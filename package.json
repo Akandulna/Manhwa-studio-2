@@ -1,0 +1,20 @@
+{
+  "name": "manhwa-studio",
+  "version": "1.0.0",
+  "description": "Local full-stack desktop-style web app for manhwa library management and downloading",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm run dev",
+    "install:all": "npm install && cd server && npm install && cd ../client && npm install",
+    "build": "cd server && npm run build && cd ../client && npm run build",
+    "db:push": "cd server && npx prisma db push",
+    "db:studio": "cd server && npx prisma studio",
+    "ml:setup": "cd server && npm run ml:setup",
+    "test": "cd server && npm test",
+    "postinstall": "cd server && npm install && cd ../client && npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

@@ -1,0 +1,26 @@
+# Manhwa Studio — AI Auto-Crop sidecar dependencies
+# Inference is fully offline (onnxruntime runs a locally-exported backbone).
+numpy>=1.24
+# Capped at <5 deliberately. Every OpenCV call in this repo was written and tested
+# against 4.x, and 5.0 changes return shapes (HoughLinesP returns (N,4) rather than
+# (N,1,4), for one).
+opencv-python-headless>=4.8,<5
+opencv-python<5
+scikit-learn>=1.3
+joblib>=1.3
+Pillow>=10.0
+
+# Morphology and Sobel gradients for Image Clipper 2.0's offline crop detector
+# (crop_detect.py). Previously arrived transitively via scikit-learn; pinned
+# directly now that a script imports it by name.
+scipy>=1.10
+
+# Phase 1 visual embeddings: runtime feature extractor (always needed).
+onnxruntime>=1.16
+
+# Export-only: used once by export_backbone.py to produce models/backbone.onnx.
+# Not imported at train/inference time. Safe to omit on machines that already
+# have a backbone.onnx committed/copied in. (onnx is required by torch.onnx.export.)
+torch>=2.1
+torchvision>=0.16
+onnx>=1.15

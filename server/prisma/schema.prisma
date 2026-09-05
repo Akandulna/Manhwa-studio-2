@@ -1,0 +1,424 @@
+// Prisma schema for Manhwa Studio
+// SQLite database for storing series, chapters, and page metadata
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Series {
+  id           String    @id @default(uuid())
+  title        String
+  sourceSite   String
+  coverPath    String?
+  rootFolder   String
+  urlTemplate  String?
+  aboutSummary String?   // Module 2: AI-generated "about this manhwa" overview
+  createdAt    DateTime  @default(now())
+  chapters     Chapter[]
+  videoProjects VideoProject[] // Module 4: Video Editor
+  watermarkTemplates WatermarkTemplate[] // Module 3: per-series watermark templates
+}
+
+// Module 3: Image Clipper — a per-series watermark template used to auto-detect
+// (OpenCV template matching) and white-fill site watermarks during crop export.
+// The template image is a small PNG saved on disk under <DOWNLOAD_ROOT>/_watermarks/.
+model WatermarkTemplate {
+  id        String   @id @default(uuid())
+  seriesId  String
+  label     String   @default("Watermark")
+  imagePath String   // absolute path to the template PNG on disk
+  width     Int      // template width in px
+  height    Int      // template height in px
+  threshold Float    @default(0.8)  // match confidence cutoff (0-1) for TM_CCOEFF_NORMED
+  enabled   Boolean  @default(true) // include in detection during export
+  createdAt DateTime @default(now())
+
+  series Series @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+
+  @@index([seriesId])
+}
+
+model Chapter {
+  id              String         @id @default(uuid())
+  seriesId        String
+  number          Float
+  title           String?
+  sourceUrl       String?
+  folderPath      String
+  status          String         @default("pending") // pending, queued, downloading, done, failed, skipped
+  pageCount       Int?
+  downloadedCount Int            @default(0)
+  error           String?
+  createdAt       DateTime       @default(now())
+  
+  series          Series         @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+  pages           Page[]
+  script          ChapterScript? // Module 2: One-to-one relation with narration script
+  audioSections   AudioSection[] // Module 2: Voiceover sections
+  audioFiles      AudioFile[]    // Module 2: Audio files (per-section + joined)
+  audioAnalysis   AudioAnalysis? // Module 2: Voice consistency analysis
+  cropSession     CropSession?   // Module 3: Image Clipper
+  aiSuggestions   AISuggestion[] // Module 3 AI: Auto-crop suggestions for this chapter
+  cropPointSet    CropPointSet?  // Module 3 v2: Image Clipper 2.0 pointer set
+
+  @@unique([seriesId, number])
+}
+
+model Page {
+  id        String  @id @default(uuid())
+  chapterId String
+  index     Int
+  sourceUrl String?
+  localPath String?
+  status    String  @default("pending") // pending, done, failed
+  bytes     Int?
+  
+  chapter   Chapter @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  
+  @@unique([chapterId, index])
+}
+
+model Setting {
+  key   String @id
+  value String
+}
+
+// Module 2: Narration Studio - Chapter script and continuity metadata
+model ChapterScript {
+  id               String   @id @default(uuid())
+  chapterId        String   @unique
+  provider         String?  // AI provider used (gemini, openai, etc.)
+  model            String?  // Model name used
+  mode             String   @default("api") // api | manual
+  scriptPath       String?  // Path to script file on disk
+  status           String   @default("none") // none, generating, done, failed, edited, stale
+  rollingSummary   String?  // Cumulative story summary through this chapter
+  closingParagraph String?  // Exact last paragraph (seam for next chapter)
+  isPartEnd        Boolean  @default(false) // Does this chapter end a Part?
+  outroText        String?  // Closing/epilogue lines (only when isPartEnd=true)
+  error            String?  // Error message if failed
+  tokensUsed       Int?     // Optional token count
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  
+  chapter          Chapter  @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+}
+
+// Module 2: Narration Studio - Voiceover audio sections
+model AudioSection {
+  id        String   @id @default(uuid())
+  chapterId String
+  index     Int      // Reading order within the chapter
+  text      String   // The section's script text
+  status    String   @default("none") // none, generating, done, failed
+  error     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  chapter   Chapter     @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  audioFile AudioFile?  // The audio file for this section (if generated/uploaded)
+  
+  @@unique([chapterId, index])
+}
+
+// Module 2: Narration Studio - Voiceover audio files
+model AudioFile {
+  id         String   @id @default(uuid())
+  chapterId  String
+  sectionId  String?  @unique // Null for joined chapter audio
+  kind       String   // generated, uploaded, joined
+  provider   String?  // TTS provider (for generated)
+  model      String?  // TTS model (for generated)
+  voice      String?  // Voice name (for generated - cheap consistency signal)
+  filePath   String   // Path on disk
+  originalName String? // Original filename of an uploaded file (for duplicate detection)
+  format     String?  // wav, mp3, etc.
+  durationMs Int?     // Duration in milliseconds
+  sampleRate Int?     // Sample rate in Hz
+  bytes      Int?     // File size in bytes
+  status     String   @default("pending") // pending, done, failed
+  error      String?
+  createdAt  DateTime @default(now())
+  
+  chapter    Chapter       @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  section    AudioSection? @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+}
+
+// Module 2: Narration Studio - Voice consistency analysis results
+model AudioAnalysis {
+  id        String   @id @default(uuid())
+  chapterId String   @unique
+  threshold Float    // Similarity threshold used
+  verdict   String   // consistent, mismatch, inconclusive
+  details   String   // JSON: per-file scores, outlier ids, pairwise matrix
+  createdAt DateTime @default(now())
+  
+  chapter   Chapter  @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+}
+
+// Module 3: Image Clipper — Crop session per chapter
+model CropSession {
+  id          String   @id @default(uuid())
+  chapterId   String   @unique
+  status      String   @default("active")  // active, finalized
+  cropCount   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  chapter       Chapter    @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  crops         Crop[]
+  events        CropEvent[]
+  aiSuggestions AISuggestion[] // Module 3 AI: Auto-crop suggestions for this session
+}
+
+// Module 3: Image Clipper — Individual crop geometry
+model Crop {
+  id            String   @id @default(uuid())
+  sessionId     String
+  sequence      Int      // Display order (1-based)
+
+  // Source coordinates (pixels, relative to virtual canvas)
+  canvasX       Float
+  canvasY       Float
+  canvasW       Float
+  canvasH       Float
+
+  // Normalized coordinates (0-1, relative to full canvas dimensions)
+  normX         Float
+  normY         Float
+  normW         Float
+  normH         Float
+
+  // Source image mapping (which source files this crop spans)
+  sourceFiles   String   // JSON array of { filename, startY, endY }
+
+  aspectRatio   String?  // "16:9", "9:16", "1:1", "free", etc.
+  exportPath    String?  // Set on finalize
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  session       CropSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  events        CropEvent[]
+
+  @@unique([sessionId, sequence])
+}
+
+// Module 3: Image Clipper — Lifecycle events for AI training
+model CropEvent {
+  id          String   @id @default(uuid())
+  sessionId   String
+  cropId      String?
+  action      String   // created, resized, moved, deleted, finalized
+  payload     String?  // JSON: snapshot of coordinates at event time
+  createdAt   DateTime @default(now())
+
+  session     CropSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  crop        Crop?       @relation(fields: [cropId], references: [id], onDelete: SetNull)
+}
+
+// Module 3 AI: Auto-Crop — a versioned, locally-trained style model.
+// Artifacts live on disk under server/ml/models/v{version}/.
+// The active version for inference is stored in the Setting table
+// under key "aiCrop.activeModelVersion".
+model AIModel {
+  id                  String   @id @default(uuid())
+  version             Int      @unique // Monotonic, dir name = v{version}
+  status              String   @default("training") // training, ready, failed
+  trainingSampleCount Int      @default(0)
+  metricsJson         String?  // JSON: holdout metrics (meanIoU, precision, recall, f1, countAcc, aspectAcc)
+  hyperparamsJson     String?  // JSON: trainer hyperparameters
+  notes               String?  // Free-form notes / failure message
+  createdAt           DateTime @default(now())
+
+  suggestions AISuggestion[]
+  evaluations EvaluationRun[]
+}
+
+// Module 3 AI: Auto-Crop — a single AI-suggested crop rectangle.
+// Suggestions are NOT real Crop rows until the user accepts one.
+// modelId is null when produced by the rule-based Stage-A fallback (cold start).
+model AISuggestion {
+  id            String   @id @default(uuid())
+  modelId       String?  // Null for rule-based (untrained) suggestions
+  cropSessionId String
+  chapterId     String
+  rectJson      String   // JSON: canvas-space rect { canvasX, canvasY, canvasW, canvasH }
+  aspectPreset  String   @default("free")
+  confidence    Float    @default(0)
+  status        String   @default("pending") // pending, accepted, adjusted, rejected
+  rating        String?  // Blind-test feedback: "up" | "down"
+  finalRectJson String?  // What the user actually kept (set when accepted/adjusted)
+  createdAt     DateTime @default(now())
+
+  model   AIModel?    @relation(fields: [modelId], references: [id], onDelete: SetNull)
+  session CropSession @relation(fields: [cropSessionId], references: [id], onDelete: Cascade)
+  chapter Chapter     @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+
+  @@index([cropSessionId])
+  @@index([chapterId])
+}
+
+// Module 3 AI: Auto-Crop — a recorded evaluation pass over held-out chapters.
+// modelId is null for rule-based (untrained) evaluation runs.
+model EvaluationRun {
+  id          String   @id @default(uuid())
+  modelId     String?  // Null for rule-based (untrained) evaluation
+  mode        String   @default("holdout") // holdout, blind
+  chapterIds  String   // JSON: array of chapter ids evaluated
+  metricsJson String   // JSON: aggregate + per-chapter metrics
+  createdAt   DateTime @default(now())
+
+  model AIModel? @relation(fields: [modelId], references: [id], onDelete: SetNull)
+}
+
+// ============ Module 3 v2: Image Clipper 2.0 ============
+
+// One four-point pointer set per chapter.
+//
+// This row is an INDEX of an on-disk artifact, not the artifact itself: the
+// pointer geometry lives in <chapter folder>/crop_points/crop_points.json,
+// which the user can inspect, hand-edit and re-apply. That file is the source
+// of truth — this row only carries what listing and status need (counts, the
+// lifecycle status, provenance and where the export landed), so a stale or
+// missing row can never change how a chapter crops.
+//
+// jsonPath is the resolved path of that artifact; imageLabel/Width/Height record
+// the logical page the pointers were measured on (OUT-14), which for a stitched
+// chapter is the combined canvas rather than any single file (ST-09).
+model CropPointSet {
+  id            String   @id @default(uuid())
+  chapterId     String   @unique
+  jsonPath      String   // Resolved path of crop_points.json (the real artifact)
+  format        String   @default("four-point-crop")
+  formatVersion String   @default("1.0")
+  cropCount     Int      @default(0)
+  status        String   @default("detected") // detecting, detected, edited, applied, failed
+  source        String   @default("ai")       // ai, manual
+  model         String?  // Vision model id, null for hand-authored point sets
+  guidelinesSha String?  // sha256 of the guidelines text detection ran against
+  imageLabel    String?  // image.filename from the artifact ("[stitched:N]" when combined)
+  imageWidth    Int      @default(0)
+  imageHeight   Int      @default(0)
+  pageCount     Int      @default(0)
+  warningsJson  String?  // JSON: ValidationIssue[] surfaced by the last run
+  error         String?  // Failure message when status = "failed"
+  exportDir     String?  // crops2/ — kept separate from v1's crops/
+  exportedCount Int      @default(0)
+  appliedAt     DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  chapter Chapter @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+}
+
+// ============ Module 4: Video Editor ============
+
+// A compiled export project: one or more chapters stitched into a continuous video.
+model VideoProject {
+  id                String   @id @default(uuid())
+  seriesId          String
+  name              String   @default("Untitled Video")
+  chapterIds        String   // JSON array of chapter ids included in this export, in order
+  status            String   @default("draft") // draft | rendering | done | failed
+  // Music + audio mix
+  musicTrackId      String?
+  masterVolume      Float    @default(1.0)   // 0.0 – 1.0, whole-video master
+  musicVolume       Float    @default(0.25)  // 0.0 – 1.0, BG music level under narration
+  // Editor-managed end title card (fixed duration; no outro audio in the pipeline)
+  titleCardText     String?  // editable end-card override; null = auto (series title + default line)
+  titleCardDuration Float    @default(5.0)   // seconds the end card is shown
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  series     Series           @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+  musicTrack MusicTrack?      @relation(fields: [musicTrackId], references: [id], onDelete: SetNull)
+  parts      VideoPartEdit[]
+  exports    VideoExport[]
+  events     VideoEditEvent[]
+}
+
+// One row per script part included in the project (mirrors AudioSection),
+// plus a final outro end-card row (isOutro = true, audioSectionId = null).
+model VideoPartEdit {
+  id             String   @id @default(uuid())
+  projectId      String
+  chapterId      String   // tag of the originating chapter (plain id, no relation)
+  audioSectionId String?  // master-clock AudioSection; null for the outro end card
+  orderIndex     Int      // global order across all chapters in the project
+  isOutro        Boolean  @default(false) // true → renders title card, no images
+  audioDuration  Float    // cached seconds (section audio, or end-card duration for outro)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  project VideoProject     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  images  VideoPartImage[]
+}
+
+model VideoPartImage {
+  id              String   @id @default(uuid())
+  partEditId      String
+  cropId          String?  // null when isFiller = true
+  imagePath       String?  // absolute path to the exported crop image; null for filler
+  isFiller        Boolean  @default(false) // black/blank frame
+  slotIndex       Int      // position within the part; ALWAYS derived from crop order
+  duration        Float    // seconds; sum of a part's images == part audioDuration
+  // Motion
+  motionMode      String   @default("drift") // drift | focus
+  motionEffect    String   @default("zoom-in") // gentle set: zoom-in | zoom-out | pan-left | pan-right | pan-up | pan-down
+  motionIntensity Float    @default(0.04)  // slow by default
+  anchorX         Float?   // 0–1, used when motionMode = focus
+  anchorY         Float?   // 0–1
+  // Manual foreground transform overrides (defaults computed by renderer)
+  scale           Float?   // null = auto (fit height / 75% width rule)
+  offsetX         Float?   // null = centered
+  offsetY         Float?
+  source          String   @default("manual") // manual | ai-suggested-accepted | ai-suggested-edited
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  partEdit VideoPartEdit @relation(fields: [partEditId], references: [id], onDelete: Cascade)
+}
+
+model MusicTrack {
+  id        String   @id @default(uuid())
+  filename  String
+  filePath  String   // absolute path on local disk
+  createdAt DateTime @default(now())
+
+  projects VideoProject[]
+}
+
+model VideoExport {
+  id          String   @id @default(uuid())
+  projectId   String
+  outputPath  String
+  resolution  String       // e.g. "1920x1080"
+  preset      String       @default("medium")
+  fileSizeMb  Float?
+  durationSec Float?
+  status      String       @default("pending") // pending | rendering | done | failed
+  errorMsg    String?
+  createdAt   DateTime     @default(now())
+
+  project VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+// AI training / event log — mirrors the CropEvent approach from the Clipper.
+model VideoEditEvent {
+  id          String   @id @default(uuid())
+  projectId   String
+  partEditId  String?
+  eventType   String   // image_selected | image_deselected | duration_adjusted | motion_changed |
+                       // anchor_set | anchor_moved | image_transformed | filler_used |
+                       // suggestion_accepted | suggestion_edited | suggestion_rejected
+  payloadJson String   // event-specific data (crop id, old/new duration, motion type+intensity, x/y, etc.)
+  createdAt   DateTime @default(now())
+
+  project VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}

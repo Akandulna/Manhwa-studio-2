@@ -1,0 +1,13 @@
+venv/
+dataset/
+models/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Ultralytics training output (crop_detector/scripts/train.py).
+runs/
+*.pt
+crop_debug/
+labeltool/
+raw/
