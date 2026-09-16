@@ -13,6 +13,7 @@ import { Server } from 'socket.io'
 import { prisma } from '../index.js'
 import { 
   splitScriptIntoSections,
+  flattenForSpeech,
   initializeSections,
   generateSectionAudio,
   generateAllSections,
@@ -27,10 +28,22 @@ import {
   getLastAnalysisResult,
   checkAnalysisSidecarAvailable 
 } from '../services/voiceAnalysisService.js'
-import { ttsProviderFactory, DEFAULT_TTS_STYLE_PROMPT } from '../services/tts/index.js'
+import { 
+  ttsProviderFactory, 
+  DEFAULT_TTS_STYLE_PROMPT, 
+  DEFAULT_KOKORO_VOICE,
+  GEMINI_TTS_VOICES,
+  KOKORO_TTS_VOICES
+} from '../services/tts/index.js'
 import { parseNormalizationOptions } from '../services/tts/textNormalizer.js'
-import { GEMINI_TTS_VOICES } from '../services/tts/types.js'
+import type { NormalizationOptions } from '../services/tts/textNormalizer.js'
 import { getAudioMetadata } from '../services/audioProcessor.js'
+import {
+  alignSection,
+  alignChapter,
+  alignSectionInBackground,
+  checkAlignmentAvailable
+} from '../services/alignment/alignmentService.js'
 
 const router = Router()
 
@@ -122,7 +135,10 @@ async function getTTSSettings(): Promise<Record<string, string>> {
           'ttsNormRemoveShouting',
           'ttsNormTidyWhitespace',
           'ttsNormAcronymAllowlist',
-          'ttsVoice'
+          'ttsVoice',
+          'ttsKokoroVoice',
+          'ttsProvider',
+          'ttsSpeed'
         ]
       }
     }
@@ -134,6 +150,43 @@ async function getTTSSettings(): Promise<Record<string, string>> {
   })
   
   return settings
+}
+
+
+/**
+ * Build generation settings from DB settings + per-request overrides.
+ *
+ * Voice defaults are provider-specific: Gemini voices ("Iapetus") and Kokoro
+ * voices ("hf_alpha") are separate namespaces, so a voice saved for one
+ * provider must not leak into the other.
+ */
+function buildVoiceoverSettings(
+  ttsSettings: Record<string, string>,
+  normalizationOptions: Partial<NormalizationOptions>,
+  overrides: { voice?: string; stylePrompt?: string } = {}
+): VoiceoverSettings {
+  const provider = ttsSettings.ttsProvider || process.env.TTS_PROVIDER || 'gemini'
+  const isKokoro = provider === 'kokoro'
+
+  const savedVoice = isKokoro ? ttsSettings.ttsKokoroVoice : ttsSettings.ttsVoice
+  const fallbackVoice = isKokoro
+    ? DEFAULT_KOKORO_VOICE
+    : (process.env.TTS_DEFAULT_VOICE || 'Iapetus')
+
+  const speed = parseFloat(ttsSettings.ttsSpeed || '1.0')
+
+  return {
+    provider,
+    voice: overrides.voice || savedVoice || fallbackVoice,
+    // Kokoro is a pure TTS model with no style-prompt support; sending one
+    // would make it read the instruction aloud.
+    stylePrompt: isKokoro
+      ? undefined
+      : (overrides.stylePrompt || ttsSettings.ttsStylePrompt || DEFAULT_TTS_STYLE_PROMPT),
+    speed: Number.isFinite(speed) ? speed : 1.0,
+    normalizeText: ttsSettings.ttsNormalizeText !== 'false',
+    normalizationOptions
+  }
 }
 
 // ============ Series/Chapter Listing with Audio Progress ============
@@ -264,7 +317,8 @@ router.get('/chapters/:id', async (req: Request, res: Response) => {
         index: sec.index,
         text: sec.text,
         status: sec.status,
-        error: sec.error
+        error: sec.error,
+        timelineScript: sec.timelineScript
       })),
       audioFiles: chapter.audioFiles.map(af => ({
         id: af.id,
@@ -300,8 +354,13 @@ router.get('/chapters/:id', async (req: Request, res: Response) => {
  */
 router.post('/chapters/:id/init-sections', async (req: Request, res: Response) => {
   try {
-    const { targetLength = 500 } = req.body
-    
+    const rawTarget = req.body?.targetLength
+    const targetLength = rawTarget === undefined ? 500 : Number(rawTarget)
+
+    if (!Number.isFinite(targetLength) || targetLength < 100 || targetLength > 5000) {
+      return res.status(400).json({ error: 'targetLength must be between 100 and 5000' })
+    }
+
     const chapter = await prisma.chapter.findUnique({
       where: { id: req.params.id },
       include: { script: true }
@@ -320,13 +379,25 @@ router.post('/chapters/:id/init-sections', async (req: Request, res: Response) =
     
     // Split into sections
     const sections = splitScriptIntoSections(scriptContent, targetLength)
-    
-    // Initialize in database
+
+    if (sections.length === 0) {
+      return res.status(400).json({ error: 'Script is empty - nothing to split' })
+    }
+
+    // Count what the re-split is about to discard, so the client can report it
+    const [replacedSections, discardedAudio] = await Promise.all([
+      prisma.audioSection.count({ where: { chapterId: chapter.id } }),
+      prisma.audioFile.count({ where: { chapterId: chapter.id, sectionId: { not: null } } })
+    ])
+
+    // Initialize in database (replaces existing sections and their audio)
     const dbSections = await initializeSections(chapter.id, sections)
     
     res.json({
       message: 'Sections initialized',
       count: dbSections.length,
+      replacedSections,
+      discardedAudio,
       sections: dbSections
     })
   } catch (error) {
@@ -346,10 +417,11 @@ router.patch('/sections/:id', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid text' })
     }
     
+    // Strip newlines typed while editing - they break speech mid-sentence
     const section = await prisma.audioSection.update({
       where: { id: req.params.id },
       data: { 
-        text,
+        text: flattenForSpeech(text),
         status: 'pending' // Reset status when text changes
       }
     })
@@ -358,6 +430,76 @@ router.patch('/sections/:id', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error updating section:', error)
     res.status(500).json({ error: 'Failed to update section' })
+  }
+})
+
+/**
+ * Update a section's "script with timeline" text (Module 4v2: Editor 2.0).
+ * Orthogonal to TTS generation — does not touch `status`.
+ */
+router.patch('/sections/:id/timeline-script', async (req: Request, res: Response) => {
+  try {
+    const { timelineScript } = req.body
+
+    if (typeof timelineScript !== 'string') {
+      return res.status(400).json({ error: 'Invalid timelineScript' })
+    }
+
+    const section = await prisma.audioSection.update({
+      where: { id: req.params.id },
+      data: { timelineScript }
+    })
+
+    res.json(section)
+  } catch (error) {
+    console.error('Error updating timeline script:', error)
+    res.status(500).json({ error: 'Failed to update timeline script' })
+  }
+})
+
+// ============ Alignment (Script with Timeline) ============
+
+/**
+ * Whether the forced-alignment sidecar can run on this machine.
+ */
+router.get('/alignment/status', async (_req: Request, res: Response) => {
+  try {
+    const status = await checkAlignmentAvailable()
+    res.json(status)
+  } catch (error) {
+    res.json({
+      available: false,
+      error: error instanceof Error ? error.message : 'Alignment check failed'
+    })
+  }
+})
+
+/**
+ * Build one section's "Script with Timeline" from its existing audio.
+ * Used by the per-section Align button for audio generated or uploaded earlier.
+ */
+router.post('/sections/:id/align', async (req: Request, res: Response) => {
+  try {
+    const result = await alignSection(req.params.id, io || undefined)
+    res.json(result)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Alignment failed'
+    console.error('Error aligning section:', message)
+    res.status(500).json({ error: message })
+  }
+})
+
+/**
+ * Align every section of a chapter that already has audio.
+ */
+router.post('/chapters/:id/align', async (req: Request, res: Response) => {
+  try {
+    const result = await alignChapter(req.params.id, io || undefined)
+    res.json(result)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Alignment failed'
+    console.error('Error aligning chapter:', message)
+    res.status(500).json({ error: message })
   }
 })
 
@@ -538,15 +680,14 @@ router.post('/sections/:id/generate', async (req: Request, res: Response) => {
     const ttsSettings = await getTTSSettings()
     const normalizationOptions = parseNormalizationOptions(ttsSettings)
     
-    const settings: VoiceoverSettings = {
-      voice: voice || ttsSettings.ttsVoice || process.env.TTS_DEFAULT_VOICE || 'Iapetus',
-      stylePrompt: stylePrompt || ttsSettings.ttsStylePrompt || DEFAULT_TTS_STYLE_PROMPT,
-      normalizeText: ttsSettings.ttsNormalizeText !== 'false',
-      normalizationOptions
-    }
+    const settings: VoiceoverSettings = buildVoiceoverSettings(
+      ttsSettings,
+      normalizationOptions,
+      { voice, stylePrompt }
+    )
     
     const audioFile = await generateSectionAudio(section.id, section.chapter.folderPath, settings)
-    
+
     // Emit complete event
     if (io) {
       io.emit('voiceover:section-complete', {
@@ -555,7 +696,12 @@ router.post('/sections/:id/generate', async (req: Request, res: Response) => {
         audioFileId: audioFile.id
       })
     }
-    
+
+    // Build the section's "Script with Timeline" from the audio we just made.
+    // Fire-and-forget: the TTS generation has already succeeded, and a failed
+    // alignment must not turn that into an error response.
+    alignSectionInBackground(section.id, io)
+
     res.json(audioFile)
   } catch (error: any) {
     console.error('Error generating audio:', error)
@@ -608,12 +754,11 @@ router.post('/chapters/:id/generate-all', async (req: Request, res: Response) =>
     const ttsSettings = await getTTSSettings()
     const normalizationOptions = parseNormalizationOptions(ttsSettings)
     
-    const settings: VoiceoverSettings = {
-      voice: voice || ttsSettings.ttsVoice || process.env.TTS_DEFAULT_VOICE || 'Iapetus',
-      stylePrompt: stylePrompt || ttsSettings.ttsStylePrompt || DEFAULT_TTS_STYLE_PROMPT,
-      normalizeText: ttsSettings.ttsNormalizeText !== 'false',
-      normalizationOptions
-    }
+    const settings: VoiceoverSettings = buildVoiceoverSettings(
+      ttsSettings,
+      normalizationOptions,
+      { voice, stylePrompt }
+    )
     
     const results = await generateAllSections(
       chapter.id,
@@ -631,7 +776,15 @@ router.post('/chapters/:id/generate-all', async (req: Request, res: Response) =>
         failed: results.filter((r: GenerationResult) => !r.success).length
       })
     }
-    
+
+    // Align every section that now has audio. The alignment queue serializes
+    // these, so they run one at a time after generation has finished.
+    for (const result of results.filter((r: GenerationResult) => r.success)) {
+      if (result.sectionId) {
+        alignSectionInBackground(result.sectionId, io)
+      }
+    }
+
     res.json({
       message: 'Generation complete',
       results
@@ -670,7 +823,11 @@ router.post('/sections/:id/upload', upload.single('audio'), async (req: Request,
       section.chapter.folderPath,
       req.file.originalname
     )
-    
+
+    // Uploaded section audio is generated from this same script, so it can be
+    // aligned exactly like generated audio. Fire-and-forget, as above.
+    alignSectionInBackground(section.id, io)
+
     res.json(audioFile)
   } catch (error) {
     console.error('Error uploading audio:', error)
@@ -923,19 +1080,54 @@ router.get('/audio/:id/download', async (req: Request, res: Response) => {
  */
 router.get('/voices', async (req: Request, res: Response) => {
   try {
-    const provider = ttsProviderFactory.getDefaultProvider()
-    
+    const ttsSettings = await getTTSSettings()
+    const requested = (req.query.provider as string) || ttsSettings.ttsProvider || process.env.TTS_PROVIDER || 'gemini'
+    const provider = ttsProviderFactory.resolveProvider(requested)
+
+    const voices = requested === 'kokoro'
+      ? KOKORO_TTS_VOICES.map(v => ({
+          id: v.id,
+          name: v.name,
+          description: `${v.language} - ${v.gender}`,
+          provider: 'kokoro'
+        }))
+      : GEMINI_TTS_VOICES.map(v => ({
+          id: v,
+          name: v,
+          provider: 'gemini'
+        }))
+
     res.json({
       provider: provider?.name || 'none',
-      voices: GEMINI_TTS_VOICES.map(v => ({
-        id: v,
-        name: v,
-        provider: 'gemini'
-      }))
+      requested,
+      voices
     })
   } catch (error) {
     console.error('Error getting voices:', error)
     res.status(500).json({ error: 'Failed to get voices' })
+  }
+})
+
+/**
+ * Check whether the local Kokoro Gradio app is reachable.
+ * Used by Settings to show a live status indicator.
+ */
+router.get('/kokoro/status', async (_req: Request, res: Response) => {
+  try {
+    const provider = ttsProviderFactory.getProvider('kokoro')
+
+    if (!provider) {
+      return res.json({ available: false, error: 'Kokoro provider not initialized' })
+    }
+
+    const result = await provider.testConnection()
+    res.json({
+      available: result.success,
+      error: result.error,
+      url: process.env.KOKORO_URL || 'http://127.0.0.1:7860'
+    })
+  } catch (error: any) {
+    res.json({ available: false, error: error?.message || 'Unknown error' })
   }
 })
 

@@ -325,7 +325,7 @@ export default function WatermarkLab() {
                         <img
                           src={watermarkApi.templateFileUrl(t.id)}
                           alt={t.label}
-                          className="h-8 max-w-24 object-contain bg-neutral-200 rounded border"
+                          className="h-8 max-w-24 object-contain bg-neutral-200 dark:bg-neutral-700 rounded border"
                         />
                         <div className="flex-1 min-w-0">
                           <div className="text-xs font-medium truncate">{t.label}</div>

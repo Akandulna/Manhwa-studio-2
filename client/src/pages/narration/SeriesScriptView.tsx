@@ -6,6 +6,8 @@
  */
 
 import { useEffect, useState } from 'react'
+import { usePublishedChapters } from '@/hooks/usePublishedChapters'
+import { PublishedBadge, publishedRowClass } from '@/components/PublishedBadge'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { narrationApi, NarrationSeriesDetail, NarrationChapterSummary, AIStatus } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -40,6 +42,9 @@ export default function SeriesScriptView() {
   const { narrationProgress, narrationRangeProgress, narrationRangeComplete } = useSocket()
 
   const [series, setSeries] = useState<NarrationSeriesDetail | null>(null)
+
+  // Chapters already rendered to video — no need to rewrite or re-voice them.
+  const { isPublished } = usePublishedChapters(id)
   const [aiStatus, setAIStatus] = useState<AIStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
@@ -474,7 +479,9 @@ export default function SeriesScriptView() {
                 {part.chapters.map((chapter) => (
                     <div
                       key={chapter.id}
-                      className="flex items-center gap-4 p-3 rounded-lg border hover:bg-accent transition-colors"
+                      className={`flex items-center gap-4 p-3 rounded-lg border hover:bg-accent transition-colors ${
+                        isPublished(chapter.id) ? publishedRowClass : ''
+                      }`}
                     >
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
@@ -489,6 +496,7 @@ export default function SeriesScriptView() {
                               Part End
                             </Badge>
                           )}
+                          {isPublished(chapter.id) && <PublishedBadge />}
                         </div>
                         
                         {chapter.script?.error && (

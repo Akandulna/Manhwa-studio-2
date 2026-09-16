@@ -36,3 +36,6 @@ coverage/
 
 # Prisma
 server/prisma/migrations/
+
+# WhisperX alignment sidecar venv
+server/.venv-whisperx/

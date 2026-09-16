@@ -5,7 +5,9 @@
  * Supports both API mode and Manual mode.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { usePublishedChapters } from '@/hooks/usePublishedChapters'
+import { PublishedBadge } from '@/components/PublishedBadge'
 import { useParams, useNavigate } from 'react-router-dom'
 import { narrationApi, clipper2Api, ChapterScriptDetail, ManualPromptResponse, AIStatus } from '@/lib/api'
 import { CopyPointerPromptButton, PointerJsonDrop } from '@/components/clipper2/PointerImport'
@@ -22,6 +24,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
+import { MurgaaDialog } from '@/components/narration/MurgaaDialog'
 import { useToast } from '@/components/ui/use-toast'
 import { useSocket } from '@/lib/socket'
 import {
@@ -42,7 +45,8 @@ import {
   Sparkles,
   Locate,
   FileJson,
-  Scissors
+  Scissors,
+  Bird
 } from 'lucide-react'
 
 export default function ScriptEditor() {
@@ -51,8 +55,13 @@ export default function ScriptEditor() {
   const { toast } = useToast()
   const { narrationProgress } = useSocket()
 
+  // Already rendered to video — surfaced in the header so a published chapter
+  // is not rewritten by mistake.
+  const { isPublished } = usePublishedChapters()
+
   const [chapter, setChapter] = useState<ChapterScriptDetail | null>(null)
   const [aiStatus, setAIStatus] = useState<AIStatus | null>(null)
+  const [murgaaOpen, setMurgaaOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [generating, setGenerating] = useState(false)
@@ -74,6 +83,25 @@ export default function ScriptEditor() {
 
   // Continuity panel
   const [showContinuity, setShowContinuity] = useState(true)
+
+  const manualStepsRef = useRef<HTMLDivElement>(null)
+
+  // Radix keeps the inactive tab's panel mounted but `hidden`, so it has no
+  // layout while API mode is showing. Effects — layout effects included — all run
+  // before the browser unhides it and re-applies the scrollTop it remembered, so
+  // zeroing synchronously does nothing. Wait a frame, once per chapter, and clear
+  // it after that restore has landed.
+  const scrollResetForChapter = useRef<string>()
+  useEffect(() => {
+    if (mode !== 'manual' || !id || scrollResetForChapter.current === id) return
+    const frame = requestAnimationFrame(() => {
+      const el = manualStepsRef.current
+      if (!el || el.clientHeight === 0) return
+      scrollResetForChapter.current = id
+      el.scrollTop = 0
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [id, mode, loading])
 
   useEffect(() => {
     if (id) {
@@ -391,6 +419,7 @@ export default function ScriptEditor() {
         </div>
 
         <div className="flex items-center gap-2">
+          {id && isPublished(id) && <PublishedBadge />}
           {hasChanges && (
             <Badge variant="outline" className="text-yellow-500 border-yellow-500">
               Unsaved
@@ -414,6 +443,16 @@ export default function ScriptEditor() {
             Save
           </Button>
           
+          <Button variant="outline" onClick={() => setMurgaaOpen(true)}>
+            <Bird className="h-4 w-4 mr-2" />
+            Murgaa
+          </Button>
+
+          <Button variant="outline" onClick={() => window.open('https://aistudio.google.com', '_blank', 'noopener,noreferrer')}>
+            <Sparkles className="h-4 w-4 mr-2" />
+            Gemini AI Studio
+          </Button>
+
           {/* Chapter Navigation */}
           <div className="flex items-center gap-1 ml-2 border-l pl-3">
             <Button
@@ -439,6 +478,8 @@ export default function ScriptEditor() {
           </div>
         </div>
       </div>
+
+      <MurgaaDialog scope="script" open={murgaaOpen} onOpenChange={setMurgaaOpen} />
 
       {/* Image validation warning */}
       {!chapter.imagesValid && (
@@ -526,7 +567,7 @@ export default function ScriptEditor() {
             {/* Four steps, one chat session: the pages are attached once at Step 1 and
                 Step 3 reuses that same conversation, which is why the pointer prompt
                 can say "the same above chapter" and carry no images of its own. */}
-            <TabsContent value="manual" className="flex-1 min-h-0 mt-0 overflow-y-auto space-y-4 pr-1">
+            <TabsContent ref={manualStepsRef} value="manual" className="flex-1 min-h-0 mt-0 overflow-y-auto space-y-4 pr-1">
               {/* Step 1: Get prompt */}
               <Card>
                 <CardHeader className="pb-3">

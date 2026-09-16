@@ -117,9 +117,10 @@ model AudioSection {
   text      String   // The section's script text
   status    String   @default("none") // none, generating, done, failed
   error     String?
+  timelineScript String? // Module 4v2: "script with timeline" text; non-empty = ready
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  
+
   chapter   Chapter     @relation(fields: [chapterId], references: [id], onDelete: Cascade)
   audioFile AudioFile?  // The audio file for this section (if generated/uploaded)
   

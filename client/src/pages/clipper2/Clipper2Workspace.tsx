@@ -721,145 +721,6 @@ export default function Clipper2Workspace() {
         </a>
       </div>
 
-      {/* ============ Getting pointers ============
-          The manual loop is the primary path — copy the guidelines into a chat that
-          holds the pages, bring the JSON back — with in-app Gemini detection beside
-          it as the automatic alternative. The whole strip collapses once the chapter
-          has pointers, because from then on the viewer below is the point. */}
-      <div className="border-b bg-card flex-shrink-0">
-        <div className="px-4 py-2 flex items-center gap-3">
-          <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Get crop pointers
-          </span>
-
-          {!showImport && crops.length > 0 && (
-            <span className="text-xs text-muted-foreground flex items-center gap-1.5 truncate">
-              <CheckCircle2 className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />
-              {crops.length} pointer set{crops.length === 1 ? '' : 's'} on file
-              {pointSet?.sidecar?.model ? ` · ${pointSet.sidecar.model}` : ''}
-            </span>
-          )}
-
-          {isDetecting && (
-            <span className="text-xs text-muted-foreground flex items-center gap-1.5">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Detecting…
-            </span>
-          )}
-
-          <div className="flex-1" />
-
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 text-xs"
-            onClick={() => setImportOpen(!showImport)}
-          >
-            {showImport ? (
-              <>
-                <ChevronUp className="h-3.5 w-3.5 mr-1" />
-                Hide
-              </>
-            ) : (
-              <>
-                <ChevronDown className="h-3.5 w-3.5 mr-1" />
-                {crops.length > 0 ? 'Replace pointers' : 'Show steps'}
-              </>
-            )}
-          </Button>
-        </div>
-
-        {showImport && (
-          <div className="px-4 pb-4 grid gap-4 md:grid-cols-2">
-            {/* ① */}
-            <div className="rounded-lg border bg-muted/20 p-3 space-y-2">
-              <div className="flex items-center gap-2 text-sm font-medium">
-                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground text-[11px]">
-                  1
-                </span>
-                Copy the prompt
-              </div>
-              <CopyPointerPromptButton size="sm" />
-              <p className="text-xs text-muted-foreground">
-                Paste it into a chat that already holds this chapter's pages — the Narration
-                Studio's manual tab is where they get attached.
-              </p>
-            </div>
-
-            {/* ② */}
-            <div className="rounded-lg border bg-muted/20 p-3 space-y-2">
-              <div className="flex items-center gap-2 text-sm font-medium">
-                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground text-[11px]">
-                  2
-                </span>
-                Bring the JSON back
-              </div>
-
-              {chapterId && (
-                <PointerJsonDrop
-                  chapterId={chapterId}
-                  compact
-                  hasExistingPoints={crops.length > 0}
-                  onImported={handleImported}
-                />
-              )}
-
-              <div className="flex flex-wrap items-center gap-2 pt-1">
-                <span className="text-xs text-muted-foreground">or</span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={() => startDetect('gemini')}
-                  disabled={detectBlockedReason != null}
-                  title={detectBlockedReason ?? 'Run detection in-app against Gemini'}
-                >
-                  {isDetecting ? (
-                    <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-                  ) : (
-                    <Sparkles className="h-3.5 w-3.5 mr-1" />
-                  )}
-                  Detect with Gemini
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={() => startDetect('offline')}
-                  disabled={offlineBlockedReason != null}
-                  title={
-                    offlineBlockedReason ??
-                    'Detect on this machine — no API key, no quota, measures the source pixels'
-                  }
-                >
-                  {isDetecting ? (
-                    <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-                  ) : (
-                    <Cpu className="h-3.5 w-3.5 mr-1" />
-                  )}
-                  Detect offline
-                </Button>
-                {isDetecting && (
-                  <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={cancelDetect}>
-                    Cancel
-                  </Button>
-                )}
-              </div>
-              {detectBlockedReason && !isDetecting && (
-                <p className="text-xs text-amber-600">{detectBlockedReason}</p>
-              )}
-              {!isDetecting && (
-                <p className="text-xs text-muted-foreground">
-                  Offline detection finds where the artwork is without reading it, so its
-                  reasons describe shape rather than content — good for a fast first pass,
-                  or when there is no API quota left.
-                </p>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-
       {/* ============ Progress ============ */}
       {detectProgress && (
         <div className="border-b bg-card px-4 py-2 flex items-center gap-3">
@@ -887,7 +748,7 @@ export default function Clipper2Workspace() {
         </div>
       )}
 
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden relative">
         {/* ============ Viewer ============ */}
         <div ref={scrollRef} className="flex-1 overflow-auto bg-neutral-950 relative">
           {/* Every overlay below is positioned against this box, so it carries a
@@ -1009,17 +870,163 @@ export default function Clipper2Workspace() {
           </div>
         </div>
 
-        {/* ============ Side panel ============ */}
-        <div className="w-[420px] border-l bg-card flex flex-col flex-shrink-0">
+        {/* ============ Side panel ============
+            Always-open docked column: pointer review stays available at all times. */}
+        <div className="relative h-full w-[420px] border-l bg-card flex flex-col flex-shrink-0 z-20 overflow-y-auto">
+          <div className="flex items-center gap-2 px-3 pt-3">
+            <span className="text-sm font-semibold flex-1">Crop pointers</span>
+          </div>
+
+          {/* ============ Getting pointers ============
+              The manual loop is the primary path — copy the guidelines into a chat that
+              holds the pages, bring the JSON back — with in-app Gemini detection beside
+              it as the automatic alternative. The section collapses once the chapter
+              has pointers, because from then on the list below is the point. */}
+          <div className="border-b flex-shrink-0 mt-2">
+            <div className="px-3 py-2 flex items-center gap-2">
+              <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Get crop pointers
+              </span>
+
+              <div className="flex-1" />
+
+              {isDetecting && (
+                <span className="text-xs text-muted-foreground flex items-center gap-1.5">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Detecting…
+                </span>
+              )}
+
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => setImportOpen(!showImport)}
+              >
+                {showImport ? (
+                  <>
+                    <ChevronUp className="h-3.5 w-3.5 mr-1" />
+                    Hide
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="h-3.5 w-3.5 mr-1" />
+                    {crops.length > 0 ? 'Replace pointers' : 'Show steps'}
+                  </>
+                )}
+              </Button>
+            </div>
+
+            {!showImport && crops.length > 0 && (
+              <p className="px-3 pb-2 text-xs text-muted-foreground flex items-center gap-1.5 truncate">
+                <CheckCircle2 className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />
+                {crops.length} pointer set{crops.length === 1 ? '' : 's'} on file
+                {pointSet?.sidecar?.model ? ` · ${pointSet.sidecar.model}` : ''}
+              </p>
+            )}
+
+            {showImport && (
+              <div className="px-3 pb-3 space-y-3">
+                {/* ① */}
+                <div className="rounded-lg border bg-muted/20 p-3 space-y-2">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground text-[11px]">
+                      1
+                    </span>
+                    Copy the prompt
+                  </div>
+                  <CopyPointerPromptButton size="sm" />
+                  <p className="text-xs text-muted-foreground">
+                    Paste it into a chat that already holds this chapter's pages — the Narration
+                    Studio's manual tab is where they get attached.
+                  </p>
+                </div>
+
+                {/* ② */}
+                <div className="rounded-lg border bg-muted/20 p-3 space-y-2">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground text-[11px]">
+                      2
+                    </span>
+                    Bring the JSON back
+                  </div>
+
+                  {chapterId && (
+                    <PointerJsonDrop
+                      chapterId={chapterId}
+                      compact
+                      hasExistingPoints={crops.length > 0}
+                      onImported={handleImported}
+                    />
+                  )}
+
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <span className="text-xs text-muted-foreground">or</span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => startDetect('gemini')}
+                      disabled={detectBlockedReason != null}
+                      title={detectBlockedReason ?? 'Run detection in-app against Gemini'}
+                    >
+                      {isDetecting ? (
+                        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                      ) : (
+                        <Sparkles className="h-3.5 w-3.5 mr-1" />
+                      )}
+                      Detect with Gemini
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => startDetect('offline')}
+                      disabled={offlineBlockedReason != null}
+                      title={
+                        offlineBlockedReason ??
+                        'Detect on this machine — no API key, no quota, measures the source pixels'
+                      }
+                    >
+                      {isDetecting ? (
+                        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                      ) : (
+                        <Cpu className="h-3.5 w-3.5 mr-1" />
+                      )}
+                      Detect offline
+                    </Button>
+                    {isDetecting && (
+                      <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={cancelDetect}>
+                        Cancel
+                      </Button>
+                    )}
+                  </div>
+                  {detectBlockedReason && !isDetecting && (
+                    <p className="text-xs text-amber-600">{detectBlockedReason}</p>
+                  )}
+                  {!isDetecting && (
+                    <p className="text-xs text-muted-foreground">
+                      Offline detection finds where the artwork is without reading it, so its
+                      reasons describe shape rather than content — good for a fast first pass,
+                      or when there is no API quota left.
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
           <Tabs
             value={panelTab}
             onValueChange={value => setPanelTab(value as PanelTab)}
             className="flex-1 flex flex-col min-h-0"
           >
-            <TabsList className="grid grid-cols-2 mx-3 mt-3">
-              <TabsTrigger value="pointers">Pointers</TabsTrigger>
-              <TabsTrigger value="json">JSON</TabsTrigger>
-            </TabsList>
+            <div className="flex items-center gap-2 mx-3 mt-3">
+              <TabsList className="grid grid-cols-2 flex-1">
+                <TabsTrigger value="pointers">Pointers</TabsTrigger>
+                <TabsTrigger value="json">JSON</TabsTrigger>
+              </TabsList>
+            </div>
 
             {/* ---- Pointers ---- */}
             <TabsContent value="pointers" className="flex-1 min-h-0 overflow-auto px-3 pb-3 space-y-3 bg-card data-[state=inactive]:hidden">

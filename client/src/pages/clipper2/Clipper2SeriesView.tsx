@@ -10,6 +10,8 @@
  */
 
 import { useState, useEffect, useMemo } from 'react'
+import { usePublishedChapters } from '@/hooks/usePublishedChapters'
+import { PublishedBadge, publishedRowClass } from '@/components/PublishedBadge'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -25,6 +27,9 @@ export default function Clipper2SeriesView() {
   const [chapters, setChapters] = useState<Clipper2ChapterSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  // Chapters already rendered to video, so the user can skip re-cutting them.
+  const { isPublished } = usePublishedChapters(id)
 
   useEffect(() => {
     let cancelled = false
@@ -103,7 +108,9 @@ export default function Clipper2SeriesView() {
         <div className="p-6 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
           {seriesChapters.map(chapter => (
             <Link key={chapter.id} to={`/clipper2/chapter/${chapter.id}`} className="block">
-              <Card className="cursor-pointer hover:border-primary transition-colors group">
+              <Card className={`cursor-pointer hover:border-primary transition-colors group ${
+                isPublished(chapter.id) ? publishedRowClass : ''
+              }`}>
                 <CardContent className="p-4">
                   <div className="flex items-center justify-between gap-2">
                     <p className="font-medium text-sm truncate">
@@ -121,8 +128,9 @@ export default function Clipper2SeriesView() {
                     )}
                   </p>
 
-                  <div className="mt-2">
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
                     <PointerStateBadge chapter={chapter} />
+                    {isPublished(chapter.id) && <PublishedBadge />}
                   </div>
                 </CardContent>
               </Card>

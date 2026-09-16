@@ -6,6 +6,8 @@
  */
 
 import { useState, useEffect } from 'react'
+import { usePublishedChapters } from '@/hooks/usePublishedChapters'
+import { PublishedBadge, publishedRowClass } from '@/components/PublishedBadge'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -30,6 +32,9 @@ export default function ClipperSeriesView() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const [detail, setDetail] = useState<ClipperSeriesDetail | null>(null)
+
+  // Chapters already rendered to video, so they need no re-cropping.
+  const { isPublished } = usePublishedChapters(id)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -124,7 +129,9 @@ export default function ClipperSeriesView() {
           {detail.chapters.map(ch => (
             <Card
               key={ch.id}
-              className="cursor-pointer hover:border-primary transition-colors group"
+              className={`cursor-pointer hover:border-primary transition-colors group ${
+                isPublished(ch.id) ? publishedRowClass : ''
+              }`}
               onClick={() => navigate(`/clipper/chapter/${ch.id}`)}
             >
               <CardContent className="p-4">
@@ -144,7 +151,8 @@ export default function ClipperSeriesView() {
                   </p>
                 )}
 
-                <div className="flex items-center gap-2 mt-2 pl-6">
+                <div className="flex flex-wrap items-center gap-2 mt-2 pl-6">
+                  {isPublished(ch.id) && <PublishedBadge />}
                   <Badge variant={
                     ch.sessionStatus === 'finalized' ? 'default' :
                     ch.hasSession ? 'secondary' : 'outline'

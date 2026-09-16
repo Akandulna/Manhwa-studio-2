@@ -184,6 +184,25 @@ interface Clipper2ApplyComplete {
   error?: string
 }
 
+// Module 3 v3: Image Clipper 3.0 cuts image by image, so progress counts images
+// rather than crops and names the one being cut.
+interface Clipper3CropProgress {
+  chapterId: string
+  current: number
+  total: number
+  filename: string
+}
+
+interface Clipper3CropComplete {
+  chapterId: string
+  images?: number
+  exported?: number
+  failed?: number
+  exportDir?: string
+  warnings?: string[]
+  error?: string
+}
+
 // Module 4: Video Editor progress
 interface VideoRenderProgress {
   projectId: string
@@ -240,6 +259,9 @@ interface SocketContextType {
   clipper2DetectComplete: Clipper2DetectComplete | null
   clipper2ApplyProgress: Clipper2ApplyProgress | null
   clipper2ApplyComplete: Clipper2ApplyComplete | null
+  // Module 3 v3: Image Clipper 3.0
+  clipper3CropProgress: Clipper3CropProgress | null
+  clipper3CropComplete: Clipper3CropComplete | null
   // Module 4: Video Editor
   videoRenderProgress: VideoRenderProgress | null
   videoRenderResult: VideoRenderResult | null
@@ -278,6 +300,8 @@ const SocketContext = createContext<SocketContextType>({
   clipper2DetectComplete: null,
   clipper2ApplyProgress: null,
   clipper2ApplyComplete: null,
+  clipper3CropProgress: null,
+  clipper3CropComplete: null,
   videoRenderProgress: null,
   videoRenderResult: null,
   videoPreviewProgress: null,
@@ -325,6 +349,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   const [clipper2DetectComplete, setClipper2DetectComplete] = useState<Clipper2DetectComplete | null>(null)
   const [clipper2ApplyProgress, setClipper2ApplyProgress] = useState<Clipper2ApplyProgress | null>(null)
   const [clipper2ApplyComplete, setClipper2ApplyComplete] = useState<Clipper2ApplyComplete | null>(null)
+
+  // Module 3 v3: Image Clipper 3.0
+  const [clipper3CropProgress, setClipper3CropProgress] = useState<Clipper3CropProgress | null>(null)
+  const [clipper3CropComplete, setClipper3CropComplete] = useState<Clipper3CropComplete | null>(null)
 
   // Module 4: Video Editor state
   const [videoRenderProgress, setVideoRenderProgress] = useState<VideoRenderProgress | null>(null)
@@ -470,6 +498,15 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       setClipper2ApplyProgress(progress)
     })
 
+    socketInstance.on('clipper3:crop-progress', (progress: Clipper3CropProgress) => {
+      setClipper3CropProgress(progress)
+    })
+
+    socketInstance.on('clipper3:crop-complete', (result: Clipper3CropComplete) => {
+      setClipper3CropComplete(result)
+      setClipper3CropProgress(null)
+    })
+
     socketInstance.on('clipper2:apply-complete', (result: Clipper2ApplyComplete) => {
       setClipper2ApplyComplete(result)
       setClipper2ApplyProgress(null)
@@ -537,6 +574,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       clipper2DetectComplete,
       clipper2ApplyProgress,
       clipper2ApplyComplete,
+      clipper3CropProgress,
+      clipper3CropComplete,
       videoRenderProgress,
       videoRenderResult,
       videoPreviewProgress,

@@ -6,8 +6,10 @@
  */
 
 import { useEffect, useState, useRef, useCallback } from 'react'
+import { usePublishedChapters } from '@/hooks/usePublishedChapters'
+import { PublishedBadge } from '@/components/PublishedBadge'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { voiceoverApi, VoiceoverChapterDetail, AudioSection, AudioFile } from '@/lib/api'
+import { voiceoverApi, settingsApi, VoiceoverChapterDetail, AudioSection, AudioFile } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -32,6 +34,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { MurgaaDialog } from '@/components/narration/MurgaaDialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -68,7 +71,9 @@ import {
   RefreshCw,
   FileAudio,
   SkipBack,
-  SkipForward
+  SkipForward,
+  Bird,
+  Clock
 } from 'lucide-react'
 
 // Voice options for Gemini TTS (male only)
@@ -93,6 +98,34 @@ const GEMINI_VOICES = [
   { id: 'Zubenelgenubi', name: 'Zubenelgenubi', description: 'Casual conversational' }
 ]
 
+// Voice options for local Kokoro TTS - ids mirror KOKORO_TTS_VOICES on the server
+const KOKORO_VOICES = [
+  { id: 'hf_alpha', name: 'Hindi Alpha', description: 'Hindi - Female' },
+  { id: 'hf_beta', name: 'Hindi Beta', description: 'Hindi - Female' },
+  { id: 'hm_omega', name: 'Hindi Omega', description: 'Hindi - Male' },
+  { id: 'hm_psi', name: 'Hindi Psi', description: 'Hindi - Male' },
+  { id: 'af_heart', name: 'Heart', description: 'English (US) - Female' },
+  { id: 'af_bella', name: 'Bella', description: 'English (US) - Female' },
+  { id: 'af_nicole', name: 'Nicole', description: 'English (US) - Female' },
+  { id: 'af_sarah', name: 'Sarah', description: 'English (US) - Female' },
+  { id: 'af_sky', name: 'Sky', description: 'English (US) - Female' },
+  { id: 'am_michael', name: 'Michael', description: 'English (US) - Male' },
+  { id: 'am_fenrir', name: 'Fenrir', description: 'English (US) - Male' },
+  { id: 'am_echo', name: 'Echo', description: 'English (US) - Male' },
+  { id: 'am_eric', name: 'Eric', description: 'English (US) - Male' },
+  { id: 'bf_emma', name: 'Emma', description: 'English (UK) - Female' },
+  { id: 'bf_isabella', name: 'Isabella', description: 'English (UK) - Female' },
+  { id: 'bm_george', name: 'George', description: 'English (UK) - Male' },
+  { id: 'bm_lewis', name: 'Lewis', description: 'English (UK) - Male' },
+  { id: 'ef_dora', name: 'Spanish Dora', description: 'Spanish - Female' },
+  { id: 'em_alex', name: 'Spanish Alex', description: 'Spanish - Male' },
+  { id: 'ff_siwis', name: 'French Siwis', description: 'French - Female' },
+  { id: 'if_sara', name: 'Italian Sara', description: 'Italian - Female' },
+  { id: 'im_nicola', name: 'Italian Nicola', description: 'Italian - Male' },
+  { id: 'pf_dora', name: 'Portuguese Dora', description: 'Portuguese - Female' },
+  { id: 'pm_alex', name: 'Portuguese Alex', description: 'Portuguese - Male' }
+]
+
 export default function VoiceoverEditor() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -100,12 +133,21 @@ export default function VoiceoverEditor() {
   const { socket } = useSocket()
   
   // Chapter data
+  // Already rendered to video — surfaced in the header so a published chapter
+  // is not re-voiced by mistake.
+  const { isPublished } = usePublishedChapters()
+
   const [chapter, setChapter] = useState<VoiceoverChapterDetail | null>(null)
   const [loading, setLoading] = useState(true)
+  const [murgaaOpen, setMurgaaOpen] = useState(false)
   
-  // Voice settings
+  // Voice settings - provider comes from Settings > Voiceover
+  const [ttsProvider, setTtsProvider] = useState<string>('gemini')
   const [selectedVoice, setSelectedVoice] = useState('Iapetus')
   const [stylePrompt, setStylePrompt] = useState('')
+
+  const isKokoro = ttsProvider === 'kokoro'
+  const availableVoices = isKokoro ? KOKORO_VOICES : GEMINI_VOICES
   
   // Generation state
   const [generating, setGenerating] = useState(false)
@@ -139,10 +181,216 @@ export default function VoiceoverEditor() {
   const [addSectionOpen, setAddSectionOpen] = useState(false)
   const [newSectionText, setNewSectionText] = useState('')
   const [addingSection, setAddingSection] = useState(false)
+
+  // Re-split (recreate sections) dialog
+  const [resplitOpen, setResplitOpen] = useState(false)
+  const [resplitTargetLength, setResplitTargetLength] = useState(500)
+  const [resplitting, setResplitting] = useState(false)
   
   // Voice consistency check
   const [checkingVoices, setCheckingVoices] = useState(false)
   const [mismatchedSectionIds, setMismatchedSectionIds] = useState<Set<string>>(new Set())
+
+  // Script with Timeline (saved to the server, per section). A legacy
+  // localStorage key from before this was server-backed is used only as a
+  // one-time fallback when the server has nothing yet.
+  const timelineStorageKey = selectedSection
+    ? `voiceover:timeline-script:section:${selectedSection}`
+    : null
+  const [timelineScript, setTimelineScript] = useState('')
+  const [timelineSaved, setTimelineSaved] = useState(false)
+  const [copyingPrompt, setCopyingPrompt] = useState(false)
+  const [copiedPrompt, setCopiedPrompt] = useState(false)
+  // Section currently being force-aligned (auto after generation, or manual)
+  const [aligningSectionId, setAligningSectionId] = useState<string | null>(null)
+  // Sections whose last alignment attempt failed. Alignment failure is not
+  // persisted on the section (timelineScript just stays empty), so the card
+  // would otherwise show "No timeline" and look merely pending.
+  const [alignFailedSectionIds, setAlignFailedSectionIds] = useState<Set<string>>(new Set())
+
+  // Which section's text currently sits in timelineScript, so a section switch
+  // never autosaves the outgoing text under the incoming section's key
+  const loadedTimelineKey = useRef<string | null>(null)
+
+  // The socket effect does not re-subscribe when the selection changes, so it
+  // reads the current selection through a ref rather than a stale closure.
+  const selectedSectionRef = useRef<string | null>(null)
+  useEffect(() => {
+    selectedSectionRef.current = selectedSection
+  }, [selectedSection])
+
+  // Restore the selected section's timeline script: server value first, with a
+  // one-time fallback to a legacy localStorage draft if the server has none.
+  useEffect(() => {
+    if (!selectedSection || !timelineStorageKey) {
+      loadedTimelineKey.current = null
+      setTimelineScript('')
+      return
+    }
+
+    const serverValue = chapter?.sections.find(s => s.id === selectedSection)?.timelineScript ?? ''
+    if (serverValue) {
+      setTimelineScript(serverValue)
+    } else {
+      let legacy = ''
+      try {
+        legacy = localStorage.getItem(timelineStorageKey) ?? ''
+      } catch {
+        legacy = ''
+      }
+      setTimelineScript(legacy)
+      if (legacy) {
+        // Migrate the old per-browser draft up to the server once, then stop
+        // reading this key ever again for this section.
+        voiceoverApi.updateTimelineScript(selectedSection, legacy)
+          .then(() => {
+            try { localStorage.removeItem(timelineStorageKey) } catch { /* ignore */ }
+          })
+          .catch(() => { /* leave the legacy key in place if migration fails */ })
+      }
+    }
+
+    loadedTimelineKey.current = timelineStorageKey
+    setTimelineSaved(false)
+  }, [selectedSection, timelineStorageKey])
+
+  // Autosave the timeline script to the server (debounced)
+  useEffect(() => {
+    if (!selectedSection || !timelineStorageKey) return
+    if (loadedTimelineKey.current !== timelineStorageKey) return
+    const timer = setTimeout(() => {
+      voiceoverApi.updateTimelineScript(selectedSection, timelineScript)
+        .then(() => {
+          setTimelineSaved(true)
+          setChapter(prev => {
+            if (!prev) return prev
+            return {
+              ...prev,
+              sections: prev.sections.map(s =>
+                s.id === selectedSection ? { ...s, timelineScript } : s
+              )
+            }
+          })
+        })
+        .catch(() => {
+          toast({
+            title: 'Save Failed',
+            description: 'Could not save the script with timeline',
+            variant: 'destructive'
+          })
+        })
+    }, 500)
+    return () => clearTimeout(timer)
+  }, [timelineScript, selectedSection, timelineStorageKey])
+
+  // Copies the "Script with Timestamp - Prompt" configured in Settings
+  const handleCopyTimelinePrompt = async () => {
+    setCopyingPrompt(true)
+    try {
+      const all = await settingsApi.getAll()
+      const prompt = (all as { scriptWithTimestampPrompt?: string }).scriptWithTimestampPrompt ?? ''
+      if (!prompt.trim()) {
+        toast({
+          title: 'No Prompt Set',
+          description: 'Add a "Script with Timestamp - Prompt" in Settings → Narration Studio first.',
+          variant: 'destructive'
+        })
+        return
+      }
+      await navigator.clipboard.writeText(prompt)
+      setCopiedPrompt(true)
+      setTimeout(() => setCopiedPrompt(false), 1500)
+    } catch (err) {
+      toast({
+        title: 'Copy Failed',
+        description: err instanceof Error ? err.message : 'Could not copy the prompt',
+        variant: 'destructive'
+      })
+    } finally {
+      setCopyingPrompt(false)
+    }
+  }
+
+  // Build this section's timeline from its existing audio. The script text is
+  // already known, so the aligner only supplies the timings - the wording that
+  // comes back is the section's own text, unchanged.
+  const handleAlignSection = async () => {
+    if (!selectedSection) return
+
+    const section = chapter?.sections.find(s => s.id === selectedSection)
+    const hasAudio = chapter?.audioFiles.some(af => af.sectionId === selectedSection)
+
+    if (!hasAudio) {
+      toast({
+        title: 'No Audio',
+        description: 'Generate or upload audio for this section first.',
+        variant: 'destructive'
+      })
+      return
+    }
+    if (!section?.text?.trim()) {
+      toast({
+        title: 'No Script Text',
+        description: 'This section has no text to align.',
+        variant: 'destructive'
+      })
+      return
+    }
+
+    setAligningSectionId(selectedSection)
+    try {
+      const result = await voiceoverApi.alignSection(selectedSection)
+
+      // Write straight into the editor: the restore effect only reruns on a
+      // section change, so a reload alone would not refresh the open textarea.
+      setTimelineScript(result.timelineScript)
+      setTimelineSaved(true)
+      setChapter(prev => {
+        if (!prev) return prev
+        return {
+          ...prev,
+          sections: prev.sections.map(s =>
+            s.id === selectedSection ? { ...s, timelineScript: result.timelineScript } : s
+          )
+        }
+      })
+
+      toast({
+        title: 'Timeline Built',
+        description: `${result.beatCount} beat${result.beatCount === 1 ? '' : 's'} from ${result.durationSec.toFixed(1)}s of audio`
+      })
+    } catch (error) {
+      toast({
+        title: 'Alignment Failed',
+        description: error instanceof Error ? error.message : 'Could not build the timeline',
+        variant: 'destructive'
+      })
+    } finally {
+      setAligningSectionId(null)
+    }
+  }
+
+  const handlePasteTimelineScript = async () => {
+    try {
+      const text = await navigator.clipboard.readText()
+      if (!text.trim()) {
+        toast({
+          title: 'Clipboard Empty',
+          description: 'There is no text to paste.',
+          variant: 'destructive'
+        })
+        return
+      }
+      setTimelineScript(text)
+      setTimelineSaved(false)
+    } catch {
+      toast({
+        title: 'Paste Failed',
+        description: 'Clipboard access was blocked. Paste manually with Cmd/Ctrl+V.',
+        variant: 'destructive'
+      })
+    }
+  }
 
   // Load chapter data
   useEffect(() => {
@@ -150,6 +398,30 @@ export default function VoiceoverEditor() {
       loadChapter()
     }
   }, [id])
+
+  // Pick up the TTS provider + voice chosen in Settings > Voiceover.
+  // Gemini and Kokoro have separate voice namespaces, so the saved voice is
+  // read from the key matching the active provider.
+  useEffect(() => {
+    let cancelled = false
+
+    settingsApi.getAll()
+      .then(all => {
+        if (cancelled) return
+
+        const s = all as { ttsProvider?: string; ttsVoice?: string; ttsKokoroVoice?: string }
+        const provider = s.ttsProvider || 'gemini'
+        setTtsProvider(provider)
+
+        const savedVoice = provider === 'kokoro' ? s.ttsKokoroVoice : s.ttsVoice
+        setSelectedVoice(savedVoice || (provider === 'kokoro' ? 'hf_alpha' : 'Iapetus'))
+      })
+      .catch(() => {
+        // Settings are optional here - fall back to the Gemini defaults
+      })
+
+    return () => { cancelled = true }
+  }, [])
 
   // Socket event handlers
   useEffect(() => {
@@ -223,6 +495,63 @@ export default function VoiceoverEditor() {
       }
     }
 
+    // Alignment runs on the server after generation/upload and writes the
+    // section's timelineScript directly. Reload so the textarea picks up the
+    // new value rather than autosaving its stale contents over it.
+    const handleAlignmentProgress = (data: {
+      chapterId: string
+      sectionId: string
+      index: number
+      stage: 'aligning' | 'done' | 'failed'
+      error?: string
+    }) => {
+      if (data.chapterId !== id) return
+
+      setAligningSectionId(data.stage === 'aligning' ? data.sectionId : null)
+
+      if (data.stage === 'aligning') {
+        // A retry clears the previous failure
+        setAlignFailedSectionIds(prev => {
+          if (!prev.has(data.sectionId)) return prev
+          const next = new Set(prev)
+          next.delete(data.sectionId)
+          return next
+        })
+      }
+
+      if (data.stage === 'done') {
+        setAlignFailedSectionIds(prev => {
+          if (!prev.has(data.sectionId)) return prev
+          const next = new Set(prev)
+          next.delete(data.sectionId)
+          return next
+        })
+        // Pull the freshly written timeline in. If this is the section the
+        // editor has open, push it into the textarea too - the restore effect
+        // only reruns on a section change, so a reload alone would not.
+        voiceoverApi.getChapterDetail(id!)
+          .then(detail => {
+            setChapter(detail)
+            const updated = detail.sections.find(s => s.id === data.sectionId)
+            if (updated && data.sectionId === selectedSectionRef.current) {
+              setTimelineScript(updated.timelineScript ?? '')
+              setTimelineSaved(true)
+            }
+          })
+          .catch(() => { /* the next manual reload will pick it up */ })
+      }
+
+      if (data.stage === 'failed') {
+        setAlignFailedSectionIds(prev => new Set(prev).add(data.sectionId))
+        toast({
+          title: `Timeline Failed - Section ${data.index + 1}`,
+          description: data.error || 'Could not align this section',
+          variant: 'destructive'
+        })
+      }
+    }
+
+    socket.on('alignment:progress', handleAlignmentProgress)
     socket.on('voiceover:section-start', handleSectionStart)
     socket.on('voiceover:section-complete', handleSectionComplete)
     socket.on('voiceover:section-error', handleSectionError)
@@ -232,6 +561,7 @@ export default function VoiceoverEditor() {
     socket.on('voiceover:join-complete', handleJoinComplete)
 
     return () => {
+      socket.off('alignment:progress', handleAlignmentProgress)
       socket.off('voiceover:section-start', handleSectionStart)
       socket.off('voiceover:section-complete', handleSectionComplete)
       socket.off('voiceover:section-error', handleSectionError)
@@ -297,6 +627,35 @@ export default function VoiceoverEditor() {
         description: error instanceof Error ? error.message : 'Failed to create sections',
         variant: 'destructive'
       })
+    }
+  }
+
+  /**
+   * Re-split the script from scratch. Discards every existing section along with
+   * its generated audio, so it is confirmed behind a dialog.
+   */
+  const handleResplitSections = async () => {
+    setResplitting(true)
+    try {
+      const result = await voiceoverApi.initializeSections(id!, resplitTargetLength)
+      const discarded = result.discardedAudio > 0
+        ? `, discarded ${result.discardedAudio} audio file${result.discardedAudio === 1 ? '' : 's'}`
+        : ''
+      toast({
+        title: 'Sections Recreated',
+        description: `Replaced ${result.replacedSections} with ${result.count} sections${discarded}`
+      })
+      setResplitOpen(false)
+      setSelectedSection(null)
+      loadChapter()
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: error instanceof Error ? error.message : 'Failed to recreate sections',
+        variant: 'destructive'
+      })
+    } finally {
+      setResplitting(false)
     }
   }
 
@@ -614,6 +973,13 @@ export default function VoiceoverEditor() {
   const joinedAudio = getJoinedAudio()
   const allSectionsGenerated = chapter.sections.every(s => s.status === 'done' || s.status === 'uploaded')
 
+  // Alignment only applies to sections that actually have audio, so the chapter
+  // summary is counted against those rather than against every section.
+  const sectionsWithAudio = chapter.sections.filter(s => getAudioForSection(s.id)).length
+  const sectionsAligned = chapter.sections.filter(
+    s => getAudioForSection(s.id) && s.timelineScript
+  ).length
+
   // Detect uploaded audio files that share the same source filename — a common
   // sign the same file was uploaded to more than one section by mistake.
   const duplicateNames = (() => {
@@ -657,12 +1023,18 @@ export default function VoiceoverEditor() {
             <div>
               <h1 className="text-lg font-semibold">
                 Chapter {chapter.number}: {chapter.title || 'Voiceover'}
+                {id && isPublished(id) && <PublishedBadge className="ml-2 align-middle" />}
               </h1>
               <p className="text-sm text-muted-foreground">{chapter.series.title}</p>
             </div>
           </div>
           
           <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => setMurgaaOpen(true)}>
+              <Bird className="h-4 w-4 mr-2" />
+              Murgaa
+            </Button>
+
             {chapter.prevChapterId && (
               <Button
                 variant="outline"
@@ -687,6 +1059,8 @@ export default function VoiceoverEditor() {
         </div>
       </div>
 
+      <MurgaaDialog scope="voice" open={murgaaOpen} onOpenChange={setMurgaaOpen} />
+
       {/* Main content */}
       <div className="flex flex-1 overflow-hidden">
         {/* Left column: Sections */}
@@ -694,7 +1068,22 @@ export default function VoiceoverEditor() {
           {/* Section controls */}
           <div className="p-4 border-b space-y-4">
             <div className="flex items-center justify-between">
-              <h2 className="font-medium">Sections ({chapter.sections.length})</h2>
+              <div className="flex items-center gap-2">
+                <h2 className="font-medium">Sections ({chapter.sections.length})</h2>
+                {sectionsWithAudio > 0 && (
+                  <Badge
+                    variant="outline"
+                    className={`text-xs ${
+                      sectionsAligned === sectionsWithAudio
+                        ? 'border-green-600/40 text-green-600'
+                        : 'text-muted-foreground'
+                    }`}
+                  >
+                    <Clock className="h-3 w-3 mr-1" />
+                    {sectionsAligned}/{sectionsWithAudio} timeline
+                  </Badge>
+                )}
+              </div>
               <div className="flex gap-2">
                 {chapter.sections.length === 0 ? (
                   <Button onClick={handleInitializeSections} disabled={!chapter.script}>
@@ -735,6 +1124,67 @@ export default function VoiceoverEditor() {
                       </DialogContent>
                     </Dialog>
                     
+                    <Dialog open={resplitOpen} onOpenChange={setResplitOpen}>
+                      <DialogTrigger asChild>
+                        <Button variant="outline" size="sm" disabled={!chapter.script}>
+                          <RefreshCw className="h-4 w-4 mr-1" />
+                          Re-split
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>Recreate Sections</DialogTitle>
+                          <DialogDescription>
+                            Splits the script again from scratch. This deletes all{' '}
+                            {chapter.sections.length} current sections, including any text
+                            you edited by hand, and their generated audio. The chapter
+                            script itself is not changed.
+                          </DialogDescription>
+                        </DialogHeader>
+
+                        {chapter.sections.some(s => s.status === 'done' || s.status === 'uploaded') && (
+                          <div className="flex gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm">
+                            <AlertTriangle className="h-4 w-4 shrink-0 text-destructive mt-0.5" />
+                            <span>
+                              {chapter.sections.filter(s => s.status === 'done' || s.status === 'uploaded').length}{' '}
+                              section(s) already have audio. It will be deleted and must be
+                              regenerated.
+                            </span>
+                          </div>
+                        )}
+
+                        <div className="space-y-2">
+                          <Label>Target section length: {resplitTargetLength} characters</Label>
+                          <Slider
+                            value={[resplitTargetLength]}
+                            onValueChange={([v]) => setResplitTargetLength(v)}
+                            min={200}
+                            max={2000}
+                            step={50}
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Shorter sections give finer control; longer ones sound more
+                            continuous. Splits happen at paragraph and sentence boundaries,
+                            so sections land near this length rather than exactly on it.
+                          </p>
+                        </div>
+
+                        <DialogFooter>
+                          <Button variant="outline" onClick={() => setResplitOpen(false)}>
+                            Cancel
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            onClick={handleResplitSections}
+                            disabled={resplitting}
+                          >
+                            {resplitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                            Recreate Sections
+                          </Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
+
                     <Button
                       onClick={handleGenerateAll}
                       disabled={generatingAll || chapter.sections.every(s => s.status === 'done')}
@@ -759,13 +1209,18 @@ export default function VoiceoverEditor() {
             {/* Voice settings */}
             <div className="flex gap-4">
               <div className="flex-1">
-                <Label className="text-xs text-muted-foreground mb-1 block">Voice</Label>
+                <Label className="text-xs text-muted-foreground mb-1 block">
+                  Voice
+                  <span className="ml-2 text-[10px] uppercase tracking-wide text-muted-foreground/70">
+                    {isKokoro ? 'Kokoro (local)' : 'Gemini'}
+                  </span>
+                </Label>
                 <Select value={selectedVoice} onValueChange={setSelectedVoice}>
                   <SelectTrigger className="h-8">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
-                    {GEMINI_VOICES.map(voice => (
+                  <SelectContent className="max-h-[300px]">
+                    {availableVoices.map(voice => (
                       <SelectItem key={voice.id} value={voice.id}>
                         {voice.name} - {voice.description}
                       </SelectItem>
@@ -776,8 +1231,8 @@ export default function VoiceoverEditor() {
             </div>
 
             {generatingAll && (
-              <Progress 
-                value={(batchProgress.completed / batchProgress.total) * 100} 
+              <Progress
+                value={(batchProgress.completed / batchProgress.total) * 100}
                 className="h-2"
               />
             )}
@@ -890,6 +1345,36 @@ export default function VoiceoverEditor() {
                         </div>
                       </div>
                       
+                      {/* Alignment ("Script with Timeline") status.
+                          Only meaningful once a section has audio - without it
+                          there is nothing to align, so no badge is shown. */}
+                      {audioFile && (
+                        aligningSectionId === section.id ? (
+                          <Badge variant="secondary" className="mt-2 text-xs">
+                            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                            Aligning timeline...
+                          </Badge>
+                        ) : alignFailedSectionIds.has(section.id) ? (
+                          <Badge variant="destructive" className="mt-2 text-xs">
+                            <XCircle className="h-3 w-3 mr-1" />
+                            Timeline failed
+                          </Badge>
+                        ) : section.timelineScript ? (
+                          <Badge
+                            variant="outline"
+                            className="mt-2 text-xs border-green-600/40 text-green-600"
+                          >
+                            <Clock className="h-3 w-3 mr-1" />
+                            Timeline ready
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="mt-2 text-xs text-muted-foreground">
+                            <Clock className="h-3 w-3 mr-1" />
+                            No timeline
+                          </Badge>
+                        )
+                      )}
+
                       {/* Voice mismatch tag */}
                       {mismatchedSectionIds.has(section.id) && (
                         <Badge variant="destructive" className="mt-2 text-xs">
@@ -1121,6 +1606,69 @@ export default function VoiceoverEditor() {
                       </Button>
                     </>
                   )}
+                </div>
+
+                {/* Script with Timeline for this section (saved to server, autosaved) */}
+                <div className="mt-4 pt-4 border-t">
+                  <div className="flex items-center justify-between mb-1">
+                    <Label className="text-xs text-muted-foreground">Script with Timeline</Label>
+                    <div className="flex items-center gap-2">
+                      {timelineSaved && timelineScript && (
+                        <span className="text-xs text-muted-foreground">Saved</span>
+                      )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7"
+                        onClick={handleAlignSection}
+                        disabled={aligningSectionId !== null}
+                        title="Build the timeline from this section's audio"
+                      >
+                        {aligningSectionId === selectedSection ? (
+                          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                        ) : (
+                          <Clock className="h-3 w-3 mr-1" />
+                        )}
+                        {aligningSectionId === selectedSection ? 'Aligning' : 'Align'}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7"
+                        onClick={handleCopyTimelinePrompt}
+                        disabled={copyingPrompt}
+                        title="Copy the Script with Timestamp prompt from Settings"
+                      >
+                        {copyingPrompt ? (
+                          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                        ) : copiedPrompt ? (
+                          <Check className="h-3 w-3 mr-1 text-green-500" />
+                        ) : (
+                          <Copy className="h-3 w-3 mr-1" />
+                        )}
+                        {copiedPrompt ? 'Copied' : 'Copy Prompt'}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7"
+                        onClick={handlePasteTimelineScript}
+                      >
+                        <Copy className="h-3 w-3 mr-1" />
+                        Paste
+                      </Button>
+                    </div>
+                  </div>
+                  <Textarea
+                    value={timelineScript}
+                    onChange={(e) => {
+                      setTimelineScript(e.target.value)
+                      setTimelineSaved(false)
+                    }}
+                    placeholder="Paste the script with timeline for this section..."
+                    rows={5}
+                    className="text-sm"
+                  />
                 </div>
               </CardContent>
             </Card>

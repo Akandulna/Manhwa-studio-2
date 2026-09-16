@@ -14,6 +14,7 @@ import { Server } from 'socket.io'
 import PQueue from 'p-queue'
 import { prisma } from '../index.js'
 import { ttsProviderFactory } from './tts/index.js'
+import type { KokoroTTSProvider } from './tts/kokoroTTSProvider.js'
 import { normalizeTextForTTS, NormalizationOptions } from './tts/textNormalizer.js'
 import {
   pcmToWav,
@@ -66,8 +67,10 @@ async function backupAudioFile(filePath: string, chapterFolder: string): Promise
 }
 
 export interface VoiceoverSettings {
+  provider?: string
   voice?: string
   stylePrompt?: string
+  speed?: number
   normalizeText?: boolean
   normalizationOptions?: Partial<NormalizationOptions>
 }
@@ -84,6 +87,16 @@ export interface GenerationResult {
   success: boolean
   audioFileId?: string
   error?: string
+}
+
+/**
+ * Collapse every run of whitespace (including the newlines typed while editing)
+ * into a single space. Section text reaches the TTS provider verbatim, and a
+ * stray newline mid-sentence makes the voice break there, so sections are stored
+ * as one flat line.
+ */
+export function flattenForSpeech(text: string): string {
+  return text.replace(/\s+/g, ' ').trim()
 }
 
 /**
@@ -119,12 +132,18 @@ export function splitScriptIntoSections(
   // Process chunks, splitting long ones by sentences if needed
   const processedChunks: string[] = []
   for (const chunk of chunks) {
-    if (chunk.length <= targetLength) {
-      processedChunks.push(chunk)
+    // Flatten first: a chunk holding soft line breaks would otherwise carry them
+    // into the section text, and its length is measured on the flattened form.
+    const flatChunk = flattenForSpeech(chunk)
+    if (!flatChunk) {
+      continue
+    }
+    if (flatChunk.length <= targetLength) {
+      processedChunks.push(flatChunk)
     } else {
       // Split long chunk by sentences
-      const sentenceChunks = splitBySentences(chunk, targetLength)
-      processedChunks.push(...sentenceChunks)
+      const sentenceChunks = splitBySentences(flatChunk, targetLength)
+      processedChunks.push(...sentenceChunks.map(flattenForSpeech).filter(c => c.length > 0))
     }
   }
   
@@ -143,7 +162,7 @@ export function splitScriptIntoSections(
     if (currentLength + chunk.length > targetLength && currentSection.length > 0) {
       sections.push({
         index: sectionIndex,
-        text: currentSection.join('\n\n')
+        text: currentSection.join(' ')
       })
       currentSection = []
       currentLength = 0
@@ -158,7 +177,7 @@ export function splitScriptIntoSections(
   if (currentSection.length > 0) {
     sections.push({
       index: sectionIndex,
-      text: currentSection.join('\n\n')
+      text: currentSection.join(' ')
     })
   }
   
@@ -206,12 +225,40 @@ function splitBySentences(text: string, targetLength: number): string[] {
 }
 
 /**
- * Initialize sections for a chapter from split script
+ * Initialize sections for a chapter from split script.
+ *
+ * Destructive: replaces every existing section. Because AudioFile.sectionId is
+ * `onDelete: SetNull`, deleting sections would otherwise leave orphaned
+ * per-section audio rows (and their .wav files) behind, so they are removed
+ * first. Chapter-level joined audio (sectionId = null) is left untouched.
  */
 export async function initializeSections(
   chapterId: string,
   sections: { index: number; text: string }[]
 ): Promise<AudioSection[]> {
+  // Drop per-section audio files that are about to lose their section
+  const staleAudio = await prisma.audioFile.findMany({
+    where: { chapterId, sectionId: { not: null } }
+  })
+
+  for (const audio of staleAudio) {
+    try {
+      await fs.unlink(audio.filePath)
+    } catch (err: any) {
+      // Already gone is fine; anything else is worth knowing about but must not
+      // block the re-split.
+      if (err?.code !== 'ENOENT') {
+        console.warn(`Could not delete stale audio ${audio.filePath}:`, err?.message)
+      }
+    }
+  }
+
+  if (staleAudio.length > 0) {
+    await prisma.audioFile.deleteMany({
+      where: { id: { in: staleAudio.map(a => a.id) } }
+    })
+  }
+
   // Delete existing sections
   await prisma.audioSection.deleteMany({
     where: { chapterId }
@@ -253,10 +300,19 @@ export async function generateSectionAudio(
     throw new Error(ffmpegCheck.error || 'FFmpeg not installed')
   }
   
-  // Get TTS provider
-  const provider = ttsProviderFactory.getDefaultProvider()
+  // Get TTS provider (honours the `ttsProvider` setting from Settings > Voiceover)
+  const provider = ttsProviderFactory.resolveProvider(settings.provider)
   if (!provider) {
     throw new Error('TTS not configured. Add GEMINI_API_KEY to your .env file.')
+  }
+
+  // Kokoro runs as a separate local Gradio app - fail with an actionable
+  // message instead of a generic fetch error when it is not running.
+  if (provider.name === 'kokoro') {
+    const health = await (provider as KokoroTTSProvider).testConnection()
+    if (!health.success) {
+      throw new Error(health.error || 'Kokoro TTS server is not reachable')
+    }
   }
   
   // Get section
@@ -276,8 +332,8 @@ export async function generateSectionAudio(
   })
   
   try {
-    // Get voice
-    const voice = settings.voice || process.env.TTS_DEFAULT_VOICE || 'Kore'
+    // Get voice - each provider has its own voice namespace
+    const voice = settings.voice || provider.defaultVoice
     
     // Normalize text if enabled (default: enabled)
     let textForTTS = section.text
@@ -292,7 +348,8 @@ export async function generateSectionAudio(
     const result = await provider.generateSpeech({
       text: textForTTS,
       voice,
-      stylePrompt: settings.stylePrompt
+      stylePrompt: settings.stylePrompt,
+      speed: settings.speed
     })
     
     // Create audio folder
@@ -304,13 +361,19 @@ export async function generateSectionAudio(
     const sectionNum = String(section.index + 1).padStart(2, '0')
     const outputPath = path.join(audioFolder, `section_${sectionNum}.wav`)
     
-    await pcmToWav(
-      result.audioData,
-      result.sampleRate,
-      result.channels,
-      result.bitsPerSample,
-      outputPath
-    )
+    if (result.format === 'wav') {
+      // Provider returned a complete WAV container (Kokoro) - write as-is
+      await fs.writeFile(outputPath, result.audioData)
+    } else {
+      // Provider returned raw PCM samples (Gemini) - add a WAV header
+      await pcmToWav(
+        result.audioData,
+        result.sampleRate,
+        result.channels,
+        result.bitsPerSample,
+        outputPath
+      )
+    }
     
     // Get metadata
     const metadata = await getAudioMetadata(outputPath)

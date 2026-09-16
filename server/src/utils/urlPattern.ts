@@ -83,8 +83,14 @@ export function inferPattern(seedUrls: string[]): PatternResult {
     };
   }
 
+  // Copy-pasted seed URLs routinely disagree on stray whitespace and on a
+  // trailing slash. Both make otherwise-identical URLs tokenize to different
+  // token counts, which reads as "different structures" to the user even
+  // though the pattern is fine. Normalize before comparing.
+  const normalizedUrls = seedUrls.map(url => url.trim().replace(/\/+$/, ''));
+
   // Tokenize all URLs
-  const tokenizedUrls = seedUrls.map(url => tokenize(url));
+  const tokenizedUrls = normalizedUrls.map(url => tokenize(url));
   
   // Check all URLs have the same structure
   const firstTokenCount = tokenizedUrls[0].length;

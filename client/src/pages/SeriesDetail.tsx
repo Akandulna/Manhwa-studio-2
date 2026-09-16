@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { usePublishedChapters } from '@/hooks/usePublishedChapters'
+import { PublishedBadge, publishedRowClass } from '@/components/PublishedBadge'
 import { useParams, useNavigate } from 'react-router-dom'
 import { seriesApi, downloadsApi, chaptersApi, Series, Chapter } from '@/lib/api'
 import { useSocket } from '@/lib/socket'
@@ -51,6 +53,10 @@ export default function SeriesDetail() {
   const { toast } = useToast()
   const { chapterProgress, chapterStatuses, queueStatus, lastStatusUpdate } = useSocket()
   
+  // Chapters already rendered to video, so they are not re-downloaded or
+  // reprocessed by mistake.
+  const { isPublished } = usePublishedChapters(id)
+
   const [series, setSeries] = useState<Series | null>(null)
   const [loading, setLoading] = useState(true)
   const [selectedChapters, setSelectedChapters] = useState<Set<string>>(new Set())
@@ -653,6 +659,7 @@ export default function SeriesDetail() {
                       flex items-center gap-4 p-3 rounded-lg border
                       ${isSelectable ? 'hover:bg-accent cursor-pointer' : ''}
                       ${selectedChapters.has(chapter.id) ? 'bg-accent border-primary' : ''}
+                      ${isPublished(chapter.id) ? publishedRowClass : ''}
                     `}
                     onClick={() => isSelectable && handleToggleChapter(chapter.id)}
                   >
@@ -696,6 +703,7 @@ export default function SeriesDetail() {
                           {chapter.downloadedCount}/{chapter.pageCount} pages
                         </span>
                       )}
+                      {isPublished(chapter.id) && <PublishedBadge />}
                       {getStatusBadge(currentStatus)}
                     </div>
                   </div>

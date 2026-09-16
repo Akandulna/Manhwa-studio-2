@@ -13,7 +13,12 @@ async function fetchApi<T>(
   })
   
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Request failed' }))
+    // Errors raised before a route runs (body-size rejections, proxy faults)
+    // answer with HTML, not JSON, so the status is the only thing left to
+    // report — without it the toast just says "Request failed".
+    const error = await response
+      .json()
+      .catch(() => ({ error: `Request failed (${response.status} ${response.statusText})` }))
     throw new Error(error.error || error.message || 'Request failed')
   }
   
@@ -469,6 +474,7 @@ export interface AudioSection {
   text: string
   status: 'pending' | 'generating' | 'done' | 'error' | 'uploaded'
   error?: string
+  timelineScript?: string | null
 }
 
 export interface AudioFile {
@@ -533,6 +539,7 @@ export interface VoiceoverChapterDetail {
 export interface VoiceInfo {
   id: string
   name: string
+  description?: string
   provider: string
 }
 
@@ -546,7 +553,12 @@ export const voiceoverApi = {
   
   // Section operations
   initializeSections: (chapterId: string, targetLength?: number) =>
-    fetchApi<{ count: number; sections: AudioSection[] }>(`/voiceover/chapters/${chapterId}/init-sections`, {
+    fetchApi<{
+      count: number
+      replacedSections: number
+      discardedAudio: number
+      sections: AudioSection[]
+    }>(`/voiceover/chapters/${chapterId}/init-sections`, {
       method: 'POST',
       body: JSON.stringify({ targetLength })
     }),
@@ -556,7 +568,30 @@ export const voiceoverApi = {
       method: 'PATCH',
       body: JSON.stringify({ text })
     }),
-  
+
+  updateTimelineScript: (sectionId: string, timelineScript: string) =>
+    fetchApi<AudioSection>(`/voiceover/sections/${sectionId}/timeline-script`, {
+      method: 'PATCH',
+      body: JSON.stringify({ timelineScript })
+    }),
+
+  // Forced alignment: builds "Script with Timeline" from a section's existing
+  // audio, using the section's own script text as the source of the wording.
+  alignSection: (sectionId: string) =>
+    fetchApi<{ sectionId: string; timelineScript: string; beatCount: number; durationSec: number }>(
+      `/voiceover/sections/${sectionId}/align`,
+      { method: 'POST' }
+    ),
+
+  alignChapter: (chapterId: string) =>
+    fetchApi<{ aligned: number; failed: number; errors: string[] }>(
+      `/voiceover/chapters/${chapterId}/align`,
+      { method: 'POST' }
+    ),
+
+  getAlignmentStatus: () =>
+    fetchApi<{ available: boolean; error?: string }>('/voiceover/alignment/status'),
+
   deleteSection: (sectionId: string) =>
     fetchApi<{ message: string }>(`/voiceover/sections/${sectionId}`, {
       method: 'DELETE'
@@ -644,8 +679,14 @@ export const voiceoverApi = {
     }),
   
   // Voices
-  getVoices: () =>
-    fetchApi<{ provider: string; voices: VoiceInfo[] }>('/voiceover/voices'),
+  getVoices: (provider?: string) =>
+    fetchApi<{ provider: string; requested?: string; voices: VoiceInfo[] }>(
+      provider ? `/voiceover/voices?provider=${encodeURIComponent(provider)}` : '/voiceover/voices'
+    ),
+
+  // Local Kokoro Gradio app availability
+  getKokoroStatus: () =>
+    fetchApi<{ available: boolean; error?: string; url?: string }>('/voiceover/kokoro/status'),
   
   // Audio streaming URL
   getAudioStreamUrl: (audioFileId: string) =>
@@ -1708,4 +1749,571 @@ export const videoApi = {
       method: 'POST',
       body: JSON.stringify({ eventType, payload })
     })
+}
+
+// ============ Module 4 v2: Editor 2.0 ============
+//
+// Phase 1 only: series → chapter readiness. Gates on 4 conditions instead of
+// the v1 editor's 2 — script generated, section audio generated, Image
+// Clipper 3.0 crops done, and a "script with timeline" on every section.
+
+export interface Editable2Chapter {
+  id: string
+  number: number
+  title: string | null
+  ready: boolean
+  reason: string | null
+  hasScript: boolean
+  hasSectionAudio: boolean
+  sectionCount: number
+  hasCropsClipper3: boolean
+  cropImageCount: number
+  cropDoneCount: number
+  hasTimelineScript: boolean
+  isPartEnd: boolean
+}
+
+/** A chapter's per-section timeline scripts, stitched into one document. */
+export interface ChapterTimelineBundle {
+  chapterId: string
+  number: number
+  title: string | null
+  sectionCount: number
+  includedCount: number
+  text: string
+}
+
+/** A chapter's per-image Clipper 3.0 metadata documents, stitched into one. */
+export interface ChapterCropMetadataBundle {
+  chapterId: string
+  number: number
+  title: string | null
+  imageCount: number
+  includedCount: number
+  text: string
+}
+
+/**
+ * One chapter that already has a rendered MP4 in the series' `_video2` folder.
+ * Editor 2.0 keeps no export rows, so this comes from scanning that folder.
+ */
+export interface Exported2Chapter {
+  chapterId: string
+  chapterNumber: number
+  fileName: string
+  size: number
+  modifiedAt: number
+}
+
+export const videoApi2 = {
+  getEditableChapters: (seriesId: string) =>
+    fetchApi<Editable2Chapter[]>(`/video2/series/${seriesId}/editable-chapters`),
+
+  /** Which chapters of this series have already been rendered to MP4. */
+  getExportedChapters: (seriesId: string) =>
+    fetchApi<Exported2Chapter[]>(`/video2/series/${seriesId}/exports`),
+
+  getTimelineBundle: (chapterId: string) =>
+    fetchApi<ChapterTimelineBundle>(`/video2/chapters/${chapterId}/timeline-bundle`),
+
+  getCropMetadataBundle: (chapterId: string) =>
+    fetchApi<ChapterCropMetadataBundle>(`/video2/chapters/${chapterId}/crop-metadata-bundle`),
+
+  processTimeline: (chapterId: string, json: string) =>
+    fetchApi<TimelinePlan>(`/video2/chapters/${chapterId}/process-timeline`, {
+      method: 'POST',
+      body: JSON.stringify({ json })
+    }),
+
+  /**
+   * Render every processed chapter of a series to its own MP4 in one job.
+   * The pasted JSON goes with the request because Editor 2.0 keeps it in the
+   * browser rather than the database.
+   *
+   * Chapters that already have an MP4 come back as skipped, not re-rendered,
+   * unless `force` is set.
+   */
+  exportAll: (
+    seriesId: string,
+    chapters: { chapterId: string; json: string }[],
+    options?: { resolution?: string; preset?: string; fps?: number; force?: boolean }
+  ) =>
+    fetchApi<{ jobId: string }>(`/video2/series/${seriesId}/export-all`, {
+      method: 'POST',
+      body: JSON.stringify({ chapters, ...options })
+    }),
+
+  getExportJob: (jobId: string) => fetchApi<Export2Job>(`/video2/exports/${jobId}`),
+
+  cancelExport: (jobId: string) =>
+    fetchApi<{ cancelled: boolean }>(`/video2/exports/${jobId}/cancel`, { method: 'POST' })
+}
+
+// ---- Batch export job (Editor 2.0) ----
+
+export type Export2ChapterStatus =
+  | 'pending'
+  | 'rendering'
+  | 'done'
+  | 'skipped'
+  | 'failed'
+  | 'cancelled'
+
+export interface Export2ChapterState {
+  chapterId: string
+  chapterNumber: number
+  chapterTitle: string | null
+  status: Export2ChapterStatus
+  percent: number
+  outputPath: string | null
+  error: string | null
+}
+
+export interface Export2Job {
+  id: string
+  seriesId: string
+  status: 'running' | 'done' | 'failed' | 'cancelled'
+  percent: number
+  chapters: Export2ChapterState[]
+  startedAt: number
+  finishedAt: number | null
+  error: string | null
+}
+
+// ---- Processed timeline plan (Editor 2.0 preview) ----
+
+export type Editor2MotionEffect =
+  | 'zoom-in'
+  | 'zoom-out'
+  | 'pan-left'
+  | 'pan-right'
+  | 'pan-up'
+  | 'pan-down'
+
+export interface PlanImage {
+  ref: string
+  sourceImage: string
+  cropId: string
+  filename: string | null
+  url: string | null
+  duration: number
+  startTime: number
+  endTime: number
+  motionEffect: Editor2MotionEffect
+  motionIntensity: number
+}
+
+export interface PlanSlot {
+  timeline: string
+  relStart: number
+  relEnd: number
+  startTime: number
+  endTime: number
+  images: PlanImage[]
+}
+
+export interface PlanSection {
+  label: string
+  index: number
+  startTime: number
+  audioDuration: number
+  audioUrl: string | null
+  slots: PlanSlot[]
+}
+
+export interface TimelinePlan {
+  chapterId: string
+  chapterNumber: number
+  chapterTitle: string | null
+  seriesTitle: string
+  totalDuration: number
+  imageCount: number
+  missingRefs: string[]
+  warnings: string[]
+  sections: PlanSection[]
+}
+
+// ============ Module 3 v3: Image Clipper 3.0 ============
+//
+// The 3.0 model is per-image, not per-chapter: every source image has its own
+// crop JSON whose coordinates are normalized 0.0–1.0 against THAT IMAGE alone.
+// There is no stitched canvas here, so nothing in this section carries canvas
+// offsets, and an image's status never depends on another image's crops.
+
+export interface Clipper3Image {
+  filename: string
+  /** The image's own pixel size — the space its JSON is normalized against. */
+  width: number
+  height: number
+  hasPoints: boolean
+  hasMetadata: boolean
+  /** The stored metadata still validates against this image's crop ids. */
+  metadataValid: boolean
+  /** Why validation failed — empty whenever metadataValid or hasMetadata is false. */
+  metadataErrors: string[]
+  cropCount: number
+  /** 'done' only once this image has crops AND metadata that still matches them. */
+  status: 'done' | 'pending'
+}
+
+export interface Clipper3ChapterImages {
+  chapterId: string
+  number: number
+  title: string | null
+  seriesId: string
+  seriesTitle: string
+  images: Clipper3Image[]
+}
+
+export interface Clipper3Point {
+  id: string
+  x: number
+  y: number
+}
+
+export interface Clipper3CropEntry {
+  id: string
+  reason: string
+  crop: {
+    mode: 'rectangle' | 'perspective'
+    points: Clipper3Point[]
+  }
+}
+
+export interface Clipper3ImageCropFile {
+  format: string
+  version: string
+  image: { filename: string; width?: number; height?: number }
+  coordinateSystem: string
+  crops: Clipper3CropEntry[]
+  receivedAt?: string
+}
+
+export interface Clipper3ImagePoints {
+  filename: string
+  /** Raw stored bytes, so the preview shows exactly what will be cut. */
+  content: string
+  file: Clipper3ImageCropFile | null
+  cropCount: number
+  hasMetadata: boolean
+  metadataValid: boolean
+  /** The IMAGE's status, which also depends on its metadata document. */
+  status: 'done' | 'pending'
+}
+
+export interface Clipper3ImageMetadata {
+  filename: string
+  /** The metadata document verbatim; '' when none is stored. */
+  content: string
+  hasMetadata: boolean
+  /** False whenever hasMetadata is true but it no longer matches this image's crops. */
+  metadataValid: boolean
+  /** Why validation failed — empty when metadataValid, or when there's no metadata at all. */
+  metadataErrors: string[]
+  cropCount?: number
+  status?: 'done' | 'pending'
+}
+
+export interface Clipper3Output {
+  filename: string
+  bytes: number
+  url: string
+}
+
+export interface Clipper3ChapterSummary {
+  chapterId: string
+  totalImages: number
+  attachedImages: number
+  /** Every image has crops and metadata that still validates against them. */
+  fullyAttached: boolean
+  /** The chapter has been cut — crops3/ has at least one output file. */
+  chopped: boolean
+}
+
+export const clipper3Api = {
+  getImages: (chapterId: string) =>
+    fetchApi<Clipper3ChapterImages>(`/clipper3/chapters/${chapterId}/images`),
+
+  getSeriesSummary: (seriesId: string) =>
+    fetchApi<{ chapters: Clipper3ChapterSummary[] }>(`/clipper3/series/${seriesId}/summary`),
+
+  getImagePoints: (chapterId: string, filename: string) =>
+    fetchApi<Clipper3ImagePoints>(
+      `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/points`
+    ),
+
+  putImagePoints: (chapterId: string, filename: string, content: string) =>
+    fetchApi<Clipper3ImagePoints>(
+      `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/points`,
+      { method: 'PUT', body: JSON.stringify({ content }) }
+    ),
+
+  deleteImagePoints: (chapterId: string, filename: string) =>
+    fetchApi<{ deleted: boolean }>(
+      `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/points`,
+      { method: 'DELETE' }
+    ),
+
+  // The metadata document is stored verbatim and never parsed.
+  getImageMetadata: (chapterId: string, filename: string) =>
+    fetchApi<Clipper3ImageMetadata>(
+      `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/metadata`
+    ),
+
+  putImageMetadata: (chapterId: string, filename: string, content: string) =>
+    fetchApi<Clipper3ImageMetadata>(
+      `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/metadata`,
+      { method: 'PUT', body: JSON.stringify({ content }) }
+    ),
+
+  deleteImageMetadata: (chapterId: string, filename: string) =>
+    fetchApi<{ deleted: boolean }>(
+      `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/metadata`,
+      { method: 'DELETE' }
+    ),
+
+  // Cuts every image that has its own artifact; progress over 'clipper3:crop-*'.
+  crop: (chapterId: string) =>
+    fetchApi<{ started: boolean; images: number }>(`/clipper3/chapters/${chapterId}/crop`, {
+      method: 'POST'
+    }),
+
+  getOutputs: (chapterId: string) =>
+    fetchApi<{ exportDir: string | null; files: Clipper3Output[] }>(
+      `/clipper3/chapters/${chapterId}/outputs`
+    ),
+
+  getOutputUrl: (chapterId: string, filename: string) =>
+    `${API_BASE}/clipper3/chapters/${chapterId}/output/${encodeURIComponent(filename)}`
+}
+
+// ---- Vision providers (Qwen local, Gemini, OpenAI, Claude) ----
+
+export type VisionProviderName = 'qwen' | 'gemini' | 'openai' | 'anthropic'
+
+export interface VisionProviderInfo {
+  name: VisionProviderName
+  label: string
+  model: string | null
+  /** Local backends need no API key but can be switched off. */
+  isLocal: boolean
+  /** Has what it needs to attempt a call — not proof it is reachable. */
+  configured: boolean
+}
+
+export const visionApi = {
+  getProviders: () =>
+    fetchApi<{ selected: string; providers: VisionProviderInfo[] }>('/vision/providers'),
+
+  selectProvider: (provider: VisionProviderName) =>
+    fetchApi<{ selected: string }>('/vision/providers/selected', {
+      method: 'PUT',
+      body: JSON.stringify({ provider })
+    }),
+
+  // Costs a round trip (and a token or two for cloud providers), so it is a
+  // deliberate action rather than part of the listing.
+  testProvider: (provider: VisionProviderName) =>
+    fetchApi<{ success: boolean; error?: string; models?: string[]; model: string }>(
+      `/vision/providers/${provider}/test`,
+      { method: 'POST' }
+    )
+}
+
+// Murgaa API — the reference popup in the narration Script/Voiceover headers.
+// One global config per page scope, shared across every series and chapter.
+export type MurgaaScope = 'script' | 'voice' | 'clipper3'
+
+export interface MurgaaApp {
+  id: string
+  name: string
+  /** Config still points at this application's file, but it's gone from disk. */
+  missing: boolean
+}
+
+export interface MurgaaConfig {
+  scope: MurgaaScope
+  description: string
+  imageName: string | null
+  hasImage: boolean
+  apps: MurgaaApp[]
+  updatedAt: string | null
+}
+
+export const murgaaApi = {
+  get: (scope: MurgaaScope) =>
+    fetchApi<MurgaaConfig>(`/murgaa/${scope}`),
+
+  updateDescription: (scope: MurgaaScope, description: string) =>
+    fetchApi<MurgaaConfig>(`/murgaa/${scope}`, {
+      method: 'PUT',
+      body: JSON.stringify({ description })
+    }),
+
+  // Cache-busted so a freshly uploaded image replaces the old one in-place.
+  imageUrl: (scope: MurgaaScope, version?: string | null) =>
+    `${API_BASE}/murgaa/${scope}/image${version ? `?v=${encodeURIComponent(version)}` : ''}`,
+
+  uploadImage: (scope: MurgaaScope, file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    return fetch(`${API_BASE}/murgaa/${scope}/image`, {
+      method: 'POST',
+      body: formData
+    }).then(async res => {
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Image upload failed' }))
+        throw new Error(err.error || 'Image upload failed')
+      }
+      return res.json() as Promise<MurgaaConfig>
+    })
+  },
+
+  // Adds a new application to the list — never replaces an existing one.
+  addApp: (scope: MurgaaScope, file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    return fetch(`${API_BASE}/murgaa/${scope}/apps`, {
+      method: 'POST',
+      body: formData
+    }).then(async res => {
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Application upload failed' }))
+        throw new Error(err.error || 'Application upload failed')
+      }
+      return res.json() as Promise<MurgaaConfig>
+    })
+  },
+
+  renameApp: (scope: MurgaaScope, appId: string, name: string) =>
+    fetchApi<MurgaaConfig>(`/murgaa/${scope}/apps/${appId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ name })
+    }),
+
+  removeApp: (scope: MurgaaScope, appId: string) =>
+    fetchApi<MurgaaConfig>(`/murgaa/${scope}/apps/${appId}`, { method: 'DELETE' }),
+
+  launchApp: (scope: MurgaaScope, appId: string) =>
+    fetchApi<{ message: string }>(`/murgaa/${scope}/apps/${appId}/launch`, { method: 'POST' })
+}
+
+// ============ Storage: local disk usage + reclaiming it ============
+
+export type StorageCategoryKey =
+  | 'pages' | 'crops' | 'cropJson' | 'audio' | 'script' | 'video' | 'other'
+
+export interface StorageCategoryMeta {
+  key: StorageCategoryKey
+  label: string
+  description: string
+  reclaimable: boolean
+}
+
+export type StorageSizes = Record<StorageCategoryKey, number>
+
+export interface ChapterStorage {
+  id: string
+  number: number
+  title: string | null
+  folderPath: string
+  exists: boolean
+  status: string
+  pageCount: number | null
+  sizes: StorageSizes
+  totalBytes: number
+  reclaimableBytes: number
+  fileCount: number
+  exported: boolean
+  exportedVia: 'editor2' | 'editor1' | null
+}
+
+export interface SeriesStorage {
+  id: string
+  title: string
+  rootFolder: string
+  exists: boolean
+  sizes: StorageSizes
+  totalBytes: number
+  reclaimableBytes: number
+  fileCount: number
+  chapterCount: number
+  exportedChapterCount: number
+  safeToDeleteBytes: number
+  videoBytes: number
+  videoFileCount: number
+  chapters: ChapterStorage[]
+}
+
+export interface StorageOverview {
+  downloadRoot: string
+  totalBytes: number
+  reclaimableBytes: number
+  safeToDeleteBytes: number
+  videoBytes: number
+  sharedBytes: number
+  series: SeriesStorage[]
+  scannedAt: string
+}
+
+export interface StorageDeleteResult {
+  chapterId: string
+  chapterNumber: number
+  categories: StorageCategoryKey[]
+  freedBytes: number
+  skipped?: string
+}
+
+export interface StorageVideoFile {
+  seriesId: string
+  dir: '_video' | '_video2'
+  fileName: string
+  bytes: number
+  modifiedAt: string
+  chapterNumber: number | null
+}
+
+export interface PublishedMap {
+  chapters: Record<string, boolean>
+  series: Record<string, { published: number; total: number }>
+  scannedAt: string
+}
+
+export const storageApi = {
+  getOverview: () => fetchApi<StorageOverview>('/storage/overview'),
+
+  // Cheap per-chapter "has a rendered video" lookup for the module pages.
+  getPublished: (seriesId?: string) =>
+    fetchApi<PublishedMap>(`/storage/published${seriesId ? `?seriesId=${seriesId}` : ''}`),
+
+  getCategories: () => fetchApi<StorageCategoryMeta[]>('/storage/categories'),
+
+  getSeriesVideos: (seriesId: string) =>
+    fetchApi<StorageVideoFile[]>(`/storage/series/${seriesId}/videos`),
+
+  deleteChapterData: (
+    chapterId: string,
+    categories: StorageCategoryKey[],
+    allowUnexported = false
+  ) =>
+    fetchApi<StorageDeleteResult>(`/storage/chapters/${chapterId}/delete`, {
+      method: 'POST',
+      body: JSON.stringify({ categories, allowUnexported })
+    }),
+
+  deleteSeriesData: (
+    seriesId: string,
+    categories: StorageCategoryKey[],
+    allowUnexported = false
+  ) =>
+    fetchApi<{ results: StorageDeleteResult[]; freedBytes: number }>(
+      `/storage/series/${seriesId}/delete`,
+      { method: 'POST', body: JSON.stringify({ categories, allowUnexported }) }
+    ),
+
+  deleteVideo: (seriesId: string, dir: string, fileName: string) =>
+    fetchApi<{ freedBytes: number }>(
+      `/storage/series/${seriesId}/videos/${dir}/${encodeURIComponent(fileName)}`,
+      { method: 'DELETE' }
+    )
 }

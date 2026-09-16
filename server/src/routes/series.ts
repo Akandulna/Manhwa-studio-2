@@ -94,13 +94,20 @@ router.post('/infer-pattern', async (req: Request, res: Response) => {
     }
     
     const result = inferPattern(seedUrls.filter(Boolean));
-    
-    // Try to get title from first URL
+
+    // Title lookup drives a real browser, so it can fail for reasons that have
+    // nothing to do with the URLs (missing Playwright binary, site protection,
+    // no network). Pattern inference is pure string work and must still be
+    // returned when that happens — the title is only a convenience.
     let suggestedTitle: string | null = null;
     if (seedUrls[0]) {
-      suggestedTitle = await getPageTitle(seedUrls[0]);
+      try {
+        suggestedTitle = await getPageTitle(seedUrls[0]);
+      } catch (titleError) {
+        console.warn('Could not fetch page title for suggestion:', titleError);
+      }
     }
-    
+
     const sourceSite = extractSiteDomain(seedUrls[0] || '');
     
     res.json({
@@ -110,7 +117,10 @@ router.post('/infer-pattern', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('Error inferring pattern:', error);
-    res.status(500).json({ error: 'Failed to infer pattern' });
+    // Pass the real reason through; the client toast shows this verbatim and
+    // "Failed to infer pattern" alone leaves no way to tell what went wrong.
+    const detail = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: `Failed to infer pattern: ${detail}` });
   }
 });
 

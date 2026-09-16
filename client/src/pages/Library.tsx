@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { usePublishedChapters } from '@/hooks/usePublishedChapters'
+import { publishedRowClass } from '@/components/PublishedBadge'
 import { Link } from 'react-router-dom'
 import { seriesApi, videoApi, Series } from '@/lib/api'
 import { Card, CardContent } from '@/components/ui/card'
@@ -30,6 +32,11 @@ interface ScannedSeries {
 export default function Library() {
   const [series, setSeries] = useState<Series[]>([])
   const [videoStatus, setVideoStatus] = useState<Record<string, 'draft' | 'exported'>>({})
+
+  // How many chapters of each series are actually rendered to video. This is
+  // the disk's answer, not a project row's: Editor 2.0 creates no VideoProject,
+  // so `videoStatus` alone reported nothing for a fully published series.
+  const { seriesPublished } = usePublishedChapters()
   const [loading, setLoading] = useState(true)
   const [importDialogOpen, setImportDialogOpen] = useState(false)
   const [scanning, setScanning] = useState(false)
@@ -338,10 +345,15 @@ export default function Library() {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {series.map((s) => {
             const status = getStatusInfo(s.statusCounts)
-            
+            // null until the lookup resolves, or when nothing is published yet.
+            const rollup = seriesPublished(s.id)
+            const published = rollup && rollup.published > 0 ? rollup : null
+
             return (
               <Link to={`/series/${s.id}`} key={s.id}>
-                <Card className="h-full hover:shadow-lg transition-shadow cursor-pointer overflow-hidden">
+                <Card className={`h-full hover:shadow-lg transition-shadow cursor-pointer overflow-hidden ${
+                  published ? publishedRowClass : ''
+                }`}>
                   {/* Cover image placeholder */}
                   <div className="aspect-[3/4] bg-gradient-to-br from-primary/20 to-primary/5 relative">
                     <div className="absolute inset-0 flex items-center justify-center">
@@ -352,11 +364,29 @@ export default function Library() {
                         {status.label}
                       </Badge>
                     </div>
-                    {videoStatus[s.id] && (
+                    {/* Published state wins over a stale Editor 1.0 project row:
+                        a rendered MP4 on disk is a fact, "draft" is only an
+                        intention someone may have abandoned. */}
+                    {(published || videoStatus[s.id]) && (
                       <div className="absolute top-2 left-2">
-                        <Badge variant={videoStatus[s.id] === 'exported' ? 'success' : 'secondary'}>
-                          {videoStatus[s.id] === 'exported' ? '🎬 Exported' : '🎬 Draft'}
-                        </Badge>
+                        {published ? (
+                          <Badge
+                            className={
+                              published.published === published.total
+                                ? 'border-transparent bg-fuchsia-600 text-white hover:bg-fuchsia-600/80'
+                                : 'border-transparent bg-fuchsia-600/80 text-white hover:bg-fuchsia-600/60'
+                            }
+                            title={`${published.published} of ${published.total} chapters rendered to video`}
+                          >
+                            🎬 {published.published === published.total
+                              ? 'Published'
+                              : `Published ${published.published}/${published.total}`}
+                          </Badge>
+                        ) : (
+                          <Badge variant={videoStatus[s.id] === 'exported' ? 'success' : 'secondary'}>
+                            {videoStatus[s.id] === 'exported' ? '🎬 Exported' : '🎬 Draft'}
+                          </Badge>
+                        )}
                       </div>
                     )}
                   </div>

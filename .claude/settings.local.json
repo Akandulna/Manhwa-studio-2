@@ -59,7 +59,8 @@
       "Bash(node scratch_flow.mjs)",
       "Bash(rm -f \"/Users/abhishekkandulna/Documents/Visual Studio/Manhwa studio 2/server/scratch_flow\"*.mjs *)",
       "Bash(curl -s http://localhost:5173)",
-      "Bash(open http://localhost:5173)"
+      "Bash(open http://localhost:5173)",
+      "Bash(curl -s \"http://localhost:3002/api/video2/series/24fd650b-9055-4a5e-9023-633a955c3215/editable-chapters\")"
     ],
     "additionalDirectories": [
       "/Users/abhishekkandulna/Documents/Visual Studio/Manhwa studio 2/server"
