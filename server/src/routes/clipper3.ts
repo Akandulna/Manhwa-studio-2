@@ -126,7 +126,8 @@ export function initClipper3Routes(io: Server): Router {
                 const validation = validateMetadata(
                   metadataText,
                   crops.map(c => c.id),
-                  expectedExportedFilenames(seriesSlug(chapter.series.title), img.filename, crops)
+                  expectedExportedFilenames(seriesSlug(chapter.series.title), img.filename, crops),
+                  seriesSlug(chapter.series.title)
                 )
                 metadataValid = validation.isValid
                 metadataErrors = validation.errors
@@ -202,7 +203,8 @@ export function initClipper3Routes(io: Server): Router {
         && validateMetadata(
           metadataText!,
           crops.map(c => c.id),
-          expectedExportedFilenames(seriesSlug(chapter.series.title), req.params.filename, crops)
+          expectedExportedFilenames(seriesSlug(chapter.series.title), req.params.filename, crops),
+          seriesSlug(chapter.series.title)
         ).isValid
       res.json({
         filename: req.params.filename,
@@ -337,7 +339,8 @@ export function initClipper3Routes(io: Server): Router {
         ? validateMetadata(
             content,
             crops.map(c => c.id),
-            expectedExportedFilenames(seriesSlug(chapter.series.title), req.params.filename, crops)
+            expectedExportedFilenames(seriesSlug(chapter.series.title), req.params.filename, crops),
+            seriesSlug(chapter.series.title)
           )
         : { isValid: false, errors: crops.length === 0 ? ['This image has no crop pointers yet.'] : [] }
 
@@ -393,7 +396,8 @@ export function initClipper3Routes(io: Server): Router {
       const validation = validateMetadata(
         content,
         crops.map(c => c.id),
-        expectedExportedFilenames(seriesSlug(chapter.series.title), image.filename, crops)
+        expectedExportedFilenames(seriesSlug(chapter.series.title), image.filename, crops),
+        seriesSlug(chapter.series.title)
       )
       if (!validation.isValid) {
         return res.status(400).json({ error: validation.errors.join(' ') })
@@ -473,7 +477,8 @@ export function initClipper3Routes(io: Server): Router {
           !validateMetadata(
             metadataText,
             crops.map(c => c.id),
-            expectedExportedFilenames(seriesSlug(chapter.series.title), img.filename, crops)
+            expectedExportedFilenames(seriesSlug(chapter.series.title), img.filename, crops),
+            seriesSlug(chapter.series.title)
           ).isValid
         ) continue
 
@@ -602,7 +607,8 @@ export function initClipper3Routes(io: Server): Router {
               validateMetadata(
                 metadataText,
                 crops.map(c => c.id),
-                expectedExportedFilenames(seriesSlug(chapter.series.title), img.filename, crops)
+                expectedExportedFilenames(seriesSlug(chapter.series.title), img.filename, crops),
+                seriesSlug(chapter.series.title)
               ).isValid
             ) {
               attachedImages++

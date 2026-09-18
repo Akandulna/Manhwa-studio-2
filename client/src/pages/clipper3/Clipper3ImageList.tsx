@@ -564,13 +564,29 @@ export default function Clipper3ImageList() {
         return
       }
 
-      const validation = validateMetadataJson(content, expectedIds, expectedFilenames)
+      const validation = validateMetadataJson(
+        content,
+        expectedIds,
+        expectedFilenames,
+        data ? seriesSlug(data.seriesTitle) : undefined
+      )
       if (!validation.isValid) {
+        // A toast can't hold an unbounded error list: joining them all used to
+        // truncate mid-filename, which hid the one character that differed and
+        // made the message useless. Show the first two and say how many more.
+        const [first, ...rest] = validation.errors
+        const description =
+          rest.length > 0
+            ? `${[first, rest[0]].join(' ')}${rest.length > 1 ? ` (+${rest.length - 1} more)` : ''}`
+            : first
+
         toast({
           title: 'Metadata verification failed',
-          description: validation.errors.join(' '),
+          description,
           variant: 'destructive'
         })
+        // The full list always goes to the console, so nothing is lost.
+        console.warn(`[clipper3] metadata rejected for ${filename}:`, validation.errors)
         return
       }
 

@@ -38,6 +38,7 @@ import {
 import { parseNormalizationOptions } from '../services/tts/textNormalizer.js'
 import type { NormalizationOptions } from '../services/tts/textNormalizer.js'
 import { getAudioMetadata } from '../services/audioProcessor.js'
+import { getKokoroState } from '../services/tts/kokoroSupervisor.js'
 import {
   alignSection,
   alignChapter,
@@ -460,6 +461,14 @@ router.patch('/sections/:id/timeline-script', async (req: Request, res: Response
 // ============ Alignment (Script with Timeline) ============
 
 /**
+ * Kokoro supervisor state - whether the server is currently holding a Kokoro
+ * process up, and how many jobs are using it.
+ */
+router.get('/kokoro/status', (_req: Request, res: Response) => {
+  res.json(getKokoroState())
+})
+
+/**
  * Whether the forced-alignment sidecar can run on this machine.
  */
 router.get('/alignment/status', async (_req: Request, res: Response) => {
@@ -715,6 +724,165 @@ router.post('/sections/:id/generate', async (req: Request, res: Response) => {
     }
     
     res.status(500).json({ error: error.message || 'Failed to generate audio' })
+  }
+})
+
+// Chapters with a pipeline run in flight. Guards against a double-click
+// kicking off two runs that would fight over the same sections.
+const pipelineRunning = new Set<string>()
+
+/**
+ * Runs split -> generate -> align for one chapter, emitting progress as it goes.
+ * Alignment is awaited here (rather than fire-and-forget as in the per-section
+ * routes) so the pipeline only reports "complete" once timelines actually exist.
+ */
+async function runVoiceoverPipeline(
+  chapterId: string,
+  folderPath: string,
+  scriptPath: string,
+  opts: { voice?: string; stylePrompt?: string; concurrency: number; targetLength: number }
+): Promise<void> {
+  const emit = (payload: Record<string, unknown>) =>
+    io?.emit('voiceover:pipeline', { chapterId, ...payload })
+
+  // --- 1. Split the script into sections -----------------------------------
+  emit({ stage: 'splitting' })
+
+  const scriptContent = await fs.readFile(scriptPath, 'utf-8')
+  const split = splitScriptIntoSections(scriptContent, opts.targetLength)
+
+  if (split.length === 0) {
+    throw new Error('Script is empty - nothing to voice')
+  }
+
+  const sections = await initializeSections(chapterId, split)
+  emit({ stage: 'split', totalSections: sections.length })
+
+  // --- 2. Generate audio for every section ---------------------------------
+  emit({ stage: 'generating', totalSections: sections.length })
+
+  const ttsSettings = await getTTSSettings()
+  const normalizationOptions = parseNormalizationOptions(ttsSettings)
+  const settings = buildVoiceoverSettings(ttsSettings, normalizationOptions, {
+    voice: opts.voice,
+    stylePrompt: opts.stylePrompt
+  })
+
+  const results = await generateAllSections(
+    chapterId,
+    folderPath,
+    settings,
+    opts.concurrency,
+    io || undefined
+  )
+
+  const generated = results.filter((r: GenerationResult) => r.success)
+  const failed = results.filter((r: GenerationResult) => !r.success)
+
+  emit({
+    stage: 'generated',
+    totalSections: sections.length,
+    generated: generated.length,
+    failed: failed.length
+  })
+
+  if (generated.length === 0) {
+    throw new Error('No audio could be generated for this chapter')
+  }
+
+  // --- 3. Align every section that got audio -------------------------------
+  // Sequential on purpose: the aligner is CPU-bound and already serialized by
+  // its own queue, so running these in parallel would only add contention.
+  emit({ stage: 'aligning', totalSections: generated.length, aligned: 0 })
+
+  let aligned = 0
+  let alignFailed = 0
+
+  for (const result of generated) {
+    if (!result.sectionId) continue
+    try {
+      await alignSection(result.sectionId, io || undefined)
+      aligned++
+    } catch (error) {
+      alignFailed++
+      const message = error instanceof Error ? error.message : 'Alignment failed'
+      console.error(`[pipeline] align ${result.sectionId}: ${message}`)
+    }
+    emit({ stage: 'aligning', totalSections: generated.length, aligned })
+  }
+
+  emit({
+    stage: 'complete',
+    totalSections: sections.length,
+    generated: generated.length,
+    failed: failed.length,
+    aligned,
+    alignFailed
+  })
+}
+
+/**
+ * One-click voiceover pipeline for a chapter: split the script into sections,
+ * generate audio for every section, then align each one into a
+ * "Script with Timeline".
+ *
+ * Responds immediately and runs the work in the background, because a full
+ * chapter takes minutes - far longer than an HTTP request should be held open.
+ * Progress is reported over socket.io as `voiceover:pipeline`, and the existing
+ * per-section voiceover/alignment events still fire underneath.
+ */
+router.post('/chapters/:id/pipeline', async (req: Request, res: Response) => {
+  try {
+    const { voice, stylePrompt, concurrency = 3, targetLength = 500 } = req.body
+
+    const chapter = await prisma.chapter.findUnique({
+      where: { id: req.params.id },
+      include: { script: true, audioSections: true }
+    })
+
+    if (!chapter) {
+      return res.status(404).json({ error: 'Chapter not found' })
+    }
+
+    if (!chapter.script?.scriptPath) {
+      return res.status(400).json({ error: 'Chapter has no script' })
+    }
+
+    const scriptStatus = chapter.script.status
+    if (scriptStatus !== 'done' && scriptStatus !== 'edited') {
+      return res.status(400).json({ error: 'Chapter script is not ready' })
+    }
+
+    if (pipelineRunning.has(chapter.id)) {
+      return res.status(409).json({ error: 'Voiceover is already running for this chapter' })
+    }
+
+    pipelineRunning.add(chapter.id)
+    res.status(202).json({ message: 'Voiceover pipeline started', chapterId: chapter.id })
+
+    // Everything past this point is background work - the response is already
+    // sent, so failures are reported over the socket, never thrown to express.
+    void runVoiceoverPipeline(chapter.id, chapter.folderPath, chapter.script.scriptPath, {
+      voice,
+      stylePrompt,
+      concurrency,
+      targetLength
+    }).catch((error) => {
+      const message = error instanceof Error ? error.message : 'Voiceover pipeline failed'
+      console.error(`[pipeline] chapter ${chapter.id}: ${message}`)
+      io?.emit('voiceover:pipeline', {
+        chapterId: chapter.id,
+        stage: 'failed',
+        error: message
+      })
+    }).finally(() => {
+      pipelineRunning.delete(chapter.id)
+    })
+  } catch (error) {
+    console.error('Error starting voiceover pipeline:', error)
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to start voiceover pipeline' })
+    }
   }
 })
 

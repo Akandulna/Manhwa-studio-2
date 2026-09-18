@@ -1,0 +1,207 @@
+# Crop Metadata Template — Image Clipper 3.0
+
+You are describing crops that have ALREADY been cut from one manhwa page. You
+are not choosing the crops, not changing their order, and not naming the files.
+Those are given to you. Your only job is to write one `description` per crop.
+
+---
+
+# Output contract
+
+**Read this before emitting anything.** Four rules. Each one has broken real
+output, and none of them is caught by "does it parse".
+
+## 1. The top level is an OBJECT with exactly one key: `crops`
+
+```json
+{
+  "crops": [
+    { "id": "crop-01", "exportedFilename": "...", "description": "..." }
+  ]
+}
+```
+
+**not** a bare array:
+
+```json
+[
+  { "id": "crop-01", "exportedFilename": "...", "description": "..." }
+]
+```
+
+The consumer's check is the first thing it runs, and it is strict:
+
+```js
+if (!Array.isArray(parsed?.crops)) → 'Metadata must have a "crops" array.'
+```
+
+A bare array has no `.crops`, so `parsed?.crops` is `undefined` and the whole
+document is rejected — even when every id, filename and description inside it
+is perfect. This is the single most common failure. Wrap the array.
+
+Do not add any other top-level key. No `page`, no `summary`, no `notes`, no
+`sourceContext` echoed back. One key: `crops`.
+
+## 2. Emit raw JSON. No fences, no prose, no trailing commentary
+
+The clipboard text is handed to `JSON.parse` verbatim — nothing strips markdown
+fences, and nothing tolerates a sentence before or after the document:
+
+```js
+const content = await navigator.clipboard.readText()
+JSON.parse(content)
+```
+
+So the very first character of your reply must be `{` and the very last must
+be `}`. A leading ```json line, a closing ```, "Here is the metadata:", or a
+follow-up paragraph all make the paste fail with a parse error.
+
+## 3. Reproduce `id` and `exportedFilename` character-for-character
+
+Both come from the EXPORT CONTEXT block, never from you. Copy them exactly:
+do not re-number, re-order, re-case, abbreviate, fix a truncated-looking
+series slug, or "correct" a reason suffix that reads oddly.
+
+- `id` is matched as a set against the page's own crop points. An id that is
+  not in that set, or one that is missing from your output, fails the document.
+- `exportedFilename` is matched **positionally** — entry 1 against expected
+  filename 1, entry 2 against 2, and so on. So the array order must match the
+  EXPORT CONTEXT order exactly. Reordering entries breaks the pairing even when
+  every individual name is spelled right.
+
+**Never build a filename out of the crop JSON's `reason` field.** The suffix in
+the filename is not the raw reason — it is the reason after slugification, in
+which every run of characters outside `a-z0-9` collapses to a single `_`:
+
+```js
+reason.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60)
+```
+
+So a crop whose reason is `review:possible_background_only` exports as
+`..._07_review_possible_background_only.png` — the colon becomes an
+underscore. Copying the reason verbatim produces a name that will never exist
+on disk. Most reasons are a plain word like `keep`, where slugification changes
+nothing and the trap stays invisible; it only bites on the unusual one. The
+EXPORT CONTEXT has already done this conversion for you, which is exactly why
+its `exportedFilename` is the only source you may copy from.
+
+The page stem is checked separately and by name. A crop carrying `page_011` on
+a `page_007` document is reported as a page mismatch, because such a name
+points at a real-but-different page's output and collides with it rather than
+simply going missing.
+
+If the EXPORT CONTEXT block is absent, or its `crops` field says the crop JSON
+is not attached yet, **stop and say so in plain text**. Do not invent
+filenames, do not fall back to the naming pattern, and do not emit a
+placeholder slug such as `unknown_series` or an upload UUID.
+
+## 4. One entry per crop, in the given order, and nothing else
+
+Exactly as many entries as `crop_count` in the EXPORT CONTEXT. Every crop
+described; no crop described twice; no entry for a crop that is not listed.
+Each entry has exactly three keys — `id`, `exportedFilename`, `description` —
+in that order. No `reason`, no `label`, no `bbox`, no `needs_review`, no
+`notes`.
+
+---
+
+# The `description` field
+
+This is the only field you actually author.
+
+**Shape.** One sentence. Plain prose, no markdown, no line breaks. Roughly
+12–35 words. It ends with a period.
+
+**Content.** Describe what is visibly in the crop, in this order of priority:
+
+1. The characters present — how many, and how each is identifiable by
+   appearance (hair colour, clothing, build). Include their posture, framing
+   (close-up, mid-shot, distant) and expression where readable.
+2. The setting or background — indoor/outdoor, terrain, lighting, weather.
+3. Significant objects and effects — weapons, energy, magic circles, debris.
+4. The presence of speech bubbles or sound effects, noted only as presence
+   ("with speech bubbles over the artwork"), never transcribed.
+
+**Identify by appearance, never by name.** Write "a red-haired figure", "a
+white-haired character", "a blond figure seated cross-legged". Do not use
+character names, and do not infer a name from context or from earlier pages —
+these descriptions are read back without the page in view, and a wrong name is
+worse than no name.
+
+**Do not transcribe text.** Dialogue, narration boxes, katakana SFX, countdown
+numbers and watermarks are not quoted. Note that a bubble or an SFX mark is
+present if it is visually prominent, and move on.
+
+**Do not interpret or narrate.** No plot, no motive, no emotion you cannot see,
+no continuity between crops. "A red-haired figure stands in profile with
+speech bubbles" is right; "the hero finally realises his rival betrayed him"
+is not. Each description stands alone — never write "the same character as
+above", "continuing from the previous panel", or "meanwhile".
+
+**Describe only what is inside this crop.** Neighbouring panels are not yours
+to mention, even when you can see them on the full page.
+
+**Never leave it empty** and never write "unclear", "not visible" or "n/a". A
+mostly-abstract crop still has a describable surface: "An ornate golden
+blade-like form appears over a dark streaked background with a glowing
+countdown timer." If a crop is genuinely blank, say what it is: "A blank pale
+panel with no visible artwork."
+
+---
+
+# Worked example
+
+Given an EXPORT CONTEXT whose `crops` field lists:
+
+```json
+"crops": [
+  { "id": "crop-01", "exportedFilename": "the_sword_saint_reincarnated_into_a_nobl_page_006_01_full_width_tall_scene.png" },
+  { "id": "crop-02", "exportedFilename": "the_sword_saint_reincarnated_into_a_nobl_page_006_02_full_width_tall_scene.png" },
+  { "id": "crop-03", "exportedFilename": "the_sword_saint_reincarnated_into_a_nobl_page_006_03_full_width_tall_scene.png" }
+]
+```
+
+emit exactly this — opening brace first, closing brace last, nothing around it:
+
+```json
+{
+  "crops": [
+    {
+      "id": "crop-01",
+      "exportedFilename": "the_sword_saint_reincarnated_into_a_nobl_page_006_01_full_width_tall_scene.png",
+      "description": "Two dark-clad figures stand in a misty outdoor setting, with a red-haired figure in the left foreground and distant figures on the ground behind them."
+    },
+    {
+      "id": "crop-02",
+      "exportedFilename": "the_sword_saint_reincarnated_into_a_nobl_page_006_02_full_width_tall_scene.png",
+      "description": "A red-haired figure is shown in profile with speech bubbles, while several figures are gathered across an open field around a seated blond figure."
+    },
+    {
+      "id": "crop-03",
+      "exportedFilename": "the_sword_saint_reincarnated_into_a_nobl_page_006_03_full_width_tall_scene.png",
+      "description": "Several ornate golden blade-like forms appear against a dark streaked background with glowing countdown numbers."
+    }
+  ]
+}
+```
+
+---
+
+# Self-check before you reply
+
+Run through this list. Every item has rejected a real document.
+
+- [ ] First character is `{`, last character is `}`.
+- [ ] No ``` fence anywhere, and no text outside the JSON.
+- [ ] Exactly one top-level key, `crops`, holding an array.
+- [ ] Entry count equals `crop_count` from the EXPORT CONTEXT.
+- [ ] Entries are in EXPORT CONTEXT order (positional filename matching).
+- [ ] Every `id` copied verbatim; the set matches exactly — none extra, none missing.
+- [ ] Every `exportedFilename` copied verbatim from the EXPORT CONTEXT,
+      including the page stem and the reason suffix; none invented from the
+      naming pattern and none rebuilt from the crop JSON's raw `reason`.
+- [ ] No filename contains a character outside `a-z`, `0-9`, `_` and the final
+      `.png` — a colon or space means a raw reason leaked in unslugified.
+- [ ] Every entry has all three keys, and no fourth key.
+- [ ] Every `description` is one non-empty sentence, no names, no quoted text.
+- [ ] The document parses as JSON.

@@ -156,10 +156,35 @@ function reasonSlug(value: string): string {
     .slice(0, 60) || 'crop'
 }
 
-/** The source-page stem encoded in an exported name, e.g. "page_007". */
-function stemOfExportedName(filename: string): string {
-  const match = /_(page_\d+)_\d{2}(?:_|\.)/.exec(filename)
-  return match ? match[1] : ''
+/**
+ * The source-page stem encoded in an exported name, e.g. "page_007" or "003".
+ *
+ * The stem is whatever the source image was called, so it CANNOT be pattern
+ * matched — an earlier version looked for a literal `page_\d+`, which meant
+ * every series whose pages aren't named "page_NNN" (`003.webp`, `ch12_003.webp`)
+ * produced an empty stem and silently skipped the page check entirely. Instead
+ * the two known ends are peeled off: the `${slug}_` prefix and the `_NN` crop
+ * index (plus its optional `_reason` tail) the cutter appends. What remains is
+ * the stem, whatever it looks like.
+ */
+function stemOfExportedName(filename: string, slug?: string): string {
+  let rest = filename.trim().replace(/\.[^/.]+$/, '')
+  if (slug && rest.toLowerCase().startsWith(`${slug.toLowerCase()}_`)) {
+    rest = rest.slice(slug.length + 1)
+  }
+  // Greedy stem, then the two-digit crop index, then an optional reason tail.
+  const match = /^(.+)_(\d{2})(?:_[a-z0-9_]*)?$/.exec(rest)
+  return match ? match[1] : rest
+}
+
+/**
+ * The page a stem refers to, as a number, so zero-padding can't fail a paste:
+ * "page_7" and "page_007" are the same page. Comparing the stems as raw text
+ * rejected correct metadata whenever the padding differed.
+ */
+function pageNumberOf(stem: string): string {
+  const match = /(\d+)\s*$/.exec(stem)
+  return match ? String(Number(match[1])) : ''
 }
 
 /**
@@ -202,8 +227,7 @@ export interface MetadataValidation {
  *   4. The set of ids matches the points file's crop ids EXACTLY — no id
  *      pointing at a crop that doesn't exist, and no crop left undescribed.
  *
- *   5. Every `exportedFilename`, when present, is the name the cutter will
- *      actually write for that crop — see expectedExportedFilenames.
+ *   5. Every `exportedFilename`, when present, names THIS source page.
  *
  * Check 5 exists because of a real failure: a describing pass emitted crops
  * for page_007 and page_010 carrying `page_011` filenames. Ids matched, so the
@@ -212,15 +236,32 @@ export interface MetadataValidation {
  * names the wrong source page is the one error this shape can carry silently,
  * so it is caught here rather than at render time.
  *
+ * It deliberately checks ONLY the page stem, not the whole name. The full name
+ * embeds the crop's `reason`, which is not stable: re-cutting a page can
+ * change a reason (`keep` -> `full_width_tall_scene`), or change the crop
+ * count and so shift every index, and either renames every file on the page.
+ * Metadata written against the previous cut is then rejected wholesale even
+ * though its descriptions are still perfectly good — which happened
+ * repeatedly, since describing a page takes long enough that a re-cut often
+ * lands in between. The id set (check 4) is the real key: ids survive a
+ * re-cut, filenames don't. So a mismatched suffix is left alone and only the
+ * genuinely dangerous case — a name pointing at a DIFFERENT page, which can
+ * collide with that page's real output instead of merely 404ing — still
+ * fails.
+ *
  * `expectedCropIds` is the points file's own crop ids (already validated by
  * extractCrops), so this never invents its own idea of what a crop id is.
- * `expectedFilenames` is positional alongside it; omit it (or leave an entry
- * null) where the true name isn't known, and that entry is simply not checked.
+ * `expectedFilenames` is positional alongside it and is read only for the
+ * page stem it carries; omit it where the true name isn't known. `slug` is the
+ * series slug those names were built with — pass it so the stem can be peeled
+ * off exactly instead of guessed, since a slug contains underscores and cannot
+ * be told from the stem by pattern alone.
  */
 export function validateMetadata(
   text: string,
   expectedCropIds: string[],
-  expectedFilenames?: (string | null)[]
+  expectedFilenames?: (string | null)[],
+  slug?: string
 ): MetadataValidation {
   const errors: string[] = []
 
@@ -262,32 +303,39 @@ export function validateMetadata(
   }
 
   if (expectedFilenames && expectedFilenames.length > 0) {
-    const expectedStem = stemOfExportedName(
-      expectedFilenames.find((name): name is string => typeof name === 'string' && name.length > 0) ?? ''
-    )
+    const sample = expectedFilenames.find(
+      (name): name is string => typeof name === 'string' && name.length > 0
+    ) ?? ''
+    const expectedStem = stemOfExportedName(sample, slug)
+    const expectedPage = pageNumberOf(expectedStem)
+
+    // Only the page stem is enforced — see the note on check 5 above. A name
+    // whose suffix has drifted still points at this page and is harmless; one
+    // naming another page can collide with that page's real output.
+    const wrongPage: string[] = []
 
     parsed.crops.forEach((entry: any, index: number) => {
       const actual = entry?.exportedFilename
       if (typeof actual !== 'string' || !actual.trim()) return
+      if (!expectedPage) return
 
-      const want = expectedFilenames[index]
-      if (typeof want !== 'string' || !want) return
-      if (actual === want) return
+      const actualStem = stemOfExportedName(actual, slug)
+      const actualPage = pageNumberOf(actualStem)
+      // Compared as numbers, so "page_7" and "page_007" agree. A name with no
+      // page number at all is left alone rather than guessed at.
+      if (!actualPage || actualPage === expectedPage) return
 
       const label = typeof entry?.id === 'string' && entry.id.trim() ? entry.id : `entry ${index + 1}`
-      const actualStem = stemOfExportedName(actual)
-
-      // Called out separately because it is the dangerous one: the name refers
-      // to a DIFFERENT source page, so it can collide with that page's real
-      // crops instead of simply not existing.
-      if (expectedStem && actualStem && actualStem !== expectedStem) {
-        errors.push(
-          `Crop "${label}" has exportedFilename "${actual}", which belongs to source page "${actualStem}" — this image is "${expectedStem}". Expected "${want}".`
-        )
-      } else {
-        errors.push(`Crop "${label}" has exportedFilename "${actual}" but the cutter will write "${want}".`)
-      }
+      wrongPage.push(`${label} -> ${actualStem}`)
     })
+
+    // Collapsed into one error: these always arrive as a whole bad batch, and
+    // one line per crop overflows the toast that surfaces it.
+    if (wrongPage.length > 0) {
+      errors.push(
+        `${wrongPage.length} crop(s) name a different source page — this image is "${expectedStem}": ${wrongPage.join(', ')}.`
+      )
+    }
   }
 
   return { isValid: errors.length === 0, errors }

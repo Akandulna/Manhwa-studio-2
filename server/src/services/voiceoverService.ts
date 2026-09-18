@@ -14,7 +14,7 @@ import { Server } from 'socket.io'
 import PQueue from 'p-queue'
 import { prisma } from '../index.js'
 import { ttsProviderFactory } from './tts/index.js'
-import type { KokoroTTSProvider } from './tts/kokoroTTSProvider.js'
+import { acquireKokoro, releaseKokoro } from './tts/kokoroSupervisor.js'
 import { normalizeTextForTTS, NormalizationOptions } from './tts/textNormalizer.js'
 import {
   pcmToWav,
@@ -306,13 +306,12 @@ export async function generateSectionAudio(
     throw new Error('TTS not configured. Add GEMINI_API_KEY to your .env file.')
   }
 
-  // Kokoro runs as a separate local Gradio app - fail with an actionable
-  // message instead of a generic fetch error when it is not running.
-  if (provider.name === 'kokoro') {
-    const health = await (provider as KokoroTTSProvider).testConnection()
-    if (!health.success) {
-      throw new Error(health.error || 'Kokoro TTS server is not reachable')
-    }
+  // Kokoro runs as a separate local Gradio app. Start it on demand (and keep it
+  // up for the rest of this burst of work), rather than requiring it to be
+  // running for the whole dev session.
+  const usingKokoro = provider.name === 'kokoro'
+  if (usingKokoro) {
+    await acquireKokoro()
   }
   
   // Get section
@@ -423,6 +422,12 @@ export async function generateSectionAudio(
     }).catch(() => {})
     
     throw error
+  } finally {
+    // Balances acquireKokoro(); the supervisor only counts down to an idle
+    // shutdown once every in-flight job has released.
+    if (usingKokoro) {
+      releaseKokoro()
+    }
   }
 }
 
@@ -449,6 +454,15 @@ export async function generateAllSections(
     return []
   }
   
+  // Hold Kokoro up for the whole batch. Each section acquires it too, but at
+  // concurrency 1 the count would drop to zero between sections; this keeps one
+  // reference open so a long chapter never straddles an idle shutdown.
+  const provider = ttsProviderFactory.resolveProvider(settings.provider)
+  const usingKokoro = provider?.name === 'kokoro'
+  if (usingKokoro) {
+    await acquireKokoro()
+  }
+
   const queue = new PQueue({ concurrency })
   const results: GenerationResult[] = []
   let completed = 0
@@ -484,7 +498,13 @@ export async function generateAllSections(
     })
   )
   
-  await Promise.all(promises)
+  try {
+    await Promise.all(promises)
+  } finally {
+    if (usingKokoro) {
+      releaseKokoro()
+    }
+  }
   
   return results
 }

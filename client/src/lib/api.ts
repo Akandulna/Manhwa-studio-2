@@ -563,6 +563,14 @@ export const voiceoverApi = {
       body: JSON.stringify({ targetLength })
     }),
   
+  // One-click: split script -> generate all audio -> align every section.
+  // Returns as soon as the run starts; progress arrives on `voiceover:pipeline`.
+  runPipeline: (chapterId: string, opts?: { voice?: string; targetLength?: number }) =>
+    fetchApi<{ message: string; chapterId: string }>(`/voiceover/chapters/${chapterId}/pipeline`, {
+      method: 'POST',
+      body: JSON.stringify(opts ?? {})
+    }),
+
   updateSection: (sectionId: string, text: string) =>
     fetchApi<AudioSection>(`/voiceover/sections/${sectionId}`, {
       method: 'PATCH',

@@ -5,11 +5,11 @@
  * part groupings, and generation controls.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { usePublishedChapters } from '@/hooks/usePublishedChapters'
 import { PublishedBadge, publishedRowClass } from '@/components/PublishedBadge'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { narrationApi, NarrationSeriesDetail, NarrationChapterSummary, AIStatus } from '@/lib/api'
+import { narrationApi, voiceoverApi, NarrationSeriesDetail, NarrationChapterSummary, AIStatus } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -35,11 +35,55 @@ import {
   Volume2
 } from 'lucide-react'
 
+/** Short human label for the current pipeline stage, shown in the chapter row. */
+function describeVoiceoverRun(run: VoiceoverRun): string {
+  switch (run.stage) {
+    case 'splitting':
+      return 'Splitting script...'
+    case 'split':
+      return `Split into ${run.totalSections} sections`
+    case 'generating':
+      return `Generating ${run.totalSections} sections...`
+    case 'generated':
+      return `Voiced ${run.generated}/${run.totalSections}`
+    case 'aligning':
+      return `Aligning ${run.aligned ?? 0}/${run.totalSections}...`
+    case 'complete':
+      return `Done - ${run.aligned} aligned`
+    case 'failed':
+      return 'Failed'
+  }
+}
+
+// Backstop for a single chapter in the bulk queue. Generation plus alignment on
+// a long chapter runs several minutes; this only fires if a socket event is lost.
+const BULK_CHAPTER_TIMEOUT_MS = 30 * 60 * 1000
+
+/** Progress of the series-wide sequential voiceover run. */
+interface BulkVoiceoverState {
+  total: number
+  completed: number
+  failed: number
+  currentChapterNumber: number | null
+  cancelling: boolean
+}
+
+/** Live state of a one-click voiceover run for a single chapter. */
+interface VoiceoverRun {
+  stage: 'splitting' | 'split' | 'generating' | 'generated' | 'aligning' | 'complete' | 'failed'
+  totalSections?: number
+  generated?: number
+  aligned?: number
+  failed?: number
+  alignFailed?: number
+  error?: string
+}
+
 export default function SeriesScriptView() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { toast } = useToast()
-  const { narrationProgress, narrationRangeProgress, narrationRangeComplete } = useSocket()
+  const { socket, narrationProgress, narrationRangeProgress, narrationRangeComplete } = useSocket()
 
   const [series, setSeries] = useState<NarrationSeriesDetail | null>(null)
 
@@ -53,11 +97,73 @@ export default function SeriesScriptView() {
   const [rangeFrom, setRangeFrom] = useState('')
   const [rangeTo, setRangeTo] = useState('')
 
+  // One-click voiceover pipeline, keyed by chapter id so several chapters can
+  // report progress independently in the list.
+  const [voiceoverRuns, setVoiceoverRuns] = useState<Record<string, VoiceoverRun>>({})
+
+  // Series-wide "Generate All Voiceover" run. Chapters are processed strictly
+  // one after another: the TTS provider and the aligner are both single
+  // resources, so overlapping chapters would only cause contention.
+  const [bulkVoiceover, setBulkVoiceover] = useState<BulkVoiceoverState | null>(null)
+  // Lets the queue await the chapter currently in flight. The socket handler
+  // resolves it when that chapter reports complete/failed.
+  const bulkWaiterRef = useRef<((outcome: 'complete' | 'failed') => void) | null>(null)
+  const bulkCancelRef = useRef(false)
+
   useEffect(() => {
     if (id) {
       loadData()
     }
   }, [id])
+
+  // Live progress for one-click voiceover runs started from this page.
+  useEffect(() => {
+    if (!socket) return
+
+    const handlePipeline = (data: VoiceoverRun & { chapterId: string }) => {
+      const { chapterId, ...run } = data
+      setVoiceoverRuns(prev => ({ ...prev, [chapterId]: run }))
+
+      if (run.stage === 'complete') {
+        // Release the bulk queue first, so the next chapter starts immediately.
+        bulkWaiterRef.current?.('complete')
+
+        const alignNote = run.alignFailed
+          ? `, ${run.alignFailed} timeline(s) failed`
+          : ''
+        toast({
+          title: 'Voiceover Complete',
+          description: `${run.generated}/${run.totalSections} sections voiced, ${run.aligned} aligned${alignNote}`
+        })
+        loadData()
+        // Leave the finished badge up briefly, then fall back to the normal
+        // voiceover status badge that loadData() has just refreshed.
+        setTimeout(() => {
+          setVoiceoverRuns(prev => {
+            const next = { ...prev }
+            delete next[chapterId]
+            return next
+          })
+        }, 6000)
+      }
+
+      if (run.stage === 'failed') {
+        bulkWaiterRef.current?.('failed')
+
+        toast({
+          title: 'Voiceover Failed',
+          description: run.error || 'The voiceover pipeline failed',
+          variant: 'destructive'
+        })
+        loadData()
+      }
+    }
+
+    socket.on('voiceover:pipeline', handlePipeline)
+    return () => {
+      socket.off('voiceover:pipeline', handlePipeline)
+    }
+  }, [socket, id])
 
   // Reload when generation completes
   useEffect(() => {
@@ -221,6 +327,127 @@ export default function SeriesScriptView() {
     }
   }
 
+  /**
+   * Start the one-click voiceover run for a chapter: split -> generate -> align.
+   * The request returns immediately; everything after is socket-driven.
+   */
+  const handleGenerateVoiceover = async (chapter: NarrationChapterSummary) => {
+    setVoiceoverRuns(prev => ({ ...prev, [chapter.id]: { stage: 'splitting' } }))
+    try {
+      await voiceoverApi.runPipeline(chapter.id)
+      toast({
+        title: 'Voiceover Started',
+        description: `Chapter ${chapter.number}: splitting script, then generating audio`
+      })
+    } catch (error) {
+      setVoiceoverRuns(prev => {
+        const next = { ...prev }
+        delete next[chapter.id]
+        return next
+      })
+      toast({
+        title: 'Error',
+        description: error instanceof Error ? error.message : 'Failed to start voiceover',
+        variant: 'destructive'
+      })
+    }
+  }
+
+  /**
+   * Chapters eligible for a voiceover run: script is ready, and the chapter is
+   * not already fully voiced. Published chapters are skipped - they are already
+   * rendered, and re-voicing would invalidate the video.
+   */
+  const getVoiceableChapters = (): NarrationChapterSummary[] =>
+    (series?.chapters ?? []).filter(
+      c =>
+        (c.script?.status === 'done' || c.script?.status === 'edited') &&
+        c.voiceover.status !== 'done' &&
+        !isPublished(c.id)
+    )
+
+  /**
+   * Run the voiceover pipeline across every eligible chapter, strictly one at a
+   * time. Each chapter is started via the same endpoint the per-row button uses,
+   * then awaited until its socket reports complete/failed before moving on.
+   */
+  const handleGenerateAllVoiceover = async () => {
+    const queue = getVoiceableChapters()
+    if (queue.length === 0) return
+
+    bulkCancelRef.current = false
+    setBulkVoiceover({
+      total: queue.length,
+      completed: 0,
+      failed: 0,
+      currentChapterNumber: null,
+      cancelling: false
+    })
+
+    for (const chapter of queue) {
+      if (bulkCancelRef.current) break
+
+      setBulkVoiceover(prev =>
+        prev ? { ...prev, currentChapterNumber: chapter.number } : prev
+      )
+
+      // Wait for this chapter's pipeline to report a terminal stage. The socket
+      // handler resolves the waiter; the timeout is a backstop so a dropped
+      // event cannot wedge the queue forever.
+      const outcome = await new Promise<'complete' | 'failed'>(resolve => {
+        let settled = false
+        const finish = (value: 'complete' | 'failed') => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          bulkWaiterRef.current = null
+          resolve(value)
+        }
+
+        const timer = setTimeout(() => finish('failed'), BULK_CHAPTER_TIMEOUT_MS)
+        bulkWaiterRef.current = finish
+
+        voiceoverApi.runPipeline(chapter.id).catch(error => {
+          toast({
+            title: `Chapter ${chapter.number} Failed to Start`,
+            description: error instanceof Error ? error.message : 'Could not start voiceover',
+            variant: 'destructive'
+          })
+          finish('failed')
+        })
+      })
+
+      setBulkVoiceover(prev =>
+        prev
+          ? {
+              ...prev,
+              completed: prev.completed + (outcome === 'complete' ? 1 : 0),
+              failed: prev.failed + (outcome === 'failed' ? 1 : 0)
+            }
+          : prev
+      )
+    }
+
+    setBulkVoiceover(prev => {
+      if (prev) {
+        toast({
+          title: bulkCancelRef.current ? 'Voiceover Stopped' : 'All Voiceovers Complete',
+          description: `${prev.completed} chapter(s) voiced${prev.failed ? `, ${prev.failed} failed` : ''}`
+        })
+      }
+      return null
+    })
+
+    bulkCancelRef.current = false
+    loadData()
+  }
+
+  /** Stop after the chapter currently in flight finishes. */
+  const handleStopBulkVoiceover = () => {
+    bulkCancelRef.current = true
+    setBulkVoiceover(prev => (prev ? { ...prev, cancelling: true } : prev))
+  }
+
   const getStatusBadge = (chapter: NarrationChapterSummary) => {
     // Check if this chapter is currently being generated
     if (narrationProgress?.chapterId === chapter.id) {
@@ -348,6 +575,7 @@ export default function SeriesScriptView() {
     : 0
 
   const parts = getChaptersByPart()
+  const voiceableCount = getVoiceableChapters().length
 
   return (
     <div className="p-6">
@@ -398,6 +626,73 @@ export default function SeriesScriptView() {
           </CardContent>
         </Card>
       )}
+
+      {/* Series-wide voiceover */}
+      <Card className="mb-6">
+        <CardContent className="py-4">
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="flex items-center gap-2">
+              <Volume2 className="h-4 w-4 text-muted-foreground" />
+              <span className="font-medium">Voiceover:</span>
+            </div>
+
+            {bulkVoiceover ? (
+              <>
+                <div className="flex items-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span className="text-sm">
+                    {bulkVoiceover.cancelling
+                      ? 'Stopping after this chapter...'
+                      : bulkVoiceover.currentChapterNumber !== null
+                        ? `Chapter ${bulkVoiceover.currentChapterNumber}`
+                        : 'Starting...'}
+                  </span>
+                  <span className="text-sm text-muted-foreground">
+                    ({bulkVoiceover.completed + bulkVoiceover.failed}/{bulkVoiceover.total} done
+                    {bulkVoiceover.failed > 0 ? `, ${bulkVoiceover.failed} failed` : ''})
+                  </span>
+                </div>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleStopBulkVoiceover}
+                  disabled={bulkVoiceover.cancelling}
+                >
+                  <XCircle className="h-4 w-4 mr-2" />
+                  Stop
+                </Button>
+
+                <div className="ml-auto w-48">
+                  <Progress
+                    value={
+                      ((bulkVoiceover.completed + bulkVoiceover.failed) / bulkVoiceover.total) * 100
+                    }
+                    className="h-2"
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                <Button
+                  onClick={handleGenerateAllVoiceover}
+                  disabled={voiceableCount === 0 || Object.keys(voiceoverRuns).length > 0}
+                  size="sm"
+                >
+                  <Wand2 className="h-4 w-4 mr-2" />
+                  Generate All Voiceover
+                </Button>
+
+                <span className="text-sm text-muted-foreground">
+                  {voiceableCount === 0
+                    ? 'Every scripted chapter is already voiced'
+                    : `${voiceableCount} chapter(s) ready - runs one after another`}
+                </span>
+              </>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Range Generation */}
       <Card className="mb-6">
@@ -509,7 +804,12 @@ export default function SeriesScriptView() {
                       <div className="flex items-center gap-2">
                         {getStatusBadge(chapter)}
 
-                        {chapter.voiceover.status === 'done' ? (
+                        {voiceoverRuns[chapter.id] ? (
+                          <Badge variant="secondary" className="flex items-center gap-1">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            {describeVoiceoverRun(voiceoverRuns[chapter.id])}
+                          </Badge>
+                        ) : chapter.voiceover.status === 'done' ? (
                           <Badge variant="success" className="flex items-center gap-1">
                             <Volume2 className="h-3 w-3" />
                             Voiced
@@ -543,12 +843,34 @@ export default function SeriesScriptView() {
                         </Link>
                         
                         {(chapter.script?.status === 'done' || chapter.script?.status === 'edited') && (
-                          <Link to={`/narration/voiceover/${chapter.id}`}>
-                            <Button variant="outline" size="sm">
-                              <Volume2 className="h-4 w-4 mr-1" />
-                              Voice
-                            </Button>
-                          </Link>
+                          <>
+                            {/* One-click: split -> generate -> align. Hidden once
+                                the chapter is fully voiced, where re-running
+                                would discard existing audio for no gain. */}
+                            {chapter.voiceover.status !== 'done' && (
+                              <Button
+                                variant="default"
+                                size="sm"
+                                onClick={() => handleGenerateVoiceover(chapter)}
+                                disabled={!!voiceoverRuns[chapter.id] || !!bulkVoiceover}
+                                title="Split the script, generate all audio, then align timelines"
+                              >
+                                {voiceoverRuns[chapter.id] ? (
+                                  <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                                ) : (
+                                  <Wand2 className="h-4 w-4 mr-1" />
+                                )}
+                                Generate Voiceover
+                              </Button>
+                            )}
+
+                            <Link to={`/narration/voiceover/${chapter.id}`}>
+                              <Button variant="outline" size="sm">
+                                <Volume2 className="h-4 w-4 mr-1" />
+                                Voice
+                              </Button>
+                            </Link>
+                          </>
                         )}
                       </div>
                     </div>
