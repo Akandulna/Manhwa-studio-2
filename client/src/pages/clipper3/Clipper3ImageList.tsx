@@ -33,7 +33,7 @@ import {
   CollapsibleTrigger
 } from '@/components/ui/collapsible'
 import { useToast } from '@/components/ui/use-toast'
-import { useSocket } from '@/lib/socket'
+import { useSocket, type Clipper3UnresolvedPage } from '@/lib/socket'
 import { MurgaaDialog } from '@/components/narration/MurgaaDialog'
 import {
   ArrowLeft,
@@ -57,13 +57,18 @@ import {
   Tags,
   ClipboardCopy,
   ChevronDown,
-  ExternalLink
+  ExternalLink,
+  Rows3,
+  Check,
+  FolderOpen
 } from 'lucide-react'
 import {
   clipperApi,
   clipper3Api,
   type Clipper3ChapterImages,
-  type Clipper3Image
+  type Clipper3Image,
+  type Clipper3SliceResult,
+  type Clipper3SliceFile
 } from '@/lib/api'
 import { parseCropJson, type ParsedCropItem } from '@/lib/cropJsonValidator'
 import { validateMetadataJson } from '@/lib/metadataValidator'
@@ -85,6 +90,11 @@ export default function Clipper3ImageList() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [isCropping, setIsCropping] = useState(false)
 
+  // Pages whose metadata names crops the cut did not produce. Held in state
+  // rather than shown only as a toast: this is the one moment the mismatch is
+  // cheap to explain, and a toast is gone before the user can act on it.
+  const [unresolvedPages, setUnresolvedPages] = useState<Clipper3UnresolvedPage[]>([])
+
   // The row popup: an index into images, so Next/Previous just walk it.
   const [activeIndex, setActiveIndex] = useState<number | null>(null)
 
@@ -99,6 +109,17 @@ export default function Clipper3ImageList() {
   const [copyingContext, setCopyingContext] = useState(false)
   const [copyingAll, setCopyingAll] = useState(false)
   const [promptsOpen, setPromptsOpen] = useState(false)
+
+  // Slicing: the tall page cut into parts on disk, so each piece can be pasted
+  // at full resolution instead of one downscaled strip. The server does the
+  // cutting and writes a folder — the clipboard holds a single decoded image,
+  // so selecting all the files in the OS file explorer is the only way to copy
+  // the whole set at once.
+  const [sliceResult, setSliceResult] = useState<Clipper3SliceResult | null>(null)
+  const [slicing, setSlicing] = useState(false)
+  const [slicesOpen, setSlicesOpen] = useState(false)
+  const [copiedSlice, setCopiedSlice] = useState<number | null>(null)
+  const [openingFolder, setOpeningFolder] = useState(false)
   const [pastingJson, setPastingJson] = useState(false)
   const [pastingMetadata, setPastingMetadata] = useState(false)
 
@@ -206,15 +227,27 @@ export default function Clipper3ImageList() {
     }
 
     const failed = event.failed ?? 0
+    const unresolved = event.unresolved ?? []
+    setUnresolvedPages(unresolved)
+
+    const unresolvedCount = unresolved.reduce((n, page) => n + page.missing.length, 0)
     toast({
       title: failed > 0 ? 'Cropped with failures' : 'Crop sections saved',
       description:
         `${event.exported ?? 0} section${event.exported === 1 ? '' : 's'} from ` +
         `${event.images ?? 0} image${event.images === 1 ? '' : 's'}` +
-        `${failed > 0 ? `, ${failed} failed` : ''}.`,
-      variant: failed > 0 ? 'destructive' : undefined
+        `${failed > 0 ? `, ${failed} failed` : ''}.` +
+        // Named in the toast as well as the banner, so a run left unattended
+        // still says something was wrong when the user comes back to it.
+        (unresolvedCount > 0
+          ? ` ${unresolvedCount} metadata name${unresolvedCount === 1 ? '' : 's'} on ` +
+            `${unresolved.length} page${unresolved.length === 1 ? '' : 's'} match no file.`
+          : ''),
+      variant: failed > 0 || unresolvedCount > 0 ? 'destructive' : undefined
     })
   }, [clipper3CropComplete, chapterId, toast])
+
+  const unresolvedNameCount = unresolvedPages.reduce((n, page) => n + page.missing.length, 0)
 
   const cropProgress = isCropping && clipper3CropProgress?.chapterId === chapterId
     ? clipper3CropProgress
@@ -288,6 +321,92 @@ export default function Clipper3ImageList() {
       setCopyingImage(false)
     }
   }, [chapterId, activeImage, toast, toPngBlob])
+
+  /**
+   * Cuts the active image into vertical parts, written to a folder on disk.
+   *
+   * sharp reads the true pixel dimensions off the file and extracts losslessly,
+   * so the cut never touches the scaled-down preview shown above.
+   */
+  const sliceActiveImage = useCallback(async () => {
+    if (!chapterId || !activeImage) return
+    setSlicing(true)
+    try {
+      const result = await clipper3Api.sliceImage(chapterId, activeImage.filename)
+      setSliceResult(result)
+      setCopiedSlice(null)
+      setSlicesOpen(true)
+      toast({
+        title: `Sliced into ${result.files.length} parts`,
+        description: 'Open the folder, select all, and copy them together.'
+      })
+    } catch (error) {
+      toast({
+        title: 'Slicing failed',
+        description: error instanceof Error ? error.message : 'Could not slice the image',
+        variant: 'destructive'
+      })
+    } finally {
+      setSlicing(false)
+    }
+  }, [chapterId, activeImage, toast])
+
+  /**
+   * Reveals the slice folder in Finder/Explorer.
+   *
+   * This is the "copy them all" path: the system clipboard holds only one
+   * decoded image, but it holds any number of FILE references — so selecting
+   * the files there and pressing copy puts all 18 on the clipboard at once,
+   * which no web page can do on its own.
+   */
+  const openSliceFolder = useCallback(async () => {
+    if (!chapterId || !activeImage) return
+    setOpeningFolder(true)
+    try {
+      await clipper3Api.openSliceFolder(chapterId, activeImage.filename)
+    } catch (error) {
+      toast({
+        title: 'Could not open the folder',
+        description: error instanceof Error ? error.message : 'Failed to open the folder',
+        variant: 'destructive'
+      })
+    } finally {
+      setOpeningFolder(false)
+    }
+  }, [chapterId, activeImage, toast])
+
+  /**
+   * Puts ONE slice on the clipboard, for when only a single part is needed.
+   * Fetched from disk rather than held in memory, so the browser never keeps
+   * eighteen decoded pages alive at once.
+   */
+  const copySliceToClipboard = useCallback(async (slice: Clipper3SliceFile) => {
+    if (!chapterId || !activeImage) return
+    try {
+      const response = await fetch(
+        clipper3Api.getSliceUrl(chapterId, activeImage.filename, slice.filename)
+      )
+      if (!response.ok) throw new Error(`Could not fetch the slice (HTTP ${response.status})`)
+      const blob = await response.blob()
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+      setCopiedSlice(slice.index)
+    } catch (error) {
+      toast({
+        title: 'Copy failed',
+        description: error instanceof Error ? error.message : 'Could not copy the slice',
+        variant: 'destructive'
+      })
+    }
+  }, [chapterId, activeImage, toast])
+
+  // Slices belong to the image that produced them: moving to another row (or
+  // closing the dialog) drops the panel back to its unsliced state. The files
+  // stay on disk — re-slicing overwrites them.
+  useEffect(() => {
+    setSliceResult(null)
+    setSlicesOpen(false)
+    setCopiedSlice(null)
+  }, [activeImage?.filename])
 
   /** The guideline file uploaded in Settings → Crop 3.0 → Guideline File (browser-local). */
   const copyPromptToClipboard = useCallback(async () => {
@@ -771,6 +890,9 @@ export default function Clipper3ImageList() {
   const startCropSections = useCallback(async () => {
     if (!chapterId) return
     setIsCropping(true)
+    // The previous run's report describes a crops3/ that is about to be
+    // rewritten, so it must not outlive the cut that produced it.
+    setUnresolvedPages([])
     try {
       await clipper3Api.crop(chapterId)
     } catch (error) {
@@ -897,6 +1019,48 @@ export default function Clipper3ImageList() {
         </div>
       )}
 
+      {unresolvedPages.length > 0 && (
+        <div className="border-b border-destructive/40 bg-destructive/10 px-4 py-2 flex-shrink-0">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="h-4 w-4 text-destructive mt-0.5 flex-shrink-0" />
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium text-destructive">
+                {unresolvedNameCount} metadata name{unresolvedNameCount === 1 ? '' : 's'} on{' '}
+                {unresolvedPages.length} page{unresolvedPages.length === 1 ? '' : 's'} match no file in
+                crops3/
+              </p>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                Re-paste the metadata for {unresolvedPages.length === 1 ? 'this page' : 'these pages'} — the
+                names are rebuilt from the crop JSON on save. Left as they are, Editor 2.0 cannot resolve
+                them.
+              </p>
+              <ul className="mt-1 space-y-0.5">
+                {unresolvedPages.map(page => (
+                  <li key={page.imageFilename} className="text-[11px] font-mono text-muted-foreground">
+                    <span className="text-foreground">{page.imageFilename}</span>{' '}
+                    <span className="text-destructive">
+                      {page.missing.length}/{page.total}
+                    </span>
+                    {/* First one only: the whole list overflows the banner, and
+                        one example is enough to recognise which cut is stale. */}
+                    <span className="ml-1 truncate">— {page.missing[0]}</span>
+                    {page.missing.length > 1 && <span> +{page.missing.length - 1} more</span>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-[11px] flex-shrink-0"
+              onClick={() => setUnresolvedPages([])}
+            >
+              Dismiss
+            </Button>
+          </div>
+        </div>
+      )}
+
       <ScrollArea className="flex-1">
         <div className="p-4 space-y-2">
           {images.map((img, index) => {
@@ -998,6 +1162,111 @@ export default function Clipper3ImageList() {
                   )}
                   Copy image to clipboard
                 </Button>
+
+                {/* Tall pages get downscaled to mush when pasted whole, so the
+                    page is cut into parts on disk first. Copying the whole set
+                    happens in the file explorer, not here: the clipboard holds
+                    one decoded image but any number of file references. */}
+                <Collapsible open={slicesOpen} onOpenChange={setSlicesOpen}>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      className="flex-1"
+                      onClick={sliceActiveImage}
+                      disabled={slicing}
+                    >
+                      {slicing ? (
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      ) : (
+                        <Rows3 className="h-4 w-4 mr-2" />
+                      )}
+                      {sliceResult
+                        ? `Re-slice image (${sliceResult.files.length})`
+                        : 'Slice image into parts'}
+                    </Button>
+                    {sliceResult && (
+                      <CollapsibleTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          title={slicesOpen ? 'Hide slices' : 'Show slices'}
+                        >
+                          <ChevronDown
+                            className={`h-4 w-4 transition-transform ${slicesOpen ? 'rotate-180' : ''}`}
+                          />
+                        </Button>
+                      </CollapsibleTrigger>
+                    )}
+                  </div>
+
+                  <CollapsibleContent className="pt-2 pl-3 border-l ml-1">
+                    {sliceResult && sliceResult.files.length > 0 && (
+                      <p className="text-xs text-muted-foreground mb-2">
+                        {sliceResult.sourceWidth} × {sliceResult.sourceHeight} px →{' '}
+                        {sliceResult.files.length}{' '}
+                        {sliceResult.files.length === 1 ? 'part' : 'parts'} of{' '}
+                        {sliceResult.files[0].width} × {sliceResult.files[0].height}
+                        {sliceResult.files[0].height !== sliceResult.files[0].width &&
+                          ' (taller than square, to stay under 9)'}
+                        .
+                      </p>
+                    )}
+
+                    {/* The real "copy all": the OS can put many FILES on the
+                        clipboard at once, which a web page cannot do. */}
+                    <Button
+                      variant="secondary"
+                      className="w-full"
+                      onClick={openSliceFolder}
+                      disabled={openingFolder}
+                    >
+                      {openingFolder ? (
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      ) : (
+                        <FolderOpen className="h-4 w-4 mr-2" />
+                      )}
+                      Open folder — select all &amp; copy
+                    </Button>
+                    <p className="text-xs text-muted-foreground mt-1 mb-2">
+                      In the folder: ⌘A to select all, then ⌘C. That puts every part on the
+                      clipboard together.
+                    </p>
+
+                    <div className="grid grid-cols-1 gap-2 max-h-56 overflow-y-auto pr-1">
+                      {sliceResult?.files.map(slice => (
+                        <Button
+                          key={slice.index}
+                          variant="outline"
+                          className="justify-start h-auto py-2"
+                          onClick={() => copySliceToClipboard(slice)}
+                        >
+                          <img
+                            src={clipper3Api.getSliceUrl(
+                              chapterId!,
+                              activeImage.filename,
+                              slice.filename
+                            )}
+                            alt={`Part ${slice.index}`}
+                            loading="lazy"
+                            draggable={false}
+                            className="h-10 w-10 object-cover rounded border mr-3 flex-shrink-0"
+                          />
+                          <span className="flex-1 text-left min-w-0">
+                            <span className="block text-sm">Part {slice.index}</span>
+                            <span className="block text-xs text-muted-foreground font-mono truncate">
+                              {slice.width} × {slice.height}
+                            </span>
+                          </span>
+                          {copiedSlice === slice.index ? (
+                            <Check className="h-4 w-4 ml-2 flex-shrink-0 text-green-500" />
+                          ) : (
+                            <ClipboardCopy className="h-4 w-4 ml-2 flex-shrink-0 opacity-50" />
+                          )}
+                        </Button>
+                      ))}
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
 
                 {/* One button copies all four in paste order; the arrow opens
                     the same four individually, for re-copying just one. */}

@@ -17,6 +17,10 @@ import {
 } from '../services/videoEditor2Service.js'
 import { processTimelineJson } from '../services/editor2Timeline.js'
 import {
+  repairSeriesTimelineRefs,
+  type CropRepairInput
+} from '../services/editor2CropRepair.js'
+import {
   cancelExport2Job,
   getExport2Job,
   getExportedChapterIds,
@@ -151,6 +155,42 @@ export function initVideoEditor2Routes(io: Server): Router {
     } catch (error) {
       console.error('[videoEditor2] streaming section audio failed:', error)
       res.status(500).json({ error: 'Failed to stream section audio' })
+    }
+  })
+
+  /**
+   * POST /series/:seriesId/check-image-refs { chapters: [{ chapterId, json }] }
+   *
+   * Finds every timeline image reference that names no file in its chapter's
+   * crops3 — the cause of the preview's "image references could not be found
+   * on disk" — and rewrites it to the crop its page and index actually name.
+   *
+   * Nothing is written anywhere. The corrected JSON comes back per chapter and
+   * the client decides whether to keep it, because Editor 2.0 holds the paste
+   * in the browser rather than the database. That also makes this one call
+   * serve both the check and the fix: what the confirmation shows IS the
+   * result, not a separate estimate that could disagree with it.
+   */
+  router.post('/series/:seriesId/check-image-refs', async (req: Request, res: Response) => {
+    try {
+      const { chapters } = req.body ?? {}
+      if (!Array.isArray(chapters) || chapters.length === 0) {
+        return res.status(400).json({ error: 'chapters (non-empty array) is required' })
+      }
+      const inputs: CropRepairInput[] = []
+      for (const entry of chapters) {
+        if (typeof entry?.chapterId !== 'string' || !entry.chapterId.trim()) {
+          return res.status(400).json({ error: 'Every chapter needs a chapterId' })
+        }
+        if (typeof entry?.json !== 'string' || !entry.json.trim()) continue
+        inputs.push({ chapterId: entry.chapterId, json: entry.json })
+      }
+      const result = await repairSeriesTimelineRefs(req.params.seriesId, inputs)
+      res.json(result)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to check the image references'
+      console.error('[videoEditor2] checking image refs failed:', message)
+      res.status(/not found/i.test(message) ? 404 : 500).json({ error: message })
     }
   })
 

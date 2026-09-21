@@ -20,6 +20,17 @@ segmentation (CH)** below. That is a manual/vision fallback, not part of this
 script's output, and it applies only inside a container geometry has already
 returned whole.
 
+Two further sections cover faults that geometry cannot detect and that raise
+no error, so they are only ever caught by looking:
+
+- **Oversized-container audit (OS)** — a single tall crop that actually holds
+  several croppable scenes. Every crop is re-checked against it before
+  emitting; the technique is to anchor on the subject rather than hunt for a
+  boundary that was never drawn.
+- **SFX and bubbles never define a crop (SX)** — sound effects and speech
+  bubbles surviving past OV and setting crop edges they should have no say
+  in.
+
 ## Usage
 
 ```
@@ -136,7 +147,18 @@ mistaken for a clean export. Fix the measurement; do not widen the range.
    rectangle is axis-aligned (H).
 5. `P2.x > P1.x` and `P4.y > P1.y`? → non-zero extent.
 
-Or skip all five and run the checker, which is safe on any input — model
+Those five are about *shape*. Two more are about *content*, and no checker
+can run them — a crop can be perfectly shaped and still be the wrong crop:
+
+6. Is any crop oversized (taller than ~2× its width, over ~20% of the page,
+   or a big outlier against its neighbours)? → audit it before emitting,
+   per **Oversized-container audit (OS)**. This is the detector's most
+   common wrong answer and it raises no error.
+7. Is any crop edge sitting on a speech bubble or an SFX glyph rather than
+   on artwork? → re-resolve it against the art, per **SFX and bubbles never
+   define a crop (SX)**.
+
+Or skip the first five and run the checker, which is safe on any input — model
 output, hand edits, another tool's export:
 
 ```
@@ -309,6 +331,13 @@ and flagged `review:large_monochrome_section` instead.
   geometry, and `find_containers` returns it as one tall container. That is
   the correct answer to the question geometry asks. Dividing it needs a
   different signal: see **Character-cluster segmentation (CH)** below.
+- **Any oversized crop**, on any polarity, may hold several croppable scenes
+  with no boundary between them that geometry can see. This is the most
+  common wrong output of the detector and it raises no error, so it is caught
+  only by the deliberate re-check in **Oversized-container audit (OS)**.
+- **Bubbles and SFX at the crop-bounds stage.** OV keeps them out of the
+  content mask, but they still reach the emitted edges — see **SFX and
+  bubbles never define a crop (SX)**.
 - **Overlays that bridge containers** defeat container assembly on any
   polarity. Speech bubbles crossing a panel boundary fail the `bubble_*`
   tests (they sit on artwork, so `bubble_ring_gutter` is low, and a
@@ -317,6 +346,157 @@ and flagged `review:large_monochrome_section` instead.
   enormous containers and near-zero overlay coverage; measure
   `overlay.mean()` and the largest `fill` components before tuning anything
   else.
+
+## Oversized-container audit (OS)
+
+The most common wrong answer this detector gives is not a missing crop or a
+misplaced edge. It is **one crop that should have been three** — a tall
+pointer, hundreds to thousands of pixels high, that quietly contains several
+perfectly croppable scenes inside it.
+
+It happens because geometry only ever answers the question it was asked.
+`find_containers` looks for gutters, frames and luma seams; where the artist
+drew none, it finds none and returns the whole run as a single container.
+That is a correct measurement and a wrong crop. The scenes are separated by
+*subject matter*, and subject matter is not a geometric signal.
+
+The failure is quiet, which is what makes it dangerous. An oversized crop is
+legally shaped, passes every check in **Self-check before emitting**, sits
+inside 0.0–1.0, and reports no error at all. Nothing downstream will catch
+it. It has to be caught here, by deliberately re-opening crops that geometry
+already called done.
+
+### OS-01 — Always run the audit
+
+After containers are resolved and before crops are emitted, **every** crop is
+re-examined against the oversize tests below. This is not conditional on page
+polarity, on the container being full-bleed, or on the absence of internal
+edges. A tall crop on a white page with a drawn frame around it is just as
+capable of holding three scenes as a dark full-bleed one.
+
+Do not skip a crop because geometry sounded confident about it. Geometry is
+always confident; that is the problem.
+
+### OS-02 — What counts as oversized
+
+Flag a crop for audit if **any** of these hold. These are triggers for a
+second look, not verdicts — a flagged crop is often correct, and the audit is
+what establishes that.
+
+- **Aspect.** Height exceeds ~2× its own width. A single manhwa panel is
+  rarely taller than it is wide by more than that; a run of scenes almost
+  always is.
+- **Page share.** It occupies more than ~20% of total page height on its own.
+- **Relative outlier.** It is more than ~2.5× the median height of the other
+  crops on the same page. A page of eight 600 px panels and one 4800 px panel
+  is telling you something about the 4800 px one.
+- **Subject count.** It visibly contains two or more separated character
+  groups, regardless of its measured size. This one overrides the numbers in
+  both directions: a modest 1.2× crop holding two clearly distinct scenes is
+  oversized, and a 6× tall crop holding one continuous falling figure is not.
+
+### OS-03 — Anchor on the subject, not on the gap
+
+This is the core technique, and it inverts the usual approach. Do not hunt
+for the boundary between scenes — on these pages there is nothing there to
+find, which is precisely why geometry failed. **Find the subjects first, then
+derive the boundaries from them.**
+
+Work in this order:
+
+1. **Locate every anchor.** An anchor is a character, a face, a hand, a
+   distinct object or a focal point of action — the thing a reader's eye
+   lands on. Sweep the full height of the crop and mark each one's vertical
+   extent. On dark pages the hue masks in **The character mask** below do
+   this mechanically; on lighter or busier pages, read it visually.
+2. **Group anchors into scenes.** Anchors close together, at a consistent
+   scale, sharing a background, belong to one scene. A jump in scale
+   (close-up → wide shot), a change in background colour or lighting, or a
+   change in the cast present marks a new one.
+3. **Derive each boundary from the gap between two groups**, placing it at
+   the centre of the empty span rather than hard against either subject
+   (see CH-06).
+4. **Verify each resulting crop stands alone.** Each one should be
+   independently readable as a moment: it has a subject, that subject is
+   whole, and nothing of the next scene intrudes. If a candidate crop has no
+   subject at all, the split was wrong — go back to step 2 and regroup, do
+   not keep the empty crop.
+
+A crop with no anchor in it is almost always a mistake. That is the single
+most useful test in this section: **every crop should be about something.**
+
+### OS-04 — Boundaries that are not boundaries
+
+Several things look like scene breaks and are not. Splitting on any of them
+cuts a scene in half.
+
+- **SFX glyphs.** Large stylised sound effects routinely sit *between* two
+  moments of the same scene, or bleed across a real boundary. They mark
+  emphasis, not structure. See **SFX and bubbles never define a crop (SX)**.
+- **Speech bubbles and narration boxes.** Same reasoning, and they span
+  scenes deliberately — carrying dialogue over a cut is exactly what they are
+  for.
+- **A patch of empty shadow or sky.** Empty space inside a single wide
+  establishing shot is part of the shot. Absence of characters is necessary
+  for a boundary, never sufficient for one (CH-09).
+- **A speed-line or motion-blur field.** It belongs to the action that
+  produced it, and it continues through the very gap that looks splittable.
+
+### OS-05 — When not to split
+
+Leave the crop whole, and say why, when:
+
+- It holds **one continuous subject** at full height — a falling figure, a
+  tall mecha, a vertical panorama, a single sprawling action beat.
+- The scenes inside it are **genuinely inseparable**: they overlap, or one
+  character's artwork crosses the only candidate boundary.
+- It contains **no detectable anchors at all** — pure landscape, effects or
+  abstract shadow. Flag `review:no_characters_present` (CH-12) and move on.
+
+Over-splitting is a real failure too. Two crops of half a character each are
+worse than one correct tall crop.
+
+### OS-06 — Report every audit
+
+Record the outcome for each audited crop, including the ones left whole. A
+reader must be able to tell *"this stayed one crop because it was checked and
+found continuous"* from *"this stayed one crop because nobody looked"*. Note
+the trigger that flagged it (OS-02), the anchors found, and the decision.
+
+## SFX and bubbles never define a crop (SX)
+
+Overlay exclusion (OV) already removes bubbles and lettering from the
+**content mask**, so they cannot weld two panels together or seed a container
+of their own. That is a detection-stage fix and it is not sufficient — these
+elements keep reappearing at the **crop-bounds** stage, where they stretch a
+crop outward or anchor an edge that should have sat elsewhere.
+
+The rule is the same wherever it is applied: **an SFX glyph, speech bubble or
+narration box is never what a crop is about, and never what sets its edge.**
+
+- **SX-01** No crop edge may be positioned by a bubble, narration box or SFX
+  stroke. Resolve every edge against artwork — panel border, gutter, or the
+  extent of the subject. If removing the overlay would move the edge, the
+  edge was wrong.
+- **SX-02** An overlay that extends past its panel does not extend the crop.
+  A bubble with its tail hanging into the gutter, or an SFX glyph running off
+  the panel edge, is clipped at the artwork boundary. The crop follows the
+  art.
+- **SX-03** An overlay bridging two panels belongs to neither crop's bounds.
+  Cut both crops at their own artwork edges and let the overlay be split
+  between them. Do not grow either crop to contain it whole.
+- **SX-04** A region of pure SFX is not a crop. Merge it into the neighbour
+  whose artwork actually continues through it, decided by looking (CH-11).
+  A lone SFX crop is always an error.
+- **SX-05** Bubble-dense pages need the check run explicitly. Where dialogue
+  covers much of the page, the artwork under the bubbles is still the
+  subject. Measure the crop against what is *drawn*, not against what is
+  *printed on top of it*.
+
+The practical test, for any edge and any crop: **mentally delete every bubble
+and every SFX glyph, and ask whether the crop still makes sense.** If it
+collapses, or if an edge moves, the overlay was doing work it should never
+have been doing.
 
 ## Character-cluster segmentation (CH)
 
@@ -331,10 +511,20 @@ the characters?**
 This is the rule set for that case. It is a *fallback*, not a replacement:
 geometry first, and CH only in the region geometry could not divide.
 
+CH is the **mechanical instance** of the anchoring technique described in
+OS-03. The audit in **Oversized-container audit (OS)** is the general rule and
+applies to every oversized crop on every kind of page; CH is what that rule
+becomes when the page is dark enough that the anchors can be found by hue
+rather than by eye. Where CH's gate below does not admit a region, the OS
+audit still does — fall back to reading it visually, and use CH-05 through
+CH-13 as the method regardless of how the anchors were located.
+
 ### When CH applies
 
-All four must hold. If any fails, the region is one crop and that is the
-right answer.
+All four must hold for the *automated* hue-mask route below. If any fails,
+that does not settle the crop — it means the anchors cannot be found
+mechanically, so the region goes to the visual audit in OS-03 instead. Only
+OS-05 concludes that a region is genuinely one crop.
 
 - **CH-01** The container is full-bleed (spans the page width) and tall —
   taller than roughly 2× the page width.

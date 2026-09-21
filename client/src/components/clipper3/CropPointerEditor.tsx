@@ -156,13 +156,47 @@ export interface CropPointerEditorProps {
    * Once editing starts, renders Save/Cancel as a fixed panel pinned to the
    * viewport's right edge instead of inline above the image. Needed on
    * Clipper3Preview: cards are stacked and can run taller than the viewport,
-   * so an inline Save button scrolls out of reach mid-drag. The "Adjust
-   * pointers" trigger itself stays inline either way — it's only ever shown
-   * on one card at a time before editing starts, so it never needs to float.
-   * A caller with a short, non-scrolling container (the image-list dialog)
-   * should leave this off.
+   * so an inline Save button scrolls out of reach mid-drag. A caller with a
+   * short, non-scrolling container (the image-list dialog) should leave this
+   * off.
    */
   floatingControls?: boolean
+  /**
+   * Hides the inline "Adjust pointers" trigger, on the understanding that the
+   * caller offers its own. Clipper3Preview does: its trigger lives in the
+   * left drawer, which is reachable from anywhere in a long stack of images,
+   * whereas an inline one sits at the top of a card that can be several
+   * viewports tall — the user had to scroll back up to it to start editing.
+   * The caller drives this component through `editRequest` and hears back
+   * through the existing `onEditingChange`.
+   */
+  hideInlineTrigger?: boolean
+  /**
+   * A counter the caller bumps to ask this editor to enter edit mode. A
+   * counter rather than a boolean so a second request after the user cancels
+   * still registers; any change to a non-zero value starts editing.
+   */
+  editRequest?: number
+  /**
+   * This image's crop descriptions, keyed by crop id — shown in a rail beside
+   * the page, each card aligned with the crop it describes. Read from the
+   * metadata document by the caller, which already holds it; this component
+   * never parses that document itself (the store treats it as opaque text).
+   */
+  metadataByCropId?: Record<string, CropMetadataEntry>
+  /**
+   * Renders the metadata rail to the right of the page, using the empty space
+   * beside it. Off by default so the image-list dialog, which is width-
+   * constrained, is unaffected.
+   */
+  showMetadataRail?: boolean
+}
+
+/** One crop's entry from the metadata document, as far as the rail reads it. */
+export interface CropMetadataEntry {
+  id: string
+  description?: string
+  exportedFilename?: string
 }
 
 export function CropPointerEditor({
@@ -176,7 +210,11 @@ export function CropPointerEditor({
   onSaved,
   idleAccent = '#3b82f6',
   onEditingChange,
-  floatingControls = false
+  floatingControls = false,
+  hideInlineTrigger = false,
+  editRequest = 0,
+  metadataByCropId,
+  showMetadataRail = false
 }: CropPointerEditorProps) {
   const { toast } = useToast()
   const [file, setFile] = useState<Clipper3ImageCropFile | null>(initialFile ?? null)
@@ -220,6 +258,16 @@ export function CropPointerEditor({
     setRemovedCropIds([])
     onEditingChange?.(true)
   }, [onEditingChange])
+
+  // An external trigger (Clipper3Preview's left drawer) asking to edit this
+  // image. Skipped on mount and while already editing, so re-renders and a
+  // stale count can't yank the user back into edit mode.
+  const lastEditRequest = useRef(editRequest)
+  useEffect(() => {
+    if (editRequest === lastEditRequest.current) return
+    lastEditRequest.current = editRequest
+    if (editRequest > 0 && !editing) startEditing()
+  }, [editRequest, editing, startEditing])
 
   const cancelEditing = useCallback(() => {
     if (dirty && !window.confirm('Discard unsaved pointer changes for this image?')) return
@@ -391,9 +439,8 @@ export function CropPointerEditor({
 
   const crops = file?.crops ?? []
 
-  // The trigger stays inline always: it's only ever shown on the one
-  // not-yet-editing card, so there's nothing to scroll away from.
-  const adjustTrigger = !editing && crops.length > 0 && (
+  // Shown unless the caller supplies its own trigger (hideInlineTrigger).
+  const adjustTrigger = !hideInlineTrigger && !editing && crops.length > 0 && (
     <Button variant="outline" size="sm" className="h-7 ml-auto" onClick={startEditing}>
       <Pencil className="h-3.5 w-3.5 mr-1" />
       Adjust pointers
@@ -447,6 +494,90 @@ export function CropPointerEditor({
     </div>
   )
 
+  /**
+   * The descriptions, in a column beside the page, each card pinned to the top
+   * of the crop it describes so the pairing is read off position rather than
+   * by matching ids by eye. Cards are absolutely positioned inside a box the
+   * same height as the image, which is why the rail needs that height: it is
+   * the coordinate space the crop fractions map onto.
+   *
+   * Two crops close together would overlap, so each card is nudged below the
+   * previous one's bottom when it would otherwise collide — cards stay in crop
+   * order and only ever drift downward, never above the crop they describe.
+   */
+  const metadataRail = showMetadataRail && crops.length > 0 && (() => {
+    const CARD_GAP = 6
+    const pageHeight = height * zoom
+    let nextFreeTop = 0
+
+    const placed = crops.map(entry => {
+      const bounds = entryBounds(entry)
+      const meta = metadataByCropId?.[entry.id]
+      const wanted = bounds ? bounds.top * pageHeight : nextFreeTop
+      const top = Math.max(wanted, nextFreeTop)
+      // Estimated from the description's length: cards are laid out before
+      // they render, so their true height isn't knowable here. Roughly 38
+      // characters to a line at this width, plus the id/filename header.
+      const lines = Math.ceil((meta?.description?.length ?? 0) / 38) || 1
+      const estHeight = 34 + lines * 15
+      nextFreeTop = top + estHeight + CARD_GAP
+      return { entry, meta, top, bounds }
+    })
+
+    return (
+      <div
+        className="relative flex-shrink-0 w-64"
+        style={{ height: pageHeight }}
+      >
+        {placed.map(({ entry, meta, top, bounds }) => {
+          const isSelected = editing && selectedCropId === entry.id
+          const color = isSelected ? SELECTED_ACCENT : (editing ? ACCENT : idleAccent)
+          return (
+            <div
+              key={entry.id}
+              onMouseDown={editing ? () => setSelectedCropId(entry.id) : undefined}
+              className="absolute left-0 right-0 rounded border bg-card/95 px-2 py-1.5 text-left"
+              style={{
+                top,
+                borderColor: color,
+                cursor: editing ? 'pointer' : undefined,
+                boxShadow: isSelected ? `0 0 0 1px ${color}` : undefined
+              }}
+            >
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-[10px] font-mono font-semibold" style={{ color }}>
+                  {entry.id}
+                </span>
+                {entry.reason && (
+                  <span className="text-[9px] text-muted-foreground truncate">{entry.reason}</span>
+                )}
+                {bounds && (
+                  <span className="text-[9px] text-muted-foreground ml-auto tabular-nums">
+                    {Math.round((bounds.bottom - bounds.top) * height)}px
+                  </span>
+                )}
+              </div>
+              {meta?.description ? (
+                <p className="mt-0.5 text-[10px] leading-[1.35] text-foreground/85">
+                  {meta.description}
+                </p>
+              ) : (
+                <p className="mt-0.5 text-[10px] italic text-muted-foreground">
+                  No description in metadata
+                </p>
+              )}
+              {meta?.exportedFilename && (
+                <p className="mt-0.5 text-[9px] font-mono text-muted-foreground truncate" title={meta.exportedFilename}>
+                  {meta.exportedFilename}
+                </p>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    )
+  })()
+
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2">
@@ -455,6 +586,7 @@ export function CropPointerEditor({
       </div>
       {floatingSaveCancel}
 
+      <div className="flex items-start gap-3">
       <div
         ref={boxRef}
         className="relative bg-neutral-950 rounded-sm overflow-hidden mx-auto"
@@ -604,6 +736,9 @@ export function CropPointerEditor({
             </div>
           )
         })}
+      </div>
+
+      {metadataRail}
       </div>
     </div>
   )

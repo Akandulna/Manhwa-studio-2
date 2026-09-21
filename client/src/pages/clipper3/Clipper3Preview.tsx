@@ -23,7 +23,37 @@ import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { ArrowLeft, Loader2, AlertTriangle, ZoomIn, ZoomOut, Pencil, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { clipperApi, clipper3Api, type Clipper3ChapterImages, type Clipper3ImageCropFile } from '@/lib/api'
-import { CropPointerEditor } from '@/components/clipper3/CropPointerEditor'
+import { CropPointerEditor, type CropMetadataEntry } from '@/components/clipper3/CropPointerEditor'
+
+/**
+ * Reads one image's metadata document into a crop-id -> entry map for the rail.
+ *
+ * Best-effort by design: the store keeps this document verbatim and never
+ * parses it, so anything that isn't JSON with a `crops` array yields an empty
+ * map and the rail just says there's no description. It never throws, because
+ * a malformed document on one page must not take down the whole preview.
+ */
+function parseMetadataByCropId(content: string): Record<string, CropMetadataEntry> {
+  if (!content.trim()) return {}
+  let parsed: any
+  try {
+    parsed = JSON.parse(content)
+  } catch {
+    return {}
+  }
+  if (!Array.isArray(parsed?.crops)) return {}
+
+  const out: Record<string, CropMetadataEntry> = {}
+  for (const entry of parsed.crops) {
+    if (typeof entry?.id !== 'string' || !entry.id) continue
+    out[entry.id] = {
+      id: entry.id,
+      description: typeof entry.description === 'string' ? entry.description : undefined,
+      exportedFilename: typeof entry.exportedFilename === 'string' ? entry.exportedFilename : undefined
+    }
+  }
+  return out
+}
 
 export default function Clipper3Preview() {
   const { id: chapterId } = useParams<{ id: string }>()
@@ -37,6 +67,17 @@ export default function Clipper3Preview() {
   const [editingFile, setEditingFile] = useState<string | null>(null)
   const [navOpen, setNavOpen] = useState(true)
 
+  // Each image's crop descriptions, keyed by crop id, for the rail beside the
+  // page. Parsed here rather than in the editor because the store treats the
+  // metadata document as opaque text — this is a best-effort read of it, and
+  // an image whose document is missing or in another shape simply gets no
+  // descriptions rather than blocking the preview.
+  const [metaByFile, setMetaByFile] = useState<Record<string, Record<string, CropMetadataEntry>>>({})
+
+  // Bumped per image to ask that image's editor to enter edit mode, since the
+  // trigger now lives in the left drawer rather than on the card itself.
+  const [editRequests, setEditRequests] = useState<Record<string, number>>({})
+
   // Which image is currently in view, so the nav panel can highlight it.
   const [activeFile, setActiveFile] = useState<string | null>(null)
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({})
@@ -47,6 +88,14 @@ export default function Clipper3Preview() {
     el.scrollIntoView({ behavior: 'smooth', block: 'start' })
     setActiveFile(filename)
   }, [])
+
+  // Scroll to the image and ask its editor to enter edit mode. Both, because
+  // the drawer can be used to start editing a card that is nowhere near the
+  // viewport, and edit mode is useless if you can't see what you're dragging.
+  const requestEdit = useCallback((filename: string) => {
+    scrollToImage(filename)
+    setEditRequests(prev => ({ ...prev, [filename]: (prev[filename] ?? 0) + 1 }))
+  }, [scrollToImage])
 
   useEffect(() => {
     if (!chapterId) return
@@ -72,6 +121,21 @@ export default function Clipper3Preview() {
           })
         )
         if (!cancelled) setFilesByFile(Object.fromEntries(entries))
+
+        // Descriptions, fetched after the pointers so the pages draw first —
+        // the rail filling in a moment later is better than an empty screen
+        // while every image's metadata document is read.
+        const metaEntries = await Promise.all(
+          done.map(async img => {
+            try {
+              const meta = await clipper3Api.getImageMetadata(chapterId, img.filename)
+              return [img.filename, parseMetadataByCropId(meta.content)] as const
+            } catch {
+              return [img.filename, {}] as const
+            }
+          })
+        )
+        if (!cancelled) setMetaByFile(Object.fromEntries(metaEntries))
       })
       .catch(err => {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : 'Failed to load this chapter')
@@ -200,33 +264,57 @@ export default function Clipper3Preview() {
                   const cropCount = file?.crops.length ?? 0
                   const isActive = activeFile === img.filename
                   const isEditingThis = editingFile === img.filename
+                  // Editing another image blocks starting a second one: the
+                  // editor saves per image, so two open at once would be two
+                  // unsaved documents with one Save panel between them.
+                  const canEdit = cropCount > 0 && (editingFile == null || isEditingThis)
                   return (
-                    <button
+                    <div
                       key={img.filename}
-                      onClick={() => scrollToImage(img.filename)}
-                      className={`w-full flex items-center gap-2 rounded p-1.5 text-left transition-colors ${
+                      className={`rounded transition-colors ${
                         isActive ? 'bg-primary/15 ring-1 ring-primary' : 'hover:bg-muted'
                       }`}
-                      title={img.filename}
                     >
-                      <span className="text-[10px] text-muted-foreground w-5 text-right flex-shrink-0">
-                        {index + 1}
-                      </span>
-                      <img
-                        src={clipperApi.getImageUrl(chapterId!, img.filename)}
-                        alt={img.filename}
-                        loading="lazy"
-                        draggable={false}
-                        className="h-10 w-10 object-cover rounded border flex-shrink-0 bg-muted"
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-[11px] font-mono truncate">{img.filename}</span>
-                        <span className="block text-[10px] text-muted-foreground">
-                          {cropCount > 0 ? `${cropCount} crop${cropCount === 1 ? '' : 's'}` : 'no crops'}
-                          {isEditingThis && ' · editing'}
+                      <button
+                        onClick={() => scrollToImage(img.filename)}
+                        className="w-full flex items-center gap-2 p-1.5 text-left"
+                        title={img.filename}
+                      >
+                        <span className="text-[10px] text-muted-foreground w-5 text-right flex-shrink-0">
+                          {index + 1}
                         </span>
-                      </span>
-                    </button>
+                        <img
+                          src={clipperApi.getImageUrl(chapterId!, img.filename)}
+                          alt={img.filename}
+                          loading="lazy"
+                          draggable={false}
+                          className="h-10 w-10 object-cover rounded border flex-shrink-0 bg-muted"
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-[11px] font-mono truncate">{img.filename}</span>
+                          <span className="block text-[10px] text-muted-foreground">
+                            {cropCount > 0 ? `${cropCount} crop${cropCount === 1 ? '' : 's'}` : 'no crops'}
+                            {isEditingThis && ' · editing'}
+                          </span>
+                        </span>
+                      </button>
+
+                      {/* The edit trigger lives here rather than on the card:
+                          a card can be several viewports tall, so an inline
+                          trigger meant scrolling back to its top to start. */}
+                      {canEdit && (
+                        <Button
+                          variant={isEditingThis ? 'secondary' : 'ghost'}
+                          size="sm"
+                          className="h-6 w-full justify-start px-2 text-[10px] rounded-t-none"
+                          onClick={() => requestEdit(img.filename)}
+                          disabled={isEditingThis}
+                        >
+                          <Pencil className="h-3 w-3 mr-1" />
+                          {isEditingThis ? 'Editing pointers' : 'Adjust pointers'}
+                        </Button>
+                      )}
+                    </div>
                   )
                 })}
               </div>
@@ -299,6 +387,10 @@ export default function Clipper3Preview() {
                     initialFile={file}
                     idleAccent={isEven ? '#3b82f6' : '#f97316'}
                     floatingControls
+                    hideInlineTrigger
+                    editRequest={editRequests[img.filename] ?? 0}
+                    metadataByCropId={metaByFile[img.filename]}
+                    showMetadataRail
                     onEditingChange={isNowEditing => setEditingFile(isNowEditing ? img.filename : null)}
                     onSaved={stored => {
                       setFilesByFile(prev => ({ ...prev, [img.filename]: stored.file }))
@@ -311,6 +403,16 @@ export default function Clipper3Preview() {
                         )
                       })
                       setEditingFile(null)
+
+                      // A save that removed crops also rewrites the metadata
+                      // document, so the rail is re-read rather than left
+                      // describing crops that no longer exist.
+                      clipper3Api.getImageMetadata(chapterId!, img.filename)
+                        .then(meta => setMetaByFile(prev => ({
+                          ...prev,
+                          [img.filename]: parseMetadataByCropId(meta.content)
+                        })))
+                        .catch(() => {})
                     }}
                   />
                 </div>

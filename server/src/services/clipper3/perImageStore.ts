@@ -206,6 +206,72 @@ export function expectedExportedFilenames(
   })
 }
 
+/**
+ * Replace every `exportedFilename` in a metadata document with the name the
+ * cutter actually writes, and report the ones that had drifted.
+ *
+ * The describing AI is asked to reproduce `exportedFilename` character for
+ * character, and reliably does not: observed corruptions include a doubled
+ * underscore collapsed to one (`scene__subject_split` -> `scene_subject_split`)
+ * and every underscore dropped (`eye_closeup` -> `eyecloseup`). Both produce a
+ * name no file on disk answers to, which surfaces far downstream as Editor
+ * 2.0's "image references could not be found on disk" — long after the paste
+ * that caused it.
+ *
+ * Rejecting those pastes is the wrong trade: the suffix encodes the crop's
+ * `reason` and index, which a re-cut changes, so a strict check would fail
+ * good descriptions written against the previous cut (the reason validateMetadata
+ * deliberately checks only the page stem). Recomputing sidesteps it entirely —
+ * the name is fully derivable from slug + stem + index + reason, all of which
+ * live in the crop JSON, so the AI's copy of it carries no information worth
+ * keeping and is simply overwritten.
+ *
+ * `crops` must be the image's crop entries in points order, the same ordering
+ * expectedExportedFilenames() indexes by. Entries are matched by crop id, not
+ * position, since a metadata document may list them in any order; an entry
+ * whose id is not in `crops` is left untouched for validateMetadata to reject.
+ *
+ * Returns the rewritten text, or null when `text` is not a JSON document with
+ * a `crops` array — the metadata document is free-form by contract, and one
+ * this function cannot read is passed through unchanged rather than damaged.
+ */
+export function canonicalizeExportedFilenames(
+  text: string,
+  slug: string,
+  imageFilename: string,
+  crops: Clipper3CropEntry[]
+): { text: string; corrected: { id: string; was: string; now: string }[] } | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return null
+  }
+  const entries = (parsed as { crops?: unknown })?.crops
+  if (!Array.isArray(entries)) return null
+
+  const expected = expectedExportedFilenames(slug, imageFilename, crops)
+  const byId = new Map(crops.map((crop, i) => [crop.id, expected[i]]))
+  const corrected: { id: string; was: string; now: string }[] = []
+
+  for (const entry of entries as { id?: unknown; exportedFilename?: unknown }[]) {
+    if (typeof entry?.id !== 'string') continue
+    const now = byId.get(entry.id)
+    if (!now) continue
+    const was = typeof entry.exportedFilename === 'string' ? entry.exportedFilename : ''
+    if (was === now) continue
+    // Written even where the entry had no exportedFilename at all: the field
+    // is what every downstream consumer resolves through, so an absent one is
+    // as broken as a wrong one and is equally derivable.
+    if (was) corrected.push({ id: entry.id, was, now })
+    entry.exportedFilename = now
+  }
+
+  // Two spaces to match what the describing pass emits, so a canonicalized
+  // document does not read as wholly rewritten in a diff.
+  return { text: JSON.stringify(parsed, null, 2), corrected }
+}
+
 
 export interface MetadataValidation {
   isValid: boolean
@@ -410,6 +476,75 @@ export async function writeImageMetadata(
   const target = getMetadataFilePathFor(folderPath, imageFilename)
   await fs.writeFile(target, content, 'utf-8')
   return path.resolve(target)
+}
+
+/** One page whose metadata names a file that is not in crops3/. */
+export interface UnresolvedPage {
+  /** The source page, e.g. "page_002.webp". */
+  imageFilename: string
+  /** The exportedFilename values with no file behind them. */
+  missing: string[]
+  /** How many names that page's metadata carries in total. */
+  total: number
+}
+
+/**
+ * Every page of a chapter whose metadata names crops that are not on disk.
+ *
+ * Run at the end of a cut, when crops3/ is as complete as it is going to get:
+ * at that moment a name with no file behind it is unambiguous, whereas the
+ * same check mid-run would flag pages simply not cut yet.
+ *
+ * This is the last point where a bad name is still cheap to explain. Editor 2.0
+ * resolves timeline refs through these same names, so one that answers to
+ * nothing surfaces there as "image references could not be found on disk" —
+ * a chapter and several steps away from whatever caused it.
+ *
+ * Pages whose metadata is absent or not JSON are skipped rather than reported:
+ * the document is free-form by contract, and one that names nothing cannot
+ * name anything wrongly.
+ */
+export async function findUnresolvedMetadataNames(folderPath: string): Promise<UnresolvedPage[]> {
+  const outputDir = getOutputDir(folderPath)
+  let onDisk: Set<string>
+  try {
+    onDisk = new Set(await fs.readdir(outputDir))
+  } catch {
+    // No output folder at all is the "nothing was cut" case, which the cut
+    // result already reports plainly. Claiming every name is missing here
+    // would bury that under noise.
+    return []
+  }
+
+  const unresolved: UnresolvedPage[] = []
+  const stems = await listMetadataImageStems(folderPath)
+
+  for (const stem of stems) {
+    const text = await readImageMetadata(folderPath, stem)
+    if (!text) continue
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      continue
+    }
+    const entries = (parsed as { crops?: unknown })?.crops
+    if (!Array.isArray(entries)) continue
+
+    const missing: string[] = []
+    let total = 0
+    for (const entry of entries as { exportedFilename?: unknown }[]) {
+      const name = entry?.exportedFilename
+      if (typeof name !== 'string' || !name.trim()) continue
+      total++
+      if (!onDisk.has(name)) missing.push(name)
+    }
+    if (missing.length > 0) unresolved.push({ imageFilename: stem, missing, total })
+  }
+
+  // Page order, so the report reads the way the chapter does.
+  unresolved.sort((a, b) => a.imageFilename.localeCompare(b.imageFilename, undefined, { numeric: true }))
+  return unresolved
 }
 
 export async function deleteImageMetadata(folderPath: string, imageFilename: string): Promise<boolean> {

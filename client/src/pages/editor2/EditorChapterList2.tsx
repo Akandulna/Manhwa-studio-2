@@ -11,6 +11,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import {
   seriesApi,
   videoApi2,
+  type CropRepairResult,
   type Editable2Chapter,
   type Export2Job,
   type Exported2Chapter
@@ -18,6 +19,15 @@ import {
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import {
   ArrowLeft,
@@ -39,7 +49,10 @@ import {
   Ban,
   ChevronRight,
   Coffee,
-  Moon
+  Moon,
+  ImageOff,
+  Wrench,
+  FileCheck2
 } from 'lucide-react'
 
 import { useWakeLock } from '@/hooks/useWakeLock'
@@ -142,6 +155,12 @@ export default function EditorChapterList2() {
   // truth rather than a local flag: the record is the series' _video2 folder,
   // so this survives a cleared browser and is right on a second machine.
   const [exported, setExported] = useState<Record<string, Exported2Chapter>>({})
+
+  // The crop-name scan: its result while the confirmation is open, and the
+  // two in-flight flags. Null means no scan has been run or it was dismissed.
+  const [cropScan, setCropScan] = useState<CropRepairResult | null>(null)
+  const [scanningNames, setScanningNames] = useState(false)
+  const [repairingNames, setRepairingNames] = useState(false)
 
   // Which chapter's detail is open. Only one at a time: the list is the view,
   // and the detail is what you drop into for the chapter you are working on.
@@ -363,6 +382,113 @@ export default function EditorChapterList2() {
     }
   }
 
+  /**
+   * Check Images — find every pasted image reference that names no file in its
+   * chapter's crops3.
+   *
+   * This is the cause of the preview's "N image references could not be found
+   * on disk". The timeline JSON is AI-authored, and the names it writes drift
+   * from the cutter's: a reason suffix carried over from a neighbouring crop
+   * (`_11_full_width_tall_scene` where the file is `_11_full_width_wide_scene`),
+   * or a name lifted from a DIFFERENT chapter's page 1 — which is the worse
+   * case, since it is a real file and only the chapter is wrong.
+   *
+   * The page and index never drift, and within a chapter they identify the
+   * crop, so the repair matches on those and replaces the whole name.
+   *
+   * Every pasted chapter is checked, not only the processed ones: a paste that
+   * has not been previewed yet is exactly where a bad name is still cheap to
+   * fix. The scan writes nothing — the corrected JSON comes back with it and
+   * is saved only if the user confirms.
+   */
+  async function checkImageRefs() {
+    if (!seriesId) return
+    const inputs = chapters
+      .map(ch => ({ chapterId: ch.id, json: getTimelineJson(ch.id) ?? '' }))
+      .filter(i => i.json.trim().length > 0)
+
+    if (inputs.length === 0) {
+      toast({
+        title: 'Nothing to check',
+        description: 'No chapter has a pasted timeline yet — paste one first.'
+      })
+      return
+    }
+
+    setScanningNames(true)
+    try {
+      const result = await videoApi2.checkImageRefs(seriesId, inputs)
+      if (result.repairedCount === 0 && result.unfixableCount === 0) {
+        // A clean series should cost one click, not a dialog to dismiss.
+        toast({
+          title: 'All image references resolve',
+          description: `Checked ${result.chaptersChecked} chapter${
+            result.chaptersChecked === 1 ? '' : 's'
+          } — every reference points at a crop on disk.`
+        })
+        return
+      }
+      setCropScan(result)
+    } catch (err) {
+      toast({
+        title: 'Could not check the image references',
+        description: err instanceof Error ? err.message : 'The scan failed',
+        variant: 'destructive'
+      })
+    } finally {
+      setScanningNames(false)
+    }
+  }
+
+  /**
+   * Keep the corrected pastes the scan already produced.
+   *
+   * Saved straight from the scan result rather than re-requested: the fix IS
+   * what the dialog listed, line by line, so re-running it could only produce
+   * something the user did not agree to.
+   *
+   * Saving a paste clears its "processed" marker (setTimelineJson does this by
+   * content), which is right — the corrected JSON has not been previewed, and
+   * the chapter correctly returns to needing Start Processing before it can be
+   * exported.
+   */
+  function applyImageRefRepair() {
+    if (!cropScan) return
+    setRepairingNames(true)
+    try {
+      let saved = 0
+      for (const chapter of cropScan.chapters) {
+        if (!chapter.correctedJson) continue
+        setTimelineJson(chapter.chapterId, chapter.correctedJson)
+        setPasted(prev =>
+          // Only chapters whose box is actually open hold an entry here; the
+          // rest read their paste back from storage when they are opened.
+          chapter.chapterId in prev
+            ? { ...prev, [chapter.chapterId]: chapter.correctedJson! }
+            : prev
+        )
+        saved++
+      }
+      setProcessedTick(t => t + 1)
+      setCropScan(null)
+
+      toast({
+        title: `Repaired ${cropScan.repairedCount} reference${
+          cropScan.repairedCount === 1 ? '' : 's'
+        }`,
+        description:
+          `Corrected in ${saved} chapter${saved === 1 ? '' : 's'} — re-run Start Processing` +
+          (cropScan.unfixableCount > 0
+            ? `. ${cropScan.unfixableCount} reference${
+                cropScan.unfixableCount === 1 ? '' : 's'
+              } still name a crop that was never cut — re-cut those pages in Image Clipper 3.0.`
+            : '.')
+      })
+    } finally {
+      setRepairingNames(false)
+    }
+  }
+
   // Follow a running job. Polling rather than a socket subscription: the job
   // is short-lived and this view is the only thing watching it, so a one-second
   // poll is simpler than threading another event through the socket context.
@@ -526,9 +652,9 @@ export default function EditorChapterList2() {
   // the markers live in localStorage, which React cannot subscribe to.
   void processedTick
   // Only chapters that cleared the four gates can ever be processed, so they
-  // are what "all chapters processed" has to mean — counting the ones still
-  // missing a script or crops would leave the button permanently dead on a
-  // series whose later chapters have not been through the pipeline yet.
+  // are the pool Export All draws from. Whatever is processed right now is
+  // exportable — the rest of the series is allowed to lag behind, and a
+  // chapter that has not been through the pipeline yet simply waits its turn.
   const readyChapters = chapters.filter(ch => ch.ready)
   const processedInputs = collectProcessed(readyChapters.map(ch => ch.id))
   const processedCount = processedInputs.length
@@ -539,7 +665,9 @@ export default function EditorChapterList2() {
   // button counts and what decides whether it has anything to do at all.
   const pendingExport = processedInputs.filter(i => !exported[i.chapterId]).length
   const exportedCount = readyChapters.filter(ch => exported[ch.id]).length
-  const everythingExported = allProcessed && pendingExport === 0
+  // Nothing left to render: every chapter processed so far is already out.
+  // Pressing the button then means re-render those, not wait for the others.
+  const everythingExported = processedCount > 0 && pendingExport === 0
 
   const currentlyRendering = exportJob?.chapters.find(c => c.status === 'rendering') ?? null
 
@@ -557,8 +685,9 @@ export default function EditorChapterList2() {
           </p>
         </div>
 
-        {/* Export All — the whole series in one action, offered only once
-            every chapter has been processed. */}
+        {/* Export All — every processed chapter in one action. It does not
+            wait for the whole series: whatever is ready now gets rendered,
+            and the chapters processed later are picked up next time. */}
         {exporting ? (
           <div className="flex items-center gap-3 flex-shrink-0">
             <div className="text-right">
@@ -610,20 +739,45 @@ export default function EditorChapterList2() {
               </span>
             )}
 
+            {/* Check Images — sits beside Export because a broken reference is
+                only ever noticed here, as a missing image in the preview or a
+                gap in a finished render. Before the export is the cheap moment
+                to fix it; after, the video is already wrong. */}
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8"
+              onClick={checkImageRefs}
+              disabled={scanningNames || chapters.length === 0}
+              title="Find pasted image references that name no crop on disk — the cause of “image references could not be found on disk” — and correct them"
+            >
+              {scanningNames ? (
+                <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+              ) : (
+                <ImageOff className="h-3 w-3 mr-1" />
+              )}
+              Check Images
+            </Button>
+
             <Button
               size="sm"
               variant={everythingExported ? 'outline' : 'default'}
               className="h-8"
               onClick={() => exportAll(everythingExported)}
-              disabled={!allProcessed || starting}
+              disabled={processedCount === 0 || starting}
               title={
                 readyChapters.length === 0
                   ? 'No chapter is ready yet — finish a script, voiceover, crops and timeline first'
-                  : !allProcessed
-                    ? `${processedCount} of ${readyChapters.length} ready chapters processed — process them all to export`
+                  : processedCount === 0
+                    ? 'No chapter has been processed yet — paste a timeline and process one to export it'
                     : everythingExported
-                      ? `Every chapter is already exported — re-render all ${readyChapters.length} from scratch`
-                      : `Render the ${pendingExport} chapter${pendingExport === 1 ? '' : 's'} that have not been exported yet`
+                      ? `Every processed chapter is already exported — re-render all ${processedCount} from scratch`
+                      : `Render the ${pendingExport} processed chapter${pendingExport === 1 ? '' : 's'} that have not been exported yet` +
+                        (allProcessed
+                          ? ''
+                          : ` — ${readyChapters.length - processedCount} ready chapter${
+                              readyChapters.length - processedCount === 1 ? '' : 's'
+                            } not processed yet and left out`)
               }
             >
               {starting ? (
@@ -631,12 +785,20 @@ export default function EditorChapterList2() {
               ) : (
                 <Film className="h-3 w-3 mr-1" />
               )}
-              {everythingExported ? 'Re-export All' : 'Export All'}
-              {allProcessed && !everythingExported && exportedCount > 0 && (
-                <span className="ml-1 opacity-70">({pendingExport})</span>
-              )}
-              {!allProcessed && readyChapters.length > 0 && (
-                <span className="ml-1 opacity-70">({processedCount}/{readyChapters.length})</span>
+              {/* "All" only when the whole ready series is processed —
+                  otherwise this press covers just the processed part, and
+                  the count says how many chapters that is. */}
+              {everythingExported
+                ? allProcessed
+                  ? 'Re-export All'
+                  : 'Re-export Ready'
+                : allProcessed
+                  ? 'Export All'
+                  : 'Export Ready'}
+              {(allProcessed ? !everythingExported && exportedCount > 0 : true) && (
+                <span className="ml-1 opacity-70">
+                  ({everythingExported ? processedCount : pendingExport})
+                </span>
               )}
             </Button>
           </div>
@@ -952,6 +1114,121 @@ export default function EditorChapterList2() {
           })}
         </div>
       </div>
+
+      {/* The scan result, before anything is saved.
+          Every reference is listed with the name it will become rather than
+          just counted: the point of confirming is seeing WHICH crop each
+          broken ref resolves to, so a wrong match is caught here and not in
+          the finished video. References no rename can fix are listed in their
+          own block — they need a re-cut, and saying so is the honest outcome. */}
+      <Dialog open={cropScan !== null} onOpenChange={open => !open && setCropScan(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              {cropScan && cropScan.repairedCount > 0
+                ? `Correct ${cropScan.repairedCount} image reference${
+                    cropScan.repairedCount === 1 ? '' : 's'
+                  }?`
+                : 'Nothing can be corrected automatically'}
+            </DialogTitle>
+            <DialogDescription>
+              {cropScan && cropScan.repairedCount > 0 ? (
+                <>
+                  Found across {cropScan.chapters.length} chapter
+                  {cropScan.chapters.length === 1 ? '' : 's'}. Each reference is matched to
+                  the crop its page and index name, which is what the cutter actually
+                  wrote. The corrected chapters go back to needing Start Processing.
+                  {cropScan.unfixableCount > 0 && (
+                    <>
+                      {' '}
+                      {cropScan.unfixableCount} reference
+                      {cropScan.unfixableCount === 1 ? '' : 's'} cannot be fixed this way.
+                    </>
+                  )}
+                </>
+              ) : (
+                <>
+                  {cropScan?.unfixableCount ?? 0} reference
+                  {(cropScan?.unfixableCount ?? 0) === 1 ? '' : 's'} name a crop that was
+                  never cut. Re-cut those pages in Image Clipper 3.0 — no rename can
+                  produce a file that does not exist.
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          <ScrollArea className="max-h-[50vh] pr-3">
+            <div className="space-y-4">
+              {(cropScan?.chapters ?? []).map(chapter => (
+                <div key={chapter.chapterId}>
+                  <p className="text-sm font-medium mb-1">
+                    Chapter {chapter.chapterNumber}
+                    {chapter.chapterTitle ? ` — ${chapter.chapterTitle}` : ''}
+                  </p>
+
+                  {chapter.error ? (
+                    <div className="text-xs rounded p-2 flex items-start gap-2 bg-destructive/10">
+                      <AlertTriangle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-destructive" />
+                      <span className="min-w-0">{chapter.error}</span>
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {chapter.repaired.map((ref, i) => (
+                        <div
+                          key={`${chapter.chapterId}-fix-${i}`}
+                          className="text-xs rounded p-2 flex items-start gap-2 bg-muted"
+                        >
+                          <FileCheck2 className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-green-500" />
+                          <span className="min-w-0 break-all">
+                            <span className="font-mono line-through text-muted-foreground">
+                              {ref.was}
+                            </span>
+                            <span className="font-mono"> → {ref.now}</span>
+                            <span className="text-muted-foreground"> — {ref.where}</span>
+                          </span>
+                        </div>
+                      ))}
+
+                      {/* Separated from the rewrites above because the action
+                          they need is different: a re-cut, not a rename. */}
+                      {chapter.unfixable.map((ref, i) => (
+                        <div
+                          key={`${chapter.chapterId}-miss-${i}`}
+                          className="text-xs rounded p-2 flex items-start gap-2 bg-destructive/10"
+                        >
+                          <ImageOff className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-destructive" />
+                          <span className="min-w-0 break-all">
+                            <span className="font-mono">{ref.ref}</span>
+                            <span className="text-muted-foreground">
+                              {' '}— {ref.reason} ({ref.where})
+                            </span>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </ScrollArea>
+
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setCropScan(null)} disabled={repairingNames}>
+              {cropScan && cropScan.repairedCount > 0 ? 'Cancel' : 'Close'}
+            </Button>
+            {cropScan && cropScan.repairedCount > 0 && (
+              <Button onClick={applyImageRefRepair} disabled={repairingNames}>
+                {repairingNames ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Wrench className="h-4 w-4 mr-2" />
+                )}
+                Correct
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

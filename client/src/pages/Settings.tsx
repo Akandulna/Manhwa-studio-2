@@ -11,6 +11,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Switch } from '@/components/ui/switch'
 import { useTheme, type Theme } from '@/lib/theme'
+import { DocHistoryDialog, DocHistoryButton } from '@/components/settings/DocHistoryDialog'
+import { archiveVersion, readHistory, type DocVersion } from '@/lib/docHistory'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Save, RotateCcw, FolderOpen, Gauge, UserCircle, ImageIcon, Wand2, Sparkles, CheckCircle, XCircle, Key, ExternalLink, Volume2, Mic, FileText, Download, Crop, Locate, Upload, Clock, Film, Moon, Sun, Monitor, Palette, Cpu, Cloud } from 'lucide-react'
 
@@ -1463,6 +1465,8 @@ function Crop3FileUploadCard({
   const { toast } = useToast()
   const [file, setFile] = useState<Crop3StoredFile | null>(null)
   const [loading, setLoading] = useState(true)
+  const [historyCount, setHistoryCount] = useState(0)
+  const [historyOpen, setHistoryOpen] = useState(false)
 
   useEffect(() => {
     try {
@@ -1473,6 +1477,7 @@ function Crop3FileUploadCard({
     } finally {
       setLoading(false)
     }
+    setHistoryCount(readHistory(storageKey).length)
   }, [storageKey])
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1488,6 +1493,16 @@ function Crop3FileUploadCard({
         savedAt: new Date().toISOString()
       }
       try {
+        // Archive the outgoing file BEFORE the overwrite, so a replaced
+        // guideline can be recovered even though the upload has no undo.
+        if (file) {
+          const next = archiveVersion(storageKey, {
+            content: file.content,
+            savedAt: file.savedAt,
+            name: file.name
+          })
+          setHistoryCount(next.length)
+        }
         localStorage.setItem(storageKey, JSON.stringify(entry))
         setFile(entry)
         toast({ title: `${savedLabel} saved`, description: `${selected.name} saved locally in this browser.` })
@@ -1502,9 +1517,41 @@ function Crop3FileUploadCard({
   }
 
   const removeFile = () => {
-    if (!window.confirm(`Remove the saved ${savedLabel.toLowerCase()}?`)) return
+    if (!window.confirm(`Remove the saved ${savedLabel.toLowerCase()}? It stays in this document's history.`)) return
+    if (file) {
+      setHistoryCount(archiveVersion(storageKey, {
+        content: file.content,
+        savedAt: file.savedAt,
+        name: file.name
+      }).length)
+    }
     localStorage.removeItem(storageKey)
     setFile(null)
+  }
+
+  /** Append-only restore: the live file is archived, then replaced. */
+  const restoreVersion = (version: DocVersion) => {
+    const restored: Crop3StoredFile = {
+      name: version.name ?? `${savedLabel}.txt`,
+      content: version.content,
+      savedAt: new Date().toISOString()
+    }
+    try {
+      if (file) {
+        archiveVersion(storageKey, {
+          content: file.content,
+          savedAt: file.savedAt,
+          name: file.name,
+          restoredFrom: version.id
+        })
+      }
+      localStorage.setItem(storageKey, JSON.stringify(restored))
+      setFile(restored)
+      setHistoryCount(readHistory(storageKey).length)
+      toast({ title: `${savedLabel} restored`, description: `Restored the version saved ${new Date(version.savedAt).toLocaleString()}.` })
+    } catch (err) {
+      toast({ title: 'Restore failed', description: err instanceof Error ? err.message : 'Could not save to local storage', variant: 'destructive' })
+    }
   }
 
   const downloadFile = () => {
@@ -1555,18 +1602,33 @@ function Crop3FileUploadCard({
                 <Download className="h-4 w-4 mr-2" />
                 Download
               </Button>
+              <DocHistoryButton count={historyCount} onClick={() => setHistoryOpen(true)} />
               <Button variant="outline" onClick={removeFile}>Remove</Button>
             </div>
           </>
         ) : (
-          <Button variant="outline" asChild>
-            <label className="cursor-pointer">
-              <Upload className="h-4 w-4 mr-2" />
-              {uploadLabel}
-              <input type="file" className="hidden" onChange={handleFileChange} />
-            </label>
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" asChild>
+              <label className="cursor-pointer">
+                <Upload className="h-4 w-4 mr-2" />
+                {uploadLabel}
+                <input type="file" className="hidden" onChange={handleFileChange} />
+              </label>
+            </Button>
+            {/* Still reachable with no active file: a removed document is
+                recovered from here. */}
+            <DocHistoryButton count={historyCount} onClick={() => setHistoryOpen(true)} />
+          </div>
         )}
+
+        <DocHistoryDialog
+          open={historyOpen}
+          onOpenChange={setHistoryOpen}
+          docKey={storageKey}
+          title={savedLabel}
+          currentContent={file?.content ?? ''}
+          onRestore={restoreVersion}
+        />
       </CardContent>
     </Card>
   )
@@ -1607,6 +1669,8 @@ function Crop3PromptCard() {
   const [draft, setDraft] = useState('')
   const [savedAt, setSavedAt] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
+  const [historyCount, setHistoryCount] = useState(0)
+  const [historyOpen, setHistoryOpen] = useState(false)
 
   useEffect(() => {
     try {
@@ -1619,6 +1683,7 @@ function Crop3PromptCard() {
     } catch {
       // ignore corrupt/missing local state
     }
+    setHistoryCount(readHistory(CROP3_PROMPT_KEY).length)
   }, [])
 
   const startEdit = () => { setDraft(content); setEditing(true) }
@@ -1627,6 +1692,9 @@ function Crop3PromptCard() {
   const save = () => {
     const savedAtIso = new Date().toISOString()
     try {
+      // Archive first: archiveVersion no-ops on unchanged text, so re-saving
+      // without edits does not pile up duplicate versions.
+      setHistoryCount(archiveVersion(CROP3_PROMPT_KEY, { content, savedAt }).length)
       localStorage.setItem(CROP3_PROMPT_KEY, JSON.stringify({ content: draft, savedAt: savedAtIso }))
       setContent(draft)
       setSavedAt(savedAtIso)
@@ -1634,6 +1702,22 @@ function Crop3PromptCard() {
       toast({ title: 'Prompt saved', description: 'Saved locally in this browser.' })
     } catch (err) {
       toast({ title: 'Save failed', description: err instanceof Error ? err.message : 'Could not save to local storage', variant: 'destructive' })
+    }
+  }
+
+  /** Append-only restore: the live prompt is archived, then replaced. */
+  const restoreVersion = (version: DocVersion) => {
+    const savedAtIso = new Date().toISOString()
+    try {
+      archiveVersion(CROP3_PROMPT_KEY, { content, savedAt, restoredFrom: version.id })
+      localStorage.setItem(CROP3_PROMPT_KEY, JSON.stringify({ content: version.content, savedAt: savedAtIso }))
+      setContent(version.content)
+      setSavedAt(savedAtIso)
+      setEditing(false)
+      setHistoryCount(readHistory(CROP3_PROMPT_KEY).length)
+      toast({ title: 'Prompt restored', description: `Restored the version saved ${new Date(version.savedAt).toLocaleString()}.` })
+    } catch (err) {
+      toast({ title: 'Restore failed', description: err instanceof Error ? err.message : 'Could not save to local storage', variant: 'destructive' })
     }
   }
 
@@ -1680,12 +1764,24 @@ function Crop3PromptCard() {
               className="font-mono text-sm bg-muted/40"
               placeholder="No prompt saved yet."
             />
-            <Button variant="outline" onClick={startEdit}>
-              <Wand2 className="h-4 w-4 mr-2" />
-              Edit
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={startEdit}>
+                <Wand2 className="h-4 w-4 mr-2" />
+                Edit
+              </Button>
+              <DocHistoryButton count={historyCount} onClick={() => setHistoryOpen(true)} />
+            </div>
           </>
         )}
+
+        <DocHistoryDialog
+          open={historyOpen}
+          onOpenChange={setHistoryOpen}
+          docKey={CROP3_PROMPT_KEY}
+          title="Crop 3.0 prompt"
+          currentContent={content}
+          onRestore={restoreVersion}
+        />
       </CardContent>
     </Card>
   )
@@ -1709,6 +1805,8 @@ function Editor2PromptCard() {
   const [draft, setDraft] = useState('')
   const [savedAt, setSavedAt] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
+  const [historyCount, setHistoryCount] = useState(0)
+  const [historyOpen, setHistoryOpen] = useState(false)
 
   useEffect(() => {
     try {
@@ -1721,6 +1819,7 @@ function Editor2PromptCard() {
     } catch {
       // ignore corrupt/missing local state
     }
+    setHistoryCount(readHistory(EDITOR2_PROMPT_KEY).length)
   }, [])
 
   const startEdit = () => { setDraft(content); setEditing(true) }
@@ -1729,6 +1828,9 @@ function Editor2PromptCard() {
   const save = () => {
     const savedAtIso = new Date().toISOString()
     try {
+      // Archive first: archiveVersion no-ops on unchanged text, so re-saving
+      // without edits does not pile up duplicate versions.
+      setHistoryCount(archiveVersion(EDITOR2_PROMPT_KEY, { content, savedAt }).length)
       localStorage.setItem(EDITOR2_PROMPT_KEY, JSON.stringify({ content: draft, savedAt: savedAtIso }))
       setContent(draft)
       setSavedAt(savedAtIso)
@@ -1736,6 +1838,22 @@ function Editor2PromptCard() {
       toast({ title: 'Prompt saved', description: 'Saved locally in this browser.' })
     } catch (err) {
       toast({ title: 'Save failed', description: err instanceof Error ? err.message : 'Could not save to local storage', variant: 'destructive' })
+    }
+  }
+
+  /** Append-only restore: the live prompt is archived, then replaced. */
+  const restoreVersion = (version: DocVersion) => {
+    const savedAtIso = new Date().toISOString()
+    try {
+      archiveVersion(EDITOR2_PROMPT_KEY, { content, savedAt, restoredFrom: version.id })
+      localStorage.setItem(EDITOR2_PROMPT_KEY, JSON.stringify({ content: version.content, savedAt: savedAtIso }))
+      setContent(version.content)
+      setSavedAt(savedAtIso)
+      setEditing(false)
+      setHistoryCount(readHistory(EDITOR2_PROMPT_KEY).length)
+      toast({ title: 'Prompt restored', description: `Restored the version saved ${new Date(version.savedAt).toLocaleString()}.` })
+    } catch (err) {
+      toast({ title: 'Restore failed', description: err instanceof Error ? err.message : 'Could not save to local storage', variant: 'destructive' })
     }
   }
 
@@ -1784,12 +1902,24 @@ function Editor2PromptCard() {
               placeholder="No prompt saved yet."
               spellCheck={false}
             />
-            <Button variant="outline" onClick={startEdit}>
-              <Wand2 className="h-4 w-4 mr-2" />
-              Edit
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={startEdit}>
+                <Wand2 className="h-4 w-4 mr-2" />
+                Edit
+              </Button>
+              <DocHistoryButton count={historyCount} onClick={() => setHistoryOpen(true)} />
+            </div>
           </>
         )}
+
+        <DocHistoryDialog
+          open={historyOpen}
+          onOpenChange={setHistoryOpen}
+          docKey={EDITOR2_PROMPT_KEY}
+          title="Editor 2.0 prompt"
+          currentContent={content}
+          onRestore={restoreVersion}
+        />
       </CardContent>
     </Card>
   )

@@ -1813,6 +1813,46 @@ export interface Exported2Chapter {
   modifiedAt: number
 }
 
+// ---- Timeline image-reference repair (Editor 2.0) ----
+
+/** One timeline reference a repair run rewrites. */
+export interface RepairedRef {
+  /** The ref exactly as the pasted JSON wrote it. */
+  was: string
+  /** The crops3 filename it becomes. */
+  now: string
+  /** Where it appears: "Section 2 · 00:14.20 - 00:19.80". */
+  where: string
+}
+
+/** One reference naming a crop the chapter does not have. Needs a re-cut. */
+export interface UnfixableRef {
+  ref: string
+  where: string
+  reason: string
+}
+
+export interface CropRepairChapter {
+  chapterId: string
+  chapterNumber: number
+  chapterTitle: string | null
+  repaired: RepairedRef[]
+  unfixable: UnfixableRef[]
+  /** The corrected paste, when anything was repaired. Null when nothing was. */
+  correctedJson: string | null
+  error: string | null
+}
+
+export interface CropRepairResult {
+  seriesId: string
+  seriesTitle: string
+  /** Only chapters with something to report; clean ones are left out. */
+  chapters: CropRepairChapter[]
+  repairedCount: number
+  unfixableCount: number
+  chaptersChecked: number
+}
+
 export const videoApi2 = {
   getEditableChapters: (seriesId: string) =>
     fetchApi<Editable2Chapter[]>(`/video2/series/${seriesId}/editable-chapters`),
@@ -1849,6 +1889,21 @@ export const videoApi2 = {
     fetchApi<{ jobId: string }>(`/video2/series/${seriesId}/export-all`, {
       method: 'POST',
       body: JSON.stringify({ chapters, ...options })
+    }),
+
+  /**
+   * Find timeline image references that name no file in their chapter's crops3
+   * — the cause of the preview's "image references could not be found on disk"
+   * — and rewrite each to the crop its page and index actually name.
+   *
+   * Writes nothing: the corrected JSON comes back per chapter, and the caller
+   * saves it only once the user confirms. So the confirmation shows the real
+   * result rather than a separate prediction of it.
+   */
+  checkImageRefs: (seriesId: string, chapters: { chapterId: string; json: string }[]) =>
+    fetchApi<CropRepairResult>(`/video2/series/${seriesId}/check-image-refs`, {
+      method: 'POST',
+      body: JSON.stringify({ chapters })
     }),
 
   getExportJob: (jobId: string) => fetchApi<Export2Job>(`/video2/exports/${jobId}`),
@@ -2028,6 +2083,91 @@ export interface Clipper3Output {
   url: string
 }
 
+export interface Clipper3SliceFile {
+  /** 1-based, in top-to-bottom order. */
+  index: number
+  filename: string
+  width: number
+  height: number
+  bytes: number
+}
+
+export interface Clipper3SliceResult {
+  imageFilename: string
+  /** Absolute path of the folder holding the slices. */
+  directory: string
+  sourceWidth: number
+  sourceHeight: number
+  files: Clipper3SliceFile[]
+}
+
+/**
+ * What Sync json did with one `Processed/page_###` folder — or, from the
+ * preview, what it would do: 'ready' is the preview's form of 'imported'.
+ */
+export interface Clipper3SyncedPage {
+  /** The folder as it appears on disk, e.g. "page_007". */
+  folder: string
+  /** The source image it resolved to, when it resolved to one. */
+  filename: string | null
+  status: 'imported' | 'ready' | 'skipped' | 'failed'
+  /** Why, for 'skipped' and 'failed'. Empty for 'imported'/'ready'. */
+  reason: string
+  cropCount: number
+}
+
+export interface Clipper3ChapterSyncResult {
+  chapterId: string
+  chapterNumber: number
+  imported: number
+  /** Attachable, on a preview. Always 0 once the sync has actually run. */
+  ready: number
+  skipped: number
+  failed: number
+  pages: Clipper3SyncedPage[]
+}
+
+/** The confirmation dialog's contents: what a sync would attach, before it runs. */
+export interface Clipper3SyncPreview {
+  chapters: number
+  ready: number
+  skipped: number
+  failed: number
+  results: Clipper3ChapterSyncResult[]
+}
+
+/**
+ * What Unsync did to one page — or, from the preview, what it would do:
+ * 'attached' is the preview's form of 'detached'.
+ */
+export interface Clipper3UnsyncedPage {
+  filename: string
+  status: 'detached' | 'attached' | 'failed'
+  /** Why, for 'failed'. Empty otherwise. */
+  reason: string
+  /** Which halves were on disk. Both are cleared together. */
+  hadPoints: boolean
+  hadMetadata: boolean
+}
+
+export interface Clipper3ChapterUnsyncResult {
+  chapterId: string
+  chapterNumber: number
+  detached: number
+  /** Clearable, on a preview. Always 0 once the unsync has actually run. */
+  attached: number
+  failed: number
+  pages: Clipper3UnsyncedPage[]
+}
+
+/** The confirmation dialog's contents: what an unsync would clear, before it runs. */
+export interface Clipper3UnsyncPreview {
+  chapters: number
+  attached: number
+  failed: number
+  results: Clipper3ChapterUnsyncResult[]
+}
+
 export interface Clipper3ChapterSummary {
   chapterId: string
   totalImages: number
@@ -2078,6 +2218,70 @@ export const clipper3Api = {
     fetchApi<{ deleted: boolean }>(
       `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/metadata`,
       { method: 'DELETE' }
+    ),
+
+  // Slices are written to disk rather than handed back as blobs: the clipboard
+  // holds one image at a time, so selecting them all in the file explorer is
+  // the only way to copy the whole set at once.
+  sliceImage: (chapterId: string, filename: string) =>
+    fetchApi<Clipper3SliceResult>(
+      `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/slices`,
+      { method: 'POST' }
+    ),
+
+  openSliceFolder: (chapterId: string, filename: string) =>
+    fetchApi<{ success: boolean; path: string }>(
+      `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/slices/open`,
+      { method: 'POST' }
+    ),
+
+  getSliceUrl: (chapterId: string, filename: string, sliceName: string) =>
+    `${API_BASE}/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}` +
+    `/slices/${encodeURIComponent(sliceName)}`,
+
+  // What syncProcessed would attach, without writing anything — the same pass
+  // with the write suppressed, so the preview cannot promise more than the
+  // import delivers. Answers directly rather than over the socket.
+  previewProcessed: (seriesId: string, chapterIds?: string[]) =>
+    fetchApi<Clipper3SyncPreview>(
+      `/clipper3/series/${seriesId}/sync-processed/preview`,
+      { method: 'POST', body: JSON.stringify({ chapterIds }) }
+    ),
+
+  // Imports hand-made crop JSON sitting in each chapter's `Processed/` folder
+  // and attaches it to the pages it names. Background job — the outcome
+  // arrives over `clipper3:sync-*`. Omitting chapterIds syncs the whole series.
+  syncProcessed: (seriesId: string, chapterIds?: string[]) =>
+    fetchApi<{ started: boolean; chapters: number }>(
+      `/clipper3/series/${seriesId}/sync-processed`,
+      { method: 'POST', body: JSON.stringify({ chapterIds }) }
+    ),
+
+  // How many attached pages the selected chapters are carrying, so the
+  // confirmation dialog names a real number before anything is deleted.
+  previewUnsyncProcessed: (seriesId: string, chapterIds: string[]) =>
+    fetchApi<Clipper3UnsyncPreview>(
+      `/clipper3/series/${seriesId}/unsync-processed/preview`,
+      { method: 'POST', body: JSON.stringify({ chapterIds }) }
+    ),
+
+  // Removes the attached crop JSON and metadata from the selected chapters'
+  // store, putting those pages back to pending. The hand-made files under
+  // `Processed/` are left alone, so Sync json can re-attach them. Background
+  // job — the outcome arrives over `clipper3:unsync-*`. chapterIds is required:
+  // unsyncing a whole series by accident would clear hand-pasted work too.
+  unsyncProcessed: (seriesId: string, chapterIds: string[]) =>
+    fetchApi<{ started: boolean; chapters: number }>(
+      `/clipper3/series/${seriesId}/unsync-processed`,
+      { method: 'POST', body: JSON.stringify({ chapterIds }) }
+    ),
+
+  // Runs in the background — progress arrives over `clipper3:slice-*`.
+  // Omitting chapterIds slices the whole series.
+  sliceSeries: (seriesId: string, chapterIds?: string[]) =>
+    fetchApi<{ started: boolean; chapters: number; images: number }>(
+      `/clipper3/series/${seriesId}/slices`,
+      { method: 'POST', body: JSON.stringify({ chapterIds }) }
     ),
 
   // Cuts every image that has its own artifact; progress over 'clipper3:crop-*'.
