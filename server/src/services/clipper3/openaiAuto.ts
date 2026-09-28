@@ -34,6 +34,7 @@ import { applyChatGptReview, getReviewPrompt } from './chatgptReview.js'
 import { exportPage } from './exportPage.js'
 import { getSliceDir } from './perImageSlice.js'
 import { readPointerGuidelines } from '../clipper2/pointerGuidelines.js'
+import { writeEnvVars } from '../../utils/envFile.js'
 
 export const DEFAULT_OPENAI_CROP_MODEL = 'gpt-5.6-sol'
 /** Sent as `reasoning_effort`; '' leaves it to the model (needed for non-reasoning models like gpt-4o). */
@@ -125,30 +126,7 @@ export async function updateOpenAiConfig(update: OpenAiConfigUpdate): Promise<vo
   if (typeof update.includeRules === 'boolean') vars.OPENAI_CROP_INCLUDE_RULES = String(update.includeRules)
   if (typeof update.concurrency === 'number') vars.OPENAI_CROP_CONCURRENCY = String(Math.round(update.concurrency))
 
-  for (const [key, value] of Object.entries(vars)) {
-    if (/[\r\n]/.test(value)) throw new Error(`${key} cannot contain a line break`)
-  }
-  if (Object.keys(vars).length === 0) return
-
-  const envPath = path.join(process.cwd(), '.env')
-  let lines: string[] = []
-  try {
-    lines = (await fs.readFile(envPath, 'utf-8')).split('\n')
-  } catch {
-    // No .env yet — it is created below.
-  }
-  const pending = new Map(Object.entries(vars))
-  lines = lines.map(line => {
-    const key = line.split('=', 1)[0].trim()
-    if (!pending.has(key)) return line
-    const value = pending.get(key)!
-    pending.delete(key)
-    return `${key}=${value}`
-  })
-  for (const [key, value] of pending) lines.push(`${key}=${value}`)
-  await fs.writeFile(envPath, lines.join('\n'), 'utf-8')
-
-  for (const [key, value] of Object.entries(vars)) process.env[key] = value
+  await writeEnvVars(vars)
 }
 
 /** Checks the key AND that the configured model exists for it. */

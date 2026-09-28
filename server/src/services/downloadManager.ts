@@ -8,6 +8,7 @@ import PQueue from 'p-queue';
 import { prisma } from '../index.js';
 import { getChapterImages, DetectedImage } from './scraper.js';
 import { zeroPad, sanitizeTitle } from '../utils/urlPattern.js';
+import { storePageImage } from './pageImageStore.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as https from 'https';
@@ -190,10 +191,9 @@ export class DownloadManager {
       for (let i = 0; i < images.length; i++) {
         const image = images[i];
         const pageNum = zeroPad(i + 1);
-        const ext = this.getImageExtension(image.src);
-        const filename = `page_${pageNum}${ext}`;
-        const localPath = path.join(task.folderPath, filename);
-        const fullPath = path.join(fullFolderPath, filename);
+        const destBase = path.join(fullFolderPath, `page_${pageNum}`);
+        // Raw bytes land here first; storePageImage moves/converts them into place
+        const partPath = `${destBase}${this.getImageExtension(image.src)}.part`;
         
         try {
           // Check if already downloaded
@@ -214,8 +214,15 @@ export class DownloadManager {
             }
           }
           
-          // Download the image
-          const bytes = await this.downloadImage(image.src, fullPath, task.sourceUrl);
+          // Download the image, then store it in its smallest lossless form
+          await this.downloadImage(image.src, partPath, task.sourceUrl);
+          const result = await storePageImage(partPath, destBase);
+          const localPath = path.join(task.folderPath, path.basename(result.path));
+          
+          // A stale file from an earlier attempt would show up as a duplicate page
+          if (existingPage?.localPath && existingPage.localPath !== localPath) {
+            await fs.promises.unlink(path.join(downloadRoot, existingPage.localPath)).catch(() => {});
+          }
           
           // Update page record
           await prisma.page.update({
@@ -228,7 +235,7 @@ export class DownloadManager {
             data: {
               localPath,
               status: 'done',
-              bytes
+              bytes: result.bytes
             }
           });
           
@@ -254,6 +261,8 @@ export class DownloadManager {
           }
           
         } catch (pageError) {
+          await fs.promises.unlink(partPath).catch(() => {});
+          
           // Mark page as failed but continue
           await prisma.page.update({
             where: {

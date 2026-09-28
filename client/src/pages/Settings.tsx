@@ -13,6 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Switch } from '@/components/ui/switch'
 import { useTheme, type Theme } from '@/lib/theme'
 import { DocHistoryDialog, DocHistoryButton } from '@/components/settings/DocHistoryDialog'
+import { CloudflareTab } from '@/components/settings/CloudflareR2Card'
 import { archiveVersion, readHistory, type DocVersion } from '@/lib/docHistory'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Save, RotateCcw, FolderOpen, Gauge, UserCircle, ImageIcon, Wand2, Sparkles, CheckCircle, XCircle, Key, ExternalLink, Volume2, Mic, FileText, Download, Crop, Locate, Upload, Clock, Film, Moon, Sun, Monitor, Palette, Cpu, Cloud } from 'lucide-react'
@@ -362,7 +363,7 @@ export default function Settings() {
       {/* Tabs */}
       <div className="flex-1 overflow-auto">
         <Tabs defaultValue={searchParams.get('tab') || 'appearance'} className="w-full h-full">
-          <TabsList className="sticky top-0 w-full justify-start rounded-none border-b bg-background px-6">
+          <TabsList className="sticky top-0 w-full justify-start overflow-x-auto overflow-y-hidden rounded-none border-b bg-background px-6">
             <TabsTrigger value="appearance" className="flex items-center gap-2">
               <Palette className="h-4 w-4" />
               <span>Appearance</span>
@@ -394,6 +395,10 @@ export default function Settings() {
             <TabsTrigger value="editor2" className="flex items-center gap-2">
               <Film className="h-4 w-4" />
               <span>Editor 2.0</span>
+            </TabsTrigger>
+            <TabsTrigger value="cloudflare" className="flex items-center gap-2">
+              <Cloud className="h-4 w-4" />
+              <span>Cloudflare</span>
             </TabsTrigger>
           </TabsList>
 
@@ -1187,6 +1192,11 @@ STYLE RULES:
           {/* Editor 2.0 Tab — Module 4v2 (video compile/timeline/render workspace) */}
           <TabsContent value="editor2" className="p-6 max-w-4xl space-y-6">
       <Editor2PromptCard />
+          </TabsContent>
+
+          {/* Cloudflare Tab — R2 credentials for the Library's "Upload to R2" backup */}
+          <TabsContent value="cloudflare" className="p-6 max-w-4xl space-y-6">
+            <CloudflareTab />
           </TabsContent>
         </Tabs>
       </div>

@@ -22,6 +22,7 @@ import { initVideoEditorRoutes } from './routes/videoEditor.js';
 import { initVideoEditor2Routes } from './routes/videoEditor2.js';
 import { initMurgaaRoutes } from './routes/murgaa.js';
 import { initStorageRoutes } from './routes/storage.js';
+import { initR2Routes } from './routes/r2.js';
 import { DownloadManager } from './services/downloadManager.js';
 
 dotenv.config();
@@ -69,6 +70,7 @@ app.use('/api/video', initVideoEditorRoutes(io));    // Module 4: Video Editor
 app.use('/api/video2', initVideoEditor2Routes(io));  // Module 4v2: Editor 2.0
 app.use('/api/murgaa', initMurgaaRoutes());          // Narration: Murgaa reference popup (global per page)
 app.use('/api/storage', initStorageRoutes());        // Storage: local disk usage + reclaiming it
+app.use('/api/r2', initR2Routes(io));                // Cloud backup: upload series folders to Cloudflare R2
 
 // Health check
 app.get('/api/health', (req, res) => {

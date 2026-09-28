@@ -2910,3 +2910,107 @@ export const storageApi = {
       { method: 'DELETE' }
     )
 }
+
+// ============ Cloudflare R2 backup ============
+
+export type R2SeriesState = 'queued' | 'zipping' | 'uploading' | 'done' | 'skipped' | 'failed' | 'cancelled'
+
+export interface R2SeriesProgress {
+  seriesId: string
+  title: string
+  state: R2SeriesState
+  /** Unpublished chapters that go in the zip. */
+  chaptersIncluded: number
+  /** Published chapters left out. */
+  chaptersPublished: number
+  zipBytesTotal: number
+  zipBytesDone: number
+  /** Size of the finished zip, and how much has reached R2. */
+  uploadBytesTotal: number
+  uploadBytesDone: number
+  /** Object key in the bucket once uploaded. */
+  key?: string
+  /** Why a series was skipped. */
+  note?: string
+  error?: string
+}
+
+export interface R2UploadJob {
+  id: string
+  state: 'running' | 'done' | 'cancelled'
+  bucket: string
+  startedAt: string
+  finishedAt?: string
+  series: R2SeriesProgress[]
+}
+
+export interface R2Status {
+  configured: boolean
+  missing: string[]
+  bucket: string | null
+  prefix: string
+  job: R2UploadJob | null
+}
+
+export interface R2Config {
+  configured: boolean
+  missing: string[]
+  accountId: string
+  bucket: string
+  prefix: string
+  concurrency: number
+  hasAccessKey: boolean
+  accessKeyHint: string | null
+  hasSecret: boolean
+}
+
+export interface R2ConfigUpdate {
+  accountId?: string
+  bucket?: string
+  prefix?: string
+  concurrency?: number
+  accessKeyId?: string
+  secretAccessKey?: string
+  clearKeys?: boolean
+}
+
+export interface R2Usage {
+  bucket: string
+  /** "2026-09" — calendar month, UTC. */
+  month: string
+  resetsAt: string
+  limits: { storageBytes: number; classA: number; classB: number }
+  storage: {
+    bytes: number
+    objectCount: number
+    measuredAt: string
+    /** Largest first. */
+    objects: { key: string; size: number; lastModified: string | null }[]
+  }
+  /** Requests sent by Manhwa Studio this month. */
+  ops: { classA: number; classB: number; free: number; ops: Record<string, number>; since: string }
+}
+
+export const r2Api = {
+  getStatus: () => fetchApi<R2Status>('/r2/status'),
+
+  getUsage: () => fetchApi<R2Usage>('/r2/usage'),
+
+  deleteObject: (key: string) =>
+    fetchApi<{ ok: true }>(`/r2/objects?key=${encodeURIComponent(key)}`, { method: 'DELETE' }),
+
+  getConfig: () => fetchApi<R2Config>('/r2/config'),
+
+  saveConfig: (update: R2ConfigUpdate) =>
+    fetchApi<R2Config>('/r2/config', { method: 'PUT', body: JSON.stringify(update) }),
+
+  test: () => fetchApi<{ ok: true; bucket: string }>('/r2/test', { method: 'POST' }),
+
+  upload: (seriesIds: string[]) =>
+    fetchApi<R2UploadJob>('/r2/upload', {
+      method: 'POST',
+      body: JSON.stringify({ seriesIds })
+    }),
+
+  cancel: () => fetchApi<{ job: R2UploadJob | null }>('/r2/cancel', { method: 'POST' })
+}

@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { usePublishedChapters } from '@/hooks/usePublishedChapters'
 import { publishedRowClass } from '@/components/PublishedBadge'
-import { Link } from 'react-router-dom'
-import { seriesApi, videoApi, Series } from '@/lib/api'
+import { Link, useNavigate } from 'react-router-dom'
+import { seriesApi, videoApi, r2Api, Series, R2UploadJob, R2Usage } from '@/lib/api'
+import { useSocket } from '@/lib/socket'
+import { R2UploadStatusBar, R2SelectionBar } from '@/components/R2UploadStatusBar'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -17,7 +19,7 @@ import {
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Plus, BookOpen, Globe, CheckCircle, XCircle, Clock, Loader2, FolderInput, RefreshCw } from 'lucide-react'
+import { Plus, BookOpen, Globe, CheckCircle, XCircle, Clock, Loader2, FolderInput, RefreshCw, UploadCloud } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 
 const API_BASE = 'http://localhost:3002/api'
@@ -45,9 +47,100 @@ export default function Library() {
   const [selectedForImport, setSelectedForImport] = useState<Set<string>>(new Set())
   const { toast } = useToast()
 
+  // Cloudflare R2 backup: pick series with checkboxes, then upload them.
+  const { socket } = useSocket()
+  const navigate = useNavigate()
+  const [r2SelectMode, setR2SelectMode] = useState(false)
+  const [r2Selected, setR2Selected] = useState<Set<string>>(new Set())
+  const [r2Starting, setR2Starting] = useState(false)
+  const [r2Job, setR2Job] = useState<R2UploadJob | null>(null)
+  const [r2DismissedJobId, setR2DismissedJobId] = useState<string | null>(null)
+  const [r2Usage, setR2Usage] = useState<R2Usage | null>(null)
+
   useEffect(() => {
     loadSeries()
+    // Pick up an upload that is running, or finished while this page was closed.
+    r2Api.getStatus().then(status => setR2Job(status.job)).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    if (!socket) return
+    const handleProgress = (job: R2UploadJob) => setR2Job(job)
+    socket.on('r2:progress', handleProgress)
+    return () => {
+      socket.off('r2:progress', handleProgress)
+    }
+  }, [socket])
+
+  const handleStartR2Select = async () => {
+    try {
+      const status = await r2Api.getStatus()
+      if (!status.configured) {
+        toast({
+          title: 'Connect Cloudflare R2 first',
+          description: 'Add your R2 credentials here, then come back to the Library to upload.'
+        })
+        navigate('/settings?tab=cloudflare')
+        return
+      }
+      setR2Job(status.job)
+      setR2Selected(new Set())
+      setR2SelectMode(true)
+      // Free-plan headroom for the selection bar; the server enforces the limit either way.
+      r2Api.getUsage().then(setR2Usage).catch(() => setR2Usage(null))
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: 'Could not reach the server to check R2 settings',
+        variant: 'destructive'
+      })
+    }
+  }
+
+  const toggleR2Series = (id: string) => {
+    setR2Selected(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const toggleR2All = () => {
+    setR2Selected(prev =>
+      prev.size === series.length ? new Set() : new Set(series.map(s => s.id))
+    )
+  }
+
+  const handleR2Upload = async () => {
+    setR2Starting(true)
+    try {
+      const job = await r2Api.upload(series.filter(s => r2Selected.has(s.id)).map(s => s.id))
+      setR2Job(job)
+      setR2SelectMode(false)
+      setR2Selected(new Set())
+    } catch (error) {
+      toast({
+        title: 'Upload failed to start',
+        description: error instanceof Error ? error.message : 'Unknown error',
+        variant: 'destructive'
+      })
+    } finally {
+      setR2Starting(false)
+    }
+  }
+
+  const handleR2Cancel = async () => {
+    try {
+      const { job } = await r2Api.cancel()
+      if (job) setR2Job(job)
+    } catch {
+      // The socket will still report the job's real state.
+    }
+  }
+
+  const r2Running = r2Job?.state === 'running'
+  const showR2Status = r2Job !== null && (r2Running || r2Job.id !== r2DismissedJobId)
 
   const loadSeries = async () => {
     try {
@@ -211,7 +304,8 @@ export default function Library() {
   }
 
   return (
-    <div className="p-6">
+    <div className="min-h-full flex flex-col">
+    <div className="p-6 flex-1">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold">Library</h1>
@@ -220,6 +314,14 @@ export default function Library() {
           </p>
         </div>
         <div className="flex gap-2">
+          <Button
+            variant={r2SelectMode ? 'secondary' : 'outline'}
+            onClick={r2SelectMode ? () => setR2SelectMode(false) : handleStartR2Select}
+            disabled={series.length === 0}
+          >
+            <UploadCloud className="h-4 w-4 mr-2" />
+            {r2SelectMode ? 'Cancel Upload' : 'Upload to R2'}
+          </Button>
           <Button variant="outline" onClick={handleOpenImportDialog}>
             <FolderInput className="h-4 w-4 mr-2" />
             Import Existing
@@ -348,17 +450,34 @@ export default function Library() {
             // null until the lookup resolves, or when nothing is published yet.
             const rollup = seriesPublished(s.id)
             const published = rollup && rollup.published > 0 ? rollup : null
+            const r2Checked = r2Selected.has(s.id)
 
             return (
-              <Link to={`/series/${s.id}`} key={s.id}>
+              <Link
+                to={`/series/${s.id}`}
+                key={s.id}
+                onClick={e => {
+                  // While picking series for R2, a card click selects instead of navigating.
+                  if (!r2SelectMode) return
+                  e.preventDefault()
+                  toggleR2Series(s.id)
+                }}
+              >
                 <Card className={`h-full hover:shadow-lg transition-shadow cursor-pointer overflow-hidden ${
                   published ? publishedRowClass : ''
-                }`}>
+                } ${r2SelectMode && r2Checked ? 'ring-2 ring-primary' : ''}`}>
                   {/* Cover image placeholder */}
                   <div className="aspect-[3/4] bg-gradient-to-br from-primary/20 to-primary/5 relative">
                     <div className="absolute inset-0 flex items-center justify-center">
                       <BookOpen className="h-16 w-16 text-primary/30" />
                     </div>
+                    {r2SelectMode && (
+                      // Visual only: the card's click toggles it, so the box
+                      // must not also handle the click and undo it.
+                      <div className="absolute top-2 right-2 rounded-md bg-background/90 p-1.5 shadow pointer-events-none">
+                        <Checkbox checked={r2Checked} className="h-5 w-5" />
+                      </div>
+                    )}
                     <div className="absolute bottom-2 right-2">
                       <Badge variant={status.variant}>
                         {status.label}
@@ -412,6 +531,30 @@ export default function Library() {
               </Link>
             )
           })}
+        </div>
+      )}
+    </div>
+
+      {(r2SelectMode || showR2Status) && (
+        <div className="sticky bottom-0 z-20">
+          {r2SelectMode && (
+            <R2SelectionBar
+              count={r2Selected.size}
+              total={series.length}
+              busy={r2Starting || r2Running}
+              storage={r2Usage ? { used: r2Usage.storage.bytes, limit: r2Usage.limits.storageBytes } : null}
+              onToggleAll={toggleR2All}
+              onCancel={() => setR2SelectMode(false)}
+              onUpload={handleR2Upload}
+            />
+          )}
+          {showR2Status && r2Job && (
+            <R2UploadStatusBar
+              job={r2Job}
+              onCancel={handleR2Cancel}
+              onDismiss={() => setR2DismissedJobId(r2Job.id)}
+            />
+          )}
         </div>
       )}
     </div>
