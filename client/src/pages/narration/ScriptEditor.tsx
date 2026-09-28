@@ -9,8 +9,7 @@ import { useEffect, useRef, useState } from 'react'
 import { usePublishedChapters } from '@/hooks/usePublishedChapters'
 import { PublishedBadge } from '@/components/PublishedBadge'
 import { useParams, useNavigate } from 'react-router-dom'
-import { narrationApi, clipper2Api, ChapterScriptDetail, ManualPromptResponse, AIStatus } from '@/lib/api'
-import { CopyPointerPromptButton, PointerJsonDrop } from '@/components/clipper2/PointerImport'
+import { narrationApi, ChapterScriptDetail, ManualPromptResponse, AIStatus } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -43,9 +42,6 @@ import {
   Flag,
   FileText,
   Sparkles,
-  Locate,
-  FileJson,
-  Scissors,
   Bird
 } from 'lucide-react'
 
@@ -76,11 +72,6 @@ export default function ScriptEditor() {
   const [manualResponse, setManualResponse] = useState('')
   const [copied, setCopied] = useState(false)
 
-  // Manual mode, steps 3-4: crop pointers. Only the count is held here — the
-  // pointers themselves belong to Image Clipper 2.0, and this page links out to it
-  // rather than growing a second viewer.
-  const [pointerCropCount, setPointerCropCount] = useState<number | null>(null)
-
   // Continuity panel
   const [showContinuity, setShowContinuity] = useState(true)
 
@@ -109,23 +100,6 @@ export default function ScriptEditor() {
     }
   }, [id])
 
-  // Best-effort: a chapter with no pointer file is the normal case, so a failure
-  // here just means "none yet" rather than an error worth showing.
-  useEffect(() => {
-    if (!id) return
-    let cancelled = false
-    clipper2Api
-      .getPoints(id)
-      .then(set => {
-        if (!cancelled) setPointerCropCount(set.file?.crops.length ?? null)
-      })
-      .catch(() => {
-        if (!cancelled) setPointerCropCount(null)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [id])
 
   // Handle generation progress
   useEffect(() => {
@@ -564,9 +538,6 @@ export default function ScriptEditor() {
               </Card>
             </TabsContent>
 
-            {/* Four steps, one chat session: the pages are attached once at Step 1 and
-                Step 3 reuses that same conversation, which is why the pointer prompt
-                can say "the same above chapter" and carry no images of its own. */}
             <TabsContent ref={manualStepsRef} value="manual" className="flex-1 min-h-0 mt-0 overflow-y-auto space-y-4 pr-1">
               {/* Step 1: Get prompt */}
               <Card>
@@ -650,76 +621,6 @@ export default function ScriptEditor() {
                 </CardContent>
               </Card>
 
-              <Separator />
-
-              {/* Step 3: Crop pointers — same chat, same pages, different question. */}
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-lg flex items-center gap-2">
-                    <Locate className="h-4 w-4" />
-                    Step 3: Copy Pointer Prompt
-                  </CardTitle>
-                  <CardDescription>
-                    In the <strong>same chat</strong> — the chapter's pages are already attached from
-                    Step 1 — paste this to get the crop pointers back as JSON.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <CopyPointerPromptButton />
-                  <p className="text-xs text-muted-foreground">
-                    This sends your Crop Detection Guidelines verbatim. Edit them in{' '}
-                    <Button
-                      variant="link"
-                      size="sm"
-                      className="p-0 h-auto text-xs"
-                      onClick={() => navigate('/settings')}
-                    >
-                      Settings → Crop Pointers
-                    </Button>
-                    .
-                  </p>
-                </CardContent>
-              </Card>
-
-              {/* Step 4: Bring the JSON back */}
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-lg flex items-center gap-2">
-                    <FileJson className="h-4 w-4" />
-                    Step 4: Attach the Pointer JSON
-                  </CardTitle>
-                  <CardDescription>
-                    Drop the AI's <code className="text-xs">crop_points.json</code> here — or paste its
-                    raw reply. Near-miss edges, id order and reason casing are repaired on import, and
-                    every change is listed.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {id && (
-                    <PointerJsonDrop
-                      chapterId={id}
-                      hasExistingPoints={pointerCropCount !== null && pointerCropCount > 0}
-                      onImported={set => setPointerCropCount(set.file?.crops.length ?? 0)}
-                    />
-                  )}
-
-                  <div className="flex items-center justify-between gap-3 pt-1">
-                    <p className="text-xs text-muted-foreground">
-                      {pointerCropCount === null
-                        ? 'No pointers imported for this chapter yet.'
-                        : `This chapter has ${pointerCropCount} pointer${pointerCropCount === 1 ? '' : 's'} on file.`}
-                    </p>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => navigate(`/clipper2/chapter/${id}`)}
-                    >
-                      <Scissors className="h-4 w-4 mr-2" />
-                      Check in Image Clipper 2.0
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
             </TabsContent>
           </Tabs>
         </div>

@@ -33,7 +33,7 @@ import { getReview, startReview } from './reviewState.js'
 import { applyChatGptReview, getReviewPrompt } from './chatgptReview.js'
 import { exportPage } from './exportPage.js'
 import { getSliceDir } from './perImageSlice.js'
-import { readPointerGuidelines } from '../clipper2/pointerGuidelines.js'
+import { readPointerGuidelines } from './pointerGuidelines.js'
 import { writeEnvVars } from '../../utils/envFile.js'
 
 export const DEFAULT_OPENAI_CROP_MODEL = 'gpt-5.6-sol'

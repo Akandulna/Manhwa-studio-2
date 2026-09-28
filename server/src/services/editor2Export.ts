@@ -5,15 +5,12 @@
  * rendered back to back in a single job so the whole series can be exported
  * from one press of a button.
  *
- * The composition is deliberately Editor 1.0's: `buildImageFilterChunk` from
- * videoEditorService draws every frame, so a chapter exported here looks the
- * same as the same chapter exported there — blurred cover backdrop, image fit
- * to frame height, the same gentle Ken Burns drift. What differs is where the
- * material comes from. Editor 1.0 renders a VideoProject it owns in the
- * database; Editor 2.0 has no project rows at all — its source of truth is the
- * pasted timeline JSON, which the client re-sends here and which is processed
- * into a plan exactly as the preview processes it. That keeps "what I exported"
- * identical to "what I previewed" without a schema change.
+ * Every frame is drawn by `buildImageFilterChunk` from videoRender — blurred
+ * cover backdrop, image fit to frame height, a gentle Ken Burns drift. Editor
+ * 2.0 has no project rows at all — its source of truth is the pasted timeline
+ * JSON, which the client re-sends here and which is processed into a plan
+ * exactly as the preview processes it. That keeps "what I exported" identical
+ * to "what I previewed" without a schema change.
  *
  * Jobs live in memory. A render that is interrupted by a server restart is
  * simply re-run: nothing is written until FFmpeg finishes a chapter, and the
@@ -31,7 +28,7 @@ import {
   getVideoCapabilities,
   RESOLUTIONS,
   type VideoCapabilities
-} from './videoEditorService.js'
+} from './videoRender.js'
 import { ensureFfmpegAvailable, normalizePartDurations } from './videoMath.js'
 import { processTimelineJson, type PlanSection, type TimelinePlan } from './editor2Timeline.js'
 import { prisma } from '../index.js'

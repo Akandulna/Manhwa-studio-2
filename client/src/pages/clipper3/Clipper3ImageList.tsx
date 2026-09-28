@@ -65,7 +65,6 @@ import {
   Bot
 } from 'lucide-react'
 import {
-  clipperApi,
   clipper3Api,
   type Clipper3ChapterImages,
   type Clipper3Image,
@@ -346,7 +345,7 @@ export default function Clipper3ImageList() {
     if (!chapterId || !activeImage) return
     setCopyingImage(true)
     try {
-      const response = await fetch(clipperApi.getImageUrl(chapterId, activeImage.filename))
+      const response = await fetch(clipper3Api.getImageUrl(chapterId, activeImage.filename))
       if (!response.ok) throw new Error(`Could not fetch the image (HTTP ${response.status})`)
       const blob = await response.blob()
 
@@ -1386,7 +1385,7 @@ export default function Clipper3ImageList() {
                     {index + 1}
                   </span>
                   <img
-                    src={clipperApi.getImageUrl(chapterId!, img.filename)}
+                    src={clipper3Api.getImageUrl(chapterId!, img.filename)}
                     alt={img.filename}
                     loading="lazy"
                     draggable={false}
@@ -1458,7 +1457,7 @@ export default function Clipper3ImageList() {
               </DialogHeader>
 
               <img
-                src={clipperApi.getImageUrl(chapterId!, activeImage.filename)}
+                src={clipper3Api.getImageUrl(chapterId!, activeImage.filename)}
                 alt={activeImage.filename}
                 draggable={false}
                 className="w-full max-h-64 object-contain rounded border bg-muted"

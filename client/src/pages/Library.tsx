@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { usePublishedChapters } from '@/hooks/usePublishedChapters'
 import { publishedRowClass } from '@/components/PublishedBadge'
 import { Link, useNavigate } from 'react-router-dom'
-import { seriesApi, videoApi, r2Api, Series, R2UploadJob, R2Usage } from '@/lib/api'
+import { seriesApi, r2Api, Series, R2UploadJob, R2Usage } from '@/lib/api'
 import { useSocket } from '@/lib/socket'
 import { R2UploadStatusBar, R2SelectionBar } from '@/components/R2UploadStatusBar'
 import { Card, CardContent } from '@/components/ui/card'
@@ -33,11 +33,8 @@ interface ScannedSeries {
 
 export default function Library() {
   const [series, setSeries] = useState<Series[]>([])
-  const [videoStatus, setVideoStatus] = useState<Record<string, 'draft' | 'exported'>>({})
-
-  // How many chapters of each series are actually rendered to video. This is
-  // the disk's answer, not a project row's: Editor 2.0 creates no VideoProject,
-  // so `videoStatus` alone reported nothing for a fully published series.
+  // How many chapters of each series are actually rendered to video — the
+  // disk's answer, read from Editor 2.0's _video2 folders.
   const { seriesPublished } = usePublishedChapters()
   const [loading, setLoading] = useState(true)
   const [importDialogOpen, setImportDialogOpen] = useState(false)
@@ -146,7 +143,6 @@ export default function Library() {
     try {
       const data = await seriesApi.getAll()
       setSeries(data)
-      videoApi.getSeriesStatus().then(setVideoStatus).catch(() => {})
     } catch (error) {
       toast({
         title: 'Error',
@@ -483,29 +479,20 @@ export default function Library() {
                         {status.label}
                       </Badge>
                     </div>
-                    {/* Published state wins over a stale Editor 1.0 project row:
-                        a rendered MP4 on disk is a fact, "draft" is only an
-                        intention someone may have abandoned. */}
-                    {(published || videoStatus[s.id]) && (
+                    {published && (
                       <div className="absolute top-2 left-2">
-                        {published ? (
-                          <Badge
-                            className={
-                              published.published === published.total
-                                ? 'border-transparent bg-fuchsia-600 text-white hover:bg-fuchsia-600/80'
-                                : 'border-transparent bg-fuchsia-600/80 text-white hover:bg-fuchsia-600/60'
-                            }
-                            title={`${published.published} of ${published.total} chapters rendered to video`}
-                          >
-                            🎬 {published.published === published.total
-                              ? 'Published'
-                              : `Published ${published.published}/${published.total}`}
-                          </Badge>
-                        ) : (
-                          <Badge variant={videoStatus[s.id] === 'exported' ? 'success' : 'secondary'}>
-                            {videoStatus[s.id] === 'exported' ? '🎬 Exported' : '🎬 Draft'}
-                          </Badge>
-                        )}
+                        <Badge
+                          className={
+                            published.published === published.total
+                              ? 'border-transparent bg-fuchsia-600 text-white hover:bg-fuchsia-600/80'
+                              : 'border-transparent bg-fuchsia-600/80 text-white hover:bg-fuchsia-600/60'
+                          }
+                          title={`${published.published} of ${published.total} chapters rendered to video`}
+                        >
+                          🎬 {published.published === published.total
+                            ? 'Published'
+                            : `Published ${published.published}/${published.total}`}
+                        </Badge>
                       </div>
                     )}
                   </div>

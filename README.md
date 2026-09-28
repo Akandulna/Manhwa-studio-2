@@ -25,22 +25,18 @@ A local full-stack desktop-style web app for managing and downloading manhwa ser
 - **Script Editor**: Edit generated scripts with live continuity context
 - **Provider Abstraction**: Gemini implemented, easy to add OpenAI/Anthropic later
 
-### Module 3: Image Clipper
-- **Crop Workspace**: Draw, move, and resize crops on a virtualized vertical canvas of a chapter's pages
-- **Click-to-Add**: Click the page to drop a full-width crop; adjust height/width by dragging edges
-- **Story-Order Numbering**: Crops auto-number top-to-bottom; inserting/moving renumbers automatically
-- **AI Auto-Crop**: Optional locally-trained model (or rule-based fallback) suggests crops to accept/reject
-- **Finalize/Export**: Batch-exports crops to PNG on disk for downstream modules
+### Module 3: Image Clipper 3.0
+- **Per-Image Crops**: Every page has its own crop JSON, normalized 0.0–1.0 against that page alone — no stitched chapter canvas
+- **ChatGPT Flow**: Build a page's handoff package, paste ChatGPT's analysis back, review and adjust the crops, then export
+- **ChatGPT API Auto Run**: Runs package → analysis → review → export through the OpenAI API (key set in Settings → Crop 3.0 - Prompts)
+- **Crop Rules**: The guidelines document (Settings → Crop Pointers) is handed to the model verbatim
+- **Slicing & Sync**: Slice tall pages into parts; import hand-made crop JSON from a series' `Processed/` folder
 
-### Module 4: Video Editor
-- **Compile to MP4**: Stitch narration scripts + per-section voiceover audio + cropped images into a 16:9 video, across one or many chapters as a continuous "Part"
-- **Audio as Master Clock**: Each script part's audio is never trimmed; selected images subdivide its duration with draggable boundaries (sum always locked to the audio)
-- **Per-Image Motion**: Gentle drift (slow zoom/pan) by default, or manual focus mode with an anchor point; plus manual scale/offset overrides; blurred+darkened background behind each foreground image
-- **End Title Card**: Auto end card (series title + closing line, editable) over a fixed duration with music continuing underneath
-- **Background Music**: Global music library; looped under the narration with master + music volume controls
-- **Live + Rendered Preview**: Instant client-side approximate preview, plus a pixel-faithful low-res proxy render
-- **AI Assist**: Zero-shot image-range and focus-anchor suggestions (Gemini vision); every edit is logged for a future style model
-- **Export**: 1080/720/480p, quality presets, progress + cancel, open output folder
+### Module 4: Editor 2.0
+- **Readiness Gates**: A chapter is editable once it has a script, section voiceover audio, Clipper 3.0 crops for every page, and a "script with timeline" on every section
+- **Timeline JSON**: Paste a chapter's timeline JSON to build the plan; preview it with Ken Burns motion over a blurred backdrop
+- **Batch Export**: Render one MP4 per chapter into the series' `_video2/` folder, with progress and cancel
+- **Music Library**: Global background tracks (sidebar → **Music**)
 
 ### Coming Soon (Disabled Placeholders)
 - Panel Splitter
@@ -327,88 +323,48 @@ Voiceover files are saved in:
             └── ...
 ```
 
-## Module 3: Image Clipper
+## Module 3: Image Clipper 3.0
 
-Crop a chapter's downloaded pages into ordered images for the video.
-
-### Workflow
-1. Pick a series, then a chapter, to open the crop workspace.
-2. **Click** anywhere on the page to drop a full-width 1:1 crop; drag its edges/corners to set height and width.
-3. Crops are numbered top-to-bottom (story order); inserting/moving renumbers automatically.
-4. Optionally **Crop using AI** to get suggested crops to accept/reject.
-5. **Save all crops** to export them to disk.
-
-### Output Files
-```
-<DOWNLOAD_ROOT>/<Series Title>/Chapter XXX/crops/<series-slug>_crop_001.png
-```
-The absolute export path is stored on each `Crop.exportPath` and is the source of truth used by Module 4.
-
-### Key Endpoints (`/api/clipper`, `/api/ai-crop`)
-- `GET /clipper/series`, `GET /clipper/series/:id` — eligible series + chapters
-- `GET /clipper/chapters/:id/manifest`, `GET /clipper/chapters/:id/image/:filename`
-- `POST /clipper/chapters/:id/session`, crop CRUD under `/clipper/sessions` and `/clipper/crops`
-- `POST /clipper/sessions/:id/finalize` — export crops to disk
-
-### Socket.io Events
-- `clipper:finalize-progress`, `clipper:finalize-complete`
-
-## Module 4: Video Editor
-
-Compiles narration scripts + per-section voiceover audio + cropped images into a single 16:9 MP4, spanning one or more chapters as one continuous video.
+Crop each downloaded page into ordered images for the video. Each page is independent: its crop JSON's coordinates are normalized against that page only.
 
 ### Workflow
-1. Sidebar → **Editor**, pick a series.
-2. Select the chapters to include (only chapters with **finalized crops** *and* **per-section voiceover audio** are eligible). Chapters compile into the timeline sequentially.
-3. For each script part (the part's audio is the master clock): select images from the chapter's crop pool (or add a black filler), drag the slot boundaries to set per-image durations (the sum is locked to the audio), and tune motion/anchor/scale per image in the inspector.
-4. The final **End Card** part shows an editable title-card text + duration.
-5. Set **Audio & Music** (background track + master/music volume), **Preview** (live or rendered), then **Export**.
+1. Sidebar → **Image Clipper 3.0**, pick a series, then a chapter.
+2. Per page, either run the **ChatGPT flow** (build the package, paste the reply, review, export) or the **ChatGPT API** auto run.
+3. Exported crops and their JSON land in the chapter folder for Editor 2.0.
 
-### Core Editing Model
-- The atomic unit is a **script part**, backed by an `AudioSection` whose audio is never trimmed/stretched.
-- Selected images appear in **crop-number order** (no manual reordering); selecting/deselecting changes the set, durations re-split equally on add/remove.
-- **Foreground**: fit to frame height, centered; **background**: a blurred, 20%-darkened copy; cuts between images are instant.
-- **Motion**: gentle drift (zoom/pan) by default; **focus mode** (manual) zooms toward a placed anchor point.
-- **Outro**: the editor-managed end title card renders for a fixed duration (no outro audio exists in the pipeline); background music continues underneath.
+### Key Endpoints (`/api/clipper3`)
+- `GET /status`, `GET|PUT /guidelines`, `POST /guidelines/reset` — the crop rules document
+- `GET /series`, `GET /chapters`, `GET /series/:seriesId/summary` — listing and progress
+- `GET /chapters/:id/images`, `GET /chapters/:id/image/:filename` — pages and their state
+- Per page under `/chapters/:id/images/:filename/…`: `points`, `metadata`, `slices`, `handoff`, `analysis`, `review`, `export`
+- `GET|POST /chapters/:id/auto`, `POST /chapters/:id/auto/cancel` — the ChatGPT API run
+- `POST /series/:seriesId/sync-processed`, `POST /series/:seriesId/unsync-processed` (+ `/preview`)
 
-> Note: the title card is rendered with **sharp** (SVG→PNG), not FFmpeg `drawtext`, so card text works even on FFmpeg builds without `drawtext`/libfreetype.
+## Module 4: Editor 2.0
 
-### Prisma Models (Module 4)
-- `VideoProject` — an export project for a series (chapter list, music track, master/music volume, title-card text/duration, status)
-- `VideoPartEdit` — one row per script part (+ a final outro row); `audioSectionId` is null for the outro
-- `VideoPartImage` — a selected crop or filler in a part (slotIndex from crop order, duration, motion/anchor/transform, `source`)
-- `MusicTrack` — a global background-music track
-- `VideoExport` — a render job (output path, resolution, preset, size, duration, status)
-- `VideoEditEvent` — an edit-event log for the future style model (`image_selected`/`deselected`, `duration_adjusted`, `motion_changed`, `anchor_set`/`moved`, `image_transformed`, `filler_used`, `suggestion_accepted`/`edited`/`rejected`)
+Turns each chapter's timeline plan into a 16:9 MP4.
 
-### API Endpoints (`/api/video`)
-- `GET /capabilities` — FFmpeg + filter availability, resolutions, AI-assist availability
-- `POST /projects/init`, `GET /projects/:id`, `PUT /projects/:id`
-- `GET /series/:seriesId/editable-chapters`, `GET /series-status`, `GET /chapters/:chapterId/crops`
-- `PUT /parts/:partId/images` — bulk-set a part's images (normalizes durations, derives slotIndex, logs an event)
-- `POST /parts/:partId/event` — log a standalone edit event
-- `POST /projects/:id/render`, `POST /exports/:exportId/cancel`, `GET /exports/:exportId`, `GET /exports/:exportId/open`, `GET /exports/:exportId/file`
-- `POST /projects/:id/preview` (proxy draft), `GET /projects/:id/preview/file`
-- `GET /parts/:partId/audio`, `GET /crops/:cropId/image`
-- Music: `GET /music`, `POST /music` (upload), `DELETE /music/:id`, `GET /music/:id/file`
-- AI assist: `POST /parts/:partId/suggest-images`, `POST /images/:imageId/suggest-anchor`
+### Workflow
+1. Sidebar → **Editor 2.0**, pick a series; chapters show which readiness gates they pass.
+2. Paste the chapter's timeline JSON, check it in the preview, then export one or all chapters.
 
-### Socket.io Events
-- `video:render-progress`, `video:render-complete`, `video:render-failed`, `video:render-cancelled`
-- `video:preview-progress`, `video:preview-complete`
+### API Endpoints (`/api/video2`)
+- `GET /series/:seriesId/editable-chapters` — chapter readiness
+- `GET /chapters/:chapterId/timeline-bundle`, `GET /chapters/:chapterId/crop-metadata-bundle`, `POST /chapters/:chapterId/process-timeline`
+- `POST /series/:seriesId/check-image-refs` — repair missing image references
+- `POST /series/:seriesId/export-all`, `GET /series/:seriesId/exports`, `GET /exports/:jobId`, `POST /exports/:jobId/cancel`
+
+### Music Library (`/api/music`)
+- `GET /`, `POST /` (upload), `DELETE /:id`, `GET /:id/file`
 
 ### Disk Layout
 ```
-<DOWNLOAD_ROOT>/<Series Title>/_video/<project-slug>_<resolution>_<timestamp>.mp4   # rendered videos
-<DOWNLOAD_ROOT>/_music/<timestamp>_<filename>                                       # global music library
-<OS temp dir>/mhs_preview_*.mp4                                                     # proxy previews (ephemeral)
+<DOWNLOAD_ROOT>/<Series Title>/_video2/…mp4          # rendered videos
+<DOWNLOAD_ROOT>/_music/<timestamp>_<filename>        # global music library
 ```
 
-### AI Assist (zero-shot, optional)
-Requires `GEMINI_API_KEY`. Uses Gemini vision to (a) suggest the contiguous crop range that illustrates a part (monotonic story-order alignment) and (b) suggest a focus anchor for an image. Suggestions are pre-filled for accept/edit/reject; the accepted/edited/rejected signal is logged via `VideoEditEvent` for a future trained style model. (Capturing the script→crop mapping at generation time isn't applicable here — crops don't exist until Module 3 and parts are voiceover-derived — so the zero-shot range alignment is the mechanism.)
-
 ### FFmpeg Requirements
-FFmpeg must be on `PATH` (or set `FFMPEG_PATH`/`FFPROBE_PATH`). The engine detects `zoompan`, `gblur`/`boxblur`, and degrades gracefully (e.g. `gblur`→`boxblur`, missing `zoompan`→static holds). Export is disabled with a clear message if FFmpeg is unavailable. Optional `VIDEO_FONT_FILE` is unused for the card (sharp renders text).
+FFmpeg must be on `PATH` (or set `FFMPEG_PATH`). The engine detects `zoompan`, `gblur`/`boxblur`, and degrades gracefully (e.g. `gblur`→`boxblur`, missing `zoompan`→static holds).
 
 ## Configuration
 

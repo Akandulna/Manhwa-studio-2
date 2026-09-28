@@ -4,13 +4,12 @@
  * Read model for the Editor 2.0 series → chapter → readiness screen. A chapter
  * is editable once it clears four gates: a generated script, full section
  * voiceover audio, Image Clipper 3.0 crops done for every source image, and a
- * "script with timeline" on every section. Unlike the v1 Video Editor, crops
- * are checked against Clipper 3.0's per-image filesystem artifacts rather than
- * the legacy CropSession model.
+ * "script with timeline" on every section. Crops are checked against Clipper
+ * 3.0's per-image filesystem artifacts.
  */
 
 import { prisma } from '../index.js'
-import { getChapterManifest } from './clipperService.js'
+import { getChapterManifest } from './chapterManifest.js'
 import {
   extractCrops,
   listMetadataImageStems,

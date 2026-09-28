@@ -129,11 +129,7 @@ function ExportBadge({ chapter }: { chapter: ChapterStorage }) {
       <Badge
         variant="success"
         className="flex items-center gap-1"
-        title={
-          chapter.exportedVia === 'editor2'
-            ? 'An MP4 for this chapter is in the series _video2 folder'
-            : 'A finished Editor 1.0 export includes this chapter'
-        }
+        title="An MP4 for this chapter is in the series _video2 folder"
       >
         <CheckCircle2 className="h-3 w-3" />
         Exported

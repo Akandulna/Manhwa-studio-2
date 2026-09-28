@@ -236,7 +236,7 @@ export interface ChapterStorage {
   /** A rendered MP4 exists for this chapter number. */
   exported: boolean
   /** Which exporter's record vouches for it, for the tooltip. */
-  exportedVia: 'editor2' | 'editor1' | null
+  exportedVia: 'editor2' | null
 }
 
 export interface SeriesStorage {
@@ -324,30 +324,10 @@ export async function scanStorage(): Promise<StorageOverview> {
     orderBy: { title: 'asc' }
   })
 
-  // Editor 1.0's exports are database-tracked; one query covers every series.
-  const doneExports = await prisma.videoExport.findMany({
-    where: { status: 'done' },
-    select: { project: { select: { seriesId: true, chapterIds: true } } }
-  })
-  // Editor 1.0 renders a whole VideoProject, so a finished export vouches for
-  // every chapter id listed in that project.
-  const editor1ExportedIds = new Map<string, Set<string>>()
-  for (const row of doneExports) {
-    if (!row.project) continue
-    const set = editor1ExportedIds.get(row.project.seriesId) ?? new Set<string>()
-    try {
-      for (const id of JSON.parse(row.project.chapterIds) as string[]) set.add(id)
-    } catch {
-      // Malformed JSON: ignore this project.
-    }
-    editor1ExportedIds.set(row.project.seriesId, set)
-  }
-
   const seriesOut: SeriesStorage[] = []
 
   for (const s of allSeries) {
     const exportedNumbers = await scanExportedChapterNumbers(s.rootFolder)
-    const exportedIds = editor1ExportedIds.get(s.id) ?? new Set<string>()
 
     const chapters: ChapterStorage[] = []
     const BATCH = 8
@@ -357,7 +337,6 @@ export async function scanStorage(): Promise<StorageOverview> {
         slice.map(async ch => {
           const { sizes, files, exists } = await scanChapterFolder(ch.folderPath)
           const viaEditor2 = exportedNumbers.has(Math.round(ch.number))
-          const viaEditor1 = exportedIds.has(ch.id)
           const chapter: ChapterStorage = {
             id: ch.id,
             number: ch.number,
@@ -370,8 +349,8 @@ export async function scanStorage(): Promise<StorageOverview> {
             totalBytes: totalOf(sizes),
             reclaimableBytes: reclaimableOf(sizes),
             fileCount: files,
-            exported: viaEditor2 || viaEditor1,
-            exportedVia: viaEditor2 ? 'editor2' : viaEditor1 ? 'editor1' : null
+            exported: viaEditor2,
+            exportedVia: viaEditor2 ? 'editor2' : null
           }
           return chapter
         })
@@ -536,15 +515,7 @@ export async function deleteChapterData(
   if (!options.allowUnexported) {
     const exportedNumbers = await scanExportedChapterNumbers(chapter.series.rootFolder)
     if (!exportedNumbers.has(Math.round(chapter.number))) {
-      const editor1 = await prisma.videoExport.count({
-        where: {
-          status: 'done',
-          project: { seriesId: chapter.series.id, chapterIds: { contains: chapter.id } }
-        }
-      })
-      if (editor1 === 0) {
-        return { ...base, skipped: 'Chapter has not been exported to video' }
-      }
+      return { ...base, skipped: 'Chapter has not been exported to video' }
     }
   }
 
@@ -758,24 +729,6 @@ export async function getPublishedChapters(seriesId?: string): Promise<Published
     select: { id: true, rootFolder: true, chapters: { select: { id: true, number: true } } }
   })
 
-  // Editor 1.0's finished renders vouch for every chapter id in their project.
-  const doneExports = await prisma.videoExport.findMany({
-    where: {
-      status: 'done',
-      ...(seriesId ? { project: { seriesId } } : {})
-    },
-    select: { project: { select: { chapterIds: true } } }
-  })
-  const editor1Ids = new Set<string>()
-  for (const row of doneExports) {
-    if (!row.project) continue
-    try {
-      for (const id of JSON.parse(row.project.chapterIds) as string[]) editor1Ids.add(id)
-    } catch {
-      // Malformed JSON: this project vouches for nothing.
-    }
-  }
-
   const chapters: Record<string, boolean> = {}
   const series: Record<string, { published: number; total: number }> = {}
 
@@ -783,7 +736,7 @@ export async function getPublishedChapters(seriesId?: string): Promise<Published
     const exportedNumbers = await scanExportedChapterNumbers(s.rootFolder)
     let published = 0
     for (const ch of s.chapters) {
-      const isPublished = exportedNumbers.has(Math.round(ch.number)) || editor1Ids.has(ch.id)
+      const isPublished = exportedNumbers.has(Math.round(ch.number))
       chapters[ch.id] = isPublished
       if (isPublished) published += 1
     }

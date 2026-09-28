@@ -2,10 +2,7 @@
  * Clipper3SeriesView — Module 3 v3: Image Clipper 3.0
  *
  * Chapter list for one series, reached from Clipper3Library after picking a
- * series — the same "pick a series, then a chapter" flow used by Image
- * Clipper v1/v2. Clicking a chapter opens the pointer workspace
- * (Clipper3Workspace). Reuses PointerStateBadge/formatWhen from
- * Clipper3Library so the chapter state reads identically wherever it's shown.
+ * series. Clicking a chapter opens the pointer workspace (Clipper3Workspace).
  */
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
@@ -32,16 +29,14 @@ import {
   Unlink
 } from 'lucide-react'
 import {
-  clipper2Api,
   clipper3Api,
-  type Clipper2ChapterSummary,
+  type Clipper3Chapter,
   type Clipper3ChapterSummary,
   type Clipper3ChapterSyncResult,
   type Clipper3ChapterUnsyncResult,
   type Clipper3SyncPreview,
   type Clipper3UnsyncPreview
 } from '@/lib/api'
-import { PointerStateBadge, formatWhen } from './Clipper3Library'
 import { useToast } from '@/components/ui/use-toast'
 import {
   Dialog,
@@ -94,7 +89,7 @@ function ChoppedStatusBadge({ summary }: { summary: Clipper3ChapterSummary | und
 export default function Clipper3SeriesView() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const [chapters, setChapters] = useState<Clipper2ChapterSummary[]>([])
+  const [chapters, setChapters] = useState<Clipper3Chapter[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -451,7 +446,7 @@ export default function Clipper3SeriesView() {
 
   useEffect(() => {
     let cancelled = false
-    clipper2Api.getChapters()
+    clipper3Api.getChapters()
       .then(all => { if (!cancelled) setChapters(all) })
       .catch(err => { if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load chapters') })
       .finally(() => { if (!cancelled) setLoading(false) })
@@ -497,8 +492,9 @@ export default function Clipper3SeriesView() {
     )
   }
 
-  const appliedCount = seriesChapters.filter(c => c.status === 'applied').length
-  const progress = seriesChapters.length > 0 ? Math.round((appliedCount / seriesChapters.length) * 100) : 0
+  // Same bar as the library card: every page has crops and matching metadata.
+  const attachedCount = seriesChapters.filter(c => summaries[c.id]?.fullyAttached).length
+  const progress = seriesChapters.length > 0 ? Math.round((attachedCount / seriesChapters.length) * 100) : 0
 
   // Only this series' run: the socket carries every series' slice progress.
   const sliceProgress = clipper3SliceProgress?.seriesId === id ? clipper3SliceProgress : null
@@ -534,19 +530,19 @@ export default function Clipper3SeriesView() {
             <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground mt-1">
               <span>{seriesChapters.length} chapters ready for pointer detection</span>
               <span>•</span>
-              <span>{appliedCount} applied</span>
+              <span>{attachedCount} fully attached</span>
             </div>
 
             <div className="max-w-md mt-3">
               <div className="flex items-center justify-between text-sm mb-1">
-                <span>Apply Progress</span>
+                <span>Attach Progress</span>
                 <span>{progress}%</span>
               </div>
               <Progress value={progress} className="h-2" />
             </div>
 
-            {/* Separate from Apply Progress: this counts pages sliced across
-                the whole series, not chapters whose pointers were applied. */}
+            {/* Separate from Attach Progress: this counts pages sliced across
+                the whole series, not chapters that are fully attached. */}
             {sliceProgress && (
               <div className="max-w-md mt-3">
                 <div className="flex items-center justify-between text-sm mb-1">
@@ -736,13 +732,9 @@ export default function Clipper3SeriesView() {
                   <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
                     <Images className="h-3 w-3" />
                     {chapter.pageCount} page{chapter.pageCount !== 1 ? 's' : ''}
-                    {chapter.detectedAt && (
-                      <span className="ml-2">detected {formatWhen(chapter.detectedAt)}</span>
-                    )}
                   </p>
 
                   <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                    <PointerStateBadge chapter={chapter} />
                     <AttachedStatusBadge summary={summaries[chapter.id]} />
                     <ChoppedStatusBadge summary={summaries[chapter.id]} />
                     {isPublished(chapter.id) && <PublishedBadge />}

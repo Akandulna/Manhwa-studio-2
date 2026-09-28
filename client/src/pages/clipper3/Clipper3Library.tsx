@@ -1,16 +1,13 @@
 /**
  * Clipper3Library — Module 3 v3: Image Clipper 3.0
  *
- * Landing page for the four-pointer technique: a grid of series, mirroring
- * Image Clipper v1/v2's "pick a series first" flow. Selecting a series
+ * Landing page for the four-pointer technique: a grid of series, "pick a
+ * series first". Selecting a series
  * navigates to its chapter list (Clipper3SeriesView), which links into the
  * actual pointer workspace (Clipper3Workspace).
  *
- * The series/chapter listing still comes from clipper2Api, but per-series
- * progress does not: it is read from clipper3Api's own summary, because
- * Clipper 2's chapter `status` is only ever advanced by Clipper 2's apply job
- * and so never reflects work done in 3.0. `PointerStateBadge`/`formatWhen` are
- * exported for reuse by Clipper3SeriesView's chapter cards.
+ * Per-series progress is read from clipper3Api's own summary (crops +
+ * metadata attached for every page).
  */
 
 import { useState, useEffect, useMemo } from 'react'
@@ -22,106 +19,39 @@ import {
   Locate,
   Loader2,
   AlertTriangle,
-  FileJson,
   FileText,
   CheckCircle2,
-  Pencil,
-  XCircle,
   Globe,
   Image as ImageIcon,
   Scissors
 } from 'lucide-react'
 import {
-  clipperApi,
-  clipper2Api,
   clipper3Api,
-  type ClipperSeries,
-  type Clipper2Status,
-  type Clipper2ChapterSummary,
+  type Clipper3Chapter,
+  type Clipper3Series,
+  type Clipper3Status,
   type Clipper3ChapterSummary
 } from '@/lib/api'
 
 // ============ Helpers ============
 
-export function formatWhen(iso: string | null): string {
+function formatWhen(iso: string | null): string {
   if (!iso) return 'never'
   const at = new Date(iso)
   return Number.isNaN(at.getTime()) ? 'unknown' : at.toLocaleString()
 }
 
-/**
- * The pointer state of one chapter. `hasPoints` is a fact about the disk while
- * `status` comes from the index row, and the artifact is user-deletable — so a
- * row can claim 'detected' with no file behind it. The disk wins.
- */
-export function PointerStateBadge({ chapter }: { chapter: Clipper2ChapterSummary }) {
-  if (chapter.status === 'detecting') {
-    return (
-      <Badge variant="secondary" className="flex items-center gap-1">
-        <Loader2 className="h-3 w-3 animate-spin" />
-        Detecting…
-      </Badge>
-    )
-  }
-
-  if (chapter.status === 'failed') {
-    return (
-      <Badge variant="destructive" className="flex items-center gap-1">
-        <XCircle className="h-3 w-3" />
-        Detection failed
-      </Badge>
-    )
-  }
-
-  if (!chapter.hasPoints) {
-    return (
-      <Badge variant="outline" className="flex items-center gap-1 text-muted-foreground">
-        <FileJson className="h-3 w-3" />
-        No pointers
-      </Badge>
-    )
-  }
-
-  if (chapter.status === 'applied') {
-    return (
-      <Badge variant="success" className="flex items-center gap-1">
-        <CheckCircle2 className="h-3 w-3" />
-        Applied · {chapter.exportedCount} exported
-      </Badge>
-    )
-  }
-
-  if (chapter.status === 'edited') {
-    return (
-      <Badge variant="secondary" className="flex items-center gap-1">
-        <Pencil className="h-3 w-3" />
-        {chapter.cropCount} pointers · edited
-      </Badge>
-    )
-  }
-
-  return (
-    <Badge variant="secondary" className="flex items-center gap-1">
-      <Locate className="h-3 w-3" />
-      {chapter.cropCount} pointers detected
-    </Badge>
-  )
-}
-
 // ============ Page ============
 
 export default function Clipper3Library() {
-  const [status, setStatus] = useState<Clipper2Status | null>(null)
-  const [seriesList, setSeriesList] = useState<ClipperSeries[]>([])
-  const [chapters, setChapters] = useState<Clipper2ChapterSummary[]>([])
+  const [status, setStatus] = useState<Clipper3Status | null>(null)
+  const [seriesList, setSeriesList] = useState<Clipper3Series[]>([])
+  const [chapters, setChapters] = useState<Clipper3Chapter[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   /**
-   * Clipper 3's own per-chapter progress, keyed by chapter id. Clipper 2's
-   * `status === 'applied'` cannot answer this: it is only ever written by
-   * Clipper 2's apply job, so a chapter cut here would sit at 0 forever.
-   * `chopped` is read from crops3/ on disk, which is the fact this module
-   * produces. Empty until the summaries resolve — the cards then re-render.
+   * Clipper 3's own per-chapter progress, keyed by chapter id. `chopped` is
+   * read from crops3/ on disk, which is the fact this module produces. Empty until the summaries resolve — the cards then re-render.
    */
   const [summaries, setSummaries] = useState<Record<string, Clipper3ChapterSummary>>({})
 
@@ -129,11 +59,8 @@ export default function Clipper3Library() {
     let cancelled = false
 
     // Settled independently on purpose: a failed status probe must not hide the
-    // chapter list (an already-detected artifact stays inspectable and appliable
-    // even with the detector down), and a failed listing must not hide what the
-    // detector is configured with. Series come from the same source Image
-    // Clipper v1 uses for its own library grid (title/cover/source site).
-    Promise.allSettled([clipper2Api.getStatus(), clipper2Api.getChapters(), clipperApi.getSeries()])
+    // chapter list, and a failed listing must not hide the guidelines state.
+    Promise.allSettled([clipper3Api.getStatus(), clipper3Api.getChapters(), clipper3Api.getSeries()])
       .then(([statusResult, listing, seriesResult]) => {
         if (cancelled) return
         if (statusResult.status === 'fulfilled') setStatus(statusResult.value)
@@ -202,37 +129,9 @@ export default function Clipper3Library() {
     <div className="p-6">
       {header}
 
-      {/* Status strip: what the detector will run with, before anything is started. */}
+      {/* Status strip: the crop rules every run is judged against. */}
       <Card className="mb-6">
         <CardContent className="p-4 space-y-3">
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
-            <span className="flex items-center gap-2">
-              <span className="text-muted-foreground">Detection model</span>
-              <code className="text-xs bg-muted rounded px-1.5 py-0.5">
-                {status?.model || 'unknown'}
-              </code>
-            </span>
-            <span className="flex items-center gap-2">
-              <span className="text-muted-foreground">Artifact format</span>
-              <code className="text-xs bg-muted rounded px-1.5 py-0.5">
-                {status ? `${status.format} v${status.formatVersion}` : 'unknown'}
-              </code>
-            </span>
-            <span className="flex items-center gap-2">
-              {status?.geminiAvailable ? (
-                <>
-                  <CheckCircle2 className="h-4 w-4 text-green-500" />
-                  <span className="text-muted-foreground">Gemini ready</span>
-                </>
-              ) : (
-                <>
-                  <AlertTriangle className="h-4 w-4 text-amber-500" />
-                  <span className="text-muted-foreground">Gemini unavailable</span>
-                </>
-              )}
-            </span>
-          </div>
-
           <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
             <span className="flex items-center gap-2">
               <FileText className="h-4 w-4 text-muted-foreground" />
@@ -252,17 +151,6 @@ export default function Clipper3Library() {
               Edit guidelines in Settings
             </Link>
           </div>
-
-          {status && !status.geminiAvailable && (
-            <div className="flex items-start gap-2 text-xs text-amber-600 bg-amber-500/10 rounded p-2">
-              <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-              <span>
-                Gemini is unavailable
-                {status.geminiError ? <> — {status.geminiError}</> : <> — set <code>GEMINI_API_KEY</code></>}.
-                Existing pointer files can still be edited and applied.
-              </span>
-            </div>
-          )}
 
           {status && !status.guidelinesPresent && (
             <div className="flex items-start gap-2 text-xs text-amber-600 bg-amber-500/10 rounded p-2">
@@ -302,9 +190,7 @@ export default function Clipper3Library() {
           {seriesWithChapters.map(s => {
             const seriesChapters = chapters.filter(c => c.seriesId === s.id)
             // Done here means "every page has its crops and matching metadata",
-            // the same bar Clipper 3's own chapter list calls fully attached —
-            // not Clipper 2's `status === 'applied'`, which only Clipper 2's
-            // apply job ever writes, so work done in 3.0 never moved it.
+            // the same bar Clipper 3's own chapter list calls fully attached.
             // Chapters with no summary row yet (still loading, or a folder the
             // server could not read) count as not-done rather than being dropped
             // from the denominator, so the bar never overstates progress.

@@ -48,7 +48,7 @@ import { getProcessedDir, pageNumberOf } from './processedSync.js'
 import { getStudioDir } from './handoff.js'
 import { loadOriginal, sha256OfFile, type DecodedPixels } from './pageIdentity.js'
 import { getReview, type ReviewCrop, type ReviewState, type Blocker } from './reviewState.js'
-import { cropIdFor, formatRatio } from '../clipper2/fourPointSchema.js'
+import { cropIdFor, formatRatio } from './cropFormat.js'
 import type { Box } from './auditRules.js'
 
 export const EXPORT_SCHEMA = 'crop-studio-export/1.0'

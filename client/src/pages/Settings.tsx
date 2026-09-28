@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { settingsApi, Settings as SettingsType, narrationApi, AIStatus, aiCropApi, clipper2Api, clipper3Api, voiceoverApi, visionApi, type VisionProviderInfo, type VisionProviderName, type Clipper3OpenAiSettings } from '@/lib/api'
+import { settingsApi, Settings as SettingsType, narrationApi, AIStatus, clipper3Api, voiceoverApi, type Clipper3OpenAiSettings } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -16,7 +16,7 @@ import { DocHistoryDialog, DocHistoryButton } from '@/components/settings/DocHis
 import { CloudflareTab } from '@/components/settings/CloudflareR2Card'
 import { archiveVersion, readHistory, type DocVersion } from '@/lib/docHistory'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, Save, RotateCcw, FolderOpen, Gauge, UserCircle, ImageIcon, Wand2, Sparkles, CheckCircle, XCircle, Key, ExternalLink, Volume2, Mic, FileText, Download, Crop, Locate, Upload, Clock, Film, Moon, Sun, Monitor, Palette, Cpu, Cloud } from 'lucide-react'
+import { Loader2, Save, RotateCcw, FolderOpen, Gauge, UserCircle, ImageIcon, Wand2, Sparkles, CheckCircle, XCircle, Key, ExternalLink, Volume2, Mic, FileText, Download, Crop, Locate, Upload, Clock, Film, Moon, Sun, Monitor, Palette, Cloud } from 'lucide-react'
 
 // Extended settings type for Module 2 & 3
 interface ExtendedSettings extends SettingsType {
@@ -379,10 +379,6 @@ export default function Settings() {
             <TabsTrigger value="voiceover" className="flex items-center gap-2">
               <Volume2 className="h-4 w-4" />
               <span>Voiceover</span>
-            </TabsTrigger>
-            <TabsTrigger value="clipper" className="flex items-center gap-2">
-              <Crop className="h-4 w-4" />
-              <span>Image Clipper</span>
             </TabsTrigger>
             <TabsTrigger value="crop-pointers" className="flex items-center gap-2">
               <Locate className="h-4 w-4" />
@@ -1143,38 +1139,16 @@ STYLE RULES:
       </Card>
           </TabsContent>
 
-          {/* Image Clipper Tab — Module 3 v1 (AI Crop Lab) */}
-          <TabsContent value="clipper" className="p-6 max-w-4xl space-y-6">
-      {/* Crop guidelines — the immutable spec the default model follows */}
-      <CropGuidelinesCard />
-
-      <Card className="bg-muted/50">
-        <CardContent className="py-4">
-          <p className="text-sm text-muted-foreground">
-            <strong>Note:</strong> These guidelines control how the AI analyzes and suggests crops. Edit them to fine-tune crop detection behavior.
-          </p>
-        </CardContent>
-      </Card>
-          </TabsContent>
-
-          {/* Crop Pointers Tab — Image Clipper 2.0's guidelines, which are also the
-              prompt the manual loop copies into an external AI. Split out of the
-              Image Clipper tab because this document is edited far more often: it is
-              what the user actually iterates on when tuning crop quality. */}
+          {/* Crop Pointers Tab — the crop rules Image Clipper 3.0's ChatGPT API run
+              is handed verbatim. */}
           <TabsContent value="crop-pointers" className="p-6 max-w-4xl space-y-6">
       <CropPointGuidelinesCard />
 
       <Card className="bg-muted/50">
         <CardContent className="py-4 space-y-2">
           <p className="text-sm text-muted-foreground">
-            <strong>This document is the prompt.</strong> Both ways of getting pointers send it
-            verbatim: the in-app Gemini detector, and the manual loop where you copy it into
-            ChatGPT or Claude and bring the JSON back.
-          </p>
-          <p className="text-sm text-muted-foreground">
-            Copy it from <strong>Narration Studio → Manual → Step 3</strong> (the chat there already
-            holds the chapter's pages), or from the <strong>Image Clipper 2.0</strong> workspace.
-            Editing it here changes what both paths send on the very next run.
+            <strong>This document is the prompt.</strong> Image Clipper 3.0's ChatGPT API run sends
+            it verbatim, so editing it here changes what the very next run is judged against.
           </p>
         </CardContent>
       </Card>
@@ -1183,7 +1157,6 @@ STYLE RULES:
           {/* Crop 3.0 - Prompts Tab */}
           <TabsContent value="crop3-prompts" className="p-6 max-w-4xl space-y-6">
       <ChatGptApiCard />
-      <VisionProviderCard />
       <Crop3GuidelineFileCard />
       <Crop3MetadataTemplateCard />
       <Crop3PromptCard />
@@ -1205,110 +1178,10 @@ STYLE RULES:
 }
 
 /**
- * Crop Guidelines editor — the canonical rules the default "Guidelines (Gemini)"
- * crop model follows. The file is read-only on disk; this is the single
- * intentional, user-driven path to change it.
- */
-function CropGuidelinesCard() {
-  const { toast } = useToast()
-  const [content, setContent] = useState('')
-  const [draft, setDraft] = useState('')
-  const [updatedAt, setUpdatedAt] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [editing, setEditing] = useState(false)
-  const [saving, setSaving] = useState(false)
-
-  useEffect(() => {
-    aiCropApi.getGuidelines()
-      .then(g => { setContent(g.content); setUpdatedAt(g.updatedAt) })
-      .catch(() => toast({ title: 'Could not load guidelines', variant: 'destructive' }))
-      .finally(() => setLoading(false))
-  }, [])
-
-  const startEdit = () => { setDraft(content); setEditing(true) }
-  const cancelEdit = () => setEditing(false)
-
-  const save = async () => {
-    if (!draft.trim()) {
-      toast({ title: 'Guidelines cannot be empty', variant: 'destructive' })
-      return
-    }
-    setSaving(true)
-    try {
-      const res = await aiCropApi.updateGuidelines(draft)
-      setContent(draft)
-      setUpdatedAt(res.updatedAt)
-      setEditing(false)
-      toast({ title: 'Guidelines updated', description: 'The default model will follow the new guidelines.' })
-    } catch (err) {
-      toast({ title: 'Save failed', description: err instanceof Error ? err.message : 'Unknown error', variant: 'destructive' })
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <FileText className="h-5 w-5" />
-          Crop Guidelines
-        </CardTitle>
-        <CardDescription>
-          The written rules the default <strong>Guidelines (Gemini)</strong> crop model follows.
-          Stored read-only on disk — only this editor can change them.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {loading ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" /> Loading…
-          </div>
-        ) : editing ? (
-          <>
-            <Textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              className="font-mono text-xs min-h-[420px]"
-              spellCheck={false}
-            />
-            <div className="flex gap-2">
-              <Button onClick={save} disabled={saving}>
-                {saving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
-                Save Guidelines
-              </Button>
-              <Button variant="outline" onClick={cancelEdit} disabled={saving}>Cancel</Button>
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Badge variant="outline">Read-only</Badge>
-              {updatedAt && <span>Last edited {new Date(updatedAt).toLocaleString()}</span>}
-            </div>
-            <Textarea
-              value={content}
-              readOnly
-              className="font-mono text-xs min-h-[260px] bg-muted/40"
-              spellCheck={false}
-            />
-            <Button variant="outline" onClick={startEdit}>
-              <Wand2 className="h-4 w-4 mr-2" />
-              Edit guidelines
-            </Button>
-          </>
-        )}
-      </CardContent>
-    </Card>
-  )
-}
-
-/**
- * Crop Detection Guidelines editor for Image Clipper 2.0.
+ * Crop Detection Guidelines editor (Crop Rules).
  *
- * The document is handed to a vision model verbatim by BOTH paths that produce
- * pointers — the in-app Gemini detector and the manual copy-into-ChatGPT loop — so
- * editing it changes how the module crops on the very next run, either way.
+ * The document is handed verbatim to Image Clipper 3.0's ChatGPT API run, so
+ * editing it changes how the module crops on the very next run.
  *
  * The file is stored read-only (0444) on disk and this card is its only write path;
  * a reset copies the shipped default back.
@@ -1325,7 +1198,7 @@ function CropPointGuidelinesCard() {
   const [restoring, setRestoring] = useState(false)
 
   useEffect(() => {
-    clipper2Api.getGuidelines()
+    clipper3Api.getGuidelines()
       .then(g => { setContent(g.content); setUpdatedAt(g.updatedAt); setIsDefault(g.isDefault) })
       .catch(() => toast({ title: 'Could not load crop point guidelines', variant: 'destructive' }))
       .finally(() => setLoading(false))
@@ -1342,14 +1215,14 @@ function CropPointGuidelinesCard() {
     setSaving(true)
     try {
       // The response carries the bytes now on disk, so state never drifts from the file.
-      const res = await clipper2Api.updateGuidelines(draft)
+      const res = await clipper3Api.updateGuidelines(draft)
       setContent(res.content)
       setUpdatedAt(res.updatedAt)
       setIsDefault(res.isDefault)
       setEditing(false)
       toast({
         title: 'Crop point guidelines updated',
-        description: 'The pointer detector will follow the new document on the next detection run.'
+        description: 'The next crop run will follow the new document.'
       })
     } catch (err) {
       toast({ title: 'Save failed', description: err instanceof Error ? err.message : 'Unknown error', variant: 'destructive' })
@@ -1366,14 +1239,14 @@ function CropPointGuidelinesCard() {
     }
     setRestoring(true)
     try {
-      const res = await clipper2Api.resetGuidelines()
+      const res = await clipper3Api.resetGuidelines()
       setContent(res.content)
       setUpdatedAt(res.updatedAt)
       setIsDefault(res.isDefault)
       setEditing(false)
       toast({
         title: 'Default crop point guidelines restored',
-        description: 'The pointer detector will follow the shipped document on the next detection run.'
+        description: 'The next crop run will follow the shipped document.'
       })
     } catch (err) {
       toast({ title: 'Restore failed', description: err instanceof Error ? err.message : 'Unknown error', variant: 'destructive' })
@@ -1390,10 +1263,10 @@ function CropPointGuidelinesCard() {
           Crop Detection Guidelines
         </CardTitle>
         <CardDescription>
-          The written rules that govern how Image Clipper 2.0 places its <strong>four crop pointers</strong>{' '}
+          The written rules that govern how Image Clipper 3.0 places its <strong>four crop pointers</strong>{' '}
           (P1 top-left, P2 top-right, P3 bottom-right, P4 bottom-left) around every meaningful section of a
-          chapter. Stored read-only on disk, so no automated detect or apply run can change the document it
-          is judged against — this editor is the only path that writes it.
+          page. Stored read-only on disk, so no automated run can change the document it is judged
+          against — this editor is the only path that writes it.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -2007,164 +1880,6 @@ function ScriptWithTimestampPromptCard() {
             </Button>
           </>
         )}
-      </CardContent>
-    </Card>
-  )
-}
-
-/**
- * Which AI model answers "where are the crops in this image".
- *
- * Qwen3-VL runs locally through Ollama — no API key and nothing leaves the
- * machine, but it has to actually be running, which is why Test is a separate
- * button rather than something inferred from the listing. The cloud providers
- * are configured by environment variable (GEMINI_API_KEY, OPENAI_API_KEY,
- * ANTHROPIC_API_KEY); one without a key is listed but not selectable, so the
- * reason it is unavailable is visible rather than silent.
- */
-function VisionProviderCard() {
-  const { toast } = useToast()
-  const [providers, setProviders] = useState<VisionProviderInfo[]>([])
-  const [selected, setSelected] = useState<string>('')
-  const [loading, setLoading] = useState(true)
-  const [testing, setTesting] = useState<string | null>(null)
-  const [results, setResults] = useState<Record<string, { success: boolean; error?: string }>>({})
-
-  useEffect(() => {
-    visionApi.getProviders()
-      .then(res => {
-        setProviders(res.providers)
-        setSelected(res.selected)
-      })
-      .catch(() => toast({ title: 'Could not load AI providers', variant: 'destructive' }))
-      .finally(() => setLoading(false))
-  }, [])
-
-  const select = async (provider: VisionProviderName) => {
-    const previous = selected
-    setSelected(provider)
-    try {
-      await visionApi.selectProvider(provider)
-      toast({ title: 'AI model updated' })
-    } catch (error) {
-      setSelected(previous)
-      toast({
-        title: 'Could not save',
-        description: error instanceof Error ? error.message : 'Unknown error',
-        variant: 'destructive'
-      })
-    }
-  }
-
-  const test = async (provider: VisionProviderName) => {
-    setTesting(provider)
-    try {
-      const result = await visionApi.testProvider(provider)
-      setResults(prev => ({ ...prev, [provider]: result }))
-      toast({
-        title: result.success ? 'Connection OK' : 'Not reachable',
-        description: result.success ? result.model : result.error,
-        variant: result.success ? undefined : 'destructive'
-      })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error'
-      setResults(prev => ({ ...prev, [provider]: { success: false, error: message } }))
-      toast({ title: 'Test failed', description: message, variant: 'destructive' })
-    } finally {
-      setTesting(null)
-    }
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Sparkles className="h-5 w-5" />
-          Crop Detection Model
-        </CardTitle>
-        <CardDescription>
-          Which AI reads a page and returns its crop pointers, for the one-click
-          Detect in Image Clipper 3.0. It is sent the prompts below.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {loading ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Loading providers…
-          </div>
-        ) : (
-          providers.map(provider => {
-            const isSelected = selected === provider.name
-            const result = results[provider.name]
-            return (
-              <div
-                key={provider.name}
-                className={`flex items-center gap-3 rounded-lg border p-3 ${
-                  isSelected ? 'border-primary bg-primary/5' : ''
-                }`}
-              >
-                {provider.isLocal ? (
-                  <Cpu className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                ) : (
-                  <Cloud className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                )}
-
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium truncate">{provider.label}</span>
-                    {provider.isLocal && (
-                      <Badge variant="secondary" className="text-xs">Offline</Badge>
-                    )}
-                    {!provider.configured && (
-                      <Badge variant="outline" className="text-xs">No API key</Badge>
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground truncate">
-                    {provider.model ?? 'not configured'}
-                    {result && (
-                      <span className={result.success ? ' text-green-500' : ' text-destructive'}>
-                        {result.success ? ' · reachable' : ` · ${result.error}`}
-                      </span>
-                    )}
-                  </p>
-                </div>
-
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => test(provider.name)}
-                  disabled={testing === provider.name || !provider.configured}
-                >
-                  {testing === provider.name ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : result?.success ? (
-                    <CheckCircle className="h-4 w-4 text-green-500" />
-                  ) : result ? (
-                    <XCircle className="h-4 w-4 text-destructive" />
-                  ) : (
-                    'Test'
-                  )}
-                </Button>
-
-                <Button
-                  variant={isSelected ? 'default' : 'outline'}
-                  size="sm"
-                  onClick={() => select(provider.name)}
-                  disabled={isSelected || !provider.configured}
-                >
-                  {isSelected ? 'Selected' : 'Use'}
-                </Button>
-              </div>
-            )
-          })
-        )}
-
-        <p className="text-xs text-muted-foreground pt-1">
-          Qwen3-VL runs on this machine through Ollama — install it, then run{' '}
-          <code className="px-1 py-0.5 rounded bg-muted">ollama pull qwen3-vl:4b</code>.
-          Nothing is uploaded. Cloud models need their API key set in the server environment.
-        </p>
       </CardContent>
     </Card>
   )

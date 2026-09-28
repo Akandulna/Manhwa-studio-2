@@ -1,28 +1,16 @@
 /**
- * Pointer Guidelines — Image Clipper 2.0's copy of the Crop Detection Guidelines.
+ * Pointer Guidelines — the Crop Rules document (Settings → Crop Pointers).
  *
- * This document is the PROMPT Stage 1 is handed verbatim, by both routes that can
- * produce pointers:
- *  - the in-app Gemini detector (pointerDetector.ts → geminiPointerDetector.ts), and
- *  - the manual loop, where the user copies `buildPointerPrompt()` into an external
- *    chat (ChatGPT, Claude, …) and brings the JSON back through `POST …/points/import`.
+ * Image Clipper 3.0 hands this document verbatim to the OpenAI auto run
+ * (openaiAuto.ts). The document's rule IDs — `OUT-08`, `OUT-10`, … — are also
+ * cited by the export code, which enforces in code the parts of the contract no
+ * model's prose can be trusted to hold exactly.
  *
- * Both paths send the SAME bytes, which is the point: a pointer set produced by hand
- * is judged against the same rules as one produced in-app, and its sha256 is recorded
- * in the sidecar either way — so a point set can always be traced back to the revision
- * of the rules it was produced under.
- *
- * The document's rule IDs — `OUT-08`, `IX-01`, `ST-09`, `AN-02`, … — are also cited
- * throughout the validator and the normalizer, which enforce in code the parts of the
- * contract no model's prose can be trusted to hold exactly (point order,
- * rectangularity, id contiguity).
- *
- * Immutability contract (identical to the v1 engine's, see
- * services/ai/guidelineCropService.ts):
+ * Immutability contract:
  *  - server/ml/CROP_POINT_GUIDELINES.md is stored read-only (0444).
  *  - Every inference path only ever calls readPointerGuidelines() — nothing on
- *    the detect/apply/import path writes the file, so a run can never mutate the
- *    rules it is being judged against.
+ *    a crop path writes the file, so a run can never mutate the rules it is
+ *    being judged against.
  *  - The single writer is writePointerGuidelines(), reached exclusively from the
  *    user-triggered Settings route. It briefly unlocks the file (0644), writes,
  *    updates the meta sidecar, and re-locks it (0444).
@@ -31,7 +19,7 @@
  *    copied out of, so a reset always lands back on the version that shipped.
  *
  * Pure file management: deliberately free of prisma / express imports so both the
- * detector and the Settings route can depend on it.
+ * auto run and the Settings route can depend on it.
  */
 
 import fs from 'fs/promises'
@@ -40,7 +28,7 @@ import crypto from 'crypto'
 
 // ============ Paths ============
 
-/** process.cwd() is the server/ dir at runtime (mirrors guidelineCropService). */
+/** process.cwd() is the server/ dir at runtime. */
 function getMlDir(): string {
   return path.join(process.cwd(), 'ml')
 }
@@ -89,33 +77,6 @@ export async function readPointerGuidelines(): Promise<string> {
   } catch {
     return ''
   }
-}
-
-// ============ The external-AI prompt ============
-
-/**
- * The one line that precedes the guidelines in the manual loop.
- *
- * It says "the same above chapter" because the user pastes this into a chat that
- * ALREADY holds the chapter's page images — in practice the narration script
- * conversation, where the pages were attached at Step 1. That context is what lets
- * the prompt stay this short: it names the task and defers everything else to the
- * document, which already specifies the output format down to the byte (§14.7).
- */
-export const POINTER_PROMPT_PREAMBLE =
-  'Now for the same above chapter Detect Pointers as per below guidelines'
-
-/**
- * The exact text the user copies into an external AI.
- *
- * Composed here rather than in the client so that the Narration Studio's Step 3 and
- * the Clipper 2.0 workspace copy byte-identical prompts — two surfaces that drift
- * would produce pointer sets that cannot be compared.
- */
-export async function buildPointerPrompt(): Promise<string> {
-  const guidelines = await readPointerGuidelines()
-  if (!guidelines.trim()) return POINTER_PROMPT_PREAMBLE
-  return `${POINTER_PROMPT_PREAMBLE}\n\n${guidelines.trim()}\n`
 }
 
 /**

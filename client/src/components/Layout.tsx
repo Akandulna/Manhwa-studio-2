@@ -9,15 +9,10 @@ import {
   Settings,
   Plus,
   Mic,
-  Scissors,
-  Crosshair,
   Target,
-  Film,
   Clapperboard,
   Music,
   SplitSquareHorizontal,
-  FlaskConical,
-  Droplet,
   Wifi,
   WifiOff,
   PanelLeftClose,
@@ -95,39 +90,14 @@ export default function Layout({ children }: LayoutProps) {
   // Module 3: Image Clipper items
   const clipperModuleItems: NavItem[] = [
     {
-      icon: <Scissors className="h-5 w-5" />,
-      label: 'Image Clipper',
-      href: '/clipper'
-    },
-    {
-      icon: <Crosshair className="h-5 w-5" />,
-      label: 'Image Clipper 2.0',
-      href: '/clipper2'
-    },
-    {
       icon: <Target className="h-5 w-5" />,
       label: 'Image Clipper 3.0',
       href: '/clipper3'
-    },
-    {
-      icon: <Droplet className="h-5 w-5" />,
-      label: 'Watermark Lab',
-      href: '/clipper/watermark'
-    },
-    {
-      icon: <FlaskConical className="h-5 w-5" />,
-      label: 'AI Crop Lab',
-      href: '/clipper/lab'
     }
   ]
 
   // Module 4: Video Editor items
   const editorModuleItems: NavItem[] = [
-    {
-      icon: <Film className="h-5 w-5" />,
-      label: 'Editor',
-      href: '/editor'
-    },
     {
       icon: <Clapperboard className="h-5 w-5" />,
       label: 'Editor 2.0',
@@ -152,18 +122,7 @@ export default function Layout({ children }: LayoutProps) {
 
   // Check if current path is in narration module
   const isInNarration = location.pathname.startsWith('/narration')
-  // Check if current path is in clipper module.
-  // '/clipper' is a PREFIX of '/clipper2', so a startsWith('/clipper') test also
-  // matches every Image Clipper 2.0 route and would light up the v1 nav item there.
-  // The v1 subtree is therefore matched exactly, and 2.0 gets its own test.
-  const isInClipper = location.pathname === '/clipper' || location.pathname.startsWith('/clipper/')
-  const isInClipper2 = location.pathname.startsWith('/clipper2')
   const isInClipper3 = location.pathname.startsWith('/clipper3')
-  // Check if current path is in editor module.
-  // '/editor' is a PREFIX of '/editor2', so a startsWith('/editor') test also
-  // matches Editor 2.0 routes and would light up the v1 nav item there.
-  // The v1 subtree is therefore matched exactly, and 2.0 gets its own test.
-  const isInEditor = location.pathname === '/editor' || location.pathname.startsWith('/editor/')
   const isInEditor2 = location.pathname.startsWith('/editor2')
   const isInMusic = location.pathname.startsWith('/music')
 
@@ -276,19 +235,7 @@ export default function Layout({ children }: LayoutProps) {
           <div className="px-4 pb-4">
             {renderSectionLabel('IMAGE CLIPPER')}
             <nav className="space-y-2">
-              {clipperModuleItems.map((item) => {
-                const onLab = location.pathname.startsWith('/clipper/lab')
-                const onWatermark = location.pathname.startsWith('/clipper/watermark')
-                let active: boolean
-                if (item.href === '/clipper/lab') active = onLab
-                else if (item.href === '/clipper/watermark') active = onWatermark
-                else if (item.href === '/clipper2') active = isInClipper2
-                else if (item.href === '/clipper3') active = isInClipper3
-                // isInClipper excludes the '/clipper2' and '/clipper3' subtrees, so the
-                // v1 item cannot be lit by a 2.0 or 3.0 route.
-                else active = isInClipper && !onLab && !onWatermark
-                return renderNavLink(item, active)
-              })}
+              {clipperModuleItems.map((item) => renderNavLink(item, isInClipper3))}
             </nav>
           </div>
 
@@ -298,13 +245,9 @@ export default function Layout({ children }: LayoutProps) {
           <div className="px-4 pb-4">
             {renderSectionLabel('VIDEO EDITOR')}
             <nav className="space-y-2">
-              {editorModuleItems.map((item) => {
-                let active: boolean
-                if (item.href === '/music') active = isInMusic
-                else if (item.href === '/editor2') active = isInEditor2
-                else active = isInEditor
-                return renderNavLink(item, active)
-              })}
+              {editorModuleItems.map((item) =>
+                renderNavLink(item, item.href === '/music' ? isInMusic : isInEditor2)
+              )}
             </nav>
           </div>
 

@@ -1,9 +1,8 @@
 /**
  * Video Editor pure helpers — Module 4.
  *
- * Dependency-free math/ordering used by the render engine, the part-image
- * editor, and the AI assist. Kept separate from videoEditorService so it can be
- * unit-tested without importing the server bootstrap (prisma/index.ts).
+ * Dependency-free math used by Editor 2.0's export. Kept free of prisma so it
+ * can be unit-tested without importing the server bootstrap (prisma/index.ts).
  */
 
 /** Clamp a volume to [0, 1]; non-finite → 1.0. */

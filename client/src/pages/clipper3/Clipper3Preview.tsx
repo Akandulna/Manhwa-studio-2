@@ -22,7 +22,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { ArrowLeft, Loader2, AlertTriangle, ZoomIn, ZoomOut, Pencil, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
-import { clipperApi, clipper3Api, type Clipper3ChapterImages, type Clipper3ImageCropFile } from '@/lib/api'
+import { clipper3Api, type Clipper3ChapterImages, type Clipper3ImageCropFile } from '@/lib/api'
 import { CropPointerEditor, type CropMetadataEntry } from '@/components/clipper3/CropPointerEditor'
 
 /**
@@ -284,7 +284,7 @@ export default function Clipper3Preview() {
                           {index + 1}
                         </span>
                         <img
-                          src={clipperApi.getImageUrl(chapterId!, img.filename)}
+                          src={clipper3Api.getImageUrl(chapterId!, img.filename)}
                           alt={img.filename}
                           loading="lazy"
                           draggable={false}

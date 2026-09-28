@@ -1,9 +1,15 @@
 /**
  * Image Clipper 3.0 — per-image crop artifacts and cutting.
  *
- * The defining difference from 2.0: a chapter is NOT one stitched canvas here.
- * Each source image is independent —
+ * A chapter is NOT one stitched canvas here. Each source image is independent —
  *
+ *   GET    /status                                 crop rules document state
+ *   GET    /guidelines                             the crop rules document (Settings)
+ *   PUT    /guidelines                             the ONLY write path (Settings editor)
+ *   POST   /guidelines/reset                       restore the shipped default
+ *   GET    /series                                 series with downloaded chapters
+ *   GET    /chapters                               every downloaded chapter
+ *   GET    /chapters/:id/image/:filename           one source page image
  *   GET    /chapters/:id/images                    every image + its own status
  *   GET    /chapters/:id/images/:filename/points   that image's crop artifact
  *   PUT    /chapters/:id/images/:filename/points   store that image's crop artifact
@@ -52,7 +58,7 @@ import fs from 'fs/promises'
 import { exec } from 'child_process'
 import { Server } from 'socket.io'
 import { prisma } from '../index.js'
-import { getChapterManifest } from '../services/clipperService.js'
+import { getChapterManifest } from '../services/chapterManifest.js'
 import {
   deleteImageMetadata,
   deleteImagePoints,
@@ -75,6 +81,14 @@ import {
   type Clipper3ImageCropFile
 } from '../services/clipper3/perImageStore.js'
 import { cutImageCrops } from '../services/clipper3/perImageCrop.js'
+import {
+  ensurePointerGuidelines,
+  getPointerGuidelinesMeta,
+  readPointerGuidelines,
+  resetPointerGuidelines,
+  writePointerGuidelines,
+  type PointerGuidelinesMeta
+} from '../services/clipper3/pointerGuidelines.js'
 import { sliceImage, getSliceDir } from '../services/clipper3/perImageSlice.js'
 import { buildHandoff, getHandoffStatus, HandoffError } from '../services/clipper3/handoff.js'
 import { inspectOriginal } from '../services/clipper3/pageIdentity.js'
@@ -149,8 +163,178 @@ function seriesSlug(title: string): string {
     .slice(0, 40) || 'series'
 }
 
+const IMAGE_MIME: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif'
+}
+
+function guidelinesBody(content: string, meta: PointerGuidelinesMeta) {
+  return {
+    content,
+    updatedAt: meta.updatedAt,
+    readOnly: meta.readOnly,
+    present: meta.present,
+    isDefault: meta.isDefault
+  }
+}
+
 export function initClipper3Routes(io: Server): Router {
   const router = Router()
+
+  // ============ Crop rules document ============
+
+  /** GET /status — whether the crop rules document is present, and how current. */
+  router.get('/status', async (_req: Request, res: Response) => {
+    try {
+      // Idempotent seed + re-lock, best-effort: a status poll never fails on a chmod.
+      await ensurePointerGuidelines().catch(() => {})
+      const meta = await getPointerGuidelinesMeta()
+      res.json({
+        guidelinesPresent: meta.present,
+        guidelinesUpdatedAt: meta.updatedAt,
+        guidelinesIsDefault: meta.isDefault
+      })
+    } catch (error) {
+      console.error('[clipper3] status failed:', error)
+      res.status(500).json({ error: 'Failed to fetch status' })
+    }
+  })
+
+  /** GET /guidelines — the active document the auto run is handed verbatim. */
+  router.get('/guidelines', async (_req: Request, res: Response) => {
+    try {
+      // Seeded here too so the Settings editor shows the shipped rules on first open.
+      await ensurePointerGuidelines().catch(() => {})
+      const [content, meta] = await Promise.all([readPointerGuidelines(), getPointerGuidelinesMeta()])
+      res.json(guidelinesBody(content, meta))
+    } catch (error) {
+      console.error('[clipper3] reading crop rules failed:', error)
+      res.status(500).json({ error: 'Failed to read guidelines' })
+    }
+  })
+
+  /**
+   * PUT /guidelines { content } — the ONLY write path for the guidelines file.
+   * Reached exclusively from the user-initiated Settings editor; the file is
+   * otherwise 0444 so no crop path can mutate the rules it is judged by.
+   */
+  router.put('/guidelines', async (req: Request, res: Response) => {
+    try {
+      const { content } = req.body
+      if (typeof content !== 'string' || content.trim().length === 0) {
+        return res.status(400).json({ error: 'content (non-empty string) is required' })
+      }
+      const meta = await writePointerGuidelines(content, new Date().toISOString())
+      res.json(guidelinesBody(content, meta))
+    } catch (error) {
+      console.error('[clipper3] writing crop rules failed:', error)
+      res.status(500).json({ error: 'Failed to write guidelines' })
+    }
+  })
+
+  /** POST /guidelines/reset — back to the version that shipped. */
+  router.post('/guidelines/reset', async (_req: Request, res: Response) => {
+    try {
+      const meta = await resetPointerGuidelines()
+      res.json(guidelinesBody(await readPointerGuidelines(), meta))
+    } catch (error) {
+      console.error('[clipper3] resetting crop rules failed:', error)
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to reset guidelines' })
+    }
+  })
+
+  // ============ Series & chapter listing ============
+
+  /** GET /series — every series with at least one downloaded chapter. */
+  router.get('/series', async (_req: Request, res: Response) => {
+    try {
+      const series = await prisma.series.findMany({
+        select: {
+          id: true,
+          title: true,
+          sourceSite: true,
+          coverPath: true,
+          _count: { select: { chapters: { where: { status: 'done' } } } }
+        },
+        orderBy: { title: 'asc' }
+      })
+      res.json(
+        series
+          .filter(s => s._count.chapters > 0)
+          .map(s => ({
+            id: s.id,
+            title: s.title,
+            sourceSite: s.sourceSite,
+            coverPath: s.coverPath,
+            chapterCount: s._count.chapters
+          }))
+      )
+    } catch (error) {
+      console.error('[clipper3] listing series failed:', error)
+      res.status(500).json({ error: 'Failed to fetch series' })
+    }
+  })
+
+  /** GET /chapters — every downloaded chapter; downloaded is the only requirement. */
+  router.get('/chapters', async (_req: Request, res: Response) => {
+    try {
+      const chapters = await prisma.chapter.findMany({
+        where: { status: 'done' },
+        select: {
+          id: true,
+          number: true,
+          title: true,
+          seriesId: true,
+          pageCount: true,
+          series: { select: { title: true } }
+        },
+        orderBy: [{ series: { title: 'asc' } }, { number: 'asc' }]
+      })
+      res.json(
+        chapters.map(c => ({
+          id: c.id,
+          number: c.number,
+          title: c.title,
+          seriesId: c.seriesId,
+          seriesTitle: c.series.title,
+          pageCount: c.pageCount ?? 0
+        }))
+      )
+    } catch (error) {
+      console.error('[clipper3] listing chapters failed:', error)
+      res.status(500).json({ error: 'Failed to fetch chapters' })
+    }
+  })
+
+  /** GET /chapters/:id/image/:filename — one source page, scoped to the chapter folder. */
+  router.get('/chapters/:id/image/:filename', async (req: Request, res: Response) => {
+    try {
+      const chapter = await findChapter(req.params.id)
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+
+      const filename = path.basename(req.params.filename)
+      const fullPath = path.resolve(getSourceFolderPath(chapter.folderPath), filename)
+      try {
+        await fs.access(fullPath)
+      } catch {
+        return res.status(404).json({ error: 'Image not found' })
+      }
+
+      res.setHeader('Content-Type', IMAGE_MIME[path.extname(filename).toLowerCase()] || 'application/octet-stream')
+      res.setHeader('Cache-Control', 'public, max-age=86400, immutable')
+      res.sendFile(fullPath)
+    } catch (error) {
+      console.error('[clipper3] serving image failed:', error)
+      // Don't cache error responses
+      res.setHeader('Cache-Control', 'no-store')
+      res.status(500).json({ error: 'Failed to serve image' })
+    }
+  })
+
+  // ============ Per-image crop artifacts ============
 
   /**
    * GET /chapters/:id/images
@@ -684,8 +868,8 @@ export function initClipper3Routes(io: Server): Router {
         chapters.map(async chapter => {
           // A chapter not yet downloaded (or whose folder is otherwise
           // unreadable) has no manifest to build — it is simply not ready for
-          // pointer detection yet, same as it is left out of clipper2Api's own
-          // chapter listing, so it is omitted here rather than failing the
+          // pointer detection yet, same as it is left out of GET /chapters,
+          // so it is omitted here rather than failing the
           // whole series summary.
           let manifest
           try {

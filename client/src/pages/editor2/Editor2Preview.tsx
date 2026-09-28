@@ -45,9 +45,7 @@ function fmt(seconds: number): string {
  * CSS transform approximating one image's Ken Burns motion at a given
  * progress (0..1) through its slot.
  *
- * Deliberately the same formulas as Editor 1.0's PreviewPlayer, so what the
- * two editors show for the same effect and intensity matches — including the
- * ×3 amplification, which exists because the render-time intensity is far too
+ * Includes a ×3 amplification, because the render-time intensity is far too
  * subtle to read on a small preview.
  */
 function motionStyle(image: PlanImage, progress: number, enabled: boolean): React.CSSProperties {
@@ -93,7 +91,7 @@ export default function Editor2Preview() {
   const [elapsed, setElapsed] = useState(0)
   const [playing, setPlaying] = useState(false)
 
-  // Ken Burns motion, on by default to match Editor 1.0. Remembered locally
+  // Ken Burns motion, on by default to match the export. Remembered locally
   // because it is a viewing preference, not part of the timeline.
   const [motion, setMotion] = useState(() => {
     try {
@@ -382,7 +380,7 @@ export default function Editor2Preview() {
             {currentImage?.url ? (
               <>
                 {/* Blurred, darkened fill behind the image — same treatment as
-                    Editor 1.0, so tall crops sit on a soft backdrop rather
+                    the export, so tall crops sit on a soft backdrop rather
                     than hard black bars. */}
                 <img
                   src={currentImage.url}
@@ -455,7 +453,7 @@ export default function Editor2Preview() {
             <p className="text-xs text-muted-foreground">
               Current effect: <span className="font-mono">{currentImage.motionEffect}</span>
               {' · '}intensity {currentImage.motionIntensity}
-              {' · '}the same gentle set Editor 1.0 applies at render time
+              {' · '}the same gentle set the export applies at render time
             </p>
           )}
 

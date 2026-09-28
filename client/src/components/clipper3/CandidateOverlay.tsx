@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { AlertTriangle } from 'lucide-react'
-import { clipperApi, type Clipper3ImportedAnalysis, type Clipper3ImportIssue } from '@/lib/api'
+import { clipper3Api, type Clipper3ImportedAnalysis, type Clipper3ImportIssue } from '@/lib/api'
 
 const ACCENT = '#a855f7'
 const FLAGGED = '#f59e0b'
@@ -66,7 +66,7 @@ export function CandidateOverlay({ chapterId, filename, analysis, pageWidth }: C
       <div className="flex-shrink-0 overflow-auto rounded border bg-neutral-900" style={{ width: pageWidth + 18 }}>
         <div className="relative" style={{ width: pageWidth, height: pageHeight }}>
           <img
-            src={clipperApi.getImageUrl(chapterId, filename)}
+            src={clipper3Api.getImageUrl(chapterId, filename)}
             alt={filename}
             draggable={false}
             className="absolute inset-0 w-full h-full select-none"

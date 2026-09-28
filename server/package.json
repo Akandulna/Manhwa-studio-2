@@ -9,9 +9,6 @@
     "db:push": "prisma db push",
     "db:generate": "prisma generate",
     "db:studio": "prisma studio",
-    "ml:setup": "python3 -m venv ml/venv && ml/venv/bin/python -m pip install --upgrade pip && ml/venv/bin/pip install -r ml/requirements.txt && ml/venv/bin/python ml/export_backbone.py",
-    "ml:check": "ml/venv/bin/python ml/suggest.py --check",
-    "ml:export-backbone": "ml/venv/bin/python ml/export_backbone.py",
     "test": "vitest run",
     "test:watch": "vitest"
   },

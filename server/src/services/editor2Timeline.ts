@@ -48,8 +48,7 @@ interface IncomingSection {
 // ============ Outgoing plan shape ============
 
 /**
- * The same gentle motion set Editor 1.0 uses (videoEditorService's
- * GENTLE_EFFECTS), so both editors move images the same way.
+ * The gentle motion set buildImageFilterChunk (videoRender) knows how to draw.
  */
 export const GENTLE_EFFECTS = [
   'zoom-in',
@@ -62,14 +61,13 @@ export const GENTLE_EFFECTS = [
 
 export type MotionEffect = typeof GENTLE_EFFECTS[number]
 
-/** Editor 1.0's default intensity for a slow, unobtrusive drift. */
+/** Default intensity for a slow, unobtrusive drift. */
 export const DEFAULT_MOTION_INTENSITY = 0.04
 
 /**
  * Pick an effect for one image without a random number generator.
  *
- * Editor 1.0 randomizes on write, which it can afford because it stores the
- * choice. This plan is rebuilt on every processing run, so a random pick would
+ * This plan is rebuilt on every processing run, so a random pick would
  * change the motion each time the same JSON is processed. Deriving it from the
  * image's position keeps a chapter's motion stable while still varying between
  * neighbouring images, and alternating zoom-in/zoom-out on consecutive slots
@@ -100,7 +98,7 @@ export interface PlanImage {
   /** Absolute start/end across the whole chapter. */
   startTime: number
   endTime: number
-  /** Ken Burns motion for this image, matching Editor 1.0's gentle set. */
+  /** Ken Burns motion for this image, from the gentle set. */
   motionEffect: MotionEffect
   motionIntensity: number
 }

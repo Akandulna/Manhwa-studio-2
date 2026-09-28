@@ -12,9 +12,8 @@
  *  - An image is "done" if and only if its own JSON exists. Nothing is inferred
  *    from geometry, and one image's crops can never imply another's state.
  *
- * That last property is the whole reason this module exists separately from
- * clipper2/pointerStore: sharing the chapter-wide artifact made one page's
- * paste leak into every other page's status.
+ * That last property is the reason artifacts are per image: a chapter-wide
+ * artifact would let one page's paste leak into every other page's status.
  *
  * Paths and bytes only — no express, no image decoding.
  */
@@ -22,7 +21,7 @@
 import fs from 'fs/promises'
 import path from 'path'
 
-/** Mirrors clipperService.getFullFolderPath / clipper2's pointerStore. */
+/** Resolve a stored (possibly relative) chapter path against DOWNLOAD_ROOT. */
 function getFullFolderPath(relativePath: string): string {
   const downloadRoot = process.env.DOWNLOAD_ROOT || './downloads'
   return path.join(downloadRoot, relativePath)

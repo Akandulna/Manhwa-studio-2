@@ -1,10 +1,10 @@
 /**
- * MusicLibrary — Module 4: global background-music library. Upload tracks
- * (stored locally), preview, and delete. Projects pick one track in the editor.
+ * MusicLibrary — global background-music library. Upload tracks (stored
+ * locally), preview, and delete.
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { videoApi, type MusicTrack } from '@/lib/api'
+import { musicApi, type MusicTrack } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { useToast } from '@/components/ui/use-toast'
@@ -18,7 +18,7 @@ export default function MusicLibrary() {
   const fileRef = useRef<HTMLInputElement>(null)
 
   function load() {
-    videoApi.listMusic()
+    musicApi.list()
       .then(setTracks)
       .catch(err => console.error(err))
       .finally(() => setLoading(false))
@@ -31,7 +31,7 @@ export default function MusicLibrary() {
     if (!file) return
     setUploading(true)
     try {
-      await videoApi.uploadMusic(file)
+      await musicApi.upload(file)
       toast({ title: 'Uploaded', description: file.name })
       load()
     } catch (err) {
@@ -44,7 +44,7 @@ export default function MusicLibrary() {
 
   async function remove(track: MusicTrack) {
     try {
-      await videoApi.deleteMusic(track.id)
+      await musicApi.remove(track.id)
       setTracks(prev => prev.filter(t => t.id !== track.id))
     } catch (err) {
       toast({ title: 'Delete failed', description: err instanceof Error ? err.message : '', variant: 'destructive' })
@@ -81,7 +81,7 @@ export default function MusicLibrary() {
               <CardContent className="p-3 flex items-center gap-3">
                 <Music className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                 <span className="flex-1 truncate text-sm font-medium">{track.filename}</span>
-                <audio controls src={videoApi.musicFileUrl(track.id)} className="h-8" />
+                <audio controls src={musicApi.fileUrl(track.id)} className="h-8" />
                 <Button variant="ghost" size="icon" onClick={() => remove(track)}>
                   <Trash2 className="h-4 w-4 text-destructive" />
                 </Button>

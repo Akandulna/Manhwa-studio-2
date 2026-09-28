@@ -15,7 +15,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { clipperApi, type Clipper3ReviewCrop } from '@/lib/api'
+import { clipper3Api, type Clipper3ReviewCrop } from '@/lib/api'
 import {
   HANDLES,
   drawnBox,
@@ -226,7 +226,7 @@ export function ReviewCanvas(props: ReviewCanvasProps) {
         onMouseLeave={() => setGuide(null)}
       >
         <img
-          src={clipperApi.getImageUrl(chapterId, filename)}
+          src={clipper3Api.getImageUrl(chapterId, filename)}
           alt={filename}
           draggable={false}
           className="absolute inset-0 w-full h-full pointer-events-none"

@@ -20,7 +20,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { Loader2, Pencil, Save, X } from 'lucide-react'
-import { clipperApi, clipper3Api, type Clipper3CropEntry, type Clipper3ImageCropFile, type Clipper3ImagePoints } from '@/lib/api'
+import { clipper3Api, type Clipper3CropEntry, type Clipper3ImageCropFile, type Clipper3ImagePoints } from '@/lib/api'
 import { useToast } from '@/components/ui/use-toast'
 import { seriesSlug, stemOf, exportedFilenameFor } from '@/lib/clipper3Naming'
 
@@ -594,7 +594,7 @@ export function CropPointerEditor({
         onMouseDown={() => { if (editing) setSelectedCropId(null) }}
       >
         <img
-          src={clipperApi.getImageUrl(chapterId, filename)}
+          src={clipper3Api.getImageUrl(chapterId, filename)}
           alt={filename}
           draggable={false}
           style={{ width: '100%', height: '100%', display: 'block', pointerEvents: 'none', userSelect: 'none' }}
