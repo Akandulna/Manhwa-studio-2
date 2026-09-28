@@ -30,6 +30,7 @@ import {
   ensureLocked
 } from './guidelineCropService.js'
 import type { AiCropStatus, SuggestResult, CropEngine } from './aiCropTypes.js'
+import { cachedProbe, isAvailable } from '../../utils/cachedProbe.js'
 
 // ============ Config & paths ============
 
@@ -176,7 +177,7 @@ function runSidecar(
 
 // ============ Availability ============
 
-export async function checkSidecarAvailable(): Promise<{ available: boolean; error?: string }> {
+async function probeSidecarAvailable(): Promise<{ available: boolean; error?: string }> {
   const python = getPythonPath()
   const scriptPath = getScriptPath('suggest.py')
 
@@ -197,6 +198,7 @@ export async function checkSidecarAvailable(): Promise<{ available: boolean; err
     setTimeout(() => { proc.kill(); resolve({ available: false, error: 'Sidecar check timed out' }) }, 15000)
   })
 }
+export const checkSidecarAvailable = cachedProbe(probeSidecarAvailable, { isOk: isAvailable })
 
 // ============ Active model resolution ============
 

@@ -2,8 +2,8 @@
  * Murgaa Dialog
  *
  * The reference popup behind the "Murgaa" header button on the narration
- * Script Editor and Voiceover Editor pages, and the Image Clipper 3.0
- * image-list page.
+ * Script Editor and Voiceover Editor pages, the Image Clipper 3.0
+ * image-list page, and the Editor 2.0 chapter-list page.
  *
  * Three sections: an image preview (expandable to fullscreen), a short
  * description, and a LIST of launchable applications — each independently
@@ -224,6 +224,8 @@ export function MurgaaDialog({ scope, open, onOpenChange }: MurgaaDialogProps) {
                     ? 'Script generation reference'
                     : scope === 'voice'
                     ? 'Voice generation reference'
+                    : scope === 'editor2'
+                    ? 'Editor 2.0 reference'
                     : 'Image Clipper 3.0 reference'}
                 </DialogDescription>
               </div>

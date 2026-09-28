@@ -2102,6 +2102,258 @@ export interface Clipper3SliceResult {
 }
 
 /**
+ * Crop Studio — the ChatGPT handoff package for one page (server
+ * services/clipper3/handoff.ts). Slices are verified pixel-exact against the
+ * fingerprinted original before the manifest is written.
+ */
+export interface Clipper3HandoffSlice {
+  id: string
+  file: string
+  x0: number
+  y0: number
+  x1: number
+  y1: number
+  width: number
+  height: number
+  sha256: string
+}
+
+export interface Clipper3HandoffManifest {
+  schema_version: 'handoff/1.0'
+  job_id: string
+  created_at: string
+  source: {
+    series_title: string
+    series_slug: string
+    chapter_folder: string
+    chapter_number: number
+    page_stem: string
+    original_filename: string
+    sha256: string
+    width: number
+    height: number
+    format: string
+    orientation: 'stored_pixels'
+  }
+  coordinate_system: 'canonical_original_pixels'
+  slices: Clipper3HandoffSlice[]
+  manifest_sha256: string
+}
+
+export interface Clipper3HandoffStatus {
+  status: 'none' | 'ready' | 'stale'
+  staleReasons: { code: 'SOURCE_CHANGED' | 'SLICES_CHANGED' | 'MANIFEST_CORRUPT'; message: string }[]
+  manifest: Clipper3HandoffManifest | null
+  prompt: string | null
+}
+
+export interface Clipper3HandoffBuild {
+  status: 'ready'
+  manifest: Clipper3HandoffManifest
+  prompt: string
+  studioDirectory: string
+  sliceDirectory: string
+  sliced: Clipper3SliceResult
+}
+
+/** One problem with a pasted ChatGPT reply (server services/clipper3/analysisImport.ts). */
+export interface Clipper3ImportIssue {
+  code: string
+  /** Where in the reply, e.g. `candidates[2].bottom_right.y`; '' for the whole document. */
+  field: string
+  message: string
+  candidateId?: string
+}
+
+export interface Clipper3Candidate {
+  candidate_id: string
+  reason: string
+  /** Integer pixels on the original page; x1/y1 exclusive. */
+  bounds: { x0: number; y0: number; x1: number; y1: number }
+  description: string
+  visual_evidence: string
+  review_flags: string[]
+  unknown_flags: string[]
+  /** Slices the box overlaps; more than one means it crosses a seam. */
+  slices: string[]
+}
+
+export interface Clipper3ImportedAnalysis {
+  job_id: string
+  source_sha256: string
+  page_stem: string
+  source_width: number
+  source_height: number
+  imported_at: string
+  reply_coordinate_system: string
+  response_file: string
+  page_inspection_complete: boolean
+  page_review_flags: string[]
+  candidates: Clipper3Candidate[]
+  warnings: Clipper3ImportIssue[]
+}
+
+export interface Clipper3AnalysisStatus {
+  analysis: Clipper3ImportedAnalysis | null
+  stale: boolean
+  staleReasons: string[]
+}
+
+export interface Clipper3ImportOutcome {
+  imported: boolean
+  analysis: Clipper3ImportedAnalysis | null
+  errors: Clipper3ImportIssue[]
+  warnings: Clipper3ImportIssue[]
+}
+
+/** Crop Studio review (server services/clipper3/reviewState.ts + auditRules.ts). */
+export type Clipper3Disposition = 'unreviewed' | 'kept' | 'adjusted' | 'split' | 'merged' | 'unresolved'
+export type Clipper3DescriptionStatus = 'approved' | 'unreviewed' | 'stale' | 'missing'
+
+export interface Clipper3ReviewCrop {
+  key: string
+  origin: 'chatgpt' | 'existing_pointers' | 'operator'
+  reason: string
+  bounds: { x0: number; y0: number; x1: number; y1: number }
+  description: string
+  description_status: Clipper3DescriptionStatus
+  disposition: Clipper3Disposition
+  visual_evidence: string
+  gpt_flags: string[]
+  unknown_flags: string[]
+  acknowledged: string[]
+  note: string
+}
+
+export interface Clipper3ReviewState {
+  schema_version: 'crop-studio-review/1.0'
+  job_id: string | null
+  source_sha256: string
+  source_width: number
+  source_height: number
+  page_stem: string
+  review_revision: number
+  created_at: string
+  updated_at: string
+  based_on:
+    | { kind: 'chatgpt_import'; response_sha256: string; imported_at: string }
+    | { kind: 'existing_pointers'; points_sha256: string }
+  crops: Clipper3ReviewCrop[]
+  page: { sweep_done: boolean; no_eligible_artwork_confirmed: boolean; note: string }
+}
+
+export interface Clipper3ReviewItem {
+  token: string
+  key: string
+  source: 'system' | 'chatgpt'
+  code: string
+  message: string
+  acknowledged: boolean
+}
+
+export interface Clipper3ReviewView {
+  state: Clipper3ReviewState | null
+  audit: {
+    findings: { code: string; key: string; otherKey?: string; edge?: string; message: string }[]
+    gaps: { y0: number; y1: number; nonBlankShare: number | null }[]
+  } | null
+  items: Clipper3ReviewItem[]
+  readiness: { ready: boolean; blockers: { code: string; key?: string; message: string }[] }
+  stale: boolean
+  staleReasons: string[]
+  newerImportAvailable: boolean
+}
+
+/** What a ChatGPT review round did (server services/clipper3/chatgptReview.ts). */
+export interface Clipper3ChatGptReviewOutcome {
+  applied: boolean
+  view: Clipper3ReviewView | null
+  errors: Clipper3ImportIssue[]
+  warnings: Clipper3ImportIssue[]
+  summary: { kept: number; adjusted: number; split: number; merged: number; added: number; removed: number } | null
+}
+
+/** ChatGPT-API settings (server services/clipper3/openaiAuto.ts) — the key itself never leaves the server. */
+export interface Clipper3OpenAiSettings {
+  hasKey: boolean
+  keyHint: string | null
+  model: string
+  baseUrl: string
+  /** '' = the model's own default. */
+  reasoningEffort: '' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+  reviewRounds: number
+  includeRules: boolean
+  concurrency: number
+}
+
+export type Clipper3AutoStep =
+  | 'queued' | 'packaging' | 'analyzing' | 'reviewing' | 'exporting'
+  | 'done' | 'ready' | 'needs_review' | 'failed' | 'cancelled'
+
+export interface Clipper3AutoPage {
+  filename: string
+  step: Clipper3AutoStep
+  message: string
+  round: number
+  crops: number | null
+  blockers: string[]
+  tokens: number
+  startedAt: string | null
+  finishedAt: string | null
+}
+
+/** One chapter's run of the ChatGPT loop through the OpenAI API. */
+export interface Clipper3AutoJob {
+  chapterId: string
+  running: boolean
+  cancelled: boolean
+  model: string
+  reasoningEffort: Clipper3OpenAiSettings['reasoningEffort']
+  export: boolean
+  startedAt: string
+  finishedAt: string | null
+  pages: Clipper3AutoPage[]
+}
+
+/** One page's export (server services/clipper3/exportPage.ts). */
+export interface Clipper3ExportReport {
+  status: 'completed' | 'failed'
+  exported_at: string
+  page_stem: string
+  original_filename: string
+  source_sha256: string
+  review_revision: number
+  crop_count: number
+  crops: { id: string; key: string; reason: string; exportedFilename: string; width: number; height: number; sha256: string }[]
+  destinations: { processed: string; crops: string; store: string[] }
+  replaced: string[]
+  files: { path: string; sha256: string; bytes: number }[]
+  notes: string[]
+  error?: string
+}
+
+export interface Clipper3ExportStatus {
+  report: Clipper3ExportReport | null
+  upToDate: boolean
+}
+
+/** A refused export: the message, every problem, and the review blockers when it wasn't finished. */
+export class Clipper3ExportError extends Error {
+  constructor(message: string, public readonly details: string[], public readonly blockers: { code: string; key?: string; message: string }[]) {
+    super(message)
+    this.name = 'Clipper3ExportError'
+  }
+}
+
+/** A refused review save: the message, every problem, and (on a conflict) the current review. */
+export class Clipper3ReviewSaveError extends Error {
+  constructor(message: string, public readonly status: number, public readonly details: string[], public readonly current: Clipper3ReviewView | null) {
+    super(message)
+    this.name = 'Clipper3ReviewSaveError'
+  }
+}
+
+/**
  * What Sync json did with one `Processed/page_###` folder — or, from the
  * preview, what it would do: 'ready' is the preview's form of 'imported'.
  */
@@ -2235,6 +2487,135 @@ export const clipper3Api = {
       { method: 'POST' }
     ),
 
+  // The ChatGPT package: slices verified against the original, plus the
+  // manifest and prompt. A blocked page (corrupt, rotated, animated) answers
+  // 422 and the error message lists every issue.
+  getHandoff: (chapterId: string, filename: string) =>
+    fetchApi<Clipper3HandoffStatus>(
+      `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/handoff`
+    ),
+
+  buildHandoff: (chapterId: string, filename: string) =>
+    fetchApi<Clipper3HandoffBuild>(
+      `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/handoff`,
+      { method: 'POST' }
+    ),
+
+  getAnalysis: (chapterId: string, filename: string) =>
+    fetchApi<Clipper3AnalysisStatus>(
+      `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/analysis`
+    ),
+
+  // Not fetchApi: a rejected reply answers 422 with field-level errors the UI
+  // lists, and fetchApi would reduce that to a single message.
+  importAnalysis: async (chapterId: string, filename: string, content: string): Promise<Clipper3ImportOutcome> => {
+    const response = await fetch(
+      `${API_BASE}/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/analysis`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }) }
+    )
+    const payload = await response.json().catch(() => null) as (Clipper3ImportOutcome & { error?: string }) | null
+    if (response.status === 422 && payload && Array.isArray(payload.errors)) return payload
+    if (!response.ok || !payload) {
+      throw new Error(payload?.error || `Import failed (${response.status} ${response.statusText})`)
+    }
+    return payload
+  },
+
+  getReview: (chapterId: string, filename: string) =>
+    fetchApi<Clipper3ReviewView>(
+      `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/review`
+    ),
+
+  startReview: (chapterId: string, filename: string, from: 'import' | 'pointers', replace = false) =>
+    fetchApi<Clipper3ReviewView>(
+      `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/review`,
+      { method: 'POST', body: JSON.stringify({ from, replace }) }
+    ),
+
+  // Not fetchApi: a refused save carries a detail list, and a revision
+  // conflict carries the current review so the UI can resync to it.
+  saveReview: async (chapterId: string, filename: string, state: Clipper3ReviewState, expectedRevision: number): Promise<Clipper3ReviewView> => {
+    const response = await fetch(
+      `${API_BASE}/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/review`,
+      { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ state, expectedRevision }) }
+    )
+    const payload = await response.json().catch(() => null) as
+      (Clipper3ReviewView & { error?: string; details?: string[]; current?: Clipper3ReviewView | null }) | null
+    if (!response.ok || !payload) {
+      throw new Clipper3ReviewSaveError(
+        payload?.error || `Save failed (${response.status} ${response.statusText})`,
+        response.status,
+        payload?.details ?? [],
+        payload?.current ?? null
+      )
+    }
+    return payload
+  },
+
+  getReviewPrompt: (chapterId: string, filename: string) =>
+    fetchApi<{ prompt: string; review_revision: number }>(
+      `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/review/chatgpt-prompt`
+    ),
+
+  // Not fetchApi: a refused reply answers 422 with field-level errors to list.
+  applyChatGptReview: async (chapterId: string, filename: string, content: string): Promise<Clipper3ChatGptReviewOutcome> => {
+    const response = await fetch(
+      `${API_BASE}/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/review/chatgpt`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }) }
+    )
+    const payload = await response.json().catch(() => null) as (Clipper3ChatGptReviewOutcome & { error?: string }) | null
+    if (response.status === 422 && payload && Array.isArray(payload.errors)) return payload
+    if (!response.ok || !payload) throw new Error(payload?.error || `Review import failed (${response.status} ${response.statusText})`)
+    return payload
+  },
+
+  getExport: (chapterId: string, filename: string) =>
+    fetchApi<Clipper3ExportStatus>(
+      `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/export`
+    ),
+
+  // Not fetchApi: a refused export carries its problems and the review blockers.
+  exportPage: async (chapterId: string, filename: string): Promise<Clipper3ExportReport> => {
+    const response = await fetch(
+      `${API_BASE}/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/export`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' } }
+    )
+    const payload = await response.json().catch(() => null) as
+      (Clipper3ExportReport & { error?: string; details?: string[]; blockers?: Clipper3ExportError['blockers'] }) | null
+    if (!response.ok || !payload) {
+      throw new Clipper3ExportError(payload?.error || `Export failed (${response.status} ${response.statusText})`, payload?.details ?? [], payload?.blockers ?? [])
+    }
+    return payload
+  },
+
+  openExportFolder: (chapterId: string, filename: string) =>
+    fetchApi<{ success: boolean; path: string }>(
+      `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/export/open`,
+      { method: 'POST' }
+    ),
+
+  getOpenAiSettings: () => fetchApi<Clipper3OpenAiSettings>('/clipper3/openai'),
+
+  saveOpenAiSettings: (update: Partial<Omit<Clipper3OpenAiSettings, 'hasKey' | 'keyHint'>> & { apiKey?: string; clearKey?: boolean }) =>
+    fetchApi<Clipper3OpenAiSettings>('/clipper3/openai', { method: 'PUT', body: JSON.stringify(update) }),
+
+  testOpenAi: () =>
+    fetchApi<{ success: boolean; model: string; error?: string }>('/clipper3/openai/test', { method: 'POST' }),
+
+  // The ChatGPT loop (package → analysis → review → export) run through the
+  // OpenAI API in the background; poll getAutoRun for progress.
+  getAutoRun: (chapterId: string) =>
+    fetchApi<{ job: Clipper3AutoJob | null }>(`/clipper3/chapters/${chapterId}/auto`),
+
+  startAutoRun: (chapterId: string, filenames: string[], exportPages: boolean) =>
+    fetchApi<{ job: Clipper3AutoJob }>(
+      `/clipper3/chapters/${chapterId}/auto`,
+      { method: 'POST', body: JSON.stringify({ filenames, export: exportPages }) }
+    ),
+
+  cancelAutoRun: (chapterId: string) =>
+    fetchApi<{ cancelled: boolean; job: Clipper3AutoJob | null }>(`/clipper3/chapters/${chapterId}/auto/cancel`, { method: 'POST' }),
+
   getSliceUrl: (chapterId: string, filename: string, sliceName: string) =>
     `${API_BASE}/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}` +
     `/slices/${encodeURIComponent(sliceName)}`,
@@ -2334,7 +2715,7 @@ export const visionApi = {
 
 // Murgaa API — the reference popup in the narration Script/Voiceover headers.
 // One global config per page scope, shared across every series and chapter.
-export type MurgaaScope = 'script' | 'voice' | 'clipper3'
+export type MurgaaScope = 'script' | 'voice' | 'clipper3' | 'editor2'
 
 export interface MurgaaApp {
   id: string

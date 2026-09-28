@@ -9,12 +9,31 @@ let browserInstance: Browser | null = null;
 
 const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
 
+// Path segments that mark user-supplied or site-chrome images. These are
+// matched against the URL path and catch things the size filter cannot: comment
+// avatars and attached images are often large enough to look like real pages.
+const EXCLUDED_PATH_SEGMENTS = [
+  'userpics', 'avatars', 'commentsimgs', 'comments', 'uploads', 'emoji', 'emotes'
+];
+
+// Hosts that only ever serve site chrome / third-party widgets, never chapter
+// art. Some of these images are large enough to clear the size filter.
+const EXCLUDED_HOSTS = [
+  'cdn-icons-png.flaticon.com', 'upload.wikimedia.org', 'flaticon.com',
+  'gravatar.com', 'google-analytics.com', 'googletagmanager.com',
+  // Ad / impression-tracker networks. These inject <img> tags that are not
+  // images at all (pubadx returns HTTP 500 text), so they fail every download.
+  'pubadx.one', 'doubleclick.net', 'googlesyndication.com', 'adnxs.com',
+  'adsrvr.org', 'amazon-adsystem.com', 'criteo.com', 'taboola.com',
+  'outbrain.com', 'popads.net', 'propellerads.com', 'exoclick.com'
+];
+
 // Keywords that indicate non-content images (ads, icons, etc.)
 const EXCLUDED_KEYWORDS = [
-  'avatar', 'icon', 'logo', 'banner', 'ad', 'advertisement', 
+  'avatar', 'icon', 'logo', 'banner', 'ad', 'ads', 'advertisement', 
   'thumbnail', 'thumb', 'profile', 'button', 'sprite',
   'loading', 'spinner', 'placeholder', 'social', 'share',
-  'facebook', 'twitter', 'discord', 'patreon', 'ko-fi'
+  'facebook', 'twitter', 'discord', 'patreon', 'kofi'
 ];
 
 export interface DetectedImage {
@@ -100,10 +119,62 @@ async function scrollToBottom(page: Page, maxScrolls: number = 50): Promise<void
 
 /**
  * Check if a URL looks like a content image (not ad/icon/etc)
+ *
+ * Keywords are matched as whole words, not bare substrings. A plain
+ * `includes()` made every series whose name contains a keyword unscrapable —
+ * "Bad Business" tripped the 'ad' rule, so every real page URL was discarded
+ * and only stray avatars/comment images survived.
+ *
+ * Only the path+query is tested: the hostname often carries the CDN's own
+ * branding and is never a signal about the image itself.
  */
 function isContentImageUrl(url: string): boolean {
-  const lowerUrl = url.toLowerCase();
-  return !EXCLUDED_KEYWORDS.some(keyword => lowerUrl.includes(keyword));
+  let haystack = url;
+  try {
+    const parsed = new URL(url, 'https://placeholder.invalid');
+    const host = parsed.hostname.toLowerCase();
+    if (EXCLUDED_HOSTS.some(h => host === h || host.endsWith(`.${h}`))) return false;
+    haystack = `${parsed.pathname}${parsed.search}`;
+  } catch {
+    // Not parseable - fall back to testing the raw string.
+  }
+
+  // Split on anything that isn't a letter or digit so keywords only match
+  // complete words ("ad" hits "/ad/" and "banner-ad.png", not "Bad Business").
+  const words = new Set(
+    haystack
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter(Boolean)
+  );
+
+  if (EXCLUDED_PATH_SEGMENTS.some(segment => words.has(segment))) return false;
+
+  if (EXCLUDED_KEYWORDS.some(keyword => words.has(keyword))) return false;
+
+  // "ko-fi" splits into two tokens, so check adjacent pairs too.
+  const ordered = [...words];
+  for (let i = 0; i < ordered.length - 1; i++) {
+    if (EXCLUDED_KEYWORDS.includes(ordered[i] + ordered[i + 1])) return false;
+  }
+
+  return true;
+}
+
+/**
+ * Does the URL path end in a real image extension?
+ *
+ * Used for images whose dimensions are unknown (lazy-loaded srcset entries, or
+ * anything that failed to load). Real pages are files like `/1/0.jpg`; ad
+ * beacons are endpoints like `/rec?f=36882&z=10010`.
+ */
+function isLikelyImagePath(url: string): boolean {
+  try {
+    const { pathname } = new URL(url, 'https://placeholder.invalid');
+    return /\.(jpe?g|png|webp|gif|avif|bmp)$/i.test(pathname);
+  } catch {
+    return /\.(jpe?g|png|webp|gif|avif|bmp)(\?|$)/i.test(url);
+  }
 }
 
 /**
@@ -183,6 +254,13 @@ async function detectImages(page: Page): Promise<DetectedImage[]> {
       // Must have a valid URL
       if (!img.src || !isContentImageUrl(img.src)) return false;
       
+      // Images that never resolved report 0x0 and used to skip every size
+      // check below, which let ad-impression pixels through as "pages".
+      // Keep them only when the URL actually looks like an image file.
+      if (img.width === 0 || img.height === 0) {
+        if (!isLikelyImagePath(img.src)) return false;
+      }
+
       // Size-based filtering for known dimensions
       if (img.width > 0 && img.height > 0) {
         // Minimum width of 400px for manhwa panels

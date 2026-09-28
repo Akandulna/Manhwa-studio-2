@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { settingsApi, Settings as SettingsType, narrationApi, AIStatus, aiCropApi, clipper2Api, voiceoverApi, visionApi, type VisionProviderInfo, type VisionProviderName } from '@/lib/api'
+import { useSearchParams } from 'react-router-dom'
+import { settingsApi, Settings as SettingsType, narrationApi, AIStatus, aiCropApi, clipper2Api, clipper3Api, voiceoverApi, visionApi, type VisionProviderInfo, type VisionProviderName, type Clipper3OpenAiSettings } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -154,6 +155,8 @@ const GEMINI_VOICES = [
 
 export default function Settings() {
   const { toast } = useToast()
+  // ?tab=<value> deep-links to a tab (e.g. Clipper 3.0's "add your API key" link).
+  const [searchParams] = useSearchParams()
   const { theme, resolvedTheme, setTheme } = useTheme()
   const [settings, setSettings] = useState<ExtendedSettings | null>(null)
   const [aiStatus, setAIStatus] = useState<AIStatus | null>(null)
@@ -358,7 +361,7 @@ export default function Settings() {
 
       {/* Tabs */}
       <div className="flex-1 overflow-auto">
-        <Tabs defaultValue="appearance" className="w-full h-full">
+        <Tabs defaultValue={searchParams.get('tab') || 'appearance'} className="w-full h-full">
           <TabsList className="sticky top-0 w-full justify-start rounded-none border-b bg-background px-6">
             <TabsTrigger value="appearance" className="flex items-center gap-2">
               <Palette className="h-4 w-4" />
@@ -1174,6 +1177,7 @@ STYLE RULES:
 
           {/* Crop 3.0 - Prompts Tab */}
           <TabsContent value="crop3-prompts" className="p-6 max-w-4xl space-y-6">
+      <ChatGptApiCard />
       <VisionProviderCard />
       <Crop3GuidelineFileCard />
       <Crop3MetadataTemplateCard />
@@ -2151,6 +2155,207 @@ function VisionProviderCard() {
           <code className="px-1 py-0.5 rounded bg-muted">ollama pull qwen3-vl:4b</code>.
           Nothing is uploaded. Cloud models need their API key set in the server environment.
         </p>
+      </CardContent>
+    </Card>
+  )
+}
+
+/**
+ * OpenAI key + options for Clipper 3.0's "ChatGPT API" button, which runs the
+ * hybrid crop loop (package → analysis → review rounds → export) through the
+ * API instead of by copy and paste. Stored server-side in .env — the key is
+ * never sent back, only its last four characters.
+ */
+function ChatGptApiCard() {
+  const { toast } = useToast()
+  const [settings, setSettings] = useState<Clipper3OpenAiSettings | null>(null)
+  const [apiKey, setApiKey] = useState('')
+  const [model, setModel] = useState('')
+  const [effort, setEffort] = useState<Clipper3OpenAiSettings['reasoningEffort']>('high')
+  const [reviewRounds, setReviewRounds] = useState('3')
+  const [concurrency, setConcurrency] = useState('2')
+  const [includeRules, setIncludeRules] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<{ success: boolean; error?: string } | null>(null)
+
+  const apply = (next: Clipper3OpenAiSettings) => {
+    setSettings(next)
+    setModel(next.model)
+    setEffort(next.reasoningEffort)
+    setReviewRounds(String(next.reviewRounds))
+    setConcurrency(String(next.concurrency))
+    setIncludeRules(next.includeRules)
+  }
+
+  useEffect(() => {
+    clipper3Api.getOpenAiSettings()
+      .then(apply)
+      .catch(() => toast({ title: 'Could not load the ChatGPT API settings', variant: 'destructive' }))
+  }, [])
+
+  const test = async () => {
+    setTesting(true)
+    setTestResult(null)
+    try {
+      setTestResult(await clipper3Api.testOpenAi())
+    } catch (err) {
+      setTestResult({ success: false, error: err instanceof Error ? err.message : 'Test failed' })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      const next = await clipper3Api.saveOpenAiSettings({
+        ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+        model: model.trim(),
+        reasoningEffort: effort,
+        reviewRounds: Number(reviewRounds),
+        concurrency: Number(concurrency),
+        includeRules
+      })
+      apply(next)
+      setApiKey('')
+      toast({ title: 'ChatGPT API settings saved' })
+      if (next.hasKey) void test()
+    } catch (err) {
+      toast({ title: 'Save failed', description: err instanceof Error ? err.message : 'Unknown error', variant: 'destructive' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const removeKey = async () => {
+    try {
+      apply(await clipper3Api.saveOpenAiSettings({ clearKey: true }))
+      setTestResult(null)
+      toast({ title: 'API key removed' })
+    } catch (err) {
+      toast({ title: 'Could not remove the key', description: err instanceof Error ? err.message : 'Unknown error', variant: 'destructive' })
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Key className="h-5 w-5" />
+          ChatGPT API (OpenAI)
+        </CardTitle>
+        <CardDescription>
+          Used by the <strong>ChatGPT API</strong> button on a Clipper 3.0 chapter: it sends each page's slices to
+          ChatGPT, imports the crops, lets it do the review rounds and exports — no copy and paste. Billed to this key.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {!settings ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+          </div>
+        ) : (
+          <>
+            <div className="space-y-2">
+              <Label htmlFor="openaiKey">OpenAI API key</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="openaiKey"
+                  type="password"
+                  autoComplete="off"
+                  placeholder={settings.hasKey ? `Saved (${settings.keyHint}) — paste a new key to replace it` : 'sk-…'}
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                />
+                {settings.hasKey && (
+                  <Button variant="outline" onClick={removeKey}>Remove</Button>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Stored in the server's <code>.env</code> as <code>OPENAI_API_KEY</code>.{' '}
+                <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="underline inline-flex items-center gap-1">
+                  Get a key <ExternalLink className="h-3 w-3" />
+                </a>
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="openaiModel">Model</Label>
+                <Input
+                  id="openaiModel"
+                  list="openai-model-suggestions"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder="gpt-5.6-sol"
+                  className="font-mono"
+                />
+                <datalist id="openai-model-suggestions">
+                  <option value="gpt-5.6-sol" />
+                  <option value="gpt-5" />
+                  <option value="gpt-5-mini" />
+                  <option value="gpt-4.1" />
+                  <option value="gpt-4o" />
+                  <option value="o3" />
+                </datalist>
+                <p className="text-xs text-muted-foreground">Any vision model your key can use. "Test connection" checks it exists.</p>
+              </div>
+              <div className="space-y-2">
+                <Label>Reasoning effort</Label>
+                <Select value={effort || 'default'} onValueChange={(v) => setEffort(v === 'default' ? '' : v as Clipper3OpenAiSettings['reasoningEffort'])}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="default">Model default</SelectItem>
+                    <SelectItem value="none">None</SelectItem>
+                    <SelectItem value="minimal">Minimal</SelectItem>
+                    <SelectItem value="low">Low</SelectItem>
+                    <SelectItem value="medium">Medium</SelectItem>
+                    <SelectItem value="high">High</SelectItem>
+                    <SelectItem value="xhigh">Extra high</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">Use "Model default" for non-reasoning models (gpt-4o).</p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="openaiRounds">Review rounds (max)</Label>
+                <Input id="openaiRounds" type="number" min={0} max={6} value={reviewRounds} onChange={(e) => setReviewRounds(e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="openaiConcurrency">Pages at a time</Label>
+                <Input id="openaiConcurrency" type="number" min={1} max={4} value={concurrency} onChange={(e) => setConcurrency(e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="openaiRules">Send crop rules</Label>
+                <div className="flex items-center h-10">
+                  <Switch id="openaiRules" checked={includeRules} onCheckedChange={setIncludeRules} />
+                </div>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              A page still not export-ready after the review rounds stops at "needs a look" for you to finish in the
+              page dialog. "Send crop rules" includes the Crop Pointers guidelines as the system prompt.
+            </p>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button onClick={save} disabled={saving}>
+                {saving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
+                Save
+              </Button>
+              <Button variant="outline" onClick={test} disabled={testing || !settings.hasKey}>
+                {testing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Cloud className="h-4 w-4 mr-2" />}
+                Test connection
+              </Button>
+              {testResult && (
+                testResult.success ? (
+                  <span className="text-sm text-green-600 flex items-center gap-1"><CheckCircle className="h-4 w-4" /> Key and model OK</span>
+                ) : (
+                  <span className="text-sm text-destructive flex items-center gap-1"><XCircle className="h-4 w-4" /> {testResult.error}</span>
+                )
+              )}
+            </div>
+          </>
+        )}
       </CardContent>
     </Card>
   )

@@ -16,6 +16,7 @@ import {
   DEFAULT_BASE_STYLE_PROMPT
 } from '../services/ai/index.js'
 import { Server } from 'socket.io'
+import { cachedProbe } from '../utils/cachedProbe.js'
 
 const router = Router()
 
@@ -662,6 +663,15 @@ router.post('/series/:id/export-part', async (req: Request, res: Response) => {
 
 // ============ AI Provider Status ============
 
+// A live Gemini round trip, and the status endpoint is hit on every narration
+// page open — so a passing result is reused for a few minutes. Every
+// aiProviderFactory.reinitialize() below clears it, so a key or model change
+// is always re-tested.
+const testDefaultConnection = cachedProbe(
+  async () => (await aiProviderFactory.getDefaultProvider()?.testConnection()) ?? null,
+  { isOk: r => r?.success === true, okTtlMs: 5 * 60_000 }
+)
+
 /**
  * Get AI provider status
  */
@@ -670,10 +680,7 @@ router.get('/ai/status', async (req: Request, res: Response) => {
     const defaultProvider = aiProviderFactory.getDefaultProvider()
     const availableProviders = aiProviderFactory.getAvailableProviders()
     
-    let connectionTest = null
-    if (defaultProvider) {
-      connectionTest = await defaultProvider.testConnection()
-    }
+    const connectionTest = defaultProvider ? await testDefaultConnection() : null
     
     // Check if API key exists (don't return the actual value)
     const hasApiKey = !!process.env.GEMINI_API_KEY
@@ -748,13 +755,11 @@ router.post('/ai/api-key', async (req: Request, res: Response) => {
     
     // Reinitialize the AI provider
     aiProviderFactory.reinitialize()
+    testDefaultConnection.clear()
     
-    // Test the connection
+    // Test the connection (this also seeds the status cache with the new key)
     const provider = aiProviderFactory.getDefaultProvider()
-    let connectionTest = null
-    if (provider) {
-      connectionTest = await provider.testConnection()
-    }
+    const connectionTest = provider ? await testDefaultConnection() : null
     
     res.json({
       success: true,
@@ -811,6 +816,7 @@ router.post('/ai/models', async (req: Request, res: Response) => {
     
     // Reinitialize providers
     aiProviderFactory.reinitialize()
+    testDefaultConnection.clear()
     
     res.json({ success: true })
   } catch (error) {

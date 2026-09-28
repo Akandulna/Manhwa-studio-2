@@ -45,6 +45,7 @@ import {
 import { readPointerGuidelines } from './pointerGuidelines.js'
 import { logicalPageName } from './pointerDetector.js'
 import type { ImageManifest } from '../clipperService.js'
+import { cachedProbe, isAvailable } from '../../utils/cachedProbe.js'
 
 // ============ Constants ============
 
@@ -121,7 +122,7 @@ interface SidecarResult {
 }
 
 /** Is the offline detector runnable on this machine? */
-export async function checkOfflineDetector(): Promise<{ available: boolean; error?: string }> {
+async function probeOfflineDetector(): Promise<{ available: boolean; error?: string }> {
   return new Promise(resolve => {
     let proc
     try {
@@ -150,6 +151,7 @@ export async function checkOfflineDetector(): Promise<{ available: boolean; erro
     }, 15000)
   })
 }
+export const checkOfflineDetector = cachedProbe(probeOfflineDetector, { isOk: isAvailable })
 
 /**
  * Spawn the detector and stream its progress. Resolves with the `result`

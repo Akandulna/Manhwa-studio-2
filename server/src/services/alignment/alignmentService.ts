@@ -19,6 +19,7 @@ import PQueue from 'p-queue'
 import { Server } from 'socket.io'
 import { prisma } from '../../index.js'
 import { buildTimelineScript, type AlignedWord } from './beatFormatter.js'
+import { cachedProbe, isAvailable } from '../../utils/cachedProbe.js'
 
 /** Alignment is English-only for now; Hindi is future scope. */
 const ALIGN_LANGUAGE = 'en'
@@ -60,7 +61,7 @@ function getScriptPath(): string {
  * Check whether the alignment sidecar can run. Mirrors the voice-analysis
  * sidecar's --check contract.
  */
-export async function checkAlignmentAvailable(): Promise<{
+async function probeAlignmentAvailable(): Promise<{
   available: boolean
   error?: string
 }> {
@@ -108,6 +109,7 @@ export async function checkAlignmentAvailable(): Promise<{
     })
   })
 }
+export const checkAlignmentAvailable = cachedProbe(probeAlignmentAvailable, { isOk: isAvailable })
 
 /** Spawn the sidecar for one alignment job and parse its JSON result. */
 function runAligner(audioPath: string, text: string): Promise<{

@@ -26,6 +26,7 @@ import {
   type ImageManifest,
   type CropRect
 } from './clipperService.js'
+import { cachedProbe, isAvailable } from '../utils/cachedProbe.js'
 
 // ============ Paths ============
 
@@ -62,7 +63,7 @@ export interface WatermarkMatch {
 // ============ Sidecar bridge ============
 
 /** Report whether the Python detection sidecar (cv2 + numpy) is available. */
-export async function checkWatermarkSidecarAvailable(): Promise<{ available: boolean; error?: string }> {
+async function probeWatermarkSidecarAvailable(): Promise<{ available: boolean; error?: string }> {
   return new Promise((resolve) => {
     const proc = spawn(getPythonPath(), [getScriptPath(), '--check'])
     let stdout = ''
@@ -77,6 +78,7 @@ export async function checkWatermarkSidecarAvailable(): Promise<{ available: boo
     setTimeout(() => { proc.kill(); resolve({ available: false, error: 'Watermark check timed out' }) }, 10000)
   })
 }
+export const checkWatermarkSidecarAvailable = cachedProbe(probeWatermarkSidecarAvailable, { isOk: isAvailable })
 
 /** Run template matching for a set of pages + templates. Returns page-local matches. */
 async function runDetect(

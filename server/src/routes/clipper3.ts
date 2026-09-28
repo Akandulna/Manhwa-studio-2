@@ -17,6 +17,25 @@
  *   POST   /chapters/:id/images/:filename/slices      cut that page into parts
  *   POST   /chapters/:id/images/:filename/slices/open reveal the slice folder
  *   POST   /series/:seriesId/slices                   slice every page of every chapter
+ *   GET    /chapters/:id/images/:filename/source      that page's identity (hash, true size, issues)
+ *   GET    /chapters/:id/images/:filename/handoff     its ChatGPT package, and whether it is stale
+ *   POST   /chapters/:id/images/:filename/handoff     build + verify that package
+ *   GET    /chapters/:id/images/:filename/analysis    the last imported ChatGPT reply (as page-pixel candidates)
+ *   POST   /chapters/:id/images/:filename/analysis    validate + import a pasted ChatGPT reply
+ *   GET    /chapters/:id/images/:filename/review      review state + audit findings + export readiness
+ *   POST   /chapters/:id/images/:filename/review      start a review (from the import or existing pointers)
+ *   PUT    /chapters/:id/images/:filename/review      save a review edit against its revision
+ *   GET    /chapters/:id/images/:filename/review/chatgpt-prompt  a review-round prompt for the same ChatGPT chat
+ *   POST   /chapters/:id/images/:filename/review/chatgpt         apply ChatGPT's review reply
+ *   GET    /chapters/:id/images/:filename/export      the last export's report, and whether it is current
+ *   POST   /chapters/:id/images/:filename/export      export a finished review (PNGs + both JSONs)
+ *   POST   /chapters/:id/images/:filename/export/open reveal the exported crops folder
+ *   GET    /openai                                    OpenAI (ChatGPT API) settings — never the key
+ *   PUT    /openai                                    save those settings (key goes to .env)
+ *   POST   /openai/test                               check the key + model
+ *   GET    /chapters/:id/auto                         the chapter's ChatGPT-API run, if any
+ *   POST   /chapters/:id/auto                         run package → analysis → review → export via the API
+ *   POST   /chapters/:id/auto/cancel                  stop that run
  *   POST   /series/:seriesId/sync-processed           import hand-made JSON from Processed/
  *   POST   /series/:seriesId/sync-processed/preview    what that import would attach
  *   POST   /series/:seriesId/unsync-processed          remove attached JSON from the store
@@ -39,6 +58,7 @@ import {
   deleteImagePoints,
   extractCrops,
   getOutputDir,
+  getSourceFolderPath,
   listMetadataImageStems,
   listOutputs,
   listPointedImageStems,
@@ -56,6 +76,22 @@ import {
 } from '../services/clipper3/perImageStore.js'
 import { cutImageCrops } from '../services/clipper3/perImageCrop.js'
 import { sliceImage, getSliceDir } from '../services/clipper3/perImageSlice.js'
+import { buildHandoff, getHandoffStatus, HandoffError } from '../services/clipper3/handoff.js'
+import { inspectOriginal } from '../services/clipper3/pageIdentity.js'
+import { getAnalysisStatus, importAnalysis } from '../services/clipper3/analysisImport.js'
+import { getReview, saveReview, startReview, ReviewError } from '../services/clipper3/reviewState.js'
+import { exportPage, getExportStatus, ExportError } from '../services/clipper3/exportPage.js'
+import { applyChatGptReview, getReviewPrompt } from '../services/clipper3/chatgptReview.js'
+import {
+  AutoJobError,
+  cancelAutoJob,
+  getAutoJob,
+  isPageInAutoRun,
+  publicOpenAiConfig,
+  startAutoJob,
+  testOpenAiConnection,
+  updateOpenAiConfig
+} from '../services/clipper3/openaiAuto.js'
 import {
   syncChapterProcessed,
   unsyncChapterProcessed,
@@ -71,6 +107,12 @@ const cropping = new Set<string>()
 
 /** Series currently being bulk-sliced, so two runs cannot overwrite each other. */
 const slicingSeries = new Set<string>()
+
+/** Pages whose ChatGPT package is being built, keyed `<chapterId>/<filename>`. */
+const buildingHandoffs = new Set<string>()
+
+/** Pages being exported, keyed `<chapterId>/<filename>`. */
+const exportingPages = new Set<string>()
 
 /** Series currently importing from Processed/, so two runs cannot race the same writes. */
 const syncingSeries = new Set<string>()
@@ -946,6 +988,407 @@ export function initClipper3Routes(io: Server): Router {
       console.error('[clipper3] opening slice folder failed:', error)
       res.status(500).json({ error: 'Failed to open the folder' })
     }
+  })
+
+
+  /**
+   * GET /chapters/:id/images/:filename/source
+   *
+   * The original page's identity: SHA-256, true pixel size, format, frames,
+   * EXIF orientation, plus any issue that blocks it from being packaged.
+   * Reads and fully decodes the file, so it answers "is this page usable?"
+   * rather than trusting the header alone.
+   */
+  router.get('/chapters/:id/images/:filename/source', async (req: Request, res: Response) => {
+    try {
+      const chapter = await findChapter(req.params.id)
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+
+      const sourcePath = path.join(getSourceFolderPath(chapter.folderPath), path.basename(req.params.filename))
+      res.json(await inspectOriginal(sourcePath))
+    } catch (error) {
+      console.error('[clipper3] inspecting source failed:', error)
+      res.status(500).json({ error: 'Failed to inspect the page' })
+    }
+  })
+
+  /**
+   * GET /chapters/:id/images/:filename/handoff
+   *
+   * The stored ChatGPT package for this page, and whether it still describes
+   * the files on disk (`none` | `ready` | `stale`). File hashes only — cheap
+   * enough to call whenever the page opens.
+   */
+  router.get('/chapters/:id/images/:filename/handoff', async (req: Request, res: Response) => {
+    try {
+      const chapter = await findChapter(req.params.id)
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+
+      res.json(await getHandoffStatus(chapter.folderPath, req.params.filename))
+    } catch (error) {
+      console.error('[clipper3] reading handoff failed:', error)
+      res.status(500).json({ error: 'Failed to read the ChatGPT package' })
+    }
+  })
+
+  /**
+   * POST /chapters/:id/images/:filename/handoff
+   *
+   * Slices the page, verifies every slice pixel-for-pixel against the
+   * fingerprinted original, and writes the manifest + prompt. A blocked page
+   * or a failed verification answers 422 with every issue and writes nothing.
+   */
+  router.post('/chapters/:id/images/:filename/handoff', async (req: Request, res: Response) => {
+    const key = `${req.params.id}/${path.basename(req.params.filename)}`
+    if (isPageInAutoRun(req.params.id, req.params.filename)) {
+      return res.status(409).json({ error: 'The ChatGPT API run is working on this page right now' })
+    }
+    if (buildingHandoffs.has(key)) {
+      return res.status(409).json({ error: 'This page\'s ChatGPT package is already being built' })
+    }
+    buildingHandoffs.add(key)
+    try {
+      const chapter = await findChapter(req.params.id)
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+
+      const result = await buildHandoff({
+        folderPath: chapter.folderPath,
+        imageFilename: req.params.filename,
+        seriesTitle: chapter.series.title,
+        seriesSlug: seriesSlug(chapter.series.title),
+        chapterNumber: chapter.number
+      })
+      res.json({ status: 'ready', ...result })
+    } catch (error) {
+      if (error instanceof HandoffError) {
+        return res.status(422).json({ error: error.message, issues: error.issues, inspection: error.inspection ?? null })
+      }
+      console.error('[clipper3] building handoff failed:', error)
+      const message = error instanceof Error ? error.message : 'Failed to build the ChatGPT package'
+      res.status(500).json({ error: message })
+    } finally {
+      buildingHandoffs.delete(key)
+    }
+  })
+
+
+  /**
+   * GET /chapters/:id/images/:filename/analysis
+   *
+   * The page's last accepted ChatGPT reply, converted to candidates in page
+   * pixels, and whether it still applies (`stale` once the original changes).
+   */
+  router.get('/chapters/:id/images/:filename/analysis', async (req: Request, res: Response) => {
+    try {
+      const chapter = await findChapter(req.params.id)
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+
+      res.json(await getAnalysisStatus(chapter.folderPath, req.params.filename))
+    } catch (error) {
+      console.error('[clipper3] reading analysis failed:', error)
+      res.status(500).json({ error: 'Failed to read the imported reply' })
+    }
+  })
+
+  /**
+   * POST /chapters/:id/images/:filename/analysis   body: { content }
+   *
+   * Validates a pasted `chatgpt-analysis/1.0` reply against the page's current
+   * package. 422 with field-level `errors` when it is rejected — nothing is
+   * written then, so the previous import survives. On success the reply text
+   * is kept verbatim as provenance next to the converted candidates.
+   */
+  router.post('/chapters/:id/images/:filename/analysis', async (req: Request, res: Response) => {
+    try {
+      const chapter = await findChapter(req.params.id)
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+
+      const content: unknown = req.body?.content
+      if (typeof content !== 'string' || !content.trim()) {
+        return res.status(400).json({ error: 'Paste the ChatGPT reply as `content`' })
+      }
+
+      const outcome = await importAnalysis(chapter.folderPath, req.params.filename, content)
+      if (!outcome.imported) {
+        const count = outcome.errors.length
+        return res.status(422).json({
+          error: `The reply was rejected: ${count} problem${count === 1 ? '' : 's'} — ${outcome.errors[0]?.message ?? 'see errors'}`,
+          ...outcome
+        })
+      }
+      res.json(outcome)
+    } catch (error) {
+      console.error('[clipper3] importing analysis failed:', error)
+      const message = error instanceof Error ? error.message : 'Failed to import the reply'
+      res.status(500).json({ error: message })
+    }
+  })
+
+
+  /** ReviewError carries its own status; anything else is a 500. */
+  function sendReviewError(res: Response, error: unknown, action: string) {
+    if (error instanceof ReviewError) {
+      return res.status(error.status).json({ error: error.message, details: error.details, current: error.current ?? null })
+    }
+    console.error(`[clipper3] ${action} failed:`, error)
+    res.status(500).json({ error: error instanceof Error ? error.message : `Failed to ${action}` })
+  }
+
+  /**
+   * GET /chapters/:id/images/:filename/review
+   *
+   * The page's review with everything derived from it: audit findings and
+   * uncovered stretches, the items each crop still needs looked at, and the
+   * export blockers. `state: null` when no review has been started.
+   */
+  router.get('/chapters/:id/images/:filename/review', async (req: Request, res: Response) => {
+    try {
+      const chapter = await findChapter(req.params.id)
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+      res.json(await getReview(chapter.folderPath, req.params.filename))
+    } catch (error) {
+      sendReviewError(res, error, 'read the review')
+    }
+  })
+
+  /**
+   * POST /chapters/:id/images/:filename/review   body: { from: 'import' | 'pointers', replace? }
+   *
+   * Seeds a review from the latest ChatGPT import or from the page's existing
+   * Clipper 3.0 pointers. 409 when one exists and `replace` is not set.
+   */
+  router.post('/chapters/:id/images/:filename/review', async (req: Request, res: Response) => {
+    try {
+      const chapter = await findChapter(req.params.id)
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+      const from = req.body?.from
+      if (from !== 'import' && from !== 'pointers') {
+        return res.status(400).json({ error: 'from must be "import" or "pointers"' })
+      }
+      res.json(await startReview(chapter.folderPath, req.params.filename, from, req.body?.replace === true))
+    } catch (error) {
+      sendReviewError(res, error, 'start the review')
+    }
+  })
+
+  /**
+   * PUT /chapters/:id/images/:filename/review   body: { state, expectedRevision }
+   *
+   * Saves an edit. 409 (with the current review) when the revision moved on
+   * since the client loaded it; 400 with every problem when the edit is invalid.
+   */
+  router.put('/chapters/:id/images/:filename/review', async (req: Request, res: Response) => {
+    try {
+      const chapter = await findChapter(req.params.id)
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+      res.json(await saveReview(chapter.folderPath, req.params.filename, req.body?.state, req.body?.expectedRevision))
+    } catch (error) {
+      sendReviewError(res, error, 'save the review')
+    }
+  })
+
+
+  /**
+   * GET /chapters/:id/images/:filename/review/chatgpt-prompt
+   *
+   * A prompt that has ChatGPT (in the chat holding this page's slices) do the
+   * review round: every crop, its open checks and the uncovered stretches.
+   */
+  router.get('/chapters/:id/images/:filename/review/chatgpt-prompt', async (req: Request, res: Response) => {
+    try {
+      const chapter = await findChapter(req.params.id)
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+      res.json(await getReviewPrompt(chapter.folderPath, req.params.filename))
+    } catch (error) {
+      sendReviewError(res, error, 'build the review prompt')
+    }
+  })
+
+  /**
+   * POST /chapters/:id/images/:filename/review/chatgpt   body: { content }
+   *
+   * Applies ChatGPT's `chatgpt-review/1.0` reply as one review save. 422 with
+   * field-level `errors` when it is refused; nothing is written then.
+   */
+  router.post('/chapters/:id/images/:filename/review/chatgpt', async (req: Request, res: Response) => {
+    try {
+      const chapter = await findChapter(req.params.id)
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+      const content: unknown = req.body?.content
+      if (typeof content !== 'string' || !content.trim()) {
+        return res.status(400).json({ error: 'Paste the ChatGPT review reply as `content`' })
+      }
+      const outcome = await applyChatGptReview(chapter.folderPath, req.params.filename, content)
+      if (!outcome.applied) {
+        return res.status(422).json({ error: `The review reply was rejected: ${outcome.errors[0]?.message ?? 'see errors'}`, ...outcome })
+      }
+      res.json(outcome)
+    } catch (error) {
+      sendReviewError(res, error, 'apply the ChatGPT review')
+    }
+  })
+
+  /** GET /chapters/:id/images/:filename/export — the last export and whether it still matches the review. */
+  router.get('/chapters/:id/images/:filename/export', async (req: Request, res: Response) => {
+    try {
+      const chapter = await findChapter(req.params.id)
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+      res.json(await getExportStatus(chapter.folderPath, req.params.filename))
+    } catch (error) {
+      console.error('[clipper3] reading export status failed:', error)
+      res.status(500).json({ error: 'Failed to read the export status' })
+    }
+  })
+
+  /**
+   * POST /chapters/:id/images/:filename/export
+   *
+   * Exports a finished review: PNGs cut from the original into
+   * `<Series>/Crops/<Chapter>/page_###/`, the pointer and metadata JSON into
+   * `<Series>/Processed/<Chapter>/page_###/`, and the page's Clipper 3.0 store
+   * entry. 422 with the review's blockers when it is not finished.
+   */
+  router.post('/chapters/:id/images/:filename/export', async (req: Request, res: Response) => {
+    const key = `${req.params.id}/${path.basename(req.params.filename)}`
+    if (exportingPages.has(key)) return res.status(409).json({ error: 'This page is already being exported' })
+    if (isPageInAutoRun(req.params.id, req.params.filename)) {
+      return res.status(409).json({ error: 'The ChatGPT API run is working on this page right now' })
+    }
+    exportingPages.add(key)
+    try {
+      const chapter = await findChapter(req.params.id)
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+      const report = await exportPage({
+        folderPath: chapter.folderPath,
+        imageFilename: req.params.filename,
+        seriesSlug: seriesSlug(chapter.series.title),
+        chapterNumber: chapter.number
+      })
+      res.json(report)
+    } catch (error) {
+      if (error instanceof ExportError) {
+        return res.status(error.status).json({ error: error.message, details: error.details, blockers: error.blockers })
+      }
+      console.error('[clipper3] export failed:', error)
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Export failed' })
+    } finally {
+      exportingPages.delete(key)
+    }
+  })
+
+  /** POST /chapters/:id/images/:filename/export/open — reveal the exported crops folder. */
+  router.post('/chapters/:id/images/:filename/export/open', async (req: Request, res: Response) => {
+    try {
+      const chapter = await findChapter(req.params.id)
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+      const { report } = await getExportStatus(chapter.folderPath, req.params.filename)
+      if (!report) return res.status(404).json({ error: 'This page has not been exported yet' })
+
+      // The report stores the folder relative to the series folder.
+      const seriesDir = path.dirname(getSourceFolderPath(chapter.folderPath))
+      const resolved = path.resolve(seriesDir, report.destinations.crops)
+      if (!resolved.startsWith(path.resolve(seriesDir) + path.sep)) {
+        return res.status(400).json({ error: 'The export report points outside the series folder' })
+      }
+      const command =
+        process.platform === 'darwin' ? `open "${resolved}"`
+          : process.platform === 'win32' ? `explorer "${resolved}"`
+            : `xdg-open "${resolved}"`
+      exec(command, err => { if (err) console.error('[clipper3] open export folder failed:', err) })
+      res.json({ success: true, path: resolved })
+    } catch (error) {
+      console.error('[clipper3] opening export folder failed:', error)
+      res.status(500).json({ error: 'Failed to open the folder' })
+    }
+  })
+
+
+  /** GET /openai — the ChatGPT-API settings, with only a hint of the key. */
+  router.get('/openai', (_req: Request, res: Response) => {
+    res.json(publicOpenAiConfig())
+  })
+
+  /**
+   * PUT /openai   body: { apiKey?, clearKey?, model?, baseUrl?, reasoningEffort?, reviewRounds?, includeRules?, concurrency? }
+   *
+   * Stored in the server's .env (like the Gemini key) and applied at once.
+   */
+  router.put('/openai', async (req: Request, res: Response) => {
+    try {
+      const body = req.body ?? {}
+      await updateOpenAiConfig({
+        apiKey: typeof body.apiKey === 'string' ? body.apiKey : undefined,
+        clearKey: body.clearKey === true,
+        model: typeof body.model === 'string' ? body.model : undefined,
+        baseUrl: typeof body.baseUrl === 'string' ? body.baseUrl : undefined,
+        reasoningEffort: typeof body.reasoningEffort === 'string' ? body.reasoningEffort : undefined,
+        reviewRounds: typeof body.reviewRounds === 'number' ? body.reviewRounds : undefined,
+        includeRules: typeof body.includeRules === 'boolean' ? body.includeRules : undefined,
+        concurrency: typeof body.concurrency === 'number' ? body.concurrency : undefined
+      })
+      res.json(publicOpenAiConfig())
+    } catch (error) {
+      console.error('[clipper3] saving OpenAI settings failed:', error)
+      res.status(400).json({ error: error instanceof Error ? error.message : 'Failed to save the settings' })
+    }
+  })
+
+  /** POST /openai/test — is the key accepted, and can it use the configured model? */
+  router.post('/openai/test', async (_req: Request, res: Response) => {
+    res.json(await testOpenAiConnection())
+  })
+
+  /** GET /chapters/:id/auto — the chapter's current or last ChatGPT-API run (`null` if none). */
+  router.get('/chapters/:id/auto', (req: Request, res: Response) => {
+    res.json({ job: getAutoJob(req.params.id) })
+  })
+
+  /**
+   * POST /chapters/:id/auto   body: { filenames: string[], export?: boolean }
+   *
+   * Runs the hybrid ChatGPT loop for each page through the OpenAI API, in the
+   * background: package → analysis → import → review rounds → export. Poll
+   * GET /chapters/:id/auto for progress.
+   */
+  router.post('/chapters/:id/auto', async (req: Request, res: Response) => {
+    try {
+      const chapter = await findChapter(req.params.id)
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+
+      const requested: unknown = req.body?.filenames
+      if (!Array.isArray(requested) || requested.some(f => typeof f !== 'string')) {
+        return res.status(400).json({ error: 'filenames must be a list of page file names' })
+      }
+      const manifest = await getChapterManifest(chapter.folderPath)
+      const known = new Set(manifest.images.map(img => img.filename))
+      const filenames = [...new Set((requested as string[]).map(f => path.basename(f)))]
+      const unknown = filenames.filter(f => !known.has(f))
+      if (unknown.length > 0) {
+        return res.status(400).json({ error: `Not pages of this chapter: ${unknown.slice(0, 3).join(', ')}` })
+      }
+
+      const job = await startAutoJob(
+        chapter.id,
+        {
+          folderPath: chapter.folderPath,
+          seriesTitle: chapter.series.title,
+          seriesSlug: seriesSlug(chapter.series.title),
+          chapterNumber: chapter.number
+        },
+        filenames,
+        { export: req.body?.export !== false }
+      )
+      res.json({ job })
+    } catch (error) {
+      if (error instanceof AutoJobError) return res.status(error.status).json({ error: error.message })
+      console.error('[clipper3] starting the API run failed:', error)
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to start the run' })
+    }
+  })
+
+  /** POST /chapters/:id/auto/cancel — stop the run; pages mid-request end as cancelled. */
+  router.post('/chapters/:id/auto/cancel', (req: Request, res: Response) => {
+    res.json({ cancelled: cancelAutoJob(req.params.id), job: getAutoJob(req.params.id) })
   })
 
 

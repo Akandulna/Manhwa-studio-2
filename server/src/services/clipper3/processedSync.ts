@@ -11,8 +11,9 @@
  *   <Series>/Processed/<Chapter>/page_###/crop-metadata-ch###-p###.json
  *                                       ->  <Chapter>/crop_metadata3/<stem>.txt
  *
- * Source images stay in `<Series>/<Chapter>/` alongside their `slices3/`; only
- * generated files live under `Processed/`. The older per-chapter location,
+ * Source images stay in `<Series>/<Chapter>/` (their slices sit apart, under
+ * `<Series>/<Series>/<Chapter>/slices3/`); only generated files live under
+ * `Processed/`. The older per-chapter location,
  * `<Series>/<Chapter>/Processed/`, is still read when the new one has nothing
  * for that chapter, so drop-offs made before the move keep working.
  *
@@ -192,7 +193,11 @@ async function readProcessedDir(folderPath: string): Promise<ProcessedPageFiles[
     const read = async (name: string | undefined) => {
       if (!name) return null
       try {
-        return await fs.readFile(path.join(pageDir, name), 'utf-8')
+        // Strip a UTF-8 byte-order mark. Some editors (and Windows tools) save
+        // one, JSON.parse rejects it, and it never survives a clipboard paste —
+        // so without this a file that pastes fine fails to sync.
+        const text = await fs.readFile(path.join(pageDir, name), 'utf-8')
+        return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
       } catch {
         return null
       }

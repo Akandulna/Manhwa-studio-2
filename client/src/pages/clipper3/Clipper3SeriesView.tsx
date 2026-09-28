@@ -228,7 +228,7 @@ export default function Clipper3SeriesView() {
     const { sliced = 0, parts = 0, failed = 0, chapters: done = 0 } = clipper3SliceComplete
     toast({
       title: failed > 0 ? `Sliced ${sliced} pages, ${failed} failed` : `Sliced ${sliced} pages`,
-      description: `${parts} part${parts === 1 ? '' : 's'} across ${done} chapter${done === 1 ? '' : 's'}, written into each chapter's slices3 folder.`,
+      description: `${parts} part${parts === 1 ? '' : 's'} across ${done} chapter${done === 1 ? '' : 's'}, written into each chapter's slices3 folder inside the series-named subfolder.`,
       variant: failed > 0 ? 'destructive' : undefined
     })
   }, [clipper3SliceComplete, id, toast])

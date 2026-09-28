@@ -52,10 +52,12 @@ import {
   Moon,
   ImageOff,
   Wrench,
-  FileCheck2
+  FileCheck2,
+  Bird
 } from 'lucide-react'
 
 import { useWakeLock } from '@/hooks/useWakeLock'
+import { MurgaaDialog } from '@/components/narration/MurgaaDialog'
 import {
   clearTimeline,
   collectProcessed,
@@ -161,6 +163,8 @@ export default function EditorChapterList2() {
   const [cropScan, setCropScan] = useState<CropRepairResult | null>(null)
   const [scanningNames, setScanningNames] = useState(false)
   const [repairingNames, setRepairingNames] = useState(false)
+
+  const [murgaaOpen, setMurgaaOpen] = useState(false)
 
   // Which chapter's detail is open. Only one at a time: the list is the view,
   // and the detail is what you drop into for the chapter you are working on.
@@ -684,6 +688,18 @@ export default function EditorChapterList2() {
             Editor 2.0 — script, audio, crops and timeline readiness
           </p>
         </div>
+
+        {/* Murgaa — outside the export branches so it stays reachable while
+            a render is running. */}
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 flex-shrink-0"
+          onClick={() => setMurgaaOpen(true)}
+        >
+          <Bird className="h-3 w-3 mr-1" />
+          Murgaa
+        </Button>
 
         {/* Export All — every processed chapter in one action. It does not
             wait for the whole series: whatever is ready now gets rendered,
@@ -1229,6 +1245,8 @@ export default function EditorChapterList2() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <MurgaaDialog scope="editor2" open={murgaaOpen} onOpenChange={setMurgaaOpen} />
     </div>
   )
 }

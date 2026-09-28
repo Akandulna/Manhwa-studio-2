@@ -45,7 +45,9 @@ import {
   ChevronDown,
   ChevronUp,
   Sparkles,
-  Cpu
+  Cpu,
+  Trash2,
+  X
 } from 'lucide-react'
 import { CopyPointerPromptButton, PointerJsonDrop } from '@/components/clipper2/PointerImport'
 import { useSocket } from '@/lib/socket'
@@ -217,6 +219,11 @@ export default function Clipper2Workspace() {
 
   const [previews, setPreviews] = useState<Record<string, string>>({})
   const [previewing, setPreviewing] = useState<Record<string, boolean>>({})
+
+  // Which single pointer is mid-removal, and whether the whole artifact is being
+  // dropped. Separate, because they disable different controls.
+  const [removing, setRemoving] = useState<string | null>(null)
+  const [clearing, setClearing] = useState(false)
 
   const [isDetecting, setIsDetecting] = useState(false)
   const [isApplying, setIsApplying] = useState(false)
@@ -523,6 +530,107 @@ export default function Clipper2Workspace() {
   async function revertDraft() {
     if (dirty && !window.confirm('Discard your unsaved JSON edits and reload the file from disk?')) return
     await reloadPoints(true)
+  }
+
+  /**
+   * Remove ONE pointer set and save the rest.
+   *
+   * Routed through PUT rather than any delete-a-crop endpoint on purpose: the
+   * artifact is the contract, so dropping a crop is an ordinary edit of it and the
+   * server re-validates and re-canonicalizes the bytes exactly as for a hand-typed
+   * change.
+   *
+   * The ids are renumbered HERE, though. PUT validates `OUT-08` but does not rewrite
+   * what it is given — saving [crop-01, crop-03, …] is accepted with an
+   * `ids_not_contiguous` warning rather than repaired (only the import and detect
+   * paths normalize). Closing the gap client-side is what keeps a removal from
+   * leaving the artifact permanently warned-about.
+   */
+  async function removePointer(cropId: string) {
+    if (!chapterId || !parsed) return
+    if (dirty && !window.confirm('Removing a pointer saves the file, discarding your unsaved JSON edits. Continue?')) return
+    if (!window.confirm(`Remove ${cropId}? The exported images already cut from it are left alone.`)) return
+
+    // Padded to exactly two digits, never wider: `OUT-08` says "at least two", and
+    // the server's own cropIdFor() — the sequence the contiguity check compares
+    // against — pads to 2, so a 138-crop page runs crop-01 … crop-138. Padding to
+    // the count's width instead would produce crop-001 and be flagged.
+    const remaining = crops.filter(entry => entry.id !== cropId)
+    const next = {
+      ...parsed,
+      crops: remaining.map((entry, index) => ({
+        ...entry,
+        id: `crop-${String(index + 1).padStart(2, '0')}`
+      }))
+    }
+    setRemoving(cropId)
+    setSaveError(null)
+    setSaveIssues([])
+    try {
+      const result = await putPoints(chapterId, JSON.stringify(next, null, 2))
+      if (!result.ok) {
+        setSaveError(result.message)
+        setSaveIssues([...(result.validation?.errors ?? []), ...(result.validation?.warnings ?? [])])
+        toast({ title: 'Could not remove the pointer', description: result.message, variant: 'destructive' })
+        return
+      }
+      setPointSet(result.set)
+      setDraft(result.set.content)
+      setDirty(false)
+      // Ids shifted, so a preview or selection keyed to the old numbering would now
+      // be pointing at a different crop.
+      setPreviews({})
+      setSelectedCropId(null)
+      toast({
+        title: `Removed ${cropId}`,
+        description: `${result.set.file?.crops.length ?? 0} pointer set${(result.set.file?.crops.length ?? 0) === 1 ? '' : 's'} left on disk.`
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Remove failed'
+      setSaveError(message)
+      toast({ title: 'Could not remove the pointer', description: message, variant: 'destructive' })
+    } finally {
+      setRemoving(null)
+    }
+  }
+
+  /**
+   * Delete the whole artifact — file, sidecar and index row.
+   *
+   * This one is the DELETE endpoint rather than a PUT of an empty crops array,
+   * because "no pointers yet" and "a valid artifact holding zero crops" are
+   * genuinely different states: only the former puts the workspace back to the
+   * position it starts a chapter in. Exported images under crops2/ survive, since
+   * Module 4 may already reference them.
+   */
+  async function clearAllPointers() {
+    if (!chapterId) return
+    if (
+      !window.confirm(
+        `Remove all ${crops.length} pointer set${crops.length === 1 ? '' : 's'} and delete crop_points.json?\n\n` +
+        'Images already exported to crops2/ are kept. This cannot be undone.'
+      )
+    ) return
+
+    setClearing(true)
+    setSaveError(null)
+    setSaveIssues([])
+    try {
+      await clipper2Api.deletePoints(chapterId)
+      setPreviews({})
+      setPreviewing({})
+      setSelectedCropId(null)
+      // Back to the empty state, so the "get pointers" strip re-opens by itself.
+      setImportOpen(null)
+      await reloadPoints(true)
+      toast({ title: 'Pointers removed', description: 'crop_points.json was deleted. Exported images were kept.' })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Delete failed'
+      setSaveError(message)
+      toast({ title: 'Could not remove the pointers', description: message, variant: 'destructive' })
+    } finally {
+      setClearing(false)
+    }
   }
 
   async function runPreview(cropId: string) {
@@ -875,6 +983,30 @@ export default function Clipper2Workspace() {
         <div className="relative h-full w-[420px] border-l bg-card flex flex-col flex-shrink-0 z-20 overflow-y-auto">
           <div className="flex items-center gap-2 px-3 pt-3">
             <span className="text-sm font-semibold flex-1">Crop pointers</span>
+            {/* Clearing the whole artifact is offered only when there is one — and it
+                deletes the file rather than saving an empty crops array, so the
+                chapter returns to its genuine "no pointers yet" state. */}
+            {(crops.length > 0 || hasArtifact) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs text-muted-foreground hover:text-destructive"
+                onClick={clearAllPointers}
+                disabled={clearing || removing != null || isDetecting || isApplying}
+                title={
+                  isApplying
+                    ? 'Wait for the apply run to finish'
+                    : 'Delete crop_points.json — exported images are kept'
+                }
+              >
+                {clearing ? (
+                  <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                ) : (
+                  <Trash2 className="h-3.5 w-3.5 mr-1" />
+                )}
+                Remove all
+              </Button>
+            )}
           </div>
 
           {/* ============ Getting pointers ============
@@ -889,13 +1021,6 @@ export default function Clipper2Workspace() {
               </span>
 
               <div className="flex-1" />
-
-              {isDetecting && (
-                <span className="text-xs text-muted-foreground flex items-center gap-1.5">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Detecting…
-                </span>
-              )}
 
               <Button
                 variant="ghost"
@@ -915,6 +1040,61 @@ export default function Clipper2Workspace() {
                   </>
                 )}
               </Button>
+            </div>
+
+            {/* The system detector, promoted out of the collapsible steps: it is the
+                one-click path, so it stays visible and full-width whether or not the
+                manual loop's steps are expanded. The manual loop is still the more
+                accurate route, which the caption below says rather than the layout. */}
+            <div className="px-3 pb-3 space-y-2">
+              <Button
+                className="w-full"
+                onClick={() => startDetect('gemini')}
+                disabled={detectBlockedReason != null}
+                title={detectBlockedReason ?? 'Run detection in-app against Gemini'}
+              >
+                {isDetecting ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Sparkles className="h-4 w-4 mr-2" />
+                )}
+                {isDetecting ? 'Detecting pointers…' : 'Detect pointers with Gemini'}
+              </Button>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs flex-1"
+                  onClick={() => startDetect('offline')}
+                  disabled={offlineBlockedReason != null}
+                  title={
+                    offlineBlockedReason ??
+                    'Detect on this machine — no API key, no quota, measures the source pixels'
+                  }
+                >
+                  {isDetecting ? (
+                    <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                  ) : (
+                    <Cpu className="h-3.5 w-3.5 mr-1" />
+                  )}
+                  Detect offline
+                </Button>
+                {isDetecting && (
+                  <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={cancelDetect}>
+                    Cancel
+                  </Button>
+                )}
+              </div>
+
+              {detectBlockedReason && !isDetecting && (
+                <p className="text-xs text-amber-600">{detectBlockedReason}</p>
+              )}
+              {crops.length > 0 && !isDetecting && (
+                <p className="text-[11px] text-muted-foreground">
+                  Detection replaces all {crops.length} pointer set{crops.length === 1 ? '' : 's'} on disk.
+                </p>
+              )}
             </div>
 
             {!showImport && crops.length > 0 && (
@@ -960,57 +1140,13 @@ export default function Clipper2Workspace() {
                     />
                   )}
 
-                  <div className="flex flex-wrap items-center gap-2 pt-1">
-                    <span className="text-xs text-muted-foreground">or</span>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-7 text-xs"
-                      onClick={() => startDetect('gemini')}
-                      disabled={detectBlockedReason != null}
-                      title={detectBlockedReason ?? 'Run detection in-app against Gemini'}
-                    >
-                      {isDetecting ? (
-                        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-                      ) : (
-                        <Sparkles className="h-3.5 w-3.5 mr-1" />
-                      )}
-                      Detect with Gemini
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-7 text-xs"
-                      onClick={() => startDetect('offline')}
-                      disabled={offlineBlockedReason != null}
-                      title={
-                        offlineBlockedReason ??
-                        'Detect on this machine — no API key, no quota, measures the source pixels'
-                      }
-                    >
-                      {isDetecting ? (
-                        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-                      ) : (
-                        <Cpu className="h-3.5 w-3.5 mr-1" />
-                      )}
-                      Detect offline
-                    </Button>
-                    {isDetecting && (
-                      <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={cancelDetect}>
-                        Cancel
-                      </Button>
-                    )}
-                  </div>
-                  {detectBlockedReason && !isDetecting && (
-                    <p className="text-xs text-amber-600">{detectBlockedReason}</p>
-                  )}
-                  {!isDetecting && (
-                    <p className="text-xs text-muted-foreground">
-                      Offline detection finds where the artwork is without reading it, so its
-                      reasons describe shape rather than content — good for a fast first pass,
-                      or when there is no API quota left.
-                    </p>
-                  )}
+                  {/* The detector buttons used to sit here behind an "or". They are now
+                      in the section header above, always visible. */}
+                  <p className="text-xs text-muted-foreground pt-1">
+                    Offline detection finds where the artwork is without reading it, so its
+                    reasons describe shape rather than content — good for a fast first pass,
+                    or when there is no API quota left.
+                  </p>
                 </div>
               </div>
             )}
@@ -1142,6 +1278,29 @@ export default function Clipper2Workspace() {
                         >
                           <Locate className="h-3 w-3 mr-1" />
                           Locate
+                        </Button>
+
+                        <div className="flex-1" />
+
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 text-[10px] px-2 text-muted-foreground hover:text-destructive"
+                          onClick={event => {
+                            // The row itself selects the crop; removing it should not
+                            // also re-select the entry being deleted.
+                            event.stopPropagation()
+                            removePointer(entry.id)
+                          }}
+                          disabled={removing != null || clearing}
+                          title={`Remove ${entry.id} from crop_points.json`}
+                        >
+                          {removing === entry.id ? (
+                            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                          ) : (
+                            <X className="h-3 w-3 mr-1" />
+                          )}
+                          Remove
                         </Button>
                       </div>
 

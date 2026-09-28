@@ -6,11 +6,11 @@
  * navigates to its chapter list (Clipper3SeriesView), which links into the
  * actual pointer workspace (Clipper3Workspace).
  *
- * This is currently a frontend-only fork of Image Clipper 2.0: it reads and
- * writes the same clipper2Api / crop_points.json pipeline, just under its own
- * nav tab and routes, so it can be pointed at its own backend later without
- * disturbing 2.0. `PointerStateBadge`/`formatWhen` are exported for reuse by
- * Clipper3SeriesView's chapter cards.
+ * The series/chapter listing still comes from clipper2Api, but per-series
+ * progress does not: it is read from clipper3Api's own summary, because
+ * Clipper 2's chapter `status` is only ever advanced by Clipper 2's apply job
+ * and so never reflects work done in 3.0. `PointerStateBadge`/`formatWhen` are
+ * exported for reuse by Clipper3SeriesView's chapter cards.
  */
 
 import { useState, useEffect, useMemo } from 'react'
@@ -28,14 +28,17 @@ import {
   Pencil,
   XCircle,
   Globe,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Scissors
 } from 'lucide-react'
 import {
   clipperApi,
   clipper2Api,
+  clipper3Api,
   type ClipperSeries,
   type Clipper2Status,
-  type Clipper2ChapterSummary
+  type Clipper2ChapterSummary,
+  type Clipper3ChapterSummary
 } from '@/lib/api'
 
 // ============ Helpers ============
@@ -113,6 +116,14 @@ export default function Clipper3Library() {
   const [chapters, setChapters] = useState<Clipper2ChapterSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  /**
+   * Clipper 3's own per-chapter progress, keyed by chapter id. Clipper 2's
+   * `status === 'applied'` cannot answer this: it is only ever written by
+   * Clipper 2's apply job, so a chapter cut here would sit at 0 forever.
+   * `chopped` is read from crops3/ on disk, which is the fact this module
+   * produces. Empty until the summaries resolve — the cards then re-render.
+   */
+  const [summaries, setSummaries] = useState<Record<string, Clipper3ChapterSummary>>({})
 
   useEffect(() => {
     let cancelled = false
@@ -142,6 +153,28 @@ export default function Clipper3Library() {
     () => seriesList.filter(s => chapters.some(c => c.seriesId === s.id)),
     [seriesList, chapters]
   )
+
+  // Per-series, because that is the shape the endpoint has. Settled
+  // independently so one unreadable series folder leaves the other cards'
+  // counts intact rather than blanking the whole grid.
+  useEffect(() => {
+    if (seriesWithChapters.length === 0) return
+    let cancelled = false
+
+    Promise.allSettled(
+      seriesWithChapters.map(s => clipper3Api.getSeriesSummary(s.id))
+    ).then(results => {
+      if (cancelled) return
+      const next: Record<string, Clipper3ChapterSummary> = {}
+      for (const result of results) {
+        if (result.status !== 'fulfilled') continue
+        for (const summary of result.value.chapters) next[summary.chapterId] = summary
+      }
+      setSummaries(next)
+    })
+
+    return () => { cancelled = true }
+  }, [seriesWithChapters])
 
   const header = (
     <div className="mb-6">
@@ -268,8 +301,18 @@ export default function Clipper3Library() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {seriesWithChapters.map(s => {
             const seriesChapters = chapters.filter(c => c.seriesId === s.id)
-            const applied = seriesChapters.filter(c => c.status === 'applied').length
-            const progress = seriesChapters.length > 0 ? Math.round((applied / seriesChapters.length) * 100) : 0
+            // Done here means "every page has its crops and matching metadata",
+            // the same bar Clipper 3's own chapter list calls fully attached —
+            // not Clipper 2's `status === 'applied'`, which only Clipper 2's
+            // apply job ever writes, so work done in 3.0 never moved it.
+            // Chapters with no summary row yet (still loading, or a folder the
+            // server could not read) count as not-done rather than being dropped
+            // from the denominator, so the bar never overstates progress.
+            const done = seriesChapters.filter(c => summaries[c.id]?.fullyAttached).length
+            // Cut output is tracked separately: a chapter can be re-detected
+            // after being cut, so this is a note on the card, not the progress.
+            const chopped = seriesChapters.filter(c => summaries[c.id]?.chopped).length
+            const progress = seriesChapters.length > 0 ? Math.round((done / seriesChapters.length) * 100) : 0
             return (
               <Link key={s.id} to={`/clipper3/series/${s.id}`}>
                 <Card className="h-full hover:border-primary transition-colors cursor-pointer">
@@ -299,17 +342,29 @@ export default function Clipper3Library() {
 
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
-                        {progress === 100 ? (
-                          <Badge variant="success" className="flex items-center gap-1">
-                            <CheckCircle2 className="h-3 w-3" />
-                            Complete
-                          </Badge>
-                        ) : (
-                          <Badge variant="secondary" className="flex items-center gap-1">
-                            <ImageIcon className="h-3 w-3" />
-                            {applied}/{seriesChapters.length}
-                          </Badge>
-                        )}
+                        <div className="flex items-center gap-1.5">
+                          {progress === 100 ? (
+                            <Badge variant="success" className="flex items-center gap-1">
+                              <CheckCircle2 className="h-3 w-3" />
+                              Complete
+                            </Badge>
+                          ) : (
+                            <Badge variant="secondary" className="flex items-center gap-1">
+                              <ImageIcon className="h-3 w-3" />
+                              {done}/{seriesChapters.length}
+                            </Badge>
+                          )}
+                          {chopped > 0 && (
+                            <Badge
+                              variant="outline"
+                              className="flex items-center gap-1"
+                              title={`${chopped} of ${seriesChapters.length} chapters have cut output in crops3/`}
+                            >
+                              <Scissors className="h-3 w-3" />
+                              {chopped}
+                            </Badge>
+                          )}
+                        </div>
                         <span className="text-xs text-muted-foreground">{progress}%</span>
                       </div>
                       <Progress value={progress} className="h-1.5" />

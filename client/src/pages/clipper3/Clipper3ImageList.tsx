@@ -60,7 +60,9 @@ import {
   ExternalLink,
   Rows3,
   Check,
-  FolderOpen
+  FolderOpen,
+  PackageCheck,
+  Bot
 } from 'lucide-react'
 import {
   clipperApi,
@@ -68,11 +70,18 @@ import {
   type Clipper3ChapterImages,
   type Clipper3Image,
   type Clipper3SliceResult,
+  type Clipper3HandoffStatus,
+  type Clipper3AnalysisStatus,
+  type Clipper3ImportIssue,
+  type Clipper3ReviewView,
   type Clipper3SliceFile
 } from '@/lib/api'
 import { parseCropJson, type ParsedCropItem } from '@/lib/cropJsonValidator'
 import { validateMetadataJson } from '@/lib/metadataValidator'
 import { CropPointerEditor } from '@/components/clipper3/CropPointerEditor'
+import { CandidateOverlay } from '@/components/clipper3/CandidateOverlay'
+import { ReviewWorkspace } from '@/components/clipper3/ReviewWorkspace'
+import { AutoRunBadge, AutoRunDialog, AutoRunStrip, isActiveStep, useAutoRun } from '@/components/clipper3/AutoRun'
 import { seriesSlug, stemOf, exportedFilenameFor } from '@/lib/clipper3Naming'
 
 export default function Clipper3ImageList() {
@@ -120,6 +129,35 @@ export default function Clipper3ImageList() {
   const [slicesOpen, setSlicesOpen] = useState(false)
   const [copiedSlice, setCopiedSlice] = useState<number | null>(null)
   const [openingFolder, setOpeningFolder] = useState(false)
+
+  // The ChatGPT package: the same slices, verified pixel-exact against the
+  // fingerprinted original, plus a prompt carrying the page's job id and hash
+  // so the reply can later be matched to exactly this version of the page.
+  const [handoff, setHandoff] = useState<Clipper3HandoffStatus | null>(null)
+  const [buildingHandoff, setBuildingHandoff] = useState(false)
+  const [copiedHandoffPrompt, setCopiedHandoffPrompt] = useState(false)
+
+  // ChatGPT's reply to that package, checked against it and converted to
+  // page-pixel candidates. A rejected paste keeps its errors on screen and
+  // leaves the previous import untouched.
+  const [analysis, setAnalysis] = useState<Clipper3AnalysisStatus | null>(null)
+  const [importingReply, setImportingReply] = useState(false)
+  const [importErrors, setImportErrors] = useState<Clipper3ImportIssue[] | null>(null)
+  const [candidatesOpen, setCandidatesOpen] = useState(false)
+
+  // The page's review: decisions, acknowledged flags and approved descriptions
+  // on top of the imported (or existing) crops, re-audited on every save.
+  const [review, setReview] = useState<Clipper3ReviewView | null>(null)
+  const [reviewOpen, setReviewOpen] = useState(false)
+  const [startingReview, setStartingReview] = useState(false)
+
+  // ChatGPT doing the review round: copy a prompt listing the current crops and
+  // checks, paste its reply back. Repeated until nothing is left open.
+  const [copyingReviewPrompt, setCopyingReviewPrompt] = useState(false)
+  const [applyingReview, setApplyingReview] = useState(false)
+  const [reviewReplyErrors, setReviewReplyErrors] = useState<Clipper3ImportIssue[] | null>(null)
+  const [exportingPage, setExportingPage] = useState(false)
+  const [lastExport, setLastExport] = useState<{ crops: number; revision: number } | null>(null)
   const [pastingJson, setPastingJson] = useState(false)
   const [pastingMetadata, setPastingMetadata] = useState(false)
 
@@ -135,6 +173,17 @@ export default function Clipper3ImageList() {
 
   const images = data?.images ?? []
   const doneCount = useMemo(() => images.filter(i => i.status === 'done').length, [images])
+
+  // The ChatGPT loop run through the OpenAI API (server-side background job).
+  // When it finishes the list is reloaded, and `autoRunVersion` makes an open
+  // page dialog re-read its package / import / review from disk.
+  const [autoDialogOpen, setAutoDialogOpen] = useState(false)
+  const [autoRunVersion, setAutoRunVersion] = useState(0)
+  const autoRun = useAutoRun(chapterId, () => {
+    if (!chapterId) return
+    clipper3Api.getImages(chapterId).then(setData).catch(() => { /* the old list stays */ })
+    setAutoRunVersion(v => v + 1)
+  })
   useEffect(() => {
     if (!chapterId) return
     let cancelled = false
@@ -388,7 +437,9 @@ export default function Clipper3ImageList() {
       )
       if (!response.ok) throw new Error(`Could not fetch the slice (HTTP ${response.status})`)
       const blob = await response.blob()
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+      // Slices are WebP; the clipboard only takes PNG.
+      const pngBlob = blob.type === 'image/png' ? blob : await toPngBlob(blob)
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })])
       setCopiedSlice(slice.index)
     } catch (error) {
       toast({
@@ -397,7 +448,235 @@ export default function Clipper3ImageList() {
         variant: 'destructive'
       })
     }
+  }, [chapterId, activeImage, toast, toPngBlob])
+
+  /**
+   * Builds (or rebuilds) the active page's ChatGPT package and copies its
+   * prompt. The slices it writes are the ones the panel above lists, so the
+   * existing "Open folder" step is how they get attached.
+   */
+  const buildHandoffForActive = useCallback(async () => {
+    if (!chapterId || !activeImage) return
+    setBuildingHandoff(true)
+    try {
+      const result = await clipper3Api.buildHandoff(chapterId, activeImage.filename)
+      setHandoff({ status: 'ready', staleReasons: [], manifest: result.manifest, prompt: result.prompt })
+      setSliceResult(result.sliced)
+      setCopiedSlice(null)
+      setSlicesOpen(true)
+      let copied = true
+      try {
+        await navigator.clipboard.writeText(result.prompt)
+        setCopiedHandoffPrompt(true)
+      } catch {
+        copied = false
+      }
+      toast({
+        title: `ChatGPT package ready — ${result.manifest.slices.length} verified slices`,
+        description: copied
+          ? 'Prompt copied. Open the folder, attach every slice in order, then paste the prompt.'
+          : 'Use the copy button next to it for the prompt, then attach every slice in order.'
+      })
+    } catch (error) {
+      toast({
+        title: 'Could not build the ChatGPT package',
+        description: error instanceof Error ? error.message : 'Packaging failed',
+        variant: 'destructive'
+      })
+    } finally {
+      setBuildingHandoff(false)
+    }
   }, [chapterId, activeImage, toast])
+
+  const copyHandoffPrompt = useCallback(async () => {
+    if (!handoff?.prompt) return
+    try {
+      await navigator.clipboard.writeText(handoff.prompt)
+      setCopiedHandoffPrompt(true)
+    } catch (error) {
+      toast({
+        title: 'Copy failed',
+        description: error instanceof Error ? error.message : 'Could not copy the prompt',
+        variant: 'destructive'
+      })
+    }
+  }, [handoff, toast])
+
+  /**
+   * Imports ChatGPT's reply from the clipboard. The server checks it against
+   * this page's package (job id, hash, size, slice geometry) and only stores
+   * it when every check passes.
+   */
+  const pasteChatGptReply = useCallback(async () => {
+    if (!chapterId || !activeImage) return
+    setImportingReply(true)
+    try {
+      const content = await navigator.clipboard.readText()
+      if (!content.trim()) {
+        toast({ title: 'Clipboard is empty', variant: 'destructive' })
+        return
+      }
+      const outcome = await clipper3Api.importAnalysis(chapterId, activeImage.filename, content)
+      if (!outcome.imported || !outcome.analysis) {
+        setImportErrors(outcome.errors)
+        toast({
+          title: 'ChatGPT reply rejected',
+          description: `${outcome.errors.length} problem${outcome.errors.length === 1 ? '' : 's'} — nothing was imported`,
+          variant: 'destructive'
+        })
+        return
+      }
+      setImportErrors(null)
+      setAnalysis({ analysis: outcome.analysis, stale: false, staleReasons: [] })
+      // No review yet: start one from this reply straight away, so the next
+      // step (review — by hand or by ChatGPT) is one click.
+      if (!review?.state) {
+        clipper3Api.startReview(chapterId, activeImage.filename, 'import', false)
+          .then(setReview)
+          .catch(() => { /* "Start review" stays available. */ })
+      }
+      const count = outcome.analysis.candidates.length
+      toast({
+        title: `Imported ${count} candidate${count === 1 ? '' : 's'}`,
+        description: outcome.warnings.length > 0
+          ? `${outcome.warnings.length} warning${outcome.warnings.length === 1 ? '' : 's'} to review — open "View on page".`
+          : 'Open "View on page" to check the boxes line up.'
+      })
+    } catch (error) {
+      toast({
+        title: 'Import failed',
+        description: error instanceof Error ? error.message : 'Could not import the reply',
+        variant: 'destructive'
+      })
+    } finally {
+      setImportingReply(false)
+    }
+  }, [chapterId, activeImage, toast])
+
+  /**
+   * Starts (or restarts) this page's review from the latest ChatGPT import or
+   * from its existing pointers. Restarting keeps the old review in the page's
+   * review-history, but its decisions stop applying, so it asks first.
+   */
+  const startReviewFor = useCallback(async (from: 'import' | 'pointers', replace = false) => {
+    if (!chapterId || !activeImage) return
+    if (replace && !window.confirm('Start the review over? Current decisions are kept in the review history but no longer apply.')) return
+    setStartingReview(true)
+    try {
+      const view = await clipper3Api.startReview(chapterId, activeImage.filename, from, replace)
+      setReview(view)
+      setReviewOpen(true)
+    } catch (error) {
+      toast({
+        title: 'Could not start the review',
+        description: error instanceof Error ? error.message : 'Starting the review failed',
+        variant: 'destructive'
+      })
+    } finally {
+      setStartingReview(false)
+    }
+  }, [chapterId, activeImage, toast, review?.state])
+
+  const copyReviewPrompt = useCallback(async () => {
+    if (!chapterId || !activeImage) return
+    setCopyingReviewPrompt(true)
+    try {
+      const { prompt, review_revision } = await clipper3Api.getReviewPrompt(chapterId, activeImage.filename)
+      await navigator.clipboard.writeText(prompt)
+      toast({
+        title: `Review prompt copied (revision ${review_revision})`,
+        description: 'Paste it into the same ChatGPT chat that has this page\'s slices, then paste its JSON back here.'
+      })
+    } catch (error) {
+      toast({ title: 'Could not copy the review prompt', description: error instanceof Error ? error.message : 'Failed', variant: 'destructive' })
+    } finally {
+      setCopyingReviewPrompt(false)
+    }
+  }, [chapterId, activeImage, toast])
+
+  const pasteChatGptReview = useCallback(async () => {
+    if (!chapterId || !activeImage) return
+    setApplyingReview(true)
+    try {
+      const content = await navigator.clipboard.readText()
+      if (!content.trim()) {
+        toast({ title: 'Clipboard is empty', variant: 'destructive' })
+        return
+      }
+      const outcome = await clipper3Api.applyChatGptReview(chapterId, activeImage.filename, content)
+      if (!outcome.applied || !outcome.view) {
+        setReviewReplyErrors(outcome.errors)
+        toast({ title: 'ChatGPT review rejected', description: `${outcome.errors.length} problem(s) — nothing was changed`, variant: 'destructive' })
+        return
+      }
+      setReviewReplyErrors(null)
+      setReview(outcome.view)
+      const s = outcome.summary
+      const changes = s ? [
+        s.kept && `${s.kept} kept`, s.adjusted && `${s.adjusted} adjusted`, s.split && `${s.split} split parts`,
+        s.merged && `${s.merged} merged`, s.added && `${s.added} added`, s.removed && `${s.removed} removed`
+      ].filter(Boolean).join(', ') : ''
+      const left = outcome.view.readiness.blockers.length
+      toast({
+        title: left === 0 ? 'ChatGPT review applied — ready to export' : `ChatGPT review applied — ${left} left`,
+        description: left === 0
+          ? changes
+          : `${changes}. Copy the review prompt again for another round (changed boxes get fresh checks).`
+      })
+    } catch (error) {
+      toast({ title: 'Review import failed', description: error instanceof Error ? error.message : 'Failed', variant: 'destructive' })
+    } finally {
+      setApplyingReview(false)
+    }
+  }, [chapterId, activeImage, toast])
+
+  const exportFromPopup = useCallback(async () => {
+    if (!chapterId || !activeImage) return
+    setExportingPage(true)
+    try {
+      const report = await clipper3Api.exportPage(chapterId, activeImage.filename)
+      setLastExport({ crops: report.crop_count, revision: report.review_revision })
+      clipper3Api.getImages(chapterId).then(setData).catch(() => {})
+      toast({
+        title: `Exported ${report.crop_count} crop${report.crop_count === 1 ? '' : 's'}`,
+        description: `PNGs in ${report.destinations.crops}, JSON in ${report.destinations.processed}.`
+      })
+    } catch (error) {
+      toast({ title: 'Export failed', description: error instanceof Error ? error.message : 'Export failed', variant: 'destructive' })
+    } finally {
+      setExportingPage(false)
+    }
+  }, [chapterId, activeImage, toast])
+
+  // A package describes one exact version of one page, so it — and the reply
+  // imported against it — is re-read (and re-verified against the files on
+  // disk) whenever the active row changes.
+  useEffect(() => {
+    setHandoff(null)
+    setCopiedHandoffPrompt(false)
+    setAnalysis(null)
+    setImportErrors(null)
+    setCandidatesOpen(false)
+    setReview(null)
+    setReviewOpen(false)
+    setReviewReplyErrors(null)
+    setLastExport(null)
+    if (!chapterId || !activeImage) return
+    let cancelled = false
+    clipper3Api
+      .getHandoff(chapterId, activeImage.filename)
+      .then(status => { if (!cancelled) setHandoff(status) })
+      .catch(() => { /* No package status is shown; building still works. */ })
+    clipper3Api
+      .getAnalysis(chapterId, activeImage.filename)
+      .then(status => { if (!cancelled) setAnalysis(status) })
+      .catch(() => { /* No import status is shown; importing still works. */ })
+    clipper3Api
+      .getReview(chapterId, activeImage.filename)
+      .then(view => { if (!cancelled) setReview(view) })
+      .catch(() => { /* No review status is shown; starting one still works. */ })
+    return () => { cancelled = true }
+  }, [chapterId, activeImage?.filename, autoRunVersion])
 
   // Slices belong to the image that produced them: moving to another row (or
   // closing the dialog) drops the panel back to its unsliced state. The files
@@ -990,6 +1269,21 @@ export default function Clipper3ImageList() {
         <Button
           variant="outline"
           size="sm"
+          onClick={() => setAutoDialogOpen(true)}
+          disabled={autoRun.running}
+          title={autoRun.running ? 'An API run is going for this chapter' : 'Run the ChatGPT crop flow through the OpenAI API'}
+        >
+          {autoRun.running ? (
+            <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+          ) : (
+            <Bot className="h-4 w-4 mr-1" />
+          )}
+          ChatGPT API
+        </Button>
+
+        <Button
+          variant="outline"
+          size="sm"
           onClick={() => window.open('https://chatgpt.com', '_blank', 'noopener,noreferrer')}
         >
           <ExternalLink className="h-4 w-4 mr-1" />
@@ -1003,6 +1297,21 @@ export default function Clipper3ImageList() {
       </div>
 
       <MurgaaDialog scope="clipper3" open={murgaaOpen} onOpenChange={setMurgaaOpen} />
+
+      <AutoRunDialog
+        open={autoDialogOpen}
+        onOpenChange={setAutoDialogOpen}
+        images={images}
+        onStart={autoRun.start}
+      />
+
+      {autoRun.job && autoRun.visible && (
+        <AutoRunStrip
+          job={autoRun.job}
+          onCancel={() => { autoRun.cancel().catch(() => { /* the next poll shows the state */ }) }}
+          onDismiss={autoRun.dismiss}
+        />
+      )}
 
       {cropProgress && (
         <div className="border-b bg-card px-4 py-2 flex items-center gap-3 flex-shrink-0">
@@ -1065,6 +1374,7 @@ export default function Clipper3ImageList() {
         <div className="p-4 space-y-2">
           {images.map((img, index) => {
             const isDone = img.status === 'done'
+            const autoPage = autoRun.visible ? autoRun.pageStatus(img.filename) : null
             return (
               <Card
                 key={img.filename}
@@ -1100,6 +1410,7 @@ export default function Clipper3ImageList() {
                       )}
                     </p>
                   </div>
+                  {autoPage && autoPage.step !== 'queued' && <AutoRunBadge page={autoPage} />}
                   {isDone ? (
                     <Badge variant="success" className="flex items-center gap-1 flex-shrink-0">
                       <CheckCircle2 className="h-3 w-3" />
@@ -1206,8 +1517,10 @@ export default function Clipper3ImageList() {
                         {sliceResult.files.length}{' '}
                         {sliceResult.files.length === 1 ? 'part' : 'parts'} of{' '}
                         {sliceResult.files[0].width} × {sliceResult.files[0].height}
-                        {sliceResult.files[0].height !== sliceResult.files[0].width &&
-                          ' (taller than square, to stay under 9)'}
+                        {sliceResult.files.length > 1 &&
+                          sliceResult.files[sliceResult.files.length - 1].height !==
+                            sliceResult.files[0].height &&
+                          ` (last ${sliceResult.files[sliceResult.files.length - 1].height} px)`}
                         .
                       </p>
                     )}
@@ -1267,6 +1580,246 @@ export default function Clipper3ImageList() {
                     </div>
                   </CollapsibleContent>
                 </Collapsible>
+
+                {/* The whole ChatGPT loop for just this page, through the API. */}
+                {(() => {
+                  const autoPage = autoRun.pageStatus(activeImage.filename)
+                  const busy = !!autoPage && isActiveStep(autoPage.step)
+                  return (
+                    <div className="space-y-1">
+                      <Button
+                        className="w-full"
+                        onClick={() => {
+                          autoRun.start([activeImage.filename], true).catch(err => toast({
+                            title: 'Could not start',
+                            description: err instanceof Error ? err.message : 'Unknown error',
+                            variant: 'destructive'
+                          }))
+                        }}
+                        disabled={autoRun.running}
+                        title={autoRun.running ? 'An API run is going for this chapter' : 'Package → ChatGPT → review → export, via the OpenAI API'}
+                      >
+                        {busy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Bot className="h-4 w-4 mr-2" />}
+                        {busy ? autoPage!.message : 'Run this page via ChatGPT API'}
+                      </Button>
+                      {autoPage && !busy && autoPage.step !== 'queued' && (
+                        <p
+                          className={`text-xs ${autoPage.step === 'failed' ? 'text-destructive' : autoPage.step === 'needs_review' ? 'text-amber-500' : 'text-muted-foreground'}`}
+                          title={autoPage.blockers.join('\n') || undefined}
+                        >
+                          API: {autoPage.message}
+                        </p>
+                      )}
+                    </div>
+                  )
+                })()}
+
+                {/* The verified package: same slices, plus a prompt that pins
+                    the page's job id and hash for the later import. */}
+                <div className="space-y-1">
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      className="flex-1"
+                      onClick={buildHandoffForActive}
+                      disabled={buildingHandoff}
+                    >
+                      {buildingHandoff ? (
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      ) : (
+                        <PackageCheck className="h-4 w-4 mr-2" />
+                      )}
+                      {handoff && handoff.status !== 'none'
+                        ? 'Rebuild ChatGPT package'
+                        : 'Build ChatGPT package'}
+                    </Button>
+                    {handoff?.status === 'ready' && handoff.prompt && (
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        title="Copy the package prompt"
+                        onClick={copyHandoffPrompt}
+                      >
+                        {copiedHandoffPrompt ? (
+                          <Check className="h-4 w-4 text-green-500" />
+                        ) : (
+                          <ClipboardCopy className="h-4 w-4" />
+                        )}
+                      </Button>
+                    )}
+                  </div>
+                  {handoff?.status === 'ready' && handoff.manifest && (
+                    <p
+                      className="text-xs text-muted-foreground font-mono truncate"
+                      title={handoff.manifest.job_id}
+                    >
+                      <CheckCircle2 className="inline h-3 w-3 mr-1 text-green-500" />
+                      {handoff.manifest.slices.length} slices verified · {handoff.manifest.job_id}
+                    </p>
+                  )}
+                  {handoff?.status === 'stale' && (
+                    <p className="text-xs text-amber-500">
+                      <AlertTriangle className="inline h-3 w-3 mr-1" />
+                      Package out of date — {handoff.staleReasons.map(r => r.message).join('; ')}.
+                      Rebuild before sending it to ChatGPT.
+                    </p>
+                  )}
+
+                  {handoff && handoff.status !== 'none' && (
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      onClick={pasteChatGptReply}
+                      disabled={importingReply}
+                    >
+                      {importingReply ? (
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      ) : (
+                        <ClipboardPaste className="h-4 w-4 mr-2" />
+                      )}
+                      {analysis?.analysis ? 'Paste a new ChatGPT reply' : 'Paste ChatGPT reply'}
+                    </Button>
+                  )}
+
+                  {importErrors && importErrors.length > 0 && (
+                    <div className="rounded border border-destructive/50 bg-destructive/10 p-2 text-xs space-y-1 max-h-44 overflow-y-auto">
+                      <p className="font-medium text-destructive">
+                        Reply rejected — nothing was imported
+                        {analysis?.analysis ? '; the previous import is kept' : ''}.
+                      </p>
+                      {importErrors.slice(0, 12).map((issue, i) => (
+                        <p key={i}>
+                          {issue.field && !issue.message.startsWith(issue.field) && (
+                            <span className="font-mono text-muted-foreground mr-1">{issue.field}</span>
+                          )}
+                          {issue.message}
+                        </p>
+                      ))}
+                      {importErrors.length > 12 && (
+                        <p className="text-muted-foreground">…and {importErrors.length - 12} more</p>
+                      )}
+                    </div>
+                  )}
+
+                  {analysis?.analysis && (
+                    <div className="flex items-center gap-2">
+                      <p className={`text-xs flex-1 min-w-0 ${analysis.stale ? 'text-amber-500' : 'text-muted-foreground'}`}>
+                        {analysis.stale ? (
+                          <>
+                            <AlertTriangle className="inline h-3 w-3 mr-1" />
+                            Imported reply is out of date — {analysis.staleReasons.join('; ')}.
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle2 className="inline h-3 w-3 mr-1 text-green-500" />
+                            {analysis.analysis.candidates.length} candidates imported
+                            {(() => {
+                              const flagged = analysis.analysis.candidates.filter(
+                                c => c.review_flags.length > 0 || c.unknown_flags.length > 0
+                              ).length
+                              return flagged > 0 ? ` · ${flagged} flagged` : ''
+                            })()}
+                            {analysis.analysis.warnings.length > 0 &&
+                              ` · ${analysis.analysis.warnings.length} warning${analysis.analysis.warnings.length === 1 ? '' : 's'}`}
+                          </>
+                        )}
+                      </p>
+                      <Button variant="ghost" size="sm" onClick={() => setCandidatesOpen(true)}>
+                        <Eye className="h-4 w-4 mr-1" />
+                        View on page
+                      </Button>
+                    </div>
+                  )}
+
+                  {/* Review: open it when one exists; otherwise start one from
+                      the import, or from the page's existing crops. */}
+                  {review?.state ? (
+                    <div className="flex items-center gap-2">
+                      <p className={`text-xs flex-1 min-w-0 ${review.readiness.ready ? 'text-green-500' : review.stale ? 'text-amber-500' : 'text-muted-foreground'}`}>
+                        {review.readiness.ready ? (
+                          <><CheckCircle2 className="inline h-3 w-3 mr-1" />Review complete</>
+                        ) : review.stale ? (
+                          <><AlertTriangle className="inline h-3 w-3 mr-1" />Review out of date</>
+                        ) : (
+                          <>Review in progress · {review.readiness.blockers.length} left before export</>
+                        )}
+                      </p>
+                      <Button variant="outline" size="sm" onClick={() => setReviewOpen(true)}>
+                        <ScanEye className="h-4 w-4 mr-1" />
+                        Open review
+                      </Button>
+                    </div>
+                  ) : null}
+
+                  {/* ChatGPT does the review round: prompt out, JSON back. */}
+                  {review?.state && !review.stale && handoff?.status === 'ready' && (
+                    <div className="flex gap-2">
+                      <Button variant="outline" className="flex-1 min-w-0 px-2" onClick={copyReviewPrompt} disabled={copyingReviewPrompt}>
+                        {copyingReviewPrompt ? <Loader2 className="h-4 w-4 mr-1.5 flex-shrink-0 animate-spin" /> : <ClipboardCopy className="h-4 w-4 mr-1.5 flex-shrink-0" />}
+                        <span className="truncate">Copy review prompt</span>
+                      </Button>
+                      <Button variant="outline" className="flex-1 min-w-0 px-2" onClick={pasteChatGptReview} disabled={applyingReview}>
+                        {applyingReview ? <Loader2 className="h-4 w-4 mr-1.5 flex-shrink-0 animate-spin" /> : <ClipboardPaste className="h-4 w-4 mr-1.5 flex-shrink-0" />}
+                        <span className="truncate">Paste ChatGPT review</span>
+                      </Button>
+                    </div>
+                  )}
+                  {reviewReplyErrors && reviewReplyErrors.length > 0 && (
+                    <div className="rounded border border-destructive/50 bg-destructive/10 p-2 text-xs space-y-1 max-h-44 overflow-y-auto">
+                      <p className="font-medium text-destructive">Review reply rejected — nothing was changed.</p>
+                      {reviewReplyErrors.slice(0, 12).map((issue, i) => (
+                        <p key={i}>
+                          {issue.field && !issue.message.startsWith(issue.field) && (
+                            <span className="font-mono text-muted-foreground mr-1">{issue.field}</span>
+                          )}
+                          {issue.message}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                  {review?.state && review.readiness.ready && (
+                    <div className="flex items-center gap-2">
+                      <Button className="flex-1" onClick={exportFromPopup} disabled={exportingPage}>
+                        {exportingPage ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <PackageCheck className="h-4 w-4 mr-2" />}
+                        Export page
+                      </Button>
+                      {lastExport && lastExport.revision === review.state.review_revision && (
+                        <span className="text-xs text-green-500">
+                          <CheckCircle2 className="inline h-3 w-3 mr-1" />{lastExport.crops} exported
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {review?.state ? null : (
+                    <div className="flex gap-2">
+                      {analysis?.analysis && !analysis.stale && (
+                        <Button
+                          variant="outline"
+                          className="flex-1"
+                          onClick={() => startReviewFor('import')}
+                          disabled={startingReview}
+                        >
+                          {startingReview ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <ScanEye className="h-4 w-4 mr-2" />}
+                          Start review
+                        </Button>
+                      )}
+                      {activeImage.hasPoints && !(analysis?.analysis && !analysis.stale) && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="flex-1 text-xs"
+                          onClick={() => startReviewFor('pointers')}
+                          disabled={startingReview}
+                          title="Review this page's existing crop pointers with the same checks"
+                        >
+                          <ScanEye className="h-3 w-3 mr-1" />
+                          Review existing crops
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                </div>
 
                 {/* One button copies all four in paste order; the arrow opens
                     the same four individually, for re-copying just one. */}
@@ -1550,6 +2103,58 @@ export default function Clipper3ImageList() {
                       )
                     })
                   }}
+                />
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* The page's review: decisions, flags and descriptions over its crops. */}
+      <Dialog open={reviewOpen} onOpenChange={setReviewOpen}>
+        <DialogContent className="w-[95vw] max-w-6xl h-[92vh] flex flex-col p-4 sm:p-6">
+          {activeImage && review?.state && (
+            <>
+              <DialogHeader className="flex-shrink-0">
+                <DialogTitle className="font-mono text-sm truncate">
+                  {activeImage.filename} — review
+                </DialogTitle>
+              </DialogHeader>
+              <div className="flex-1 min-h-0">
+                <ReviewWorkspace
+                  chapterId={chapterId!}
+                  filename={activeImage.filename}
+                  view={review as Clipper3ReviewView & { state: NonNullable<Clipper3ReviewView['state']> }}
+                  onView={setReview}
+                  onRestart={from => startReviewFor(from, true)}
+                  pageWidth={Math.min(560, Math.round(window.innerWidth * 0.45))}
+                  onExported={() => {
+                    // The export rewrote this page's store entry: refresh its Done status.
+                    clipper3Api.getImages(chapterId!).then(setData).catch(() => {})
+                  }}
+                />
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ChatGPT's imported candidates on the original page, read-only. */}
+      <Dialog open={candidatesOpen} onOpenChange={setCandidatesOpen}>
+        <DialogContent className="w-[95vw] max-w-6xl h-[92vh] flex flex-col p-4 sm:p-6">
+          {activeImage && analysis?.analysis && (
+            <>
+              <DialogHeader className="flex-shrink-0">
+                <DialogTitle className="font-mono text-sm truncate">
+                  {activeImage.filename} — ChatGPT candidates
+                </DialogTitle>
+              </DialogHeader>
+              <div className="flex-1 min-h-0">
+                <CandidateOverlay
+                  chapterId={chapterId!}
+                  filename={activeImage.filename}
+                  analysis={analysis.analysis}
+                  pageWidth={Math.min(560, Math.round(window.innerWidth * 0.45))}
                 />
               </div>
             </>

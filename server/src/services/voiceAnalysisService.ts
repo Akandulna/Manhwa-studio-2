@@ -10,6 +10,7 @@
 import { spawn } from 'child_process'
 import path from 'path'
 import { prisma } from '../index.js'
+import { cachedProbe, isAvailable } from '../utils/cachedProbe.js'
 
 export interface VoiceAnalysisResult {
   verdict: 'consistent' | 'mismatch' | 'inconclusive'
@@ -41,7 +42,7 @@ const DEFAULT_SIMILARITY_THRESHOLD = 0.75
 /**
  * Check if the Python voice analysis sidecar is available
  */
-export async function checkAnalysisSidecarAvailable(): Promise<{
+async function probeAnalysisSidecarAvailable(): Promise<{
   available: boolean
   error?: string
 }> {
@@ -97,6 +98,7 @@ export async function checkAnalysisSidecarAvailable(): Promise<{
     }
   }
 }
+export const checkAnalysisSidecarAvailable = cachedProbe(probeAnalysisSidecarAvailable, { isOk: isAvailable })
 
 /**
  * Run acoustic analysis on audio files using Python sidecar

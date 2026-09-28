@@ -2,8 +2,9 @@
  * Murgaa API Routes
  *
  * Backs the "Murgaa" popup shown in the narration Script Editor, Voiceover
- * Editor, and Image Clipper 3.0 image-list headers. Each page has ONE global
- * config (scope 'script' / 'voice' / 'clipper3') shared across every
+ * Editor, Image Clipper 3.0 image-list and Editor 2.0 chapter-list headers.
+ * Each page has ONE global config (scope 'script' / 'voice' / 'clipper3' /
+ * 'editor2') shared across every
  * series/chapter — the popup is a per-page reference card, not per-manhwa data.
  *
  * Config is stored in the Setting key-value table under `murgaa:<scope>`, with
@@ -23,7 +24,7 @@ import { prisma } from '../index.js'
 const router = Router()
 
 /** The pages that can carry a Murgaa popup. */
-const SCOPES = ['script', 'voice', 'clipper3'] as const
+const SCOPES = ['script', 'voice', 'clipper3', 'editor2'] as const
 type Scope = (typeof SCOPES)[number]
 
 function isScope(v: string): v is Scope {
