@@ -14,7 +14,8 @@
     "test": "cd server && npm test",
     "postinstall": "cd server && npm install && cd ../client && npm install",
     "dev:kokoro": "node scripts/start-kokoro.mjs",
-    "dev:with-kokoro": "concurrently -n server,client,kokoro -c blue,green,magenta \"npm run dev:server\" \"npm run dev:client\" \"npm run dev:kokoro\""
+    "dev:with-kokoro": "concurrently -n server,client,kokoro -c blue,green,magenta \"npm run dev:server\" \"npm run dev:client\" \"npm run dev:kokoro\"",
+    "app": "cd desktop && npm install && npm run app"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

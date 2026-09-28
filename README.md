@@ -144,6 +144,23 @@ This starts both the backend (http://localhost:3001) and frontend (http://localh
 
 Open your browser to **http://localhost:5173**
 
+### 6. Mac App (optional)
+
+```bash
+npm run app
+```
+
+Builds the client, packages `desktop/` with Electron and installs **Manhwa Studio.app** into `/Applications`.
+The app is a shell around this repo, not a standalone bundle: it runs the server from `server/`
+(same `.env`, database, `downloads/` and ML venvs) using your system Node, and loads the built client
+the server serves on `PORT`. If a server is already running on that port (e.g. `npm run dev`) the app
+just attaches to it; otherwise it starts one and stops it on quit.
+
+- **UI changes** need `cd client && npx vite build` (then **View → Reload**); server changes need **Server → Restart Server**. No app rebuild needed for either.
+- **Server log:** `~/Library/Logs/Manhwa Studio/server.log` (**Server → Open Server Log**).
+- The repo's path is baked in at build time — re-run `npm run app` if you move the repo.
+- `npm run dev` can't start while the app runs its own server (port in use); start dev first, or quit the app.
+
 ## Usage
 
 ### Adding a Series

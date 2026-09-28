@@ -39,3 +39,6 @@ server/prisma/migrations/
 
 # WhisperX alignment sidecar venv
 server/.venv-whisperx/
+
+# Mac app (desktop/): machine-specific repo path
+desktop/app-config.json

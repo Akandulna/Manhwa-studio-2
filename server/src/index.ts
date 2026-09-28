@@ -1,5 +1,8 @@
 import express from 'express';
 import cors from 'cors';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import dotenv from 'dotenv';
@@ -76,6 +79,18 @@ app.use('/api/r2', initR2Routes(io));                // Cloud backup: upload ser
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// Built client (`vite build` → client/dist), served so the Mac app (desktop/)
+// needs only this one port. Dev keeps using Vite on :5173; this is a no-op
+// until the client has been built.
+const clientDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'client', 'dist');
+if (fs.existsSync(path.join(clientDist, 'index.html'))) {
+  app.use(express.static(clientDist));
+  // SPA fallback: any non-API path is a client route.
+  app.get(/^\/(?!api\/|socket\.io\/).*/, (req, res) => {
+    res.sendFile(path.join(clientDist, 'index.html'));
+  });
+}
 
 // Socket.io connection handling
 io.on('connection', (socket) => {
