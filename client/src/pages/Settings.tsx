@@ -154,6 +154,10 @@ const GEMINI_VOICES = [
   { value: 'Zubenelgenubi', label: 'Zubenelgenubi', description: 'Casual, conversational' },
 ]
 
+// Vertical sidebar tab: full-width, left-aligned, active state as a muted pill.
+const settingsTabTrigger =
+  'w-full justify-start gap-2 px-3 py-2 data-[state=active]:bg-muted data-[state=active]:shadow-none'
+
 export default function Settings() {
   const { toast } = useToast()
   // ?tab=<value> deep-links to a tab (e.g. Clipper 3.0's "add your API key" link).
@@ -361,45 +365,50 @@ export default function Settings() {
       </div>
 
       {/* Tabs */}
-      <div className="flex-1 overflow-auto">
-        <Tabs defaultValue={searchParams.get('tab') || 'appearance'} className="w-full h-full">
-          <TabsList className="sticky top-0 w-full justify-start overflow-x-auto overflow-y-hidden rounded-none border-b bg-background px-6">
-            <TabsTrigger value="appearance" className="flex items-center gap-2">
+      <div className="flex-1 min-h-0">
+        <Tabs
+          defaultValue={searchParams.get('tab') || 'appearance'}
+          orientation="vertical"
+          className="flex w-full h-full"
+        >
+          <TabsList className="h-full w-60 shrink-0 flex-col items-stretch justify-start gap-1 overflow-y-auto rounded-none border-r bg-background p-3">
+            <TabsTrigger value="appearance" className={settingsTabTrigger}>
               <Palette className="h-4 w-4" />
               <span>Appearance</span>
             </TabsTrigger>
-            <TabsTrigger value="download" className="flex items-center gap-2">
+            <TabsTrigger value="download" className={settingsTabTrigger}>
               <Download className="h-4 w-4" />
               <span>Download & Performance</span>
             </TabsTrigger>
-            <TabsTrigger value="narration" className="flex items-center gap-2">
+            <TabsTrigger value="narration" className={settingsTabTrigger}>
               <Sparkles className="h-4 w-4" />
               <span>Narration Studio</span>
             </TabsTrigger>
-            <TabsTrigger value="voiceover" className="flex items-center gap-2">
+            <TabsTrigger value="voiceover" className={settingsTabTrigger}>
               <Volume2 className="h-4 w-4" />
               <span>Voiceover</span>
             </TabsTrigger>
-            <TabsTrigger value="crop-pointers" className="flex items-center gap-2">
+            <TabsTrigger value="crop-pointers" className={settingsTabTrigger}>
               <Locate className="h-4 w-4" />
               <span>Crop Pointers</span>
             </TabsTrigger>
-            <TabsTrigger value="crop3-prompts" className="flex items-center gap-2">
+            <TabsTrigger value="crop3-prompts" className={settingsTabTrigger}>
               <Crop className="h-4 w-4" />
               <span>Crop 3.0 - Prompts</span>
             </TabsTrigger>
-            <TabsTrigger value="editor2" className="flex items-center gap-2">
+            <TabsTrigger value="editor2" className={settingsTabTrigger}>
               <Film className="h-4 w-4" />
               <span>Editor 2.0</span>
             </TabsTrigger>
-            <TabsTrigger value="cloudflare" className="flex items-center gap-2">
+            <TabsTrigger value="cloudflare" className={settingsTabTrigger}>
               <Cloud className="h-4 w-4" />
               <span>Cloudflare</span>
             </TabsTrigger>
           </TabsList>
 
+          <div className="flex-1 min-w-0 overflow-auto">
           {/* Appearance Tab */}
-          <TabsContent value="appearance" className="p-6 max-w-4xl space-y-6">
+          <TabsContent value="appearance" className="mt-0 p-6 max-w-4xl space-y-6">
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -473,7 +482,7 @@ export default function Settings() {
           </TabsContent>
 
           {/* Download & Performance Tab */}
-          <TabsContent value="download" className="p-6 max-w-4xl space-y-6">
+          <TabsContent value="download" className="mt-0 p-6 max-w-4xl space-y-6">
             {/* Download settings */}
             <Card>
         <CardHeader>
@@ -627,7 +636,7 @@ export default function Settings() {
           </TabsContent>
 
           {/* Narration Studio Tab */}
-          <TabsContent value="narration" className="p-6 max-w-4xl space-y-6">
+          <TabsContent value="narration" className="mt-0 p-6 max-w-4xl space-y-6">
       {/* AI Provider Status */}
       <Card>
         <CardHeader>
@@ -896,7 +905,7 @@ STYLE RULES:
           </TabsContent>
 
           {/* Voiceover Tab */}
-          <TabsContent value="voiceover" className="p-6 max-w-4xl space-y-6">
+          <TabsContent value="voiceover" className="mt-0 p-6 max-w-4xl space-y-6">
       {/* TTS Configuration */}
       <Card>
         <CardHeader>
@@ -1141,7 +1150,7 @@ STYLE RULES:
 
           {/* Crop Pointers Tab — the crop rules Image Clipper 3.0's ChatGPT API run
               is handed verbatim. */}
-          <TabsContent value="crop-pointers" className="p-6 max-w-4xl space-y-6">
+          <TabsContent value="crop-pointers" className="mt-0 p-6 max-w-4xl space-y-6">
       <CropPointGuidelinesCard />
 
       <Card className="bg-muted/50">
@@ -1155,7 +1164,7 @@ STYLE RULES:
           </TabsContent>
 
           {/* Crop 3.0 - Prompts Tab */}
-          <TabsContent value="crop3-prompts" className="p-6 max-w-4xl space-y-6">
+          <TabsContent value="crop3-prompts" className="mt-0 p-6 max-w-4xl space-y-6">
       <ChatGptApiCard />
       <Crop3GuidelineFileCard />
       <Crop3MetadataTemplateCard />
@@ -1163,14 +1172,15 @@ STYLE RULES:
           </TabsContent>
 
           {/* Editor 2.0 Tab — Module 4v2 (video compile/timeline/render workspace) */}
-          <TabsContent value="editor2" className="p-6 max-w-4xl space-y-6">
+          <TabsContent value="editor2" className="mt-0 p-6 max-w-4xl space-y-6">
       <Editor2PromptCard />
           </TabsContent>
 
           {/* Cloudflare Tab — R2 credentials for the Library's "Upload to R2" backup */}
-          <TabsContent value="cloudflare" className="p-6 max-w-4xl space-y-6">
+          <TabsContent value="cloudflare" className="mt-0 p-6 max-w-4xl space-y-6">
             <CloudflareTab />
           </TabsContent>
+          </div>
         </Tabs>
       </div>
     </div>
