@@ -38,7 +38,7 @@ import path from 'path'
 import { randomUUID } from 'crypto'
 import type { Server } from 'socket.io'
 import archiver from 'archiver'
-import { S3Client, HeadBucketCommand, ListObjectsV2Command, DeleteObjectCommand } from '@aws-sdk/client-s3'
+import { S3Client, HeadBucketCommand, ListObjectsV2Command, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
 import { prisma } from '../index.js'
 import { writeEnvVars } from '../utils/envFile.js'
@@ -188,6 +188,8 @@ export interface R2Object {
   key: string
   size: number
   lastModified: string | null
+  /** Without the quotes S3 puts around it. */
+  etag: string
 }
 
 export interface BucketStorage {
@@ -213,7 +215,12 @@ async function measureBucket(client: S3Client, bucket: string, fresh = false): P
     const page = await client.send(new ListObjectsV2Command({ Bucket: bucket, ContinuationToken: token }))
     for (const obj of page.Contents ?? []) {
       if (!obj.Key) continue
-      objects.push({ key: obj.Key, size: obj.Size ?? 0, lastModified: obj.LastModified?.toISOString() ?? null })
+      objects.push({
+        key: obj.Key,
+        size: obj.Size ?? 0,
+        lastModified: obj.LastModified?.toISOString() ?? null,
+        etag: (obj.ETag ?? '').replace(/"/g, '')
+      })
     }
     token = page.IsTruncated ? page.NextContinuationToken : undefined
   } while (token)
@@ -260,6 +267,105 @@ export async function deleteR2Object(key: string): Promise<void> {
   if (currentJob?.state === 'running') throw new Error('Wait for the running upload to finish before deleting backups')
   await createClient(config).send(new DeleteObjectCommand({ Bucket: config.bucket, Key: key }))
   invalidateStorage()
+}
+
+// ============ Phone (Sleeper-Cell) receipt ============
+
+/**
+ * The Sleeper-Cell Android app downloads these zips. After each sync it writes
+ * this object next to them: `{ device, updatedAt, series: { <zip key>: { etag,
+ * state: 'downloaded' | 'downloading', at? } } }`. Keep the name in step with
+ * RECEIPT_NAME in its ManhwaSync.kt.
+ */
+const PHONE_RECEIPT_NAME = '_sleeper-cell.json'
+
+export type PhoneSeriesState = 'downloaded' | 'downloading' | 'outdated' | 'missing'
+
+export interface PhoneSeriesSync {
+  /**
+   * downloaded:  the phone has unzipped the zip now in R2
+   * downloading: the phone is downloading it
+   * outdated:    the phone has an earlier upload of this series
+   * missing:     the phone has none
+   */
+  state: PhoneSeriesState
+  /** When the phone finished unzipping the copy it has. */
+  phoneAt: string | null
+  /** When the zip now in R2 was uploaded. */
+  uploadedAt: string | null
+}
+
+export interface PhoneSyncStatus {
+  configured: boolean
+  /** When the phone last wrote its receipt; null if it never has. */
+  reportedAt: string | null
+  device: string | null
+  /** By series id; only series with a zip in R2. */
+  series: Record<string, PhoneSeriesSync>
+}
+
+interface PhoneReceipt {
+  device?: string
+  updatedAt?: string
+  series?: Record<string, { etag?: string; state?: string; at?: string }>
+}
+
+/** The receipt changes only when the phone syncs, so it is re-read only when its ETag moves. */
+let receiptCache: { bucket: string; key: string; etag: string; value: PhoneReceipt } | null = null
+
+async function readPhoneReceipt(client: S3Client, bucket: string, obj: R2Object): Promise<PhoneReceipt> {
+  if (receiptCache?.bucket === bucket && receiptCache.key === obj.key && receiptCache.etag === obj.etag) {
+    return receiptCache.value
+  }
+  const res = await client.send(new GetObjectCommand({ Bucket: bucket, Key: obj.key }))
+  const text = (await res.Body?.transformToString()) ?? '{}'
+  let value: PhoneReceipt = {}
+  try {
+    const parsed = JSON.parse(text)
+    if (parsed && typeof parsed === 'object') value = parsed
+  } catch {
+    console.warn(`R2: ${obj.key} is not valid JSON; ignoring it`)
+  }
+  receiptCache = { bucket, key: obj.key, etag: obj.etag, value }
+  return value
+}
+
+/**
+ * Which series' zips the phone has downloaded. One bucket list (cached for a
+ * minute unless `fresh`) plus, when the phone has written a new receipt, one read.
+ */
+export async function getPhoneSync(fresh = false): Promise<PhoneSyncStatus> {
+  const config = getR2Config()
+  if (!config) return { configured: false, reportedAt: null, device: null, series: {} }
+
+  const client = createClient(config)
+  const storage = await measureBucket(client, config.bucket, fresh)
+  const byKey = new Map(storage.objects.map(o => [o.key, o]))
+  const receiptObj = byKey.get(`${config.prefix}${PHONE_RECEIPT_NAME}`)
+  const receipt = receiptObj ? await readPhoneReceipt(client, config.bucket, receiptObj) : {}
+  const phoneSeries = receipt.series && typeof receipt.series === 'object' ? receipt.series : {}
+
+  const rows = await prisma.series.findMany({ select: { id: true, rootFolder: true } })
+  const series: Record<string, PhoneSeriesSync> = {}
+  for (const row of rows) {
+    const key = `${config.prefix}${path.basename(row.rootFolder)}.zip`
+    const zip = byKey.get(key)
+    if (!zip) continue
+    const entry = phoneSeries[key]
+    const current = !!entry && (entry.etag ?? '').replace(/"/g, '') === zip.etag
+    series[row.id] = {
+      state: !entry ? 'missing' : !current ? 'outdated' : entry.state === 'downloading' ? 'downloading' : 'downloaded',
+      phoneAt: entry?.state === 'downloaded' ? entry.at ?? null : null,
+      uploadedAt: zip.lastModified
+    }
+  }
+
+  return {
+    configured: true,
+    reportedAt: receipt.updatedAt ?? null,
+    device: receipt.device ?? null,
+    series
+  }
 }
 
 const PART_SIZE = 16 * 1024 * 1024

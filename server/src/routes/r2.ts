@@ -6,6 +6,7 @@
  *   PUT  /config   save settings; blank key fields keep the saved keys
  *   POST /test     check the credentials can reach the bucket
  *   GET  /usage    free-plan meters: bucket storage + this month's requests
+ *   GET  /phone?fresh=1   which series' zips the Sleeper-Cell phone app has downloaded
  *   DELETE /objects?key=…   delete one object (free) to make room
  *   POST /upload   { seriesIds } — start uploading those series' folders
  *   POST /cancel   stop the running upload
@@ -21,6 +22,7 @@ import {
   deleteR2Object,
   getJob,
   getR2Usage,
+  getPhoneSync,
   getR2Config,
   missingR2Env,
   publicR2Config,
@@ -85,6 +87,15 @@ export function initR2Routes(io: Server): Router {
     } catch (error) {
       console.error('R2 usage lookup failed:', error)
       res.status(400).json({ error: message(error, 'Could not read R2 usage') })
+    }
+  })
+
+  router.get('/phone', async (req: Request, res: Response) => {
+    try {
+      res.json(await getPhoneSync(req.query.fresh === '1'))
+    } catch (error) {
+      console.error('R2 phone sync lookup failed:', error)
+      res.status(400).json({ error: message(error, 'Could not read the phone sync status') })
     }
   })
 

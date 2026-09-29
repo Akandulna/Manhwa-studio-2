@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { usePublishedChapters } from '@/hooks/usePublishedChapters'
 import { publishedRowClass } from '@/components/PublishedBadge'
 import { Link, useNavigate } from 'react-router-dom'
-import { seriesApi, r2Api, Series, R2UploadJob, R2Usage } from '@/lib/api'
+import { seriesApi, r2Api, Series, R2UploadJob, R2Usage, PhoneSyncStatus } from '@/lib/api'
 import { useSocket } from '@/lib/socket'
 import { R2UploadStatusBar, R2SelectionBar } from '@/components/R2UploadStatusBar'
+import { PhoneSyncBadge } from '@/components/PhoneSyncBadge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -23,6 +24,9 @@ import { Plus, BookOpen, Globe, CheckCircle, XCircle, Clock, Loader2, FolderInpu
 import { useToast } from '@/components/ui/use-toast'
 
 const API_BASE = 'http://localhost:3002/api'
+
+/** Coming back to the window re-lists the bucket at most this often (one Class A request each). */
+const PHONE_REFRESH_MS = 30_000
 
 interface ScannedSeries {
   name: string
@@ -54,11 +58,32 @@ export default function Library() {
   const [r2DismissedJobId, setR2DismissedJobId] = useState<string | null>(null)
   const [r2Usage, setR2Usage] = useState<R2Usage | null>(null)
 
+  // Which series' zips the Sleeper-Cell phone app has downloaded.
+  const [phoneSync, setPhoneSync] = useState<PhoneSyncStatus | null>(null)
+  const phoneFetchedAt = useRef(0)
+  const loadPhoneSync = useCallback((fresh: boolean) => {
+    phoneFetchedAt.current = Date.now()
+    r2Api.getPhoneSync(fresh).then(setPhoneSync).catch(() => {})
+  }, [])
+
   useEffect(() => {
     loadSeries()
     // Pick up an upload that is running, or finished while this page was closed.
     r2Api.getStatus().then(status => setR2Job(status.job)).catch(() => {})
-  }, [])
+    loadPhoneSync(false)
+    // The phone syncs when its button is tapped, so look again when the user comes back here.
+    const onFocus = () => {
+      if (Date.now() - phoneFetchedAt.current >= PHONE_REFRESH_MS) loadPhoneSync(true)
+    }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [loadPhoneSync])
+
+  // A finished upload replaces zips, so their phone state changes.
+  const r2JobFinished = r2Job !== null && r2Job.state !== 'running'
+  useEffect(() => {
+    if (r2JobFinished) loadPhoneSync(false)
+  }, [r2JobFinished, r2Job?.id, loadPhoneSync])
 
   useEffect(() => {
     if (!socket) return
@@ -447,6 +472,7 @@ export default function Library() {
             const rollup = seriesPublished(s.id)
             const published = rollup && rollup.published > 0 ? rollup : null
             const r2Checked = r2Selected.has(s.id)
+            const onPhone = phoneSync?.series[s.id]
 
             return (
               <Link
@@ -467,13 +493,16 @@ export default function Library() {
                     <div className="absolute inset-0 flex items-center justify-center">
                       <BookOpen className="h-16 w-16 text-primary/30" />
                     </div>
-                    {r2SelectMode && (
-                      // Visual only: the card's click toggles it, so the box
-                      // must not also handle the click and undo it.
-                      <div className="absolute top-2 right-2 rounded-md bg-background/90 p-1.5 shadow pointer-events-none">
-                        <Checkbox checked={r2Checked} className="h-5 w-5" />
-                      </div>
-                    )}
+                    <div className="absolute top-2 right-2 flex flex-col items-end gap-1.5">
+                      {r2SelectMode && (
+                        // Visual only: the card's click toggles it, so the box
+                        // must not also handle the click and undo it.
+                        <div className="rounded-md bg-background/90 p-1.5 shadow pointer-events-none">
+                          <Checkbox checked={r2Checked} className="h-5 w-5" />
+                        </div>
+                      )}
+                      {onPhone && <PhoneSyncBadge sync={onPhone} device={phoneSync?.device ?? null} />}
+                    </div>
                     <div className="absolute bottom-2 right-2">
                       <Badge variant={status.variant}>
                         {status.label}

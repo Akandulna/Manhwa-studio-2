@@ -1983,8 +1983,35 @@ export interface R2Usage {
   ops: { classA: number; classB: number; free: number; ops: Record<string, number>; since: string }
 }
 
+export interface PhoneSeriesSync {
+  /**
+   * downloaded:  the phone has unzipped the zip now in R2
+   * downloading: the phone is downloading it
+   * outdated:    the phone has an earlier upload of this series
+   * missing:     the phone has none
+   */
+  state: 'downloaded' | 'downloading' | 'outdated' | 'missing'
+  /** When the phone finished unzipping the copy it has. */
+  phoneAt: string | null
+  /** When the zip now in R2 was uploaded. */
+  uploadedAt: string | null
+}
+
+/** What the Sleeper-Cell phone app has downloaded, from the receipt it writes to R2. */
+export interface PhoneSyncStatus {
+  configured: boolean
+  /** When the phone last reported; null if it never has. */
+  reportedAt: string | null
+  device: string | null
+  /** By series id; only series with a zip in R2. */
+  series: Record<string, PhoneSeriesSync>
+}
+
 export const r2Api = {
   getStatus: () => fetchApi<R2Status>('/r2/status'),
+
+  /** `fresh` re-lists the bucket instead of using the server's one-minute cache. */
+  getPhoneSync: (fresh = false) => fetchApi<PhoneSyncStatus>(`/r2/phone${fresh ? '?fresh=1' : ''}`),
 
   getUsage: () => fetchApi<R2Usage>('/r2/usage'),
 
