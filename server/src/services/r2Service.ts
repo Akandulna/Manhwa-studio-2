@@ -39,7 +39,7 @@ import path from 'path'
 import { randomUUID } from 'crypto'
 import type { Server } from 'socket.io'
 import archiver from 'archiver'
-import { S3Client, HeadBucketCommand, ListObjectsV2Command, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3'
+import { S3Client, HeadBucketCommand, HeadObjectCommand, ListObjectsV2Command, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
 import { prisma } from '../index.js'
 import { writeEnvVars } from '../utils/envFile.js'
@@ -373,6 +373,139 @@ export async function getPhoneSync(fresh = false): Promise<PhoneSyncStatus> {
     reportedAt: receipt.updatedAt ?? null,
     device: receipt.device ?? null,
     series
+  }
+}
+
+// ============ Phone (Sleeper-Cell) scripts receipt ============
+
+/**
+ * Sleeper-Cell also writes narration scripts on the phone. After each save it
+ * writes this object: `{ device, updatedAt, series: { <series folder>: { total,
+ * done, chapters: { <chapter folder>: { status, savedAt? } } } } }`, leaving
+ * out chapters with no script. Keep the name in step with RECEIPT_NAME in its
+ * ScriptReceipt.kt.
+ */
+const SCRIPTS_RECEIPT_NAME = '_sleeper-cell-scripts.json'
+
+export type PhoneScriptState = 'done' | 'needs_summary' | 'stale'
+
+export interface PhoneChapterScript {
+  status: PhoneScriptState
+  /** When the phone saved the reply. */
+  savedAt: string | null
+}
+
+export interface PhoneScriptsStatus {
+  configured: boolean
+  /** When the phone last wrote the receipt; null if it never has. */
+  reportedAt: string | null
+  device: string | null
+  /** By series id: chapters done on the phone out of those it has. */
+  series: Record<string, { done: number; total: number }>
+  /** By chapter id, for the series asked for; chapters with no script are left out. */
+  chapters: Record<string, PhoneChapterScript>
+}
+
+interface ScriptsReceipt {
+  device?: string
+  updatedAt?: string
+  series?: Record<string, {
+    total?: number
+    done?: number
+    chapters?: Record<string, { status?: string; savedAt?: string }>
+  }>
+}
+
+const PHONE_SCRIPT_STATES = new Set<string>(['done', 'needs_summary', 'stale'])
+
+/** The Library polls every few seconds, so HEADs are shared for this long across tabs. */
+const SCRIPTS_HEAD_MS = 2_000
+let scriptsCache: { bucket: string; key: string | null; etag: string | null; value: ScriptsReceipt; at: number } | null = null
+
+function isNotFound(error: unknown): boolean {
+  const status = (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode
+  return status === 404 || (error as { name?: string }).name === 'NotFound'
+}
+
+/**
+ * The phone writes under its own prefix setting, which may not match ours, so
+ * the bucket root is tried too. One HEAD (Class B) per look; the body is
+ * fetched only when the phone has written a new receipt.
+ */
+async function readScriptsReceipt(client: S3Client, config: R2Config): Promise<ScriptsReceipt> {
+  const cached = scriptsCache?.bucket === config.bucket ? scriptsCache : null
+  if (cached && Date.now() - cached.at < SCRIPTS_HEAD_MS) return cached.value
+
+  const candidates = [...new Set([`${config.prefix}${SCRIPTS_RECEIPT_NAME}`, SCRIPTS_RECEIPT_NAME])]
+  // Try wherever it was found last time first, so a steady poll is a single HEAD.
+  if (cached?.key) candidates.sort((a, b) => Number(b === cached.key) - Number(a === cached.key))
+
+  for (const key of candidates) {
+    let etag: string
+    try {
+      const head = await client.send(new HeadObjectCommand({ Bucket: config.bucket, Key: key }))
+      etag = (head.ETag ?? '').replace(/"/g, '')
+    } catch (error) {
+      if (isNotFound(error)) continue
+      throw error
+    }
+    if (cached?.key === key && cached.etag === etag) {
+      scriptsCache = { ...cached, at: Date.now() }
+      return cached.value
+    }
+    const res = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: key }))
+    let value: ScriptsReceipt = {}
+    try {
+      const parsed = JSON.parse((await res.Body?.transformToString()) ?? '{}')
+      if (parsed && typeof parsed === 'object') value = parsed
+    } catch {
+      console.warn(`R2: ${key} is not valid JSON; ignoring it`)
+    }
+    scriptsCache = { bucket: config.bucket, key, etag, value, at: Date.now() }
+    return value
+  }
+
+  scriptsCache = { bucket: config.bucket, key: null, etag: null, value: {}, at: Date.now() }
+  return {}
+}
+
+/**
+ * Which chapters have a narration script on the phone. Series and chapters are
+ * matched by folder name, the names the R2 zip carries to the phone.
+ */
+export async function getPhoneScripts(seriesId?: string): Promise<PhoneScriptsStatus> {
+  const config = getR2Config()
+  if (!config) return { configured: false, reportedAt: null, device: null, series: {}, chapters: {} }
+
+  const receipt = await readScriptsReceipt(createClient(config), config)
+  const phoneSeries = receipt.series && typeof receipt.series === 'object' ? receipt.series : {}
+
+  const rows = await prisma.series.findMany({ select: { id: true, rootFolder: true } })
+  const series: PhoneScriptsStatus['series'] = {}
+  const chapters: PhoneScriptsStatus['chapters'] = {}
+  for (const row of rows) {
+    const entry = phoneSeries[path.basename(row.rootFolder)]
+    if (!entry || typeof entry !== 'object') continue
+    series[row.id] = { done: Number(entry.done) || 0, total: Number(entry.total) || 0 }
+
+    if (row.id !== seriesId || !entry.chapters || typeof entry.chapters !== 'object') continue
+    const byFolder = new Map(
+      (await prisma.chapter.findMany({ where: { seriesId: row.id }, select: { id: true, folderPath: true } }))
+        .map(c => [path.basename(c.folderPath), c.id])
+    )
+    for (const [folder, chapter] of Object.entries(entry.chapters)) {
+      const id = byFolder.get(folder)
+      if (!id || !chapter || !PHONE_SCRIPT_STATES.has(chapter.status ?? '')) continue
+      chapters[id] = { status: chapter.status as PhoneScriptState, savedAt: chapter.savedAt ?? null }
+    }
+  }
+
+  return {
+    configured: true,
+    reportedAt: receipt.updatedAt ?? null,
+    device: receipt.device ?? null,
+    series,
+    chapters
   }
 }
 

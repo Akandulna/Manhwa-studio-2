@@ -2007,11 +2007,39 @@ export interface PhoneSyncStatus {
   series: Record<string, PhoneSeriesSync>
 }
 
+/**
+ * A chapter's narration script on the Sleeper-Cell phone:
+ *   done:          script, summary and closing saved, so the next chapter can follow
+ *   needs_summary: a script was saved without its summary or closing paragraph
+ *   stale:         an earlier chapter was saved again after this one
+ */
+export interface PhoneChapterScript {
+  status: 'done' | 'needs_summary' | 'stale'
+  /** When the phone saved the reply. */
+  savedAt: string | null
+}
+
+/** Scripts written on the Sleeper-Cell phone, from the receipt it writes to R2 after each save. */
+export interface PhoneScriptsStatus {
+  configured: boolean
+  /** When the phone last reported; null if it never has. */
+  reportedAt: string | null
+  device: string | null
+  /** By series id: chapters done on the phone out of those it has. */
+  series: Record<string, { done: number; total: number }>
+  /** By chapter id, for the series asked for; chapters with no script are left out. */
+  chapters: Record<string, PhoneChapterScript>
+}
+
 export const r2Api = {
   getStatus: () => fetchApi<R2Status>('/r2/status'),
 
   /** `fresh` re-lists the bucket instead of using the server's one-minute cache. */
   getPhoneSync: (fresh = false) => fetchApi<PhoneSyncStatus>(`/r2/phone${fresh ? '?fresh=1' : ''}`),
+
+  /** With `seriesId`, also that series' chapters. */
+  getPhoneScripts: (seriesId?: string) =>
+    fetchApi<PhoneScriptsStatus>(`/r2/phone/scripts${seriesId ? `?seriesId=${encodeURIComponent(seriesId)}` : ''}`),
 
   getUsage: () => fetchApi<R2Usage>('/r2/usage'),
 

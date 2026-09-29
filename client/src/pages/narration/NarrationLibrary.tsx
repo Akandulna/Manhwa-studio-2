@@ -17,16 +17,20 @@ import {
   FileText,
   CheckCircle,
   Loader2,
-  AlertCircle
+  AlertCircle,
+  Smartphone
 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { useSocket } from '@/lib/socket'
+import { usePhoneScripts } from '@/hooks/usePhoneScripts'
 
 export default function NarrationLibrary() {
   const [series, setSeries] = useState<NarrationSeries[]>([])
   const [loading, setLoading] = useState(true)
   const { toast } = useToast()
   const { narrationRangeComplete } = useSocket()
+  // Scripts written in the Sleeper-Cell phone app, per series.
+  const phoneScripts = usePhoneScripts()
 
   useEffect(() => {
     loadSeries()
@@ -163,6 +167,12 @@ export default function NarrationLibrary() {
                     </span>
                   </div>
                   <Progress value={getScriptProgress(s)} className="h-1.5" />
+                  {phoneScripts?.series[s.id] && (
+                    <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                      <Smartphone className="h-3 w-3" />
+                      {phoneScripts.series[s.id].done}/{phoneScripts.series[s.id].total} done on phone
+                    </div>
+                  )}
                 </div>
               </CardContent>
             </Card>

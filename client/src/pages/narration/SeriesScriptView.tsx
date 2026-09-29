@@ -8,6 +8,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePublishedChapters } from '@/hooks/usePublishedChapters'
 import { PublishedBadge, publishedRowClass } from '@/components/PublishedBadge'
+import { PhoneScriptBadge } from '@/components/PhoneSyncBadge'
+import { usePhoneScripts } from '@/hooks/usePhoneScripts'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { narrationApi, voiceoverApi, NarrationSeriesDetail, NarrationChapterSummary, AIStatus } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -89,6 +91,8 @@ export default function SeriesScriptView() {
 
   // Chapters already rendered to video — no need to rewrite or re-voice them.
   const { isPublished } = usePublishedChapters(id)
+  // Scripts written in the Sleeper-Cell phone app, updated as the phone saves them.
+  const phoneScripts = usePhoneScripts(id)
   const [aiStatus, setAIStatus] = useState<AIStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
@@ -592,6 +596,14 @@ export default function SeriesScriptView() {
             <span>{series.chapters.length} chapters available</span>
             <span>•</span>
             <span>{scriptedCount} scripted</span>
+            {phoneScripts?.series[series.id] && (
+              <>
+                <span>•</span>
+                <span title={phoneScripts.device ? `Sleeper-Cell on ${phoneScripts.device}` : 'Sleeper-Cell'}>
+                  {phoneScripts.series[series.id].done}/{phoneScripts.series[series.id].total} done on phone
+                </span>
+              </>
+            )}
           </div>
           
           {/* Progress bar */}
@@ -802,6 +814,12 @@ export default function SeriesScriptView() {
                       </div>
                       
                       <div className="flex items-center gap-2">
+                        {phoneScripts?.chapters[chapter.id] && (
+                          <PhoneScriptBadge
+                            script={phoneScripts.chapters[chapter.id]}
+                            device={phoneScripts.device}
+                          />
+                        )}
                         {getStatusBadge(chapter)}
 
                         {voiceoverRuns[chapter.id] ? (

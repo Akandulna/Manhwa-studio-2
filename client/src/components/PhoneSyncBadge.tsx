@@ -1,5 +1,6 @@
 /**
  * PhoneSyncBadge — has the Sleeper-Cell phone app downloaded this series' R2 zip?
+ * PhoneScriptBadge (below) — has the phone written this chapter's narration script?
  *
  * The phone writes a receipt to the bucket after each sync (see r2Service
  * getPhoneSync). Shown only for series with a zip in R2. Colours follow the
@@ -7,7 +8,7 @@
  */
 
 import { Loader2, Smartphone } from 'lucide-react'
-import type { PhoneSeriesSync } from '@/lib/api'
+import type { PhoneChapterScript, PhoneSeriesSync } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 const STYLES: Record<PhoneSeriesSync['state'], { label: string; className: string }> = {
@@ -56,6 +57,39 @@ export function PhoneSyncBadge({ sync, device }: { sync: PhoneSeriesSync; device
       {sync.state === 'downloading'
         ? <Loader2 className="h-3 w-3 animate-spin" />
         : <Smartphone className="h-3 w-3" />}
+      {style.label}
+    </span>
+  )
+}
+
+const SCRIPT_STYLES: Record<PhoneChapterScript['status'], { label: string; className: string; hint: string }> = {
+  done: { label: 'Phone: Done', className: 'bg-emerald-600 text-white', hint: 'Script, summary and closing saved' },
+  needs_summary: {
+    label: 'Phone: Needs summary',
+    className: 'bg-amber-500 text-white',
+    hint: 'Script saved without its summary or closing paragraph'
+  },
+  stale: {
+    label: 'Phone: Stale',
+    className: 'bg-amber-500 text-white',
+    hint: 'An earlier chapter was saved again after this one'
+  }
+}
+
+/** PhoneScriptBadge — the chapter's narration script status in the Sleeper-Cell app (see usePhoneScripts). */
+export function PhoneScriptBadge({ script, device }: { script: PhoneChapterScript; device: string | null }) {
+  const style = SCRIPT_STYLES[script.status]
+  const saved = formatWhen(script.savedAt)
+  const where = device ? `on the phone (${device})` : 'on the phone'
+  return (
+    <span
+      title={`${style.hint} ${where}${saved ? `, ${saved}` : ''}`}
+      className={cn(
+        'inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-transparent px-2 py-0.5 text-xs font-semibold shadow-sm',
+        style.className
+      )}
+    >
+      <Smartphone className="h-3 w-3" />
       {style.label}
     </span>
   )
