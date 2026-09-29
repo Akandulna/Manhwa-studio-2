@@ -8,6 +8,10 @@
  *   GET  /usage    free-plan meters: bucket storage + this month's requests
  *   GET  /phone?fresh=1   which series' zips the Sleeper-Cell phone app has downloaded
  *   GET  /phone/scripts?seriesId=…   which chapters have a narration script on the phone
+ *   GET  /phone/crops?seriesId=…&chapterId=…   which pages have crop JSON on the phone, and the page Auto-run is on
+ *   GET  /phone/scripts/zip?seriesId=…   the phone's uploaded script zip for a series, and the last import
+ *   POST /phone/scripts/preview   { seriesId } — download + parse that zip, say what each chapter would get
+ *   POST /phone/scripts/import    { seriesId, etag, chapterIds } — attach the previewed scripts
  *   DELETE /objects?key=…   delete one object (free) to make room
  *   POST /upload   { seriesIds } — start uploading those series' folders
  *   POST /cancel   stop the running upload
@@ -23,6 +27,7 @@ import {
   deleteR2Object,
   getJob,
   getR2Usage,
+  getPhoneCrops,
   getPhoneScripts,
   getPhoneSync,
   getR2Config,
@@ -32,6 +37,7 @@ import {
   testR2Connection,
   updateR2Config
 } from '../services/r2Service.js'
+import { getPhoneScriptsZip, importPhoneScripts, previewPhoneScripts } from '../services/phoneScriptImport.js'
 
 function message(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
@@ -108,6 +114,54 @@ export function initR2Routes(io: Server): Router {
     } catch (error) {
       console.error('R2 phone scripts lookup failed:', error)
       res.status(400).json({ error: message(error, 'Could not read the phone scripts status') })
+    }
+  })
+
+  router.get('/phone/crops', async (req: Request, res: Response) => {
+    try {
+      const seriesId = typeof req.query.seriesId === 'string' ? req.query.seriesId : undefined
+      const chapterId = typeof req.query.chapterId === 'string' ? req.query.chapterId : undefined
+      res.json(await getPhoneCrops(seriesId, chapterId))
+    } catch (error) {
+      console.error('R2 phone crops lookup failed:', error)
+      res.status(400).json({ error: message(error, 'Could not read the phone crop status') })
+    }
+  })
+
+  router.get('/phone/scripts/zip', async (req: Request, res: Response) => {
+    try {
+      const seriesId = typeof req.query.seriesId === 'string' ? req.query.seriesId : ''
+      if (!seriesId) throw new Error('seriesId is required')
+      res.json(await getPhoneScriptsZip(seriesId))
+    } catch (error) {
+      console.error('R2 phone script zip lookup failed:', error)
+      res.status(400).json({ error: message(error, 'Could not look for the phone script zip') })
+    }
+  })
+
+  router.post('/phone/scripts/preview', async (req: Request, res: Response) => {
+    try {
+      const seriesId = req.body?.seriesId
+      if (typeof seriesId !== 'string' || !seriesId) throw new Error('seriesId is required')
+      res.json(await previewPhoneScripts(seriesId))
+    } catch (error) {
+      console.error('Phone script preview failed:', error)
+      res.status(400).json({ error: message(error, 'Could not read the phone script zip') })
+    }
+  })
+
+  router.post('/phone/scripts/import', async (req: Request, res: Response) => {
+    try {
+      const { seriesId, etag, chapterIds } = req.body ?? {}
+      if (typeof seriesId !== 'string' || !seriesId) throw new Error('seriesId is required')
+      if (typeof etag !== 'string' || !etag) throw new Error('etag is required')
+      if (!Array.isArray(chapterIds) || !chapterIds.every(id => typeof id === 'string')) {
+        throw new Error('chapterIds must be an array of strings')
+      }
+      res.json(await importPhoneScripts(seriesId, etag, chapterIds))
+    } catch (error) {
+      console.error('Phone script import failed:', error)
+      res.status(400).json({ error: message(error, 'Could not import the phone scripts') })
     }
   })
 

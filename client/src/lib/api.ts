@@ -2031,6 +2031,75 @@ export interface PhoneScriptsStatus {
   chapters: Record<string, PhoneChapterScript>
 }
 
+/**
+ * A page's crop JSON on the Sleeper-Cell phone (Image Clipper's Auto-run):
+ *   done:        crop pointers and metadata generated
+ *   in_progress: sections made, the ChatGPT rounds not finished
+ *   changed:     the page file was replaced since it was started, so it starts over
+ */
+export type PhonePageState = 'done' | 'in_progress' | 'changed'
+
+/** Crop pointers made on the Sleeper-Cell phone, from the receipt it writes to R2 as pages start and finish. */
+export interface PhoneCropsStatus {
+  configured: boolean
+  /** When the phone last reported; null if it never has. */
+  reportedAt: string | null
+  device: string | null
+  /** By series id: pages done on the phone out of those it has. */
+  series: Record<string, { done: number; total: number }>
+  /** By chapter id, for the series asked for; chapters with no page started are left out. */
+  chapters: Record<string, { done: number; total: number }>
+  /** The page Auto-run is on in the series asked for, or null when it isn't running there. */
+  working: { chapterId: string; page: string; since: string | null; paused: boolean } | null
+  /** By image filename, for the chapter asked for; pages not started are left out. */
+  pages: Record<string, PhonePageState>
+}
+
+/** The script zip the phone uploads once every chapter of a series is done ("Zip and upload to R2"). */
+export interface PhoneScriptsZip {
+  key: string
+  etag: string
+  size: number
+  uploadedAt: string | null
+}
+
+export interface PhoneScriptsZipStatus {
+  configured: boolean
+  /** Null until the phone has uploaded one for this series. */
+  zip: PhoneScriptsZip | null
+  /** The zip last imported into this series, if any. */
+  lastImport: { etag: string; at: string; chapters: number } | null
+}
+
+/**
+ * What importing does to one chapter:
+ *   new:     the desktop has no script yet
+ *   replace: the desktop has a different script
+ *   same:    the desktop already has exactly this script, summary and closing
+ */
+export interface PhoneImportChapter {
+  chapterId: string
+  number: number
+  folder: string
+  action: 'new' | 'replace' | 'same'
+  desktopStatus: string | null
+  hasSummary: boolean
+  hasClosing: boolean
+  savedAt: string | null
+  /** Voiceover sections were already split from the desktop's script. */
+  hasVoiceover: boolean
+  published: boolean
+}
+
+export interface PhoneImportPreview {
+  zip: PhoneScriptsZip
+  chapters: PhoneImportChapter[]
+  /** Chapter folders in the zip with no matching chapter here. */
+  unmatched: string[]
+  /** set: series has none · replace: phone has chapter 1 · keep: desktop's is kept · same · none: zip has no about */
+  about: 'set' | 'replace' | 'keep' | 'same' | 'none'
+}
+
 export const r2Api = {
   getStatus: () => fetchApi<R2Status>('/r2/status'),
 
@@ -2040,6 +2109,32 @@ export const r2Api = {
   /** With `seriesId`, also that series' chapters. */
   getPhoneScripts: (seriesId?: string) =>
     fetchApi<PhoneScriptsStatus>(`/r2/phone/scripts${seriesId ? `?seriesId=${encodeURIComponent(seriesId)}` : ''}`),
+
+  /** With `seriesId`, also that series' chapters and the page Auto-run is on; with `chapterId`, that chapter's pages. */
+  getPhoneCrops: (seriesId?: string, chapterId?: string) => {
+    const params = new URLSearchParams()
+    if (seriesId) params.set('seriesId', seriesId)
+    if (chapterId) params.set('chapterId', chapterId)
+    const query = params.toString()
+    return fetchApi<PhoneCropsStatus>(`/r2/phone/crops${query ? `?${query}` : ''}`)
+  },
+
+  getPhoneScriptsZip: (seriesId: string) =>
+    fetchApi<PhoneScriptsZipStatus>(`/r2/phone/scripts/zip?seriesId=${encodeURIComponent(seriesId)}`),
+
+  /** Downloads and parses the phone's script zip; nothing is changed yet. */
+  previewPhoneScripts: (seriesId: string) =>
+    fetchApi<PhoneImportPreview>('/r2/phone/scripts/preview', {
+      method: 'POST',
+      body: JSON.stringify({ seriesId })
+    }),
+
+  /** Attaches the previewed zip's scripts to `chapterIds`. */
+  importPhoneScripts: (seriesId: string, etag: string, chapterIds: string[]) =>
+    fetchApi<{ imported: number; aboutUpdated: boolean }>('/r2/phone/scripts/import', {
+      method: 'POST',
+      body: JSON.stringify({ seriesId, etag, chapterIds })
+    }),
 
   getUsage: () => fetchApi<R2Usage>('/r2/usage'),
 

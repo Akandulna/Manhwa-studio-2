@@ -10,6 +10,7 @@ import { usePublishedChapters } from '@/hooks/usePublishedChapters'
 import { PublishedBadge, publishedRowClass } from '@/components/PublishedBadge'
 import { PhoneScriptBadge } from '@/components/PhoneSyncBadge'
 import { usePhoneScripts } from '@/hooks/usePhoneScripts'
+import { PhoneScriptImport } from '@/components/narration/PhoneScriptImport'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { narrationApi, voiceoverApi, NarrationSeriesDetail, NarrationChapterSummary, AIStatus } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -638,6 +639,9 @@ export default function SeriesScriptView() {
           </CardContent>
         </Card>
       )}
+
+      {/* Scripts written on the Sleeper-Cell phone, uploaded as one zip */}
+      <PhoneScriptImport seriesId={series.id} phoneScripts={phoneScripts} onImported={loadSeries} />
 
       {/* Series-wide voiceover */}
       <Card className="mb-6">

@@ -85,7 +85,7 @@ export function getR2Config(): R2Config | null {
   }
 }
 
-function createClient(config: R2Config): S3Client {
+export function createClient(config: R2Config): S3Client {
   const client = new S3Client({
     region: 'auto',
     endpoint: `https://${config.accountId}.r2.cloudflarestorage.com`,
@@ -419,10 +419,12 @@ interface ScriptsReceipt {
 const PHONE_SCRIPT_STATES = new Set<string>(['done', 'needs_summary', 'stale'])
 
 /** The Library polls every few seconds, so HEADs are shared for this long across tabs. */
-const SCRIPTS_HEAD_MS = 2_000
-let scriptsCache: { bucket: string; key: string | null; etag: string | null; value: ScriptsReceipt; at: number } | null = null
+const RECEIPT_HEAD_MS = 2_000
+interface ReceiptCache { bucket: string; key: string | null; etag: string | null; value: object; at: number }
+/** By receipt name: the scripts and crops receipts are polled independently. */
+const receiptCaches = new Map<string, ReceiptCache>()
 
-function isNotFound(error: unknown): boolean {
+export function isNotFound(error: unknown): boolean {
   const status = (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode
   return status === 404 || (error as { name?: string }).name === 'NotFound'
 }
@@ -432,11 +434,12 @@ function isNotFound(error: unknown): boolean {
  * the bucket root is tried too. One HEAD (Class B) per look; the body is
  * fetched only when the phone has written a new receipt.
  */
-async function readScriptsReceipt(client: S3Client, config: R2Config): Promise<ScriptsReceipt> {
-  const cached = scriptsCache?.bucket === config.bucket ? scriptsCache : null
-  if (cached && Date.now() - cached.at < SCRIPTS_HEAD_MS) return cached.value
+async function readPolledReceipt<T extends object>(client: S3Client, config: R2Config, name: string): Promise<T> {
+  const found = receiptCaches.get(name)
+  const cached = found?.bucket === config.bucket ? found : null
+  if (cached && Date.now() - cached.at < RECEIPT_HEAD_MS) return cached.value as T
 
-  const candidates = [...new Set([`${config.prefix}${SCRIPTS_RECEIPT_NAME}`, SCRIPTS_RECEIPT_NAME])]
+  const candidates = [...new Set([`${config.prefix}${name}`, name])]
   // Try wherever it was found last time first, so a steady poll is a single HEAD.
   if (cached?.key) candidates.sort((a, b) => Number(b === cached.key) - Number(a === cached.key))
 
@@ -450,23 +453,23 @@ async function readScriptsReceipt(client: S3Client, config: R2Config): Promise<S
       throw error
     }
     if (cached?.key === key && cached.etag === etag) {
-      scriptsCache = { ...cached, at: Date.now() }
-      return cached.value
+      receiptCaches.set(name, { ...cached, at: Date.now() })
+      return cached.value as T
     }
     const res = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: key }))
-    let value: ScriptsReceipt = {}
+    let value: object = {}
     try {
       const parsed = JSON.parse((await res.Body?.transformToString()) ?? '{}')
       if (parsed && typeof parsed === 'object') value = parsed
     } catch {
       console.warn(`R2: ${key} is not valid JSON; ignoring it`)
     }
-    scriptsCache = { bucket: config.bucket, key, etag, value, at: Date.now() }
-    return value
+    receiptCaches.set(name, { bucket: config.bucket, key, etag, value, at: Date.now() })
+    return value as T
   }
 
-  scriptsCache = { bucket: config.bucket, key: null, etag: null, value: {}, at: Date.now() }
-  return {}
+  receiptCaches.set(name, { bucket: config.bucket, key: null, etag: null, value: {}, at: Date.now() })
+  return {} as T
 }
 
 /**
@@ -477,7 +480,7 @@ export async function getPhoneScripts(seriesId?: string): Promise<PhoneScriptsSt
   const config = getR2Config()
   if (!config) return { configured: false, reportedAt: null, device: null, series: {}, chapters: {} }
 
-  const receipt = await readScriptsReceipt(createClient(config), config)
+  const receipt = await readPolledReceipt<ScriptsReceipt>(createClient(config), config, SCRIPTS_RECEIPT_NAME)
   const phoneSeries = receipt.series && typeof receipt.series === 'object' ? receipt.series : {}
 
   const rows = await prisma.series.findMany({ select: { id: true, rootFolder: true } })
@@ -507,6 +510,117 @@ export async function getPhoneScripts(seriesId?: string): Promise<PhoneScriptsSt
     series,
     chapters
   }
+}
+
+/**
+ * Sleeper-Cell also makes crop pointers on the phone (Image Clipper's
+ * Auto-run, page after page in ChatGPT). As pages start and finish it writes
+ * this object: `{ device, updatedAt, series: { <series folder>: { total, done,
+ * working?: { chapter, page, since, paused }, chapters: { <chapter folder>:
+ * { total, done, pages: { <page file>: done|in_progress|changed } } } } } }`,
+ * leaving out pages not started and chapters with none started. Keep the name
+ * in step with RECEIPT_NAME in its ClipperReceipt.kt.
+ */
+const CROPS_RECEIPT_NAME = '_sleeper-cell-crops.json'
+
+export type PhonePageState = 'done' | 'in_progress' | 'changed'
+
+export interface PhoneCropsWorking {
+  chapterId: string
+  /** The page file, the same name as the image in the chapter folder. */
+  page: string
+  /** When Auto-run started this page. */
+  since: string | null
+  paused: boolean
+}
+
+export interface PhoneCropsStatus {
+  configured: boolean
+  /** When the phone last wrote the receipt; null if it never has. */
+  reportedAt: string | null
+  device: string | null
+  /** By series id: pages with their JSON files on the phone out of those it has. */
+  series: Record<string, { done: number; total: number }>
+  /** By chapter id, for the series asked for; chapters with no page started are left out. */
+  chapters: Record<string, { done: number; total: number }>
+  /** The page Auto-run is on in the series asked for, or null when it isn't running there. */
+  working: PhoneCropsWorking | null
+  /** By page file, for the chapter asked for; pages not started are left out. */
+  pages: Record<string, PhonePageState>
+}
+
+interface CropsReceipt {
+  device?: string
+  updatedAt?: string
+  series?: Record<string, {
+    total?: number
+    done?: number
+    working?: { chapter?: string; page?: string; since?: string; paused?: boolean }
+    chapters?: Record<string, { total?: number; done?: number; pages?: Record<string, string> }>
+  }>
+}
+
+const PHONE_PAGE_STATES = new Set<string>(['done', 'in_progress', 'changed'])
+
+/**
+ * The phone clears "working" when Auto-run ends, but a run killed with the app
+ * never does. A page takes minutes, fix rounds included, so one still "working"
+ * after this long is taken as a dead run rather than a slow one.
+ */
+const WORKING_STALE_MS = 45 * 60_000
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+/**
+ * Crop progress on the phone. Series, chapters and pages are matched by
+ * folder and file name, the names the R2 zip carries to the phone.
+ */
+export async function getPhoneCrops(seriesId?: string, chapterId?: string): Promise<PhoneCropsStatus> {
+  const empty = { reportedAt: null, device: null, series: {}, chapters: {}, working: null, pages: {} }
+  const config = getR2Config()
+  if (!config) return { configured: false, ...empty }
+
+  const receipt = await readPolledReceipt<CropsReceipt>(createClient(config), config, CROPS_RECEIPT_NAME)
+  const phoneSeries = isObject(receipt.series) ? receipt.series : {}
+
+  const rows = await prisma.series.findMany({ select: { id: true, rootFolder: true } })
+  const status: PhoneCropsStatus = { configured: true, ...empty }
+  status.reportedAt = receipt.updatedAt ?? null
+  status.device = receipt.device ?? null
+  for (const row of rows) {
+    const entry = phoneSeries[path.basename(row.rootFolder)]
+    if (!isObject(entry)) continue
+    status.series[row.id] = { done: Number(entry.done) || 0, total: Number(entry.total) || 0 }
+    if (row.id !== seriesId) continue
+
+    const chapterRows = await prisma.chapter.findMany({ where: { seriesId: row.id }, select: { id: true, folderPath: true } })
+    const byFolder = new Map(chapterRows.map(c => [path.basename(c.folderPath), c.id]))
+    const phoneChapters = isObject(entry.chapters) ? entry.chapters : {}
+    for (const [folder, chapter] of Object.entries(phoneChapters)) {
+      const id = byFolder.get(folder)
+      if (!id || !isObject(chapter)) continue
+      status.chapters[id] = { done: Number(chapter.done) || 0, total: Number(chapter.total) || 0 }
+      if (id !== chapterId || !isObject(chapter.pages)) continue
+      for (const [page, state] of Object.entries(chapter.pages)) {
+        if (PHONE_PAGE_STATES.has(state)) status.pages[page] = state as PhonePageState
+      }
+    }
+
+    const working = entry.working
+    const workingChapter = isObject(working) && working.chapter ? byFolder.get(working.chapter) : undefined
+    const since = isObject(working) && working.since ? Date.parse(working.since) : NaN
+    if (workingChapter && working?.page && !(Date.now() - since > WORKING_STALE_MS)) {
+      status.working = {
+        chapterId: workingChapter,
+        page: working.page,
+        since: working.since ?? null,
+        paused: working.paused === true
+      }
+    }
+  }
+  return status
 }
 
 const PART_SIZE = 16 * 1024 * 1024

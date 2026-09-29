@@ -1,0 +1,288 @@
+/**
+ * PhoneScriptImport — "Import from phone" on a series' chapter list.
+ *
+ * Sleeper-Cell writes narration scripts on the phone. Once every chapter is
+ * done there, its "Zip and upload to R2" puts the scripts in R2; this card's
+ * button lights up then. Clicking it downloads and parses the zip (nothing is
+ * changed yet) and shows what each chapter would get; confirming attaches
+ * script.md plus the summary and closing paragraph from continuity.json to
+ * each ticked chapter. Voiceover is then started by hand as usual.
+ *
+ * Chapters that already have voiceover sections or are published start
+ * unticked, since replacing their script leaves that audio out of step.
+ */
+
+import { useEffect, useMemo, useState } from 'react'
+import { AlertTriangle, CheckCircle, Download, Loader2, Smartphone } from 'lucide-react'
+import {
+  r2Api,
+  PhoneImportChapter,
+  PhoneImportPreview,
+  PhoneScriptsStatus,
+  PhoneScriptsZipStatus
+} from '@/lib/api'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Card, CardContent } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog'
+import { useToast } from '@/components/ui/use-toast'
+
+/** The phone's upload isn't announced anywhere, so the zip is looked for this often. */
+const ZIP_POLL_MS = 30_000
+
+function formatWhen(iso: string | null | undefined): string | null {
+  if (!iso) return null
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime())
+    ? null
+    : date.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+}
+
+const ticksByDefault = (c: PhoneImportChapter) => c.action !== 'same' && !c.hasVoiceover && !c.published
+
+const ABOUT_NOTES: Record<PhoneImportPreview['about'], string | null> = {
+  set: 'The series has no "about" text yet; the phone\'s will be used.',
+  replace: 'The phone rewrote chapter 1, so its "about" text replaces this series\' one.',
+  keep: 'The phone\'s "about" text is ignored: it didn\'t start from chapter 1, so the series\' own is kept.',
+  same: null,
+  none: null
+}
+
+interface Props {
+  seriesId: string
+  /** From usePhoneScripts(seriesId). */
+  phoneScripts: PhoneScriptsStatus | null
+  onImported: () => void
+}
+
+export function PhoneScriptImport({ seriesId, phoneScripts, onImported }: Props) {
+  const { toast } = useToast()
+  const [zipStatus, setZipStatus] = useState<PhoneScriptsZipStatus | null>(null)
+  const [previewing, setPreviewing] = useState(false)
+  const [preview, setPreview] = useState<PhoneImportPreview | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [importing, setImporting] = useState(false)
+
+  const phoneSeries = phoneScripts?.series[seriesId]
+
+  // Look for the zip on open, whenever the phone reports, and every so often while visible.
+  useEffect(() => {
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const check = async () => {
+      clearTimeout(timer)
+      try {
+        const next = await r2Api.getPhoneScriptsZip(seriesId)
+        if (cancelled) return
+        setZipStatus(prev => (prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next))
+        if (!next.configured) return
+      } catch {
+        // Advisory; try again later.
+      }
+      if (!cancelled && document.visibilityState === 'visible') timer = setTimeout(check, ZIP_POLL_MS)
+    }
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') check()
+      else clearTimeout(timer)
+    }
+    check()
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [seriesId, phoneScripts?.reportedAt])
+
+  const zip = zipStatus?.zip ?? null
+  const allDone = !!phoneSeries && phoneSeries.total > 0 && phoneSeries.done === phoneSeries.total
+  const ready = allDone && !!zip
+  const alreadyImported = !!zip && zipStatus?.lastImport?.etag === zip.etag
+
+  // A chapter saved on the phone after the upload isn't in the zip.
+  const zipBehindPhone = useMemo(() => {
+    if (!zip?.uploadedAt || !phoneScripts) return false
+    const uploaded = new Date(zip.uploadedAt).getTime()
+    return Object.values(phoneScripts.chapters).some(c => c.savedAt && new Date(c.savedAt).getTime() > uploaded)
+  }, [zip?.uploadedAt, phoneScripts])
+
+  if (!zipStatus?.configured || (!phoneSeries && !zip)) return null
+
+  const handlePreview = async () => {
+    setPreviewing(true)
+    try {
+      const result = await r2Api.previewPhoneScripts(seriesId)
+      setPreview(result)
+      setSelected(new Set(result.chapters.filter(ticksByDefault).map(c => c.chapterId)))
+    } catch (error) {
+      toast({
+        title: 'Could not read the phone scripts',
+        description: error instanceof Error ? error.message : 'Download failed',
+        variant: 'destructive'
+      })
+    } finally {
+      setPreviewing(false)
+    }
+  }
+
+  const handleImport = async () => {
+    if (!preview) return
+    setImporting(true)
+    try {
+      const result = await r2Api.importPhoneScripts(seriesId, preview.zip.etag, [...selected])
+      toast({
+        title: 'Phone scripts attached',
+        description: `${result.imported} chapter script(s) imported${result.aboutUpdated ? ', about text updated' : ''}. Voiceover is ready to run.`
+      })
+      setPreview(null)
+      setZipStatus(await r2Api.getPhoneScriptsZip(seriesId).catch(() => zipStatus))
+      onImported()
+    } catch (error) {
+      toast({
+        title: 'Import failed',
+        description: error instanceof Error ? error.message : 'Could not import the phone scripts',
+        variant: 'destructive'
+      })
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  const toggle = (id: string, on: boolean) =>
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (on) next.add(id)
+      else next.delete(id)
+      return next
+    })
+
+  let note: string
+  if (!allDone) {
+    note = phoneSeries
+      ? `${phoneSeries.done}/${phoneSeries.total} chapters done on the phone — finish them all, then use "Zip and upload to R2" there`
+      : 'Waiting for the phone to report its scripts'
+  } else if (!zip) {
+    note = 'Every chapter is done on the phone — use "Zip and upload to R2" there to send them'
+  } else if (alreadyImported) {
+    note = `Imported ${formatWhen(zipStatus.lastImport?.at) ?? ''} (${zipStatus.lastImport?.chapters ?? 0} chapters)`
+  } else {
+    note = `Uploaded from the phone ${formatWhen(zip.uploadedAt) ?? ''} — ready to import`
+  }
+
+  return (
+    <>
+      <Card className="mb-6">
+        <CardContent className="py-4">
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="flex items-center gap-2">
+              <Smartphone className="h-4 w-4 text-muted-foreground" />
+              <span className="font-medium">Phone scripts:</span>
+            </div>
+
+            <Button
+              size="sm"
+              variant={ready && !alreadyImported ? 'default' : 'outline'}
+              onClick={handlePreview}
+              disabled={!ready || previewing}
+              title={ready ? 'Download the phone\'s scripts and choose which chapters to attach them to' : note}
+            >
+              {previewing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Download className="h-4 w-4 mr-2" />}
+              {alreadyImported ? 'Import again' : 'Import from phone'}
+            </Button>
+
+            <span className="text-sm text-muted-foreground flex items-center gap-1">
+              {alreadyImported && <CheckCircle className="h-4 w-4 text-emerald-600" />}
+              {note}
+            </span>
+
+            {ready && zipBehindPhone && (
+              <span className="text-sm text-amber-600 flex items-center gap-1">
+                <AlertTriangle className="h-4 w-4" />
+                A chapter was saved on the phone after this upload — upload again from the phone to include it
+              </span>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Dialog open={!!preview} onOpenChange={open => !open && !importing && setPreview(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Import scripts from the phone</DialogTitle>
+            <DialogDescription>
+              Each ticked chapter gets the phone's script, summary and closing paragraph. Uploaded{' '}
+              {formatWhen(preview?.zip.uploadedAt) ?? 'recently'}.
+            </DialogDescription>
+          </DialogHeader>
+
+          {preview && (
+            <div className="space-y-3">
+              <div className="max-h-[50vh] overflow-y-auto rounded-md border divide-y">
+                {preview.chapters.length === 0 && (
+                  <p className="p-3 text-sm text-muted-foreground">No chapter in the zip matches a chapter here.</p>
+                )}
+                {preview.chapters.map(c => (
+                  <label key={c.chapterId} className="flex items-center gap-3 p-2.5 text-sm cursor-pointer hover:bg-accent">
+                    <Checkbox
+                      checked={selected.has(c.chapterId)}
+                      onCheckedChange={v => toggle(c.chapterId, v === true)}
+                      disabled={importing}
+                    />
+                    <span className="font-medium w-28 shrink-0">Chapter {c.number}</span>
+                    <span className="flex flex-wrap items-center gap-1.5">
+                      {c.action === 'new' && <Badge variant="success">New</Badge>}
+                      {c.action === 'replace' && (
+                        <Badge variant="outline" className="border-amber-500 text-amber-600">
+                          Replaces {c.desktopStatus ?? 'existing'} script
+                        </Badge>
+                      )}
+                      {c.action === 'same' && <Badge variant="outline">Already the same</Badge>}
+                      {c.hasVoiceover && c.action !== 'same' && (
+                        <Badge variant="outline" className="border-amber-500 text-amber-600">
+                          Has voiceover — re-split after import
+                        </Badge>
+                      )}
+                      {c.published && <Badge variant="secondary">Published</Badge>}
+                      {(!c.hasSummary || !c.hasClosing) && (
+                        <Badge variant="outline" className="text-muted-foreground">
+                          No {!c.hasSummary ? 'summary' : 'closing'}
+                        </Badge>
+                      )}
+                    </span>
+                  </label>
+                ))}
+              </div>
+
+              {preview.unmatched.length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Not matched to a chapter here (skipped): {preview.unmatched.join(', ')}
+                </p>
+              )}
+              {ABOUT_NOTES[preview.about] && (
+                <p className="text-xs text-muted-foreground">{ABOUT_NOTES[preview.about]}</p>
+              )}
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPreview(null)} disabled={importing}>
+              Cancel
+            </Button>
+            <Button onClick={handleImport} disabled={importing || selected.size === 0}>
+              {importing && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Import {selected.size} chapter{selected.size === 1 ? '' : 's'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}

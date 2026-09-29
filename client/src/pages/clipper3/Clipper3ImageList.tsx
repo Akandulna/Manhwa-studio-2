@@ -82,6 +82,8 @@ import { CandidateOverlay } from '@/components/clipper3/CandidateOverlay'
 import { ReviewWorkspace } from '@/components/clipper3/ReviewWorkspace'
 import { AutoRunBadge, AutoRunDialog, AutoRunStrip, isActiveStep, useAutoRun } from '@/components/clipper3/AutoRun'
 import { seriesSlug, stemOf, exportedFilenameFor } from '@/lib/clipper3Naming'
+import { PhonePageBadge, PhoneWorkingBadge } from '@/components/PhoneSyncBadge'
+import { usePhoneCrops } from '@/hooks/usePhoneCrops'
 
 export default function Clipper3ImageList() {
   const { id: chapterId } = useParams<{ id: string }>()
@@ -172,6 +174,14 @@ export default function Clipper3ImageList() {
 
   const images = data?.images ?? []
   const doneCount = useMemo(() => images.filter(i => i.status === 'done').length, [images])
+
+  // Crop pointers the Sleeper-Cell phone is making for this chapter, live from
+  // its R2 receipt: each page's state there, and the page its Auto-run is on.
+  // Pages match by filename, which the R2 zip carries to the phone unchanged.
+  const phoneCrops = usePhoneCrops(data?.seriesId, chapterId)
+  const phoneChapter = chapterId ? phoneCrops?.chapters[chapterId] : undefined
+  const phoneWorking = phoneCrops?.working?.chapterId === chapterId ? phoneCrops?.working ?? null : null
+  const rowRefs = useRef(new Map<string, HTMLDivElement>())
 
   // The ChatGPT loop run through the OpenAI API (server-side background job).
   // When it finishes the list is reloaded, and `autoRunVersion` makes an open
@@ -1235,8 +1245,23 @@ export default function Clipper3ImageList() {
           <Images className="h-3.5 w-3.5" />
           {images.length} file{images.length === 1 ? '' : 's'}
         </span>
-        <span className="text-xs text-muted-foreground ml-auto">
+        {/* Tapping the phone chip scrolls to the page it is on. */}
+        {phoneWorking && (
+          <button
+            type="button"
+            className="ml-2 min-w-0"
+            onClick={() => rowRefs.current.get(phoneWorking.page)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+          >
+            <PhoneWorkingBadge page={phoneWorking.page} paused={phoneWorking.paused} device={phoneCrops?.device ?? null} />
+          </button>
+        )}
+        <span className="text-xs text-muted-foreground ml-auto flex-shrink-0">
           {doneCount}/{images.length} done
+          {phoneChapter && (
+            <span title={phoneCrops?.device ? `Sleeper-Cell on ${phoneCrops.device}` : 'Sleeper-Cell'}>
+              {' '}· {phoneChapter.done}/{phoneChapter.total} on phone
+            </span>
+          )}
         </span>
 
         <Button
@@ -1374,15 +1399,31 @@ export default function Clipper3ImageList() {
           {images.map((img, index) => {
             const isDone = img.status === 'done'
             const autoPage = autoRun.visible ? autoRun.pageStatus(img.filename) : null
+            const phonePage = phoneCrops?.pages[img.filename]
+            const phoneOnThis = phoneWorking?.page === img.filename
             return (
               <Card
                 key={img.filename}
-                className="cursor-pointer hover:border-primary transition-colors"
+                ref={el => {
+                  if (el) rowRefs.current.set(img.filename, el)
+                  else rowRefs.current.delete(img.filename)
+                }}
+                className={`cursor-pointer hover:border-primary transition-colors ${
+                  phoneOnThis ? 'border-sky-500 ring-2 ring-sky-500/40' : ''
+                }`}
                 onClick={() => setActiveIndex(index)}
               >
                 <CardContent className="p-3 flex items-center gap-3">
-                  <span className="text-xs text-muted-foreground w-8 text-right flex-shrink-0">
-                    {index + 1}
+                  {/* The phone's Auto-run points at the page it is on. */}
+                  <span className="text-xs text-muted-foreground w-8 flex-shrink-0 flex items-center justify-end">
+                    {phoneOnThis ? (
+                      <ChevronRight
+                        className={`h-5 w-5 text-sky-500 ${phoneWorking?.paused ? '' : 'animate-pulse'}`}
+                        aria-label="The phone is on this page"
+                      />
+                    ) : (
+                      index + 1
+                    )}
                   </span>
                   <img
                     src={clipper3Api.getImageUrl(chapterId!, img.filename)}
@@ -1409,6 +1450,11 @@ export default function Clipper3ImageList() {
                       )}
                     </p>
                   </div>
+                  {phoneOnThis && phoneWorking ? (
+                    <PhoneWorkingBadge page={img.filename} paused={phoneWorking.paused} device={phoneCrops?.device ?? null} showPage={false} />
+                  ) : phonePage && (
+                    <PhonePageBadge state={phonePage} device={phoneCrops?.device ?? null} />
+                  )}
                   {autoPage && autoPage.step !== 'queued' && <AutoRunBadge page={autoPage} />}
                   {isDone ? (
                     <Badge variant="success" className="flex items-center gap-1 flex-shrink-0">

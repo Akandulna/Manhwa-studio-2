@@ -8,6 +8,8 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { usePublishedChapters } from '@/hooks/usePublishedChapters'
 import { PublishedBadge, publishedRowClass } from '@/components/PublishedBadge'
+import { PhoneCropsBadge } from '@/components/PhoneSyncBadge'
+import { usePhoneCrops } from '@/hooks/usePhoneCrops'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -96,6 +98,9 @@ export default function Clipper3SeriesView() {
   // Chapters already rendered to video, so the user can skip re-cutting them.
   const { isPublished } = usePublishedChapters(id)
   const [summaries, setSummaries] = useState<Record<string, Clipper3ChapterSummary>>({})
+  // Crop pointers the Sleeper-Cell phone is making, live from its R2 receipt.
+  const phoneCrops = usePhoneCrops(id)
+  const phoneSeries = id ? phoneCrops?.series[id] : undefined
 
   const { toast } = useToast()
   const {
@@ -531,6 +536,14 @@ export default function Clipper3SeriesView() {
               <span>{seriesChapters.length} chapters ready for pointer detection</span>
               <span>•</span>
               <span>{attachedCount} fully attached</span>
+              {phoneSeries && (
+                <>
+                  <span>•</span>
+                  <span title={phoneCrops?.device ? `Sleeper-Cell on ${phoneCrops.device}` : 'Sleeper-Cell'}>
+                    {phoneSeries.done}/{phoneSeries.total} pages done on phone
+                  </span>
+                </>
+              )}
             </div>
 
             <div className="max-w-md mt-3">
@@ -707,7 +720,9 @@ export default function Clipper3SeriesView() {
             const card = (
               <Card className={`cursor-pointer transition-colors group ${
                 isSelected ? 'border-primary bg-accent' : 'hover:border-primary'
-              } ${isPublished(chapter.id) ? publishedRowClass : ''}`}>
+              } ${isPublished(chapter.id) ? publishedRowClass : ''} ${
+                phoneCrops?.working?.chapterId === chapter.id ? 'ring-2 ring-sky-500/60' : ''
+              }`}>
                 <CardContent className="p-4">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0">
@@ -738,6 +753,14 @@ export default function Clipper3SeriesView() {
                     <AttachedStatusBadge summary={summaries[chapter.id]} />
                     <ChoppedStatusBadge summary={summaries[chapter.id]} />
                     {isPublished(chapter.id) && <PublishedBadge />}
+                    {phoneCrops && (phoneCrops.chapters[chapter.id] || phoneCrops.working?.chapterId === chapter.id) && (
+                      <PhoneCropsBadge
+                        done={phoneCrops.chapters[chapter.id]?.done ?? 0}
+                        total={phoneCrops.chapters[chapter.id]?.total ?? chapter.pageCount}
+                        working={phoneCrops.working?.chapterId === chapter.id ? phoneCrops.working : null}
+                        device={phoneCrops.device}
+                      />
+                    )}
                   </div>
                 </CardContent>
               </Card>
