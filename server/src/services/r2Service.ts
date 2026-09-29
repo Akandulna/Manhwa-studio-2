@@ -24,7 +24,8 @@
  *
  * Credentials are set in Settings → Cloudflare, which writes them to the
  * server's .env (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
- * R2_BUCKET, optional R2_PREFIX / R2_CONCURRENCY).
+ * R2_BUCKET, optional R2_PREFIX / R2_CONCURRENCY). An unset R2_PREFIX means
+ * DEFAULT_R2_PREFIX, the folder Sleeper-Cell reads its manhwa from.
  *
  * Only one job runs at a time. Its state lives in memory and is pushed to the
  * client as `r2:progress`; the last finished job stays readable through
@@ -64,9 +65,16 @@ export function missingR2Env(): string[] {
   return REQUIRED_ENV.filter(key => !process.env[key]?.trim())
 }
 
+/** Bucket folder used when R2_PREFIX is absent from .env. An explicit empty value means the bucket root. */
+export const DEFAULT_R2_PREFIX = 'Manhwa'
+
+function prefixEnv(): string {
+  return (process.env.R2_PREFIX ?? DEFAULT_R2_PREFIX).trim().replace(/^\/+|\/+$/g, '')
+}
+
 export function getR2Config(): R2Config | null {
   if (missingR2Env().length > 0) return null
-  const rawPrefix = (process.env.R2_PREFIX || '').trim().replace(/^\/+|\/+$/g, '')
+  const rawPrefix = prefixEnv()
   return {
     accountId: process.env.R2_ACCOUNT_ID!.trim(),
     accessKeyId: process.env.R2_ACCESS_KEY_ID!.trim(),
@@ -100,7 +108,7 @@ export function publicR2Config() {
     missing: missingR2Env(),
     accountId: env('R2_ACCOUNT_ID'),
     bucket: env('R2_BUCKET'),
-    prefix: env('R2_PREFIX'),
+    prefix: prefixEnv(),
     concurrency: Math.max(1, Number(env('R2_CONCURRENCY')) || 4),
     hasAccessKey: !!accessKeyId,
     accessKeyHint: accessKeyId ? `…${accessKeyId.slice(-4)}` : null,

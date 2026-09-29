@@ -187,7 +187,7 @@ export function CloudflareR2Card({ onSaved }: { onSaved?: () => void } = {}) {
                   id="r2Prefix"
                   value={prefix}
                   onChange={(e) => setPrefix(e.target.value)}
-                  placeholder="e.g. backup"
+                  placeholder="Manhwa"
                   className="font-mono"
                   autoComplete="off"
                 />

@@ -3,7 +3,9 @@
 // The server still lives in this repo and runs from server/ exactly as in dev
 // (same .env, dev.db, downloads/, ml venvs), so the app never moves data.
 // On launch: attach to a server already on PORT (e.g. `npm run dev`), or start
-// one with the system Node + tsx, then load the built client it serves.
+// one with `tsx watch`; same for Vite on :5173. The window loads Vite, so code
+// edits show up live (HMR for the client, auto-restart for the server). If Vite
+// can't start, it falls back to the built client the server serves.
 const { app, BrowserWindow, Menu, shell, dialog } = require('electron')
 const { spawn, spawnSync } = require('child_process')
 const fs = require('fs')
@@ -14,13 +16,18 @@ const REPO_ROOT = app.isPackaged
   ? require('./app-config.json').repoRoot
   : path.resolve(__dirname, '..')
 const SERVER_DIR = path.join(REPO_ROOT, 'server')
-const CLIENT_INDEX = path.join(REPO_ROOT, 'client', 'dist', 'index.html')
+const CLIENT_DIR = path.join(REPO_ROOT, 'client')
+const CLIENT_INDEX = path.join(CLIENT_DIR, 'dist', 'index.html')
+const TSX_CLI = path.join(SERVER_DIR, 'node_modules', 'tsx', 'dist', 'cli.mjs')
+const VITE_CLI = path.join(CLIENT_DIR, 'node_modules', 'vite', 'bin', 'vite.js')
 const LOG_DIR = app.getPath('logs')
 const LOG_FILE = path.join(LOG_DIR, 'server.log')
+const VITE_LOG_FILE = path.join(LOG_DIR, 'vite.log')
 const STARTUP_TIMEOUT_MS = 120_000
 
 let mainWindow = null
 let serverProc = null // only set when this app started the server
+let viteProc = null // likewise for Vite
 let quitting = false
 let stopping = false // intentional stop (restart/quit): don't show the crash page
 
@@ -36,6 +43,9 @@ function readPort() {
 }
 const PORT = readPort()
 const ORIGIN = `http://localhost:${PORT}`
+// Must be 5173: the server's socket.io CORS only allows that origin.
+const VITE_ORIGIN = 'http://localhost:5173'
+const isAppUrl = (url) => url.startsWith(ORIGIN) || url.startsWith(VITE_ORIGIN)
 
 /**
  * Apps opened from Finder get a bare PATH (/usr/bin:/bin...), which would hide
@@ -62,9 +72,9 @@ function findNode(envPath) {
   return null
 }
 
-function checkHealth() {
+function checkUrl(url) {
   return new Promise((resolve) => {
-    const req = http.get(`${ORIGIN}/api/health`, { timeout: 2000 }, (res) => {
+    const req = http.get(url, { timeout: 2000 }, (res) => {
       res.resume()
       resolve(res.statusCode === 200)
     })
@@ -72,6 +82,8 @@ function checkHealth() {
     req.on('timeout', () => { req.destroy(); resolve(false) })
   })
 }
+const checkHealth = () => checkUrl(`${ORIGIN}/api/health`)
+const checkVite = () => checkUrl(VITE_ORIGIN)
 
 function logTail(lines = 40) {
   try {
@@ -81,22 +93,32 @@ function logTail(lines = 40) {
   }
 }
 
-function startServer() {
-  const envPath = loginShellPath()
-  const nodeBin = findNode(envPath)
-  if (!nodeBin) throw new Error('Could not find `node` on your shell PATH.')
+let shellEnv = null
+function nodeEnv() {
+  if (!shellEnv) {
+    const envPath = loginShellPath()
+    shellEnv = { envPath, nodeBin: findNode(envPath) }
+  }
+  if (!shellEnv.nodeBin) throw new Error('Could not find `node` on your shell PATH.')
+  return shellEnv
+}
 
+function spawnLogged(label, logFile, cwd, args) {
+  const { envPath, nodeBin } = nodeEnv()
   fs.mkdirSync(LOG_DIR, { recursive: true })
-  const log = fs.openSync(LOG_FILE, 'a')
-  fs.writeSync(log, `\n==== ${new Date().toISOString()} starting server (${nodeBin}) ====\n`)
-
-  // `node --import tsx` runs src/ directly (no build step, always current code)
-  // in a single process, so SIGINT reaches index.ts's graceful shutdown.
-  serverProc = spawn(nodeBin, ['--import', 'tsx', 'src/index.ts'], {
-    cwd: SERVER_DIR,
-    env: { ...process.env, PATH: envPath, NODE_ENV: 'production' },
+  const log = fs.openSync(logFile, 'a')
+  fs.writeSync(log, `\n==== ${new Date().toISOString()} starting ${label} (${nodeBin}) ====\n`)
+  return spawn(nodeBin, args, {
+    cwd,
+    env: { ...process.env, PATH: envPath },
     stdio: ['ignore', log, log],
   })
+}
+
+function startServer() {
+  // `tsx watch` runs src/ directly (no build step) and restarts on edits,
+  // forwarding SIGINT so index.ts's graceful shutdown still runs.
+  serverProc = spawnLogged('server', LOG_FILE, SERVER_DIR, [TSX_CLI, 'watch', 'src/index.ts'])
   serverProc.on('exit', (code, signal) => {
     fs.appendFileSync(LOG_FILE, `==== server exited (code ${code}, signal ${signal}) ====\n`)
     serverProc = null
@@ -104,14 +126,36 @@ function startServer() {
   })
 }
 
-async function waitForServer() {
+function startVite() {
+  viteProc = spawnLogged('vite', VITE_LOG_FILE, CLIENT_DIR,
+    [VITE_CLI, '--port', '5173', '--strictPort', '--clearScreen', 'false'])
+  viteProc.on('exit', (code, signal) => {
+    fs.appendFileSync(VITE_LOG_FILE, `==== vite exited (code ${code}, signal ${signal}) ====\n`)
+    viteProc = null
+  })
+}
+
+async function waitFor(check, getProc) {
   const deadline = Date.now() + STARTUP_TIMEOUT_MS
   while (Date.now() < deadline) {
-    if (await checkHealth()) return true
-    if (!serverProc) return false // exited during startup
+    if (await check()) return true
+    if (!getProc()) return false // exited during startup
     await new Promise((r) => setTimeout(r, 500))
   }
   return false
+}
+const waitForServer = () => waitFor(checkHealth, () => serverProc)
+
+/** Vite dev server if it is (or can be made) available, else the built client. */
+async function clientUrl() {
+  if (await checkVite()) return VITE_ORIGIN
+  if (fs.existsSync(VITE_CLI)) {
+    try {
+      startVite()
+      if (await waitFor(checkVite, () => viteProc)) return VITE_ORIGIN
+    } catch {}
+  }
+  return fs.existsSync(CLIENT_INDEX) ? ORIGIN : null
 }
 
 function page(title, body) {
@@ -142,9 +186,6 @@ function showError(message) {
 async function boot() {
   mainWindow.loadURL(page('Starting', '<div class="spin"></div><h1>Starting Manhwa Studio…</h1>'))
 
-  if (!fs.existsSync(CLIENT_INDEX)) {
-    return showError(`The client hasn't been built. Run: cd "${REPO_ROOT}/client" && npx vite build`)
-  }
   if (!(await checkHealth())) {
     try {
       startServer()
@@ -156,7 +197,11 @@ async function boot() {
       return // exit handler already showed the error
     }
   }
-  mainWindow.loadURL(ORIGIN)
+  const url = await clientUrl()
+  if (!url) {
+    return showError(`Vite didn't start (log: ${VITE_LOG_FILE}) and there is no built client to fall back to.`)
+  }
+  mainWindow.loadURL(url)
 }
 
 async function restartServer() {
@@ -164,15 +209,20 @@ async function restartServer() {
   boot()
 }
 
-function stopServer() {
+function stopProc(proc) {
   return new Promise((resolve) => {
-    const proc = serverProc
     if (!proc) return resolve()
-    stopping = true
     const killTimer = setTimeout(() => proc.kill('SIGKILL'), 8000)
-    proc.once('exit', () => { clearTimeout(killTimer); stopping = false; resolve() })
+    proc.once('exit', () => { clearTimeout(killTimer); resolve() })
     proc.kill('SIGINT')
   })
+}
+
+async function stopServer() {
+  if (!serverProc) return
+  stopping = true
+  await stopProc(serverProc)
+  stopping = false
 }
 
 function createWindow() {
@@ -189,12 +239,12 @@ function createWindow() {
   // Same-origin popups (e.g. the Murgaa reference window) open in-app;
   // everything else (ChatGPT, AI Studio, …) goes to the default browser.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith(ORIGIN)) return { action: 'allow' }
+    if (isAppUrl(url)) return { action: 'allow' }
     if (/^https?:/.test(url)) shell.openExternal(url)
     return { action: 'deny' }
   })
   mainWindow.webContents.on('will-navigate', (event, url) => {
-    if (url.startsWith(ORIGIN) || url.startsWith('data:')) return
+    if (isAppUrl(url) || url.startsWith('data:')) return
     event.preventDefault()
     if (/^https?:/.test(url)) shell.openExternal(url)
   })
@@ -214,9 +264,10 @@ function buildMenu() {
       submenu: [
         { label: 'Restart Server', click: () => restartServer() },
         { label: 'Open Server Log', click: () => shell.openPath(LOG_FILE) },
+        { label: 'Open Vite Log', click: () => shell.openPath(VITE_LOG_FILE) },
         { label: 'Reveal Project Folder', click: () => shell.openPath(REPO_ROOT) },
         { type: 'separator' },
-        { label: 'Open in Browser', click: () => shell.openExternal(ORIGIN) },
+        { label: 'Open in Browser', click: () => shell.openExternal(mainWindow?.webContents.getURL().startsWith(VITE_ORIGIN) ? VITE_ORIGIN : ORIGIN) },
       ],
     },
     { role: 'windowMenu' },
@@ -244,10 +295,10 @@ if (!app.requestSingleInstanceLock()) {
   app.on('activate', () => { if (!mainWindow) createWindow() })
 
   app.on('before-quit', (event) => {
-    if (quitting || !serverProc) return
+    if (quitting || (!serverProc && !viteProc)) return
     event.preventDefault()
     quitting = true
-    stopServer().then(() => app.quit())
+    Promise.all([stopProc(serverProc), stopProc(viteProc)]).then(() => app.quit())
   })
 }
 
