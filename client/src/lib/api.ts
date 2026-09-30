@@ -1981,6 +1981,8 @@ export interface R2Config {
   hasAccessKey: boolean
   accessKeyHint: string | null
   hasSecret: boolean
+  /** An Account Analytics token is saved, so request counts are Cloudflare's own. */
+  hasAnalyticsToken: boolean
 }
 
 export interface R2ConfigUpdate {
@@ -1991,6 +1993,8 @@ export interface R2ConfigUpdate {
   accessKeyId?: string
   secretAccessKey?: string
   clearKeys?: boolean
+  analyticsToken?: string
+  clearAnalyticsToken?: boolean
 }
 
 export interface R2Usage {
@@ -2006,8 +2010,13 @@ export interface R2Usage {
     /** Largest first. */
     objects: { key: string; size: number; lastModified: string | null }[]
   }
-  /** Requests sent by Manhwa Studio this month. */
-  ops: { classA: number; classB: number; free: number; ops: Record<string, number>; since: string }
+  /**
+   * cloudflare: Cloudflare's own count for the whole account this month (every client, a few minutes behind).
+   * local: only the requests Manhwa Studio sent, used when no analytics token is saved or it failed.
+   */
+  ops: { classA: number; classB: number; free: number; ops: Record<string, number>; since: string; source: 'cloudflare' | 'local' }
+  /** Why Cloudflare's count couldn't be read, when a token is saved. */
+  analyticsError: string | null
 }
 
 export interface PhoneSeriesSync {
@@ -2068,6 +2077,16 @@ export interface PhoneScriptsStatus {
  */
 export type PhonePageState = 'done' | 'in_progress' | 'changed'
 
+/** A page the phone's Auto-run is on right now. */
+export interface PhoneCropsWorking {
+  chapterId: string
+  /** The page file, the same name as the image in the chapter folder. */
+  page: string
+  /** When Auto-run started this page. */
+  since: string | null
+  paused: boolean
+}
+
 /** Crop pointers made on the Sleeper-Cell phone, from the receipt it writes to R2 as pages start and finish. */
 export interface PhoneCropsStatus {
   configured: boolean
@@ -2080,8 +2099,10 @@ export interface PhoneCropsStatus {
   series: Record<string, { done: number; total: number }>
   /** By chapter id, for the series asked for; chapters with no page started are left out. */
   chapters: Record<string, { done: number; total: number }>
-  /** The page Auto-run is on in the series asked for, or null when it isn't running there. */
-  working: { chapterId: string; page: string; since: string | null; paused: boolean } | null
+  /** The page Auto-run is on in the series asked for, or null when it isn't running there. The first of `workingPages`. */
+  working: PhoneCropsWorking | null
+  /** Every page Auto-run is on in the series asked for: one per ChatGPT tab, possibly across chapters. */
+  workingPages: PhoneCropsWorking[]
   /** By image filename, for the chapter asked for; pages not started are left out. */
   pages: Record<string, PhonePageState>
 }

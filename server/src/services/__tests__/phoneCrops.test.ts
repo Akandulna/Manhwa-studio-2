@@ -88,10 +88,48 @@ describe('getPhoneCrops', () => {
     expect(JSON.parse(puts[0].Body)).toEqual({ id: request.id, requestedAt: request.requestedAt })
   })
 
+  it('lists every page Auto-run is on, across chapters, dropping stale ones', async () => {
+    const now = new Date().toISOString()
+    const stale = new Date(Date.now() - 60 * 60_000).toISOString()
+    receipt = {
+      series: {
+        'Solo Hero': {
+          total: 40,
+          done: 3,
+          working: { chapter: 'Chapter 009', page: '004.jpg', since: now, paused: true },
+          workingPages: [
+            { chapter: 'Chapter 009', page: '004.jpg', since: now, paused: true },
+            { chapter: 'Chapter 010', page: '001.jpg', since: now, paused: true },
+            { chapter: 'Chapter 010', page: '002.jpg', since: stale, paused: true },
+            { chapter: 'Chapter 099', page: '001.jpg', since: now, paused: true }
+          ],
+          chapters: {}
+        }
+      }
+    }
+    const status = await read('s1')
+    expect(status.workingPages).toEqual([
+      { chapterId: 'c9', page: '004.jpg', since: now, paused: true },
+      { chapterId: 'c10', page: '001.jpg', since: now, paused: true }
+    ])
+    expect(status.working).toMatchObject({ chapterId: 'c9', page: '004.jpg' })
+    expect((await read()).workingPages).toEqual([])
+  })
+
+  it('falls back to the single working page from older phone builds', async () => {
+    const since = new Date().toISOString()
+    receipt = { series: { 'Solo Hero': { total: 1, done: 0, working: { chapter: 'Chapter 010', page: '007.jpg', since }, chapters: {} } } }
+    expect((await read('s1')).workingPages).toEqual([{ chapterId: 'c10', page: '007.jpg', since, paused: false }])
+    receipt = { series: { 'Solo Hero': { total: 1, done: 0, chapters: {} } } }
+    expect((await read('s1')).workingPages).toEqual([])
+  })
+
   it('drops a working page the phone never cleared', async () => {
     const since = new Date(Date.now() - 60 * 60_000).toISOString()
     receipt = { series: { 'Solo Hero': { total: 1, done: 0, working: { chapter: 'Chapter 009', page: '001.jpg', since }, chapters: {} } } }
-    expect((await read('s1')).working).toBeNull()
+    const status = await read('s1')
+    expect(status.working).toBeNull()
+    expect(status.workingPages).toEqual([])
   })
 
   it('is empty when the phone has not written a receipt', async () => {

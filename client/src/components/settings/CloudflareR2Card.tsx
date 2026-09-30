@@ -24,6 +24,7 @@ export function CloudflareR2Card({ onSaved }: { onSaved?: () => void } = {}) {
   const [concurrency, setConcurrency] = useState('4')
   const [accessKeyId, setAccessKeyId] = useState('')
   const [secretAccessKey, setSecretAccessKey] = useState('')
+  const [analyticsToken, setAnalyticsToken] = useState('')
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
@@ -64,11 +65,13 @@ export function CloudflareR2Card({ onSaved }: { onSaved?: () => void } = {}) {
         prefix,
         concurrency: Number(concurrency),
         ...(accessKeyId.trim() ? { accessKeyId: accessKeyId.trim() } : {}),
-        ...(secretAccessKey.trim() ? { secretAccessKey: secretAccessKey.trim() } : {})
+        ...(secretAccessKey.trim() ? { secretAccessKey: secretAccessKey.trim() } : {}),
+        ...(analyticsToken.trim() ? { analyticsToken: analyticsToken.trim() } : {})
       })
       apply(next)
       setAccessKeyId('')
       setSecretAccessKey('')
+      setAnalyticsToken('')
       toast({ title: 'Cloudflare settings saved' })
       onSaved?.()
       if (next.configured) void test()
@@ -210,6 +213,41 @@ export function CloudflareR2Card({ onSaved }: { onSaved?: () => void } = {}) {
               replacing the previous backup of that series. Parallel upload parts: 16 MB chunks sent at once (default 4).
               Saved to the server's <code>.env</code> and applied immediately — no restart needed.
             </p>
+
+            <div className="space-y-2">
+              <Label htmlFor="r2AnalyticsToken">Analytics token (optional)</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="r2AnalyticsToken"
+                  type="password"
+                  autoComplete="off"
+                  value={analyticsToken}
+                  onChange={(e) => setAnalyticsToken(e.target.value)}
+                  placeholder={config.hasAnalyticsToken ? 'Saved — paste to replace' : 'API token with Account Analytics → Read'}
+                  className="font-mono"
+                />
+                {config.hasAnalyticsToken && (
+                  <Button
+                    variant="ghost"
+                    onClick={async () => {
+                      try {
+                        apply(await r2Api.saveConfig({ clearAnalyticsToken: true }))
+                        onSaved?.()
+                      } catch (err) {
+                        toast({ title: 'Could not remove the token', description: err instanceof Error ? err.message : 'Unknown error', variant: 'destructive' })
+                      }
+                    }}
+                  >
+                    Remove
+                  </Button>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Makes Free plan usage show Cloudflare's own request counts, including Sleeper-Cell's and the dashboard's,
+                instead of only Manhwa Studio's. My Profile → API Tokens → Create Custom Token → <em>Account · Account
+                Analytics · Read</em>. Reading it costs no R2 operations.
+              </p>
+            </div>
 
             <div className="flex items-center gap-2 flex-wrap">
               <Button onClick={save} disabled={saving}>

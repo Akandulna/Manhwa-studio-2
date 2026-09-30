@@ -176,14 +176,19 @@ export default function Clipper3ImageList() {
   const images = data?.images ?? []
   const doneCount = useMemo(() => images.filter(i => i.status === 'done').length, [images])
 
-  // Crop pointers the Sleeper-Cell phone is making for this chapter, from its
-  // R2 receipt: each page's state there, and the page its Auto-run is on. It is
-  // only re-read when "Refresh from phone" asks, to save R2 operations.
+  // Crop pointers the Sleeper-Cell phone is making for this chapter: each page's
+  // state there, and the page its Auto-run is on. Live through the phone relay;
+  // without it, re-read from R2 only when "Refresh from phone" asks.
   // Pages match by filename, which the R2 zip carries to the phone unchanged.
   const phoneCropsReceipt = usePhoneCrops(data?.seriesId, chapterId)
   const phoneCrops = phoneCropsReceipt.status
   const phoneChapter = chapterId ? phoneCrops?.chapters[chapterId] : undefined
-  const phoneWorking = phoneCrops?.working?.chapterId === chapterId ? phoneCrops?.working ?? null : null
+  // Auto-run can be on several pages of this chapter at once (one per ChatGPT tab).
+  const phoneWorkingPages = useMemo(
+    () => (phoneCrops?.workingPages ?? []).filter(w => w.chapterId === chapterId),
+    [phoneCrops, chapterId]
+  )
+  const phoneWorkingByPage = useMemo(() => new Map(phoneWorkingPages.map(w => [w.page, w])), [phoneWorkingPages])
   const rowRefs = useRef(new Map<string, HTMLDivElement>())
 
   // The ChatGPT loop run through the OpenAI API (server-side background job).
@@ -1321,15 +1326,16 @@ export default function Clipper3ImageList() {
               {phoneChapter.done}/{phoneChapter.total} pages done on phone
             </span>
           )}
-          {phoneWorking && (
+          {phoneWorkingPages.map(working => (
             <button
+              key={working.page}
               type="button"
               className="min-w-0"
-              onClick={() => rowRefs.current.get(phoneWorking.page)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+              onClick={() => rowRefs.current.get(working.page)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
             >
-              <PhoneWorkingBadge page={phoneWorking.page} paused={phoneWorking.paused} device={phoneCrops.device} />
+              <PhoneWorkingBadge page={working.page} paused={working.paused} device={phoneCrops.device} />
             </button>
-          )}
+          ))}
         </div>
       )}
 
@@ -1413,7 +1419,8 @@ export default function Clipper3ImageList() {
             const isDone = img.status === 'done'
             const autoPage = autoRun.visible ? autoRun.pageStatus(img.filename) : null
             const phonePage = phoneCrops?.pages[img.filename]
-            const phoneOnThis = phoneWorking?.page === img.filename
+            const phoneWorking = phoneWorkingByPage.get(img.filename) ?? null
+            const phoneOnThis = phoneWorking !== null
             return (
               <Card
                 key={img.filename}

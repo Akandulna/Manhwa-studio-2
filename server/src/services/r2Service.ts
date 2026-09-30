@@ -46,6 +46,7 @@ import { writeEnvVars } from '../utils/envFile.js'
 import { getPublishedChapters } from './storageService.js'
 import { FREE_PLAN, attachUsageCounter, getMonthUsage, monthKey } from './r2Usage.js'
 import { relayConfigured, relayReceipt, sendPhoneRequest } from './phoneRelay.js'
+import { analyticsConfigured, getCloudflareMonthOps, invalidateAnalytics } from './r2Analytics.js'
 
 // ============ Config ============
 
@@ -113,7 +114,8 @@ export function publicR2Config() {
     concurrency: Math.max(1, Number(env('R2_CONCURRENCY')) || 4),
     hasAccessKey: !!accessKeyId,
     accessKeyHint: accessKeyId ? `…${accessKeyId.slice(-4)}` : null,
-    hasSecret: !!secret
+    hasSecret: !!secret,
+    hasAnalyticsToken: analyticsConfigured()
   }
 }
 
@@ -126,6 +128,9 @@ export interface R2ConfigUpdate {
   secretAccessKey?: string
   /** Remove the saved access key and secret. */
   clearKeys?: boolean
+  /** API token with Account Analytics → Read, for Cloudflare's own request counts (see r2Analytics.ts). */
+  analyticsToken?: string
+  clearAnalyticsToken?: boolean
 }
 
 /**
@@ -164,8 +169,11 @@ export async function updateR2Config(update: R2ConfigUpdate): Promise<void> {
     if (update.accessKeyId?.trim()) vars.R2_ACCESS_KEY_ID = update.accessKeyId.trim()
     if (update.secretAccessKey?.trim()) vars.R2_SECRET_ACCESS_KEY = update.secretAccessKey.trim()
   }
+  if (update.clearAnalyticsToken) vars.CF_ANALYTICS_TOKEN = ''
+  else if (update.analyticsToken?.trim()) vars.CF_ANALYTICS_TOKEN = update.analyticsToken.trim()
 
   await writeEnvVars(vars)
+  invalidateAnalytics()
 }
 
 /** Confirm the credentials can reach the bucket. Throws with the reason. */
@@ -254,7 +262,17 @@ export async function getR2Usage() {
   if (!config) throw new Error(`R2 is not configured. Missing: ${missingR2Env().join(', ')}`)
   // Measure first so the list request this costs is in the count below.
   const storage = await measureBucket(createClient(config), config.bucket)
-  const ops = await getMonthUsage()
+  // Cloudflare's own count covers every client (the phone, the dashboard); ours only this server.
+  let cloudflare = null
+  let analyticsError: string | null = null
+  try {
+    cloudflare = await getCloudflareMonthOps()
+  } catch (error) {
+    analyticsError = error instanceof Error ? error.message : String(error)
+  }
+  const ops = cloudflare
+    ? { ...cloudflare, source: 'cloudflare' as const }
+    : { ...(await getMonthUsage()), source: 'local' as const }
   return {
     bucket: config.bucket,
     month: monthKey(),
@@ -266,7 +284,8 @@ export async function getR2Usage() {
       measuredAt: storage.measuredAt,
       objects: [...storage.objects].sort((a, b) => b.size - a.size)
     },
-    ops
+    ops,
+    analyticsError
   }
 }
 
@@ -530,10 +549,14 @@ export async function getPhoneScripts(seriesId?: string, fresh = false): Promise
  * Sleeper-Cell also makes crop pointers on the phone (Image Clipper's
  * Auto-run, page after page in ChatGPT). When asked (see requestPhoneUpdate)
  * it writes this object: `{ device, updatedAt, answers, series: { <series folder>: { total, done,
- * working?: { chapter, page, since, paused }, chapters: { <chapter folder>:
- * { total, done, pages: { <page file>: done|in_progress|changed } } } } } }`,
- * leaving out pages not started and chapters with none started. Keep the name
- * in step with RECEIPT_NAME in its ClipperReceipt.kt.
+ * working?: { chapter, page, since, paused }, workingPages?: [{ chapter, page, since, paused }, …],
+ * chapters: { <chapter folder>: { total, done, pages: { <page file>: done|in_progress|changed } } } } } }`,
+ * leaving out pages not started and chapters with none started. Auto-run can
+ * clip several pages at once (one per ChatGPT tab, across chapters):
+ * `workingPages` lists them all, each with its own `since`, and `working` is
+ * the first of them, kept for older readers. Older phone builds send only
+ * `working`. Both are there only while Auto-run is on that series. Keep the
+ * name in step with RECEIPT_NAME in its ClipperReceipt.kt.
  */
 const CROPS_RECEIPT_NAME = '_sleeper-cell-crops.json'
 
@@ -559,8 +582,10 @@ export interface PhoneCropsStatus {
   series: Record<string, { done: number; total: number }>
   /** By chapter id, for the series asked for; chapters with no page started are left out. */
   chapters: Record<string, { done: number; total: number }>
-  /** The page Auto-run is on in the series asked for, or null when it isn't running there. */
+  /** The page Auto-run is on in the series asked for, or null when it isn't running there. The first of `workingPages`. */
   working: PhoneCropsWorking | null
+  /** Every page Auto-run is on in the series asked for (one per ChatGPT tab; may span chapters). */
+  workingPages: PhoneCropsWorking[]
   /** By page file, for the chapter asked for; pages not started are left out. */
   pages: Record<string, PhonePageState>
 }
@@ -572,10 +597,13 @@ interface CropsReceipt {
   series?: Record<string, {
     total?: number
     done?: number
-    working?: { chapter?: string; page?: string; since?: string; paused?: boolean }
+    working?: CropsReceiptWorking
+    workingPages?: CropsReceiptWorking[]
     chapters?: Record<string, { total?: number; done?: number; pages?: Record<string, string> }>
   }>
 }
+
+interface CropsReceiptWorking { chapter?: string; page?: string; since?: string; paused?: boolean }
 
 const PHONE_PAGE_STATES = new Set<string>(['done', 'in_progress', 'changed'])
 
@@ -595,7 +623,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
  * folder and file name, the names the R2 zip carries to the phone.
  */
 export async function getPhoneCrops(seriesId?: string, chapterId?: string, fresh = false): Promise<PhoneCropsStatus> {
-  const empty = { reportedAt: null, device: null, answers: null, series: {}, chapters: {}, working: null, pages: {} }
+  const empty = { reportedAt: null, device: null, answers: null, series: {}, chapters: {}, working: null, workingPages: [], pages: {} }
   const config = getR2Config()
   const relayed = relayReceipt<CropsReceipt>('crops')
   if (!config && !relayed) return { configured: false, ...empty }
@@ -627,17 +655,17 @@ export async function getPhoneCrops(seriesId?: string, chapterId?: string, fresh
       }
     }
 
-    const working = entry.working
-    const workingChapter = isObject(working) && working.chapter ? byFolder.get(working.chapter) : undefined
-    const since = isObject(working) && working.since ? Date.parse(working.since) : NaN
-    if (workingChapter && working?.page && !(Date.now() - since > WORKING_STALE_MS)) {
-      status.working = {
-        chapterId: workingChapter,
-        page: working.page,
-        since: working.since ?? null,
-        paused: working.paused === true
-      }
+    const toWorking = (working: unknown): PhoneCropsWorking | null => {
+      if (!isObject(working) || typeof working.page !== 'string' || !working.page) return null
+      const chapterId = typeof working.chapter === 'string' ? byFolder.get(working.chapter) : undefined
+      const since = typeof working.since === 'string' ? working.since : null
+      if (!chapterId || (since && Date.now() - Date.parse(since) > WORKING_STALE_MS)) return null
+      return { chapterId, page: working.page, since, paused: working.paused === true }
     }
+    status.working = toWorking(entry.working)
+    // Older phone builds send only `working`.
+    const rawPages = Array.isArray(entry.workingPages) ? entry.workingPages : entry.working ? [entry.working] : []
+    status.workingPages = rawPages.map(toWorking).filter((w): w is PhoneCropsWorking => w !== null)
   }
   return status
 }
@@ -712,6 +740,17 @@ function formatSize(bytes: number): string {
  * Throw if uploading `bytes` to `key` would go past the free plan. An upload
  * replacing `key` frees the old object, so its size is netted out.
  */
+/**
+ * Class A requests used this month: Cloudflare's count when the analytics
+ * token is set, else only this server's. Cloudflare's runs a few minutes
+ * behind, so it is never taken below our own.
+ */
+async function classAUsed(): Promise<number> {
+  const local = (await getMonthUsage()).classA
+  const cloudflare = await getCloudflareMonthOps().catch(() => null)
+  return Math.max(local, cloudflare?.classA ?? 0)
+}
+
 async function assertWithinFreePlan(client: S3Client, bucket: string, key: string, bytes: number): Promise<void> {
   const storage = await measureBucket(client, bucket, true)
   const replaced = storage.objects.find(o => o.key === key)?.size ?? 0
@@ -726,7 +765,7 @@ async function assertWithinFreePlan(client: S3Client, bucket: string, key: strin
   }
   // Create + one per 16 MB part + complete.
   const requests = Math.ceil(bytes / PART_SIZE) + 2
-  const { classA } = await getMonthUsage()
+  const classA = await classAUsed()
   if (classA + requests > FREE_PLAN.classA) {
     throw new Error(
       `Blocked to stay on the free plan: this upload needs ~${requests.toLocaleString()} Class A requests and ` +

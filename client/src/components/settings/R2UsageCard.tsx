@@ -120,8 +120,9 @@ export function R2UsageCard() {
   const monthLabel = usage
     ? new Date(`${usage.month}-01T00:00:00Z`).toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' })
     : ''
-  // On the first month the ledger starts mid-month; say so rather than imply a full count.
-  const countingSinceMidMonth = usage ? new Date(usage.ops.since).getUTCDate() > 1 : false
+  const fromCloudflare = usage?.ops.source === 'cloudflare'
+  // On the first month the local ledger starts mid-month; say so rather than imply a full count.
+  const countingSinceMidMonth = usage && !fromCloudflare ? new Date(usage.ops.since).getUTCDate() > 1 : false
   const opBreakdown = usage
     ? Object.entries(usage.ops.ops).sort((a, b) => b[1] - a[1]).map(([op, n]) => `${op} ${n.toLocaleString()}`).join(' · ')
     : ''
@@ -190,11 +191,24 @@ export function R2UsageCard() {
             />
 
             <p className="text-xs text-muted-foreground">
-              Storage is exact. Requests are the ones Manhwa Studio sent
-              {countingSinceMidMonth ? ` since ${formatUtcDay(usage.ops.since)}` : ' this month'}; browsing the bucket in
-              the Cloudflare dashboard adds a few that are not counted here. Deletes are free.
+              {fromCloudflare ? (
+                <>
+                  Storage is exact. Requests are Cloudflare's own count for the whole account this month, from every
+                  client (Manhwa Studio, Sleeper-Cell, the dashboard); it runs a few minutes behind. Deletes are free.
+                </>
+              ) : (
+                <>
+                  Storage is exact. Requests are only the ones Manhwa Studio sent
+                  {countingSinceMidMonth ? ` since ${formatUtcDay(usage.ops.since)}` : ' this month'}: Sleeper-Cell's and
+                  the Cloudflare dashboard's are not counted, so Cloudflare's figures are higher. Add an analytics token
+                  above to show Cloudflare's own count.
+                </>
+              )}
               {opBreakdown && <><br />Counted: {opBreakdown}</>}
             </p>
+            {usage.analyticsError && (
+              <p className="text-xs text-destructive">Cloudflare's count is unavailable ({usage.analyticsError}); showing Manhwa Studio's own.</p>
+            )}
 
             <div className="space-y-2">
               <h4 className="text-sm font-medium">In the bucket</h4>

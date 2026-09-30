@@ -105,7 +105,7 @@ function onPhone(device: string | null): string {
 /**
  * PhoneCropsBadge — a chapter's crop progress in the Sleeper-Cell app (see
  * usePhoneCrops): pages with their JSON files out of the pages the phone has.
- * `working` is the page its Auto-run is on in this chapter, if any.
+ * `working` is the pages its Auto-run is on in this chapter (one per ChatGPT tab).
  */
 export function PhoneCropsBadge({
   done,
@@ -115,10 +115,11 @@ export function PhoneCropsBadge({
 }: {
   done: number
   total: number
-  working?: { page: string; paused: boolean } | null
+  working?: { page: string; paused: boolean }[]
   device: string | null
 }) {
   const complete = total > 0 && done >= total
+  const pages = working ?? []
   return (
     <>
       <span
@@ -128,22 +129,27 @@ export function PhoneCropsBadge({
         <Smartphone className="h-3 w-3" />
         {done}/{total} pages
       </span>
-      {working && <PhoneWorkingBadge page={working.page} paused={working.paused} device={device} />}
+      {pages.length === 1 && <PhoneWorkingBadge page={pages[0].page} paused={pages[0].paused} device={device} />}
+      {pages.length > 1 && (
+        <PhoneWorkingBadge page={pages.map(p => p.page).join(', ')} paused={pages[0].paused} device={device} count={pages.length} />
+      )}
     </>
   )
 }
 
-/** The page the phone's Auto-run is on right now. */
+/** The page the phone's Auto-run is on right now; with `count`, several pages at once (`page` lists them). */
 export function PhoneWorkingBadge({
   page,
   paused,
   device,
-  showPage = true
+  showPage = true,
+  count
 }: {
   page: string
   paused: boolean
   device: string | null
   showPage?: boolean
+  count?: number
 }) {
   return (
     <span
@@ -153,7 +159,7 @@ export function PhoneWorkingBadge({
       {paused ? <Pause className="h-3 w-3 flex-shrink-0" /> : <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin" />}
       <span className="truncate">
         {paused ? 'Paused' : 'Processing'}
-        {showPage ? ` ${page}` : ' on phone'}
+        {count ? ` ${count} pages` : showPage ? ` ${page}` : ' on phone'}
       </span>
     </span>
   )

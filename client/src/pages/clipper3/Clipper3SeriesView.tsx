@@ -142,8 +142,8 @@ export default function Clipper3SeriesView() {
   // Chapters already rendered to video, so the user can skip re-cutting them.
   const { isPublished } = usePublishedChapters(id)
   const [summaries, setSummaries] = useState<Record<string, Clipper3ChapterSummary>>({})
-  // Crop pointers the Sleeper-Cell phone is making, from its R2 receipt. It is
-  // only re-read when "Refresh from phone" asks, to save R2 operations.
+  // Crop pointers the Sleeper-Cell phone is making. Live through the phone
+  // relay; without it, re-read from R2 only when "Refresh from phone" asks.
   const phoneCropsReceipt = usePhoneCrops(id)
   const phoneCrops = phoneCropsReceipt.status
   const phoneSeries = id ? phoneCrops?.series[id] : undefined
@@ -796,7 +796,7 @@ export default function Clipper3SeriesView() {
               <Card className={`cursor-pointer transition-colors group ${
                 isSelected ? 'border-primary bg-accent' : 'hover:border-primary'
               } ${isPublished(chapter.id) ? publishedRowClass : ''} ${
-                phoneCrops?.working?.chapterId === chapter.id ? 'ring-2 ring-sky-500/60' : ''
+                phoneCrops?.workingPages.some(w => w.chapterId === chapter.id) ? 'ring-2 ring-sky-500/60' : ''
               }`}>
                 <CardContent className="p-4">
                   <div className="flex items-center justify-between gap-2">
@@ -828,11 +828,11 @@ export default function Clipper3SeriesView() {
                     <AttachedStatusBadge summary={summaries[chapter.id]} />
                     <ChoppedStatusBadge summary={summaries[chapter.id]} />
                     {isPublished(chapter.id) && <PublishedBadge />}
-                    {phoneCrops && (phoneCrops.chapters[chapter.id] || phoneCrops.working?.chapterId === chapter.id) && (
+                    {phoneCrops && (phoneCrops.chapters[chapter.id] || phoneCrops.workingPages.some(w => w.chapterId === chapter.id)) && (
                       <PhoneCropsBadge
                         done={phoneCrops.chapters[chapter.id]?.done ?? 0}
                         total={phoneCrops.chapters[chapter.id]?.total ?? chapter.pageCount}
-                        working={phoneCrops.working?.chapterId === chapter.id ? phoneCrops.working : null}
+                        working={phoneCrops.workingPages.filter(w => w.chapterId === chapter.id)}
                         device={phoneCrops.device}
                       />
                     )}

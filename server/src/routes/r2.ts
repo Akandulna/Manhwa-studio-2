@@ -79,7 +79,9 @@ export function initR2Routes(io: Server): Router {
         concurrency: typeof body.concurrency === 'number' ? body.concurrency : undefined,
         accessKeyId: str(body.accessKeyId),
         secretAccessKey: str(body.secretAccessKey),
-        clearKeys: body.clearKeys === true
+        clearKeys: body.clearKeys === true,
+        analyticsToken: str(body.analyticsToken),
+        clearAnalyticsToken: body.clearAnalyticsToken === true
       })
       res.json(publicR2Config())
     } catch (error) {
