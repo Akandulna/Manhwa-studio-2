@@ -29,7 +29,8 @@ import {
   Clock,
   Rows3,
   RefreshCw,
-  Unlink
+  Unlink,
+  DownloadCloud
 } from 'lucide-react'
 import {
   clipper3Api,
@@ -38,6 +39,7 @@ import {
   type Clipper3ChapterSyncResult,
   type Clipper3ChapterUnsyncResult,
   type Clipper3SyncPreview,
+  type Clipper3PhoneCropsFetch,
   type Clipper3UnsyncPreview
 } from '@/lib/api'
 import { useToast } from '@/components/ui/use-toast'
@@ -67,6 +69,47 @@ function AttachedStatusBadge({ summary }: { summary: Clipper3ChapterSummary | un
       <Clock className="h-3 w-3" />
       {summary.attachedImages}/{summary.totalImages} attached
     </Badge>
+  )
+}
+
+/**
+ * What Sync json pulled from R2 before scanning: which finished chapters were
+ * downloaded from the phone's uploads, and any it couldn't place.
+ */
+function R2FetchSummary({ result }: { result: Clipper3PhoneCropsFetch }) {
+  const { found, fetched, upToDate, unmatched, failed } = result
+  const pages = fetched.reduce((sum, c) => sum + c.pages, 0)
+  return (
+    <div className="rounded-md border p-3 text-sm space-y-1.5">
+      <p className="flex items-center gap-2 font-medium">
+        <DownloadCloud className="h-4 w-4 flex-shrink-0" />
+        {found === 0
+          ? 'No finished chapters from the phone in R2 yet'
+          : fetched.length > 0
+            ? `Fetched ${fetched.length} chapter${fetched.length === 1 ? '' : 's'} from R2 (${pages} page${pages === 1 ? '' : 's'})`
+            : 'Nothing new from the phone in R2'}
+      </p>
+      {fetched.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {fetched.map(c => `Chapter ${c.chapterNumber}`).join(', ')}
+        </p>
+      )}
+      {upToDate > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {upToDate} chapter{upToDate === 1 ? '' : 's'} already fetched earlier.
+        </p>
+      )}
+      {unmatched.length > 0 && (
+        <p className="text-xs text-destructive">
+          No chapter folder named {unmatched.map(f => `"${f}"`).join(', ')} in this series — not fetched.
+        </p>
+      )}
+      {failed.map(f => (
+        <p key={f.folder} className="text-xs text-destructive">
+          {f.folder}: {f.reason}
+        </p>
+      ))}
+    </div>
   )
 }
 
@@ -123,6 +166,11 @@ export default function Clipper3SeriesView() {
   // the idea of syncing.
   const [scanning, setScanning] = useState(false)
   const [syncPreview, setSyncPreview] = useState<Clipper3SyncPreview | null>(null)
+
+  // Before the scan, the phone's finished-chapter zips are pulled from R2 into
+  // Processed/; what that did is shown at the top of the same dialog.
+  const [fetchingR2, setFetchingR2] = useState(false)
+  const [r2Fetch, setR2Fetch] = useState<Clipper3PhoneCropsFetch | null>(null)
 
   // Pages the completed run could not attach, kept until dismissed: a toast
   // cannot hold a per-page list, and "3 pages failed" with no way to see
@@ -249,8 +297,25 @@ export default function Clipper3SeriesView() {
    */
   const scanProcessed = useCallback(async () => {
     if (!id) return
-    setScanning(true)
     setSyncReport(null)
+    setR2Fetch(null)
+
+    // A failed fetch doesn't stop the scan: files already in Processed/ can
+    // still be attached, and the toast says R2 was not reached.
+    setFetchingR2(true)
+    try {
+      setR2Fetch(await clipper3Api.fetchPhoneCrops(id))
+    } catch (err) {
+      toast({
+        title: 'Could not fetch from R2',
+        description: `${err instanceof Error ? err.message : 'Failed to reach R2'} — scanning local files only.`,
+        variant: 'destructive'
+      })
+    } finally {
+      setFetchingR2(false)
+    }
+
+    setScanning(true)
     try {
       const preview = await clipper3Api.previewProcessed(id)
       setSyncPreview(preview)
@@ -522,7 +587,7 @@ export default function Clipper3SeriesView() {
 
   // Any run that writes the store locks every button that writes the store, so
   // two of them can never be started over the same files.
-  const busy = slicingAll || syncing || scanning || unsyncing || unsyncScanning
+  const busy = slicingAll || syncing || scanning || fetchingR2 || unsyncing || unsyncScanning
 
   return (
     <div className="flex flex-col h-full">
@@ -659,14 +724,20 @@ export default function Clipper3SeriesView() {
                   variant="outline"
                   onClick={scanProcessed}
                   disabled={busy}
-                  title="Find crop pointers and metadata in each chapter's Processed folder"
+                  title="Fetch the phone's finished chapters from R2, then find crop pointers and metadata in each chapter's Processed folder"
                 >
-                  {scanning || syncing ? (
+                  {fetchingR2 || scanning || syncing ? (
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                   ) : (
                     <RefreshCw className="h-4 w-4 mr-2" />
                   )}
-                  {scanning ? 'Scanning…' : syncing ? 'Syncing…' : 'Sync json'}
+                  {fetchingR2
+                    ? 'Fetching from R2…'
+                    : scanning
+                      ? 'Scanning…'
+                      : syncing
+                        ? 'Syncing…'
+                        : 'Sync json'}
                 </Button>
 
                 {/* Unsync gets its own picker rather than riding the slicing
@@ -825,6 +896,8 @@ export default function Clipper3SeriesView() {
               )}
             </DialogDescription>
           </DialogHeader>
+
+          {r2Fetch?.configured && <R2FetchSummary result={r2Fetch} />}
 
           <ScrollArea className="max-h-[50vh] pr-3">
             <div className="space-y-4">

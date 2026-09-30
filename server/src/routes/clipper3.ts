@@ -42,6 +42,7 @@
  *   GET    /chapters/:id/auto                         the chapter's ChatGPT-API run, if any
  *   POST   /chapters/:id/auto                         run package → analysis → review → export via the API
  *   POST   /chapters/:id/auto/cancel                  stop that run
+ *   POST   /series/:seriesId/fetch-phone-crops        unpack the phone's chapter zips from R2 into Processed/
  *   POST   /series/:seriesId/sync-processed           import hand-made JSON from Processed/
  *   POST   /series/:seriesId/sync-processed/preview    what that import would attach
  *   POST   /series/:seriesId/unsync-processed          remove attached JSON from the store
@@ -106,6 +107,7 @@ import {
   testOpenAiConnection,
   updateOpenAiConfig
 } from '../services/clipper3/openaiAuto.js'
+import { fetchPhoneCrops } from '../services/phoneCropImport.js'
 import {
   syncChapterProcessed,
   unsyncChapterProcessed,
@@ -1573,6 +1575,41 @@ export function initClipper3Routes(io: Server): Router {
   /** POST /chapters/:id/auto/cancel — stop the run; pages mid-request end as cancelled. */
   router.post('/chapters/:id/auto/cancel', (req: Request, res: Response) => {
     res.json({ cancelled: cancelAutoJob(req.params.id), job: getAutoJob(req.params.id) })
+  })
+
+
+  /**
+   * POST /series/:seriesId/fetch-phone-crops
+   *
+   * Sync json's first step: downloads the chapter zips the Sleeper-Cell phone
+   * uploaded to R2 (`crops/<Series>/<Chapter>.zip`, one per finished chapter)
+   * and unpacks them into `<Series>/Processed/<Chapter>/`, where the scan below
+   * finds them. Only new or re-uploaded zips are downloaded; nothing is
+   * attached here. Answers `configured: false` without touching R2 when it is
+   * not set up, so Sync json still works on local drop-offs alone.
+   */
+  router.post('/series/:seriesId/fetch-phone-crops', async (req: Request, res: Response) => {
+    try {
+      const seriesId = req.params.seriesId
+      if (syncingSeries.has(seriesId)) {
+        return res.status(409).json({ error: 'This series is already being synced' })
+      }
+      if (unsyncingSeries.has(seriesId)) {
+        return res.status(409).json({ error: 'This series is being unsynced right now' })
+      }
+      const requested: unknown = req.body?.chapterIds
+      if (requested !== undefined && !Array.isArray(requested)) {
+        return res.status(400).json({ error: 'chapterIds must be an array of chapter ids' })
+      }
+      const chapterIds = Array.isArray(requested)
+        ? requested.filter((v): v is string => typeof v === 'string')
+        : undefined
+      res.json(await fetchPhoneCrops(seriesId, chapterIds))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error('[clipper3] fetching phone crops failed:', message)
+      res.status(500).json({ error: message })
+    }
   })
 
 

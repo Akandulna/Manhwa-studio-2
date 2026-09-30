@@ -1351,6 +1351,24 @@ export interface Clipper3ChapterSyncResult {
   pages: Clipper3SyncedPage[]
 }
 
+/**
+ * What Sync json's first step pulled from R2: the chapter zips the phone
+ * uploads once every page of a chapter is done, unpacked into Processed/.
+ */
+export interface Clipper3PhoneCropsFetch {
+  /** False when R2 is not set up; nothing was looked at. */
+  configured: boolean
+  /** Chapter zips in R2 for this series. */
+  found: number
+  /** Chapters unpacked by this run: new, or re-uploaded by the phone. */
+  fetched: { chapterId: string; chapterNumber: number; folder: string; pages: number }[]
+  /** Chapters already unpacked from the same zip before. */
+  upToDate: number
+  /** Zips with no desktop chapter folder of that name. */
+  unmatched: string[]
+  failed: { folder: string; reason: string }[]
+}
+
 /** The confirmation dialog's contents: what a sync would attach, before it runs. */
 export interface Clipper3SyncPreview {
   chapters: number
@@ -1644,6 +1662,15 @@ export const clipper3Api = {
   getSliceUrl: (chapterId: string, filename: string, sliceName: string) =>
     `${API_BASE}/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}` +
     `/slices/${encodeURIComponent(sliceName)}`,
+
+  // Downloads the phone's finished-chapter zips from R2 and unpacks them into
+  // Processed/ so the preview below finds them. Only new or re-uploaded zips
+  // are downloaded; nothing is attached.
+  fetchPhoneCrops: (seriesId: string, chapterIds?: string[]) =>
+    fetchApi<Clipper3PhoneCropsFetch>(
+      `/clipper3/series/${seriesId}/fetch-phone-crops`,
+      { method: 'POST', body: JSON.stringify({ chapterIds }) }
+    ),
 
   // What syncProcessed would attach, without writing anything — the same pass
   // with the write suppressed, so the preview cannot promise more than the
