@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { CheckCircle, Cloud, ExternalLink, Loader2, Save, XCircle } from 'lucide-react'
 import { R2UsageCard } from './R2UsageCard'
+import { PhoneRelayCard } from './PhoneRelayCard'
 
 /**
  * Settings → Cloudflare: credentials for the Library's "Upload to R2" backup.
@@ -241,12 +242,13 @@ export function CloudflareR2Card({ onSaved }: { onSaved?: () => void } = {}) {
   )
 }
 
-/** The Settings → Cloudflare tab: credentials, then free-plan usage (re-measured after a save). */
+/** The Settings → Cloudflare tab: credentials, the phone relay, then free-plan usage (re-measured after a save). */
 export function CloudflareTab() {
   const [version, setVersion] = useState(0)
   return (
     <>
       <CloudflareR2Card onSaved={() => setVersion(v => v + 1)} />
+      <PhoneRelayCard />
       <R2UsageCard key={version} />
     </>
   )

@@ -6,10 +6,13 @@
  *   PUT  /config   save settings; blank key fields keep the saved keys
  *   POST /test     check the credentials can reach the bucket
  *   GET  /usage    free-plan meters: bucket storage + this month's requests
- *   GET  /phone?fresh=1   which series' zips the Sleeper-Cell phone app has downloaded
+ *   GET  /phone?fresh=1   which series' zips the Sleeper-Cell phone app has downloaded (cached=1: last bucket listing, any age)
  *   GET  /phone/scripts?seriesId=…&fresh=1   which chapters have a narration script on the phone
  *   GET  /phone/crops?seriesId=…&chapterId=…&fresh=1   which pages have crop JSON on the phone, and the page Auto-run is on
  *   POST /phone/request   ask the phone to write both receipts again ("Refresh from phone")
+ *   GET  /relay          the phone relay's settings (no token) and connection state
+ *   PUT  /relay          { url, token, clearToken } — save; a blank token keeps the saved one
+ *   POST /relay/test     ask the relay what it holds, to check the URL and token
  *     (the GETs answer from the server's last copy; fresh=1 re-reads R2)
  *   GET  /phone/scripts/zip?seriesId=…   the phone's uploaded script zip for a series, and the last import
  *   POST /phone/scripts/preview   { seriesId } — download + parse that zip, say what each chapter would get
@@ -41,6 +44,7 @@ import {
   updateR2Config
 } from '../services/r2Service.js'
 import { getPhoneScriptsZip, importPhoneScripts, previewPhoneScripts } from '../services/phoneScriptImport.js'
+import { relayStatus, testRelay, updateRelayConfig } from '../services/phoneRelay.js'
 
 function message(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
@@ -103,7 +107,7 @@ export function initR2Routes(io: Server): Router {
 
   router.get('/phone', async (req: Request, res: Response) => {
     try {
-      res.json(await getPhoneSync(req.query.fresh === '1'))
+      res.json(await getPhoneSync(req.query.fresh === '1', req.query.cached === '1'))
     } catch (error) {
       console.error('R2 phone sync lookup failed:', error)
       res.status(400).json({ error: message(error, 'Could not read the phone sync status') })
@@ -137,6 +141,32 @@ export function initR2Routes(io: Server): Router {
     } catch (error) {
       console.error('R2 phone update request failed:', error)
       res.status(400).json({ error: message(error, 'Could not ask the phone for an update') })
+    }
+  })
+
+  router.get('/relay', (_req: Request, res: Response) => {
+    res.json(relayStatus())
+  })
+
+  router.put('/relay', async (req: Request, res: Response) => {
+    try {
+      const body = req.body ?? {}
+      await updateRelayConfig({
+        url: typeof body.url === 'string' ? body.url : undefined,
+        token: typeof body.token === 'string' ? body.token : undefined,
+        clearToken: body.clearToken === true
+      })
+      res.json(relayStatus())
+    } catch (error) {
+      res.status(400).json({ error: message(error, 'Failed to save the relay settings') })
+    }
+  })
+
+  router.post('/relay/test', async (_req: Request, res: Response) => {
+    try {
+      res.json({ ok: true, ...(await testRelay()) })
+    } catch (error) {
+      res.status(400).json({ ok: false, error: message(error, 'Could not reach the relay') })
     }
   })
 

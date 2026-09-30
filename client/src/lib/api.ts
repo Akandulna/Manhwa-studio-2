@@ -2086,6 +2086,28 @@ export interface PhoneCropsStatus {
   pages: Record<string, PhonePageState>
 }
 
+/** "Refresh from phone": how the ask went out. */
+export interface PhoneUpdateRequest {
+  id: string
+  requestedAt: string
+  /** relay: through the phone relay, answered the moment Sleeper-Cell is open. r2: left in the bucket. */
+  via: 'relay' | 'r2'
+  /** Through the relay: Sleeper-Cell sockets open when it was sent (0 = it answers once opened). */
+  phones: number | null
+}
+
+/** The phone relay (a Cloudflare Worker) that carries Sleeper-Cell's status live, without R2. */
+export interface RelayStatus {
+  configured: boolean
+  url: string
+  hasToken: boolean
+  connected: boolean
+  /** Sleeper-Cell sockets open right now, i.e. the app is open on the phone. */
+  phones: number
+  lastError: string | null
+  lastReceiptAt: string | null
+}
+
 /** The script zip the phone uploads once every chapter of a series is done ("Zip and upload to R2"). */
 export interface PhoneScriptsZip {
   key: string
@@ -2134,8 +2156,12 @@ export interface PhoneImportPreview {
 export const r2Api = {
   getStatus: () => fetchApi<R2Status>('/r2/status'),
 
-  /** `fresh` re-lists the bucket instead of using the server's one-minute cache. */
-  getPhoneSync: (fresh = false) => fetchApi<PhoneSyncStatus>(`/r2/phone${fresh ? '?fresh=1' : ''}`),
+  /**
+   * `fresh` re-lists the bucket instead of using the server's one-minute cache;
+   * `cached` takes the last listing however old (no R2 operation once listed).
+   */
+  getPhoneSync: (fresh = false, cached = false) =>
+    fetchApi<PhoneSyncStatus>(`/r2/phone${fresh ? '?fresh=1' : cached ? '?cached=1' : ''}`),
 
   /**
    * With `seriesId`, also that series' chapters. The server answers from its
@@ -2162,9 +2188,18 @@ export const r2Api = {
     return fetchApi<PhoneCropsStatus>(`/r2/phone/crops${query ? `?${query}` : ''}`)
   },
 
-  /** Asks Sleeper-Cell to write its scripts and crops receipts again; they carry `id` in `answers`. */
+  /** Asks Sleeper-Cell to send its scripts and crops receipts again; they carry `id` in `answers`. */
   requestPhoneUpdate: () =>
-    fetchApi<{ id: string; requestedAt: string }>('/r2/phone/request', { method: 'POST' }),
+    fetchApi<PhoneUpdateRequest>('/r2/phone/request', { method: 'POST' }),
+
+  getRelay: () => fetchApi<RelayStatus>('/r2/relay'),
+
+  /** A blank or missing token keeps the saved one. */
+  saveRelay: (update: { url?: string; token?: string; clearToken?: boolean }) =>
+    fetchApi<RelayStatus>('/r2/relay', { method: 'PUT', body: JSON.stringify(update) }),
+
+  testRelay: () =>
+    fetchApi<{ ok: true; receipts: { kind: string; at: number; size: number }[]; phones: number }>('/r2/relay/test', { method: 'POST' }),
 
   getPhoneScriptsZip: (seriesId: string) =>
     fetchApi<PhoneScriptsZipStatus>(`/r2/phone/scripts/zip?seriesId=${encodeURIComponent(seriesId)}`),

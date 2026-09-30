@@ -1,23 +1,29 @@
 /**
- * usePhoneReceipt — a receipt the Sleeper-Cell phone writes to R2, read on
- * demand only.
+ * usePhoneReceipt — a status receipt from the Sleeper-Cell phone.
  *
- * R2 operations count against the free tier, so nothing here polls. Opening a
- * page reads the server's last copy, which costs no R2 operation. `refresh`
- * ("Refresh from phone") asks the phone for fresh receipts, then checks R2 on
- * a slowing schedule until the phone's answer carries that request's id, or
- * gives up. The phone looks for requests every 30 s while Sleeper-Cell is
- * open, so an answer usually lands within half a minute.
+ * With the phone relay set up (Settings → Cloudflare), the phone sends a
+ * receipt whenever something changes and the server pushes `phone:receipt`
+ * over the socket; this reloads from the server's copy right then, so the
+ * markers update live and no R2 operation is spent.
+ *
+ * Without the relay, receipts sit in R2 and nothing polls: opening a page
+ * reads the server's last copy, and `refresh` ("Refresh from phone") asks the
+ * phone, then checks R2 on a slowing schedule until the answer carries that
+ * request's id. The phone looks for requests every 30 s while it is open.
  *
  * Like usePublishedChapters, a failed load is silent: the phone markers are
  * advisory. A refresh reports its outcome to the caller.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { r2Api } from '@/lib/api'
+import { r2Api, type PhoneUpdateRequest } from '@/lib/api'
+import { useSocket } from '@/lib/socket'
 
-/** Seconds between R2 checks after asking: about 2.5 minutes in all, at most 13 HEADs. */
+/** Without the relay: seconds between R2 checks after asking, about 2.5 minutes in all, at most 13 HEADs. */
 const WAIT_SCHEDULE_S = [8, 8, 8, 8, 8, 8, 15, 15, 15, 15, 15, 15, 15]
+
+/** With the relay: how long to wait for the answer to arrive over the socket. */
+const RELAY_WAIT_MS = 150_000
 
 export type PhoneRefreshOutcome = 'answered' | 'no-answer'
 
@@ -25,19 +31,30 @@ export interface PhoneReceipt<T> {
   status: T | null
   /** True from asking the phone until it answers or the wait gives up. */
   refreshing: boolean
+  /** How the last ask went out, so the caller can word the outcome. */
+  lastRequest: PhoneUpdateRequest | null
   refresh: () => Promise<PhoneRefreshOutcome>
 }
 
-/** `load(fresh)` reads the receipt: from the server's copy, or from R2 when `fresh`. Changing `key` reloads. */
+/**
+ * `load(fresh)` reads the receipt: from the server's copy, or (without the
+ * relay) from R2 when `fresh`. Changing `key` reloads. `kind` is the receipt
+ * whose `phone:receipt` event triggers a reload.
+ */
 export function usePhoneReceipt<T extends { configured: boolean; answers: string | null }>(
+  kind: 'scripts' | 'crops',
   load: (fresh: boolean) => Promise<T>,
   key: string
 ): PhoneReceipt<T> {
+  const { socket } = useSocket()
   const [status, setStatus] = useState<T | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [lastRequest, setLastRequest] = useState<PhoneUpdateRequest | null>(null)
   const loadRef = useRef(load)
   loadRef.current = load
   const alive = useRef(true)
+  /** Called with each copy loaded after a push, while a relay refresh waits for its answer. */
+  const onPushed = useRef<((next: T) => void) | null>(null)
 
   useEffect(() => {
     alive.current = true
@@ -58,17 +75,50 @@ export function usePhoneReceipt<T extends { configured: boolean; answers: string
     return () => { cancelled = true }
   }, [key, apply])
 
+  useEffect(() => {
+    if (!socket) return
+    const onReceipt = (event: { kind: string }) => {
+      if (event.kind !== kind) return
+      loadRef.current(false)
+        .then(next => {
+          if (!alive.current) return
+          apply(next)
+          onPushed.current?.(next)
+        })
+        .catch(() => { /* advisory only */ })
+    }
+    socket.on('phone:receipt', onReceipt)
+    return () => { socket.off('phone:receipt', onReceipt) }
+  }, [socket, kind, apply])
+
   const refresh = useCallback(async (): Promise<PhoneRefreshOutcome> => {
     setRefreshing(true)
     try {
-      const { id } = await r2Api.requestPhoneUpdate()
+      const request = await r2Api.requestPhoneUpdate()
+      if (alive.current) setLastRequest(request)
+
+      if (request.via === 'relay') {
+        return await new Promise<PhoneRefreshOutcome>(resolve => {
+          const timer = setTimeout(() => {
+            onPushed.current = null
+            resolve('no-answer')
+          }, RELAY_WAIT_MS)
+          onPushed.current = next => {
+            if (next.answers !== request.id) return
+            clearTimeout(timer)
+            onPushed.current = null
+            resolve('answered')
+          }
+        })
+      }
+
       for (const seconds of WAIT_SCHEDULE_S) {
         await new Promise(resolve => setTimeout(resolve, seconds * 1000))
         if (!alive.current) return 'no-answer'
         const next = await loadRef.current(true)
         if (!alive.current) return 'no-answer'
         apply(next)
-        if (next.answers === id) return 'answered'
+        if (next.answers === request.id) return 'answered'
       }
       return 'no-answer'
     } finally {
@@ -76,5 +126,5 @@ export function usePhoneReceipt<T extends { configured: boolean; answers: string
     }
   }, [apply])
 
-  return { status, refreshing, refresh }
+  return { status, refreshing, lastRequest, refresh }
 }

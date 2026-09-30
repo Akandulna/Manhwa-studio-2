@@ -84,7 +84,8 @@ describe('getPhoneCrops', () => {
     const request = await requestPhoneUpdate()
     // The receipt was found at the bucket root, not under R2_PREFIX, so only the root gets the request.
     expect(puts.map(p => p.Key)).toEqual(['_sleeper-cell-request.json'])
-    expect(JSON.parse(puts[0].Body)).toEqual(request)
+    expect(request.via).toBe('r2')
+    expect(JSON.parse(puts[0].Body)).toEqual({ id: request.id, requestedAt: request.requestedAt })
   })
 
   it('drops a working page the phone never cleared', async () => {

@@ -57,8 +57,8 @@ export default function Library() {
 
   // Which series' zips the Sleeper-Cell phone app has downloaded.
   const [phoneSync, setPhoneSync] = useState<PhoneSyncStatus | null>(null)
-  const loadPhoneSync = useCallback((fresh: boolean) => {
-    r2Api.getPhoneSync(fresh).then(setPhoneSync).catch(() => {})
+  const loadPhoneSync = useCallback((fresh: boolean, cached = false) => {
+    r2Api.getPhoneSync(fresh, cached).then(setPhoneSync).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -75,6 +75,19 @@ export default function Library() {
   useEffect(() => {
     if (r2JobFinished) loadPhoneSync(false)
   }, [r2JobFinished, r2Job?.id, loadPhoneSync])
+
+  // Through the phone relay the phone reports each sync as it happens. Its
+  // receipt says nothing new about the bucket, so the last listing is reused.
+  useEffect(() => {
+    if (!socket) return
+    const onReceipt = (event: { kind: string }) => {
+      if (event.kind === 'sync') loadPhoneSync(false, true)
+    }
+    socket.on('phone:receipt', onReceipt)
+    return () => {
+      socket.off('phone:receipt', onReceipt)
+    }
+  }, [socket, loadPhoneSync])
 
   useEffect(() => {
     if (!socket) return

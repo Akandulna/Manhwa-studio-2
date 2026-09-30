@@ -45,6 +45,7 @@ import { prisma } from '../index.js'
 import { writeEnvVars } from '../utils/envFile.js'
 import { getPublishedChapters } from './storageService.js'
 import { FREE_PLAN, attachUsageCounter, getMonthUsage, monthKey } from './r2Usage.js'
+import { relayConfigured, relayReceipt, sendPhoneRequest } from './phoneRelay.js'
 
 // ============ Config ============
 
@@ -212,9 +213,10 @@ const STORAGE_CACHE_MS = 60_000
 /**
  * Everything in the bucket, summed. Each 1,000 objects costs one Class A
  * list, so the result is cached for a minute; the guard asks for a fresh one.
+ * `anyAge` takes the cached copy however old it is.
  */
-async function measureBucket(client: S3Client, bucket: string, fresh = false): Promise<BucketStorage> {
-  if (!fresh && storageCache?.bucket === bucket && Date.now() - storageCache.at < STORAGE_CACHE_MS) {
+async function measureBucket(client: S3Client, bucket: string, fresh = false, anyAge = false): Promise<BucketStorage> {
+  if (!fresh && storageCache?.bucket === bucket && (anyAge || Date.now() - storageCache.at < STORAGE_CACHE_MS)) {
     return storageCache.value
   }
   const objects: R2Object[] = []
@@ -284,6 +286,10 @@ export async function deleteR2Object(key: string): Promise<void> {
  * this object next to them: `{ device, updatedAt, series: { <zip key>: { etag,
  * state: 'downloaded' | 'downloading', at? } } }`. Keep the name in step with
  * RECEIPT_NAME in its ManhwaSync.kt.
+ *
+ * With the phone relay set up (phoneRelay.ts), the phone posts all three
+ * receipts to the relay instead and they are served from its copy; R2 is read
+ * for them only without it.
  */
 const PHONE_RECEIPT_NAME = '_sleeper-cell.json'
 
@@ -341,16 +347,19 @@ async function readPhoneReceipt(client: S3Client, bucket: string, obj: R2Object)
 /**
  * Which series' zips the phone has downloaded. One bucket list (cached for a
  * minute unless `fresh`) plus, when the phone has written a new receipt, one read.
+ * `cached` uses the last listing however old: a new receipt from the relay
+ * changes what the phone has, not what is in the bucket.
  */
-export async function getPhoneSync(fresh = false): Promise<PhoneSyncStatus> {
+export async function getPhoneSync(fresh = false, cached = false): Promise<PhoneSyncStatus> {
   const config = getR2Config()
   if (!config) return { configured: false, reportedAt: null, device: null, series: {} }
 
   const client = createClient(config)
-  const storage = await measureBucket(client, config.bucket, fresh)
+  const storage = await measureBucket(client, config.bucket, fresh, cached)
   const byKey = new Map(storage.objects.map(o => [o.key, o]))
   const receiptObj = byKey.get(`${config.prefix}${PHONE_RECEIPT_NAME}`)
-  const receipt = receiptObj ? await readPhoneReceipt(client, config.bucket, receiptObj) : {}
+  const receipt = relayReceipt<PhoneReceipt>('sync')
+    ?? (receiptObj ? await readPhoneReceipt(client, config.bucket, receiptObj) : {})
   const phoneSeries = receipt.series && typeof receipt.series === 'object' ? receipt.series : {}
 
   const rows = await prisma.series.findMany({ select: { id: true, rootFolder: true } })
@@ -481,9 +490,10 @@ async function readPolledReceipt<T extends object>(client: S3Client, config: R2C
  */
 export async function getPhoneScripts(seriesId?: string, fresh = false): Promise<PhoneScriptsStatus> {
   const config = getR2Config()
-  if (!config) return { configured: false, reportedAt: null, device: null, answers: null, series: {}, chapters: {} }
+  const relayed = relayReceipt<ScriptsReceipt>('scripts')
+  if (!config && !relayed) return { configured: false, reportedAt: null, device: null, answers: null, series: {}, chapters: {} }
 
-  const receipt = await readPolledReceipt<ScriptsReceipt>(createClient(config), config, SCRIPTS_RECEIPT_NAME, fresh)
+  const receipt = relayed ?? await readPolledReceipt<ScriptsReceipt>(createClient(config!), config!, SCRIPTS_RECEIPT_NAME, fresh)
   const phoneSeries = receipt.series && typeof receipt.series === 'object' ? receipt.series : {}
 
   const rows = await prisma.series.findMany({ select: { id: true, rootFolder: true } })
@@ -587,9 +597,10 @@ function isObject(value: unknown): value is Record<string, unknown> {
 export async function getPhoneCrops(seriesId?: string, chapterId?: string, fresh = false): Promise<PhoneCropsStatus> {
   const empty = { reportedAt: null, device: null, answers: null, series: {}, chapters: {}, working: null, pages: {} }
   const config = getR2Config()
-  if (!config) return { configured: false, ...empty }
+  const relayed = relayReceipt<CropsReceipt>('crops')
+  if (!config && !relayed) return { configured: false, ...empty }
 
-  const receipt = await readPolledReceipt<CropsReceipt>(createClient(config), config, CROPS_RECEIPT_NAME, fresh)
+  const receipt = relayed ?? await readPolledReceipt<CropsReceipt>(createClient(config!), config!, CROPS_RECEIPT_NAME, fresh)
   const phoneSeries = isObject(receipt.series) ? receipt.series : {}
 
   const rows = await prisma.series.findMany({ select: { id: true, rootFolder: true } })
@@ -660,8 +671,21 @@ async function phoneFolders(client: S3Client, config: R2Config): Promise<string[
   return folders.length > 0 ? folders : [...new Set([config.prefix, ''])]
 }
 
-/** Asks the phone for fresh receipts. One PUT (Class A), two if its folder is unknown. */
-export async function requestPhoneUpdate(): Promise<{ id: string; requestedAt: string }> {
+export interface PhoneUpdateRequest {
+  id: string
+  requestedAt: string
+  /** relay: sent through the phone relay, answered the moment Sleeper-Cell is open. r2: left in the bucket. */
+  via: 'relay' | 'r2'
+  /** Through the relay: Sleeper-Cell sockets open when it was sent (0 = it answers once opened). */
+  phones: number | null
+}
+
+/**
+ * Asks the phone for fresh receipts: through the relay when it is set up (no
+ * R2 operations), else one PUT (Class A), two if its folder is unknown.
+ */
+export async function requestPhoneUpdate(): Promise<PhoneUpdateRequest> {
+  if (relayConfigured()) return { ...(await sendPhoneRequest()), via: 'relay' }
   const config = getR2Config()
   if (!config) throw new Error('Cloudflare R2 is not set up')
   const client = createClient(config)
@@ -675,7 +699,7 @@ export async function requestPhoneUpdate(): Promise<{ id: string; requestedAt: s
       ContentType: 'application/json'
     }))
   }
-  return request
+  return { ...request, via: 'r2', phones: null }
 }
 
 const PART_SIZE = 16 * 1024 * 1024
