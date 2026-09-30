@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { usePublishedChapters } from '@/hooks/usePublishedChapters'
 import { publishedRowClass } from '@/components/PublishedBadge'
 import { Link, useNavigate } from 'react-router-dom'
@@ -24,9 +24,6 @@ import { Plus, BookOpen, Globe, CheckCircle, XCircle, Clock, Loader2, FolderInpu
 import { useToast } from '@/components/ui/use-toast'
 
 const API_BASE = 'http://localhost:3002/api'
-
-/** Coming back to the window re-lists the bucket at most this often (one Class A request each). */
-const PHONE_REFRESH_MS = 30_000
 
 interface ScannedSeries {
   name: string
@@ -60,9 +57,7 @@ export default function Library() {
 
   // Which series' zips the Sleeper-Cell phone app has downloaded.
   const [phoneSync, setPhoneSync] = useState<PhoneSyncStatus | null>(null)
-  const phoneFetchedAt = useRef(0)
   const loadPhoneSync = useCallback((fresh: boolean) => {
-    phoneFetchedAt.current = Date.now()
     r2Api.getPhoneSync(fresh).then(setPhoneSync).catch(() => {})
   }, [])
 
@@ -70,13 +65,9 @@ export default function Library() {
     loadSeries()
     // Pick up an upload that is running, or finished while this page was closed.
     r2Api.getStatus().then(status => setR2Job(status.job)).catch(() => {})
+    // Once per visit, from the server's one-minute bucket cache. No re-list on
+    // window focus: each list is a Class A operation, and R2 must stay in the free tier.
     loadPhoneSync(false)
-    // The phone syncs when its button is tapped, so look again when the user comes back here.
-    const onFocus = () => {
-      if (Date.now() - phoneFetchedAt.current >= PHONE_REFRESH_MS) loadPhoneSync(true)
-    }
-    window.addEventListener('focus', onFocus)
-    return () => window.removeEventListener('focus', onFocus)
   }, [loadPhoneSync])
 
   // A finished upload replaces zips, so their phone state changes.

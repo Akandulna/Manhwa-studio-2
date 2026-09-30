@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // The receipt Sleeper-Cell's ClipperReceipt.kt writes, at the bucket root (the phone's prefix differs).
 let receipt: object = {}
-const send = vi.fn(async (command: { constructor: { name: string }; input: { Key: string } }) => {
+const puts: { Key: string; Body: string }[] = []
+const send = vi.fn(async (command: { constructor: { name: string }; input: { Key: string; Body?: string } }) => {
+  if (command.constructor.name === 'PutObjectCommand') return void puts.push({ Key: command.input.Key, Body: command.input.Body! })
   if (command.input.Key !== '_sleeper-cell-crops.json') throw Object.assign(new Error('NotFound'), { name: 'NotFound' })
   if (command.constructor.name === 'HeadObjectCommand') return { ETag: `"${JSON.stringify(receipt).length}-${Math.random()}"` }
   return { Body: { transformToString: async () => JSON.stringify(receipt) } }
@@ -26,16 +28,13 @@ vi.mock('../../index.js', () => ({
 }))
 
 Object.assign(process.env, { R2_ACCOUNT_ID: 'a', R2_ACCESS_KEY_ID: 'k', R2_SECRET_ACCESS_KEY: 's', R2_BUCKET: 'b', R2_PREFIX: 'Manhwa' })
-const { getPhoneCrops } = await import('../r2Service.js')
+const { getPhoneCrops, requestPhoneUpdate } = await import('../r2Service.js')
 
-/** Past the 2 s HEAD cache, so each call re-reads the receipt. */
-async function read(seriesId?: string, chapterId?: string) {
-  vi.setSystemTime(Date.now() + 3_000)
-  return getPhoneCrops(seriesId, chapterId)
-}
+/** A "Refresh from phone" read, which goes to R2. */
+const read = (seriesId?: string, chapterId?: string) => getPhoneCrops(seriesId, chapterId, true)
 
 describe('getPhoneCrops', () => {
-  beforeEach(() => vi.useFakeTimers({ toFake: ['Date'] }))
+  beforeEach(() => { send.mockClear() })
 
   it('maps series, chapters, pages and the working page by folder and file name', async () => {
     receipt = {
@@ -65,6 +64,27 @@ describe('getPhoneCrops', () => {
     const summary = await read()
     expect(summary.chapters).toEqual({})
     expect(summary.working).toBeNull()
+  })
+
+  it('answers from the cached copy without touching R2 unless fresh', async () => {
+    receipt = { answers: 'req-1', series: { 'Solo Hero': { total: 3, done: 1, chapters: {} } } }
+    expect((await read('s1')).answers).toBe('req-1')
+    send.mockClear()
+    receipt = { answers: 'req-2', series: {} }
+    const cached = await getPhoneCrops('s1')
+    expect(send).not.toHaveBeenCalled()
+    expect(cached.answers).toBe('req-1')
+    expect((await read('s1')).answers).toBe('req-2')
+  })
+
+  it('puts the update request in the folder the phone writes its receipts to', async () => {
+    receipt = { series: {} }
+    await read()
+    puts.length = 0
+    const request = await requestPhoneUpdate()
+    // The receipt was found at the bucket root, not under R2_PREFIX, so only the root gets the request.
+    expect(puts.map(p => p.Key)).toEqual(['_sleeper-cell-request.json'])
+    expect(JSON.parse(puts[0].Body)).toEqual(request)
   })
 
   it('drops a working page the phone never cleared', async () => {

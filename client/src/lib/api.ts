@@ -2025,6 +2025,8 @@ export interface PhoneScriptsStatus {
   /** When the phone last reported; null if it never has. */
   reportedAt: string | null
   device: string | null
+  /** The id of the "Refresh from phone" request the phone last answered. */
+  answers: string | null
   /** By series id: chapters done on the phone out of those it has. */
   series: Record<string, { done: number; total: number }>
   /** By chapter id, for the series asked for; chapters with no script are left out. */
@@ -2045,6 +2047,8 @@ export interface PhoneCropsStatus {
   /** When the phone last reported; null if it never has. */
   reportedAt: string | null
   device: string | null
+  /** The id of the "Refresh from phone" request the phone last answered. */
+  answers: string | null
   /** By series id: pages done on the phone out of those it has. */
   series: Record<string, { done: number; total: number }>
   /** By chapter id, for the series asked for; chapters with no page started are left out. */
@@ -2106,18 +2110,34 @@ export const r2Api = {
   /** `fresh` re-lists the bucket instead of using the server's one-minute cache. */
   getPhoneSync: (fresh = false) => fetchApi<PhoneSyncStatus>(`/r2/phone${fresh ? '?fresh=1' : ''}`),
 
-  /** With `seriesId`, also that series' chapters. */
-  getPhoneScripts: (seriesId?: string) =>
-    fetchApi<PhoneScriptsStatus>(`/r2/phone/scripts${seriesId ? `?seriesId=${encodeURIComponent(seriesId)}` : ''}`),
+  /**
+   * With `seriesId`, also that series' chapters. The server answers from its
+   * last copy of the phone's receipt; `fresh` re-reads it from R2.
+   */
+  getPhoneScripts: (seriesId?: string, fresh = false) => {
+    const params = new URLSearchParams()
+    if (seriesId) params.set('seriesId', seriesId)
+    if (fresh) params.set('fresh', '1')
+    const query = params.toString()
+    return fetchApi<PhoneScriptsStatus>(`/r2/phone/scripts${query ? `?${query}` : ''}`)
+  },
 
-  /** With `seriesId`, also that series' chapters and the page Auto-run is on; with `chapterId`, that chapter's pages. */
-  getPhoneCrops: (seriesId?: string, chapterId?: string) => {
+  /**
+   * With `seriesId`, also that series' chapters and the page Auto-run is on;
+   * with `chapterId`, that chapter's pages. `fresh` as for getPhoneScripts.
+   */
+  getPhoneCrops: (seriesId?: string, chapterId?: string, fresh = false) => {
     const params = new URLSearchParams()
     if (seriesId) params.set('seriesId', seriesId)
     if (chapterId) params.set('chapterId', chapterId)
+    if (fresh) params.set('fresh', '1')
     const query = params.toString()
     return fetchApi<PhoneCropsStatus>(`/r2/phone/crops${query ? `?${query}` : ''}`)
   },
+
+  /** Asks Sleeper-Cell to write its scripts and crops receipts again; they carry `id` in `answers`. */
+  requestPhoneUpdate: () =>
+    fetchApi<{ id: string; requestedAt: string }>('/r2/phone/request', { method: 'POST' }),
 
   getPhoneScriptsZip: (seriesId: string) =>
     fetchApi<PhoneScriptsZipStatus>(`/r2/phone/scripts/zip?seriesId=${encodeURIComponent(seriesId)}`),

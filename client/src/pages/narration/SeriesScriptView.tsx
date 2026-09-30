@@ -11,6 +11,7 @@ import { PublishedBadge, publishedRowClass } from '@/components/PublishedBadge'
 import { PhoneScriptBadge } from '@/components/PhoneSyncBadge'
 import { usePhoneScripts } from '@/hooks/usePhoneScripts'
 import { PhoneScriptImport } from '@/components/narration/PhoneScriptImport'
+import { PhoneRefreshButton } from '@/components/PhoneRefreshButton'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { narrationApi, voiceoverApi, NarrationSeriesDetail, NarrationChapterSummary, AIStatus } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -93,7 +94,8 @@ export default function SeriesScriptView() {
   // Chapters already rendered to video — no need to rewrite or re-voice them.
   const { isPublished } = usePublishedChapters(id)
   // Scripts written in the Sleeper-Cell phone app, updated as the phone saves them.
-  const phoneScripts = usePhoneScripts(id)
+  const phoneScriptsReceipt = usePhoneScripts(id)
+  const phoneScripts = phoneScriptsReceipt.status
   const [aiStatus, setAIStatus] = useState<AIStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
@@ -605,6 +607,7 @@ export default function SeriesScriptView() {
                 </span>
               </>
             )}
+            <PhoneRefreshButton receipt={phoneScriptsReceipt} />
           </div>
           
           {/* Progress bar */}

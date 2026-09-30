@@ -7,8 +7,10 @@
  *   POST /test     check the credentials can reach the bucket
  *   GET  /usage    free-plan meters: bucket storage + this month's requests
  *   GET  /phone?fresh=1   which series' zips the Sleeper-Cell phone app has downloaded
- *   GET  /phone/scripts?seriesId=…   which chapters have a narration script on the phone
- *   GET  /phone/crops?seriesId=…&chapterId=…   which pages have crop JSON on the phone, and the page Auto-run is on
+ *   GET  /phone/scripts?seriesId=…&fresh=1   which chapters have a narration script on the phone
+ *   GET  /phone/crops?seriesId=…&chapterId=…&fresh=1   which pages have crop JSON on the phone, and the page Auto-run is on
+ *   POST /phone/request   ask the phone to write both receipts again ("Refresh from phone")
+ *     (the GETs answer from the server's last copy; fresh=1 re-reads R2)
  *   GET  /phone/scripts/zip?seriesId=…   the phone's uploaded script zip for a series, and the last import
  *   POST /phone/scripts/preview   { seriesId } — download + parse that zip, say what each chapter would get
  *   POST /phone/scripts/import    { seriesId, etag, chapterIds } — attach the previewed scripts
@@ -32,6 +34,7 @@ import {
   getPhoneSync,
   getR2Config,
   missingR2Env,
+  requestPhoneUpdate,
   publicR2Config,
   startUpload,
   testR2Connection,
@@ -110,7 +113,7 @@ export function initR2Routes(io: Server): Router {
   router.get('/phone/scripts', async (req: Request, res: Response) => {
     try {
       const seriesId = typeof req.query.seriesId === 'string' ? req.query.seriesId : undefined
-      res.json(await getPhoneScripts(seriesId))
+      res.json(await getPhoneScripts(seriesId, req.query.fresh === '1'))
     } catch (error) {
       console.error('R2 phone scripts lookup failed:', error)
       res.status(400).json({ error: message(error, 'Could not read the phone scripts status') })
@@ -121,10 +124,19 @@ export function initR2Routes(io: Server): Router {
     try {
       const seriesId = typeof req.query.seriesId === 'string' ? req.query.seriesId : undefined
       const chapterId = typeof req.query.chapterId === 'string' ? req.query.chapterId : undefined
-      res.json(await getPhoneCrops(seriesId, chapterId))
+      res.json(await getPhoneCrops(seriesId, chapterId, req.query.fresh === '1'))
     } catch (error) {
       console.error('R2 phone crops lookup failed:', error)
       res.status(400).json({ error: message(error, 'Could not read the phone crop status') })
+    }
+  })
+
+  router.post('/phone/request', async (_req: Request, res: Response) => {
+    try {
+      res.json(await requestPhoneUpdate())
+    } catch (error) {
+      console.error('R2 phone update request failed:', error)
+      res.status(400).json({ error: message(error, 'Could not ask the phone for an update') })
     }
   })
 

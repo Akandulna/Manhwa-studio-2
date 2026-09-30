@@ -10,6 +10,7 @@ import { usePublishedChapters } from '@/hooks/usePublishedChapters'
 import { PublishedBadge, publishedRowClass } from '@/components/PublishedBadge'
 import { PhoneCropsBadge } from '@/components/PhoneSyncBadge'
 import { usePhoneCrops } from '@/hooks/usePhoneCrops'
+import { PhoneRefreshButton } from '@/components/PhoneRefreshButton'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -98,8 +99,10 @@ export default function Clipper3SeriesView() {
   // Chapters already rendered to video, so the user can skip re-cutting them.
   const { isPublished } = usePublishedChapters(id)
   const [summaries, setSummaries] = useState<Record<string, Clipper3ChapterSummary>>({})
-  // Crop pointers the Sleeper-Cell phone is making, live from its R2 receipt.
-  const phoneCrops = usePhoneCrops(id)
+  // Crop pointers the Sleeper-Cell phone is making, from its R2 receipt. It is
+  // only re-read when "Refresh from phone" asks, to save R2 operations.
+  const phoneCropsReceipt = usePhoneCrops(id)
+  const phoneCrops = phoneCropsReceipt.status
   const phoneSeries = id ? phoneCrops?.series[id] : undefined
 
   const { toast } = useToast()
@@ -544,6 +547,7 @@ export default function Clipper3SeriesView() {
                   </span>
                 </>
               )}
+              <PhoneRefreshButton receipt={phoneCropsReceipt} />
             </div>
 
             <div className="max-w-md mt-3">

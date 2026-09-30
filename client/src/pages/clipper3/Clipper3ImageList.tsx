@@ -84,6 +84,7 @@ import { AutoRunBadge, AutoRunDialog, AutoRunStrip, isActiveStep, useAutoRun } f
 import { seriesSlug, stemOf, exportedFilenameFor } from '@/lib/clipper3Naming'
 import { PhonePageBadge, PhoneWorkingBadge } from '@/components/PhoneSyncBadge'
 import { usePhoneCrops } from '@/hooks/usePhoneCrops'
+import { PhoneRefreshButton } from '@/components/PhoneRefreshButton'
 
 export default function Clipper3ImageList() {
   const { id: chapterId } = useParams<{ id: string }>()
@@ -175,10 +176,12 @@ export default function Clipper3ImageList() {
   const images = data?.images ?? []
   const doneCount = useMemo(() => images.filter(i => i.status === 'done').length, [images])
 
-  // Crop pointers the Sleeper-Cell phone is making for this chapter, live from
-  // its R2 receipt: each page's state there, and the page its Auto-run is on.
+  // Crop pointers the Sleeper-Cell phone is making for this chapter, from its
+  // R2 receipt: each page's state there, and the page its Auto-run is on. It is
+  // only re-read when "Refresh from phone" asks, to save R2 operations.
   // Pages match by filename, which the R2 zip carries to the phone unchanged.
-  const phoneCrops = usePhoneCrops(data?.seriesId, chapterId)
+  const phoneCropsReceipt = usePhoneCrops(data?.seriesId, chapterId)
+  const phoneCrops = phoneCropsReceipt.status
   const phoneChapter = chapterId ? phoneCrops?.chapters[chapterId] : undefined
   const phoneWorking = phoneCrops?.working?.chapterId === chapterId ? phoneCrops?.working ?? null : null
   const rowRefs = useRef(new Map<string, HTMLDivElement>())
@@ -1245,23 +1248,8 @@ export default function Clipper3ImageList() {
           <Images className="h-3.5 w-3.5" />
           {images.length} file{images.length === 1 ? '' : 's'}
         </span>
-        {/* Tapping the phone chip scrolls to the page it is on. */}
-        {phoneWorking && (
-          <button
-            type="button"
-            className="ml-2 min-w-0"
-            onClick={() => rowRefs.current.get(phoneWorking.page)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
-          >
-            <PhoneWorkingBadge page={phoneWorking.page} paused={phoneWorking.paused} device={phoneCrops?.device ?? null} />
-          </button>
-        )}
-        <span className="text-xs text-muted-foreground ml-auto flex-shrink-0">
+        <span className="text-xs text-muted-foreground ml-auto">
           {doneCount}/{images.length} done
-          {phoneChapter && (
-            <span title={phoneCrops?.device ? `Sleeper-Cell on ${phoneCrops.device}` : 'Sleeper-Cell'}>
-              {' '}· {phoneChapter.done}/{phoneChapter.total} on phone
-            </span>
-          )}
         </span>
 
         <Button
@@ -1319,6 +1307,31 @@ export default function Clipper3ImageList() {
           Murgaa
         </Button>
       </div>
+
+      {/* The Sleeper-Cell phone's progress on this chapter, re-read only when
+          asked. Tapping the Processing chip scrolls to the page it is on. */}
+      {phoneCrops?.configured && (
+        <div className="border-b bg-card px-4 py-2 flex flex-wrap items-center gap-3 flex-shrink-0">
+          <PhoneRefreshButton receipt={phoneCropsReceipt} />
+          {phoneChapter && (
+            <span
+              className="text-xs text-muted-foreground"
+              title={phoneCrops.device ? `Sleeper-Cell on ${phoneCrops.device}` : 'Sleeper-Cell'}
+            >
+              {phoneChapter.done}/{phoneChapter.total} pages done on phone
+            </span>
+          )}
+          {phoneWorking && (
+            <button
+              type="button"
+              className="min-w-0"
+              onClick={() => rowRefs.current.get(phoneWorking.page)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+            >
+              <PhoneWorkingBadge page={phoneWorking.page} paused={phoneWorking.paused} device={phoneCrops.device} />
+            </button>
+          )}
+        </div>
+      )}
 
       <MurgaaDialog scope="clipper3" open={murgaaOpen} onOpenChange={setMurgaaOpen} />
 

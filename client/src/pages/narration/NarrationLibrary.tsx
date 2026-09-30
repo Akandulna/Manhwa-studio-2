@@ -30,7 +30,8 @@ export default function NarrationLibrary() {
   const { toast } = useToast()
   const { narrationRangeComplete } = useSocket()
   // Scripts written in the Sleeper-Cell phone app, per series.
-  const phoneScripts = usePhoneScripts()
+  // The server's last copy; "Refresh from phone" on a series page updates it.
+  const { status: phoneScripts } = usePhoneScripts()
 
   useEffect(() => {
     loadSeries()
