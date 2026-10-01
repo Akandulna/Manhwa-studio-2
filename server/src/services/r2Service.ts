@@ -562,6 +562,13 @@ export async function getPhoneScripts(seriesId?: string, fresh = false): Promise
  * the first of them, kept for older readers. Older phone builds send only
  * `working`. Both are there only while Auto-run is on that series. Keep the
  * name in step with RECEIPT_NAME in its ClipperReceipt.kt.
+ *
+ * `profiles` (UploadLedger.kt) lists every browser profile on the phone with
+ * the images it uploaded to ChatGPT in the last day, in 5-minute slots
+ * (`uploads: [[slot start, images], …]`), and the limits ChatGPT put on it
+ * (`limits: [{ at, until, used, countedSince, complete, flagged, reason }]`):
+ * `used` is how many images it took, counted from the limit before, and
+ * `counting: { since, images }` is the count so far towards the next one.
  */
 const CROPS_RECEIPT_NAME = '_sleeper-cell-crops.json'
 
@@ -591,6 +598,39 @@ export interface PhonePageFinish {
   models: string[]
 }
 
+/** A limit ChatGPT put on a phone profile. */
+export interface PhoneUploadLimit {
+  at: string
+  /** When ChatGPT said it would lift (the phone's reading of its words; an hour when it said nothing). */
+  until: string
+  /** Images the profile uploaded from `countedSince` up to the limit. */
+  used: number
+  countedSince: string
+  /** False for the first limit after tracking began: its count may have started mid-window. */
+  complete: boolean
+  /** A flag for suspicious activity, not the upload limit; its `used` says nothing about the limit. */
+  flagged: boolean
+  reason: string
+}
+
+/** One of the phone's browser profiles (one ChatGPT account each) and its uploads to ChatGPT. */
+export interface PhoneUploadProfile {
+  id: string
+  name: string
+  /** The profile the phone's browser is on, which the next run starts in. */
+  selected: boolean
+  /** While ChatGPT's limit on it is noted as running; null otherwise. */
+  limitedUntil: string | null
+  /** When the phone began counting this profile's uploads; null before its first upload. */
+  trackingSince: string | null
+  /** Images uploaded towards the next limit: since the last one, or since tracking began. */
+  counting: { since: string; images: number } | null
+  /** Images uploaded in the last day, by 5-minute slot, oldest first. */
+  uploads: { at: string; images: number }[]
+  /** Oldest first. */
+  limits: PhoneUploadLimit[]
+}
+
 export interface PhoneCropsStatus {
   configured: boolean
   /** When the phone last wrote the receipt; null if it never has. */
@@ -610,12 +650,15 @@ export interface PhoneCropsStatus {
   pages: Record<string, PhonePageState>
   /** By page file, for the chapter asked for: how each done page was finished. */
   finished: Record<string, PhonePageFinish>
+  /** Every browser profile on the phone, in its order, with its ChatGPT uploads; empty from older phone builds. */
+  profiles: PhoneUploadProfile[]
 }
 
 interface CropsReceipt {
   device?: string
   updatedAt?: string
   answers?: string
+  profiles?: unknown
   series?: Record<string, {
     total?: number
     done?: number
@@ -640,12 +683,57 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
+function isTime(value: unknown): value is string {
+  return typeof value === 'string' && !Number.isNaN(Date.parse(value))
+}
+
+function count(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
+}
+
+/** The receipt's `profiles`, dropping anything malformed. */
+export function parseUploadProfiles(raw: unknown): PhoneUploadProfile[] {
+  if (!Array.isArray(raw)) return []
+  const profiles: PhoneUploadProfile[] = []
+  for (const entry of raw) {
+    if (!isObject(entry) || typeof entry.id !== 'string' || !entry.id) continue
+    const uploads = (Array.isArray(entry.uploads) ? entry.uploads : [])
+      .filter((u): u is [string, number] => Array.isArray(u) && isTime(u[0]) && count(u[1]) > 0)
+      .map(([at, images]) => ({ at, images: count(images) }))
+      .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+    const limits = (Array.isArray(entry.limits) ? entry.limits : [])
+      .filter((l): l is Record<string, unknown> => isObject(l) && isTime(l.at) && isTime(l.until))
+      .map(l => ({
+        at: l.at as string,
+        until: l.until as string,
+        used: count(l.used),
+        countedSince: isTime(l.countedSince) ? l.countedSince : (l.at as string),
+        complete: l.complete === true,
+        flagged: l.flagged === true,
+        reason: typeof l.reason === 'string' ? l.reason : ''
+      }))
+    profiles.push({
+      id: entry.id,
+      name: typeof entry.name === 'string' && entry.name ? entry.name : entry.id,
+      selected: entry.selected === true,
+      limitedUntil: isTime(entry.limitedUntil) ? entry.limitedUntil : null,
+      trackingSince: isTime(entry.trackingSince) ? entry.trackingSince : null,
+      counting: isObject(entry.counting) && isTime(entry.counting.since)
+        ? { since: entry.counting.since, images: count(entry.counting.images) }
+        : null,
+      uploads,
+      limits
+    })
+  }
+  return profiles
+}
+
 /**
  * Crop progress on the phone. Series, chapters and pages are matched by
  * folder and file name, the names the R2 zip carries to the phone.
  */
 export async function getPhoneCrops(seriesId?: string, chapterId?: string, fresh = false): Promise<PhoneCropsStatus> {
-  const empty = { reportedAt: null, device: null, answers: null, series: {}, chapters: {}, working: null, workingPages: [], pages: {}, finished: {} }
+  const empty = { reportedAt: null, device: null, answers: null, series: {}, chapters: {}, working: null, workingPages: [], pages: {}, finished: {}, profiles: [] }
   const config = getR2Config()
   const relayed = relayReceipt<CropsReceipt>('crops')
   if (!config && !relayed) return { configured: false, ...empty }
@@ -658,6 +746,7 @@ export async function getPhoneCrops(seriesId?: string, chapterId?: string, fresh
   status.reportedAt = receipt.updatedAt ?? null
   status.device = receipt.device ?? null
   status.answers = receipt.answers ?? null
+  status.profiles = parseUploadProfiles(receipt.profiles)
   for (const row of rows) {
     const entry = phoneSeries[path.basename(row.rootFolder)]
     if (!isObject(entry)) continue

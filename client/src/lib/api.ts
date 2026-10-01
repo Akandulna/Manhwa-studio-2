@@ -2107,6 +2107,40 @@ export interface PhoneCropsStatus {
   pages: Record<string, PhonePageState>
   /** By image filename, for the chapter asked for: how each done page was finished on the phone. */
   finished: Record<string, PhonePageFinish>
+  /** Every browser profile on the phone (one ChatGPT account each), with its uploads to ChatGPT; empty from older phone builds. */
+  profiles: PhoneUploadProfile[]
+}
+
+/** A limit ChatGPT put on a phone profile. */
+export interface PhoneUploadLimit {
+  at: string
+  /** When ChatGPT said it would lift (an hour when it said nothing). */
+  until: string
+  /** Images the profile uploaded from `countedSince` up to the limit. */
+  used: number
+  countedSince: string
+  /** False for the first limit after tracking began: its count may have started mid-window. */
+  complete: boolean
+  /** A flag for suspicious activity, not the upload limit. */
+  flagged: boolean
+  reason: string
+}
+
+/** One of the phone's browser profiles and the images it uploaded to ChatGPT. */
+export interface PhoneUploadProfile {
+  id: string
+  name: string
+  /** The profile the phone's browser is on, which the next run starts in. */
+  selected: boolean
+  /** While ChatGPT's limit on it is noted as running; null otherwise. */
+  limitedUntil: string | null
+  trackingSince: string | null
+  /** Images uploaded towards the next limit: since the last one, or since tracking began. */
+  counting: { since: string; images: number } | null
+  /** Images uploaded in the last day, by 5-minute slot, oldest first. */
+  uploads: { at: string; images: number }[]
+  /** Oldest first. */
+  limits: PhoneUploadLimit[]
 }
 
 /** How a done page was finished on the phone. */

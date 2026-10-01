@@ -32,6 +32,9 @@ import {
   type Clipper3Status,
   type Clipper3ChapterSummary
 } from '@/lib/api'
+import { usePhoneCrops } from '@/hooks/usePhoneCrops'
+import { PhoneRefreshButton } from '@/components/PhoneRefreshButton'
+import { PhoneUploadUsage } from '@/components/PhoneUploadUsage'
 
 // ============ Helpers ============
 
@@ -54,6 +57,8 @@ export default function Clipper3Library() {
    * read from crops3/ on disk, which is the fact this module produces. Empty until the summaries resolve — the cards then re-render.
    */
   const [summaries, setSummaries] = useState<Record<string, Clipper3ChapterSummary>>({})
+  /** For the phone profiles' ChatGPT upload counts, which aren't per series. */
+  const phoneCropsReceipt = usePhoneCrops()
 
   useEffect(() => {
     let cancelled = false
@@ -164,6 +169,13 @@ export default function Clipper3Library() {
           )}
         </CardContent>
       </Card>
+
+      {phoneCropsReceipt.status?.profiles.length ? (
+        <div className="mb-6 space-y-2">
+          <PhoneUploadUsage status={phoneCropsReceipt.status} />
+          <PhoneRefreshButton receipt={phoneCropsReceipt} />
+        </div>
+      ) : null}
 
       {error && (
         <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 rounded p-2 mb-6">

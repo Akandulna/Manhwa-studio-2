@@ -11,6 +11,7 @@ import { PublishedBadge, publishedRowClass } from '@/components/PublishedBadge'
 import { PhoneCropsBadge } from '@/components/PhoneSyncBadge'
 import { usePhoneCrops } from '@/hooks/usePhoneCrops'
 import { PhoneRefreshButton } from '@/components/PhoneRefreshButton'
+import { PhoneUploadUsage } from '@/components/PhoneUploadUsage'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -614,6 +615,8 @@ export default function Clipper3SeriesView() {
               )}
               <PhoneRefreshButton receipt={phoneCropsReceipt} />
             </div>
+
+            <PhoneUploadUsage status={phoneCrops} className="max-w-3xl mt-3" />
 
             <div className="max-w-md mt-3">
               <div className="flex items-center justify-between text-sm mb-1">

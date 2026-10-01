@@ -152,4 +152,37 @@ describe('getPhoneCrops', () => {
     const status = await read('s1', 'c9')
     expect(status).toMatchObject({ configured: true, series: {}, chapters: {}, pages: {}, working: null })
   })
+
+  it('reads each phone profile\'s ChatGPT uploads and limits, dropping malformed parts', async () => {
+    receipt = {
+      series: {},
+      profiles: [
+        {
+          id: 'Default', name: 'Main', selected: true, limitedUntil: null, trackingSince: '2026-10-01T08:00:00Z',
+          counting: { since: '2026-10-01T09:00:00Z', images: 14 },
+          uploads: [['2026-10-01T09:10:00Z', 6], ['2026-10-01T09:05:00Z', 8], ['nope', 3], ['2026-10-01T09:15:00Z', 0]],
+          limits: [
+            { at: '2026-10-01T09:00:00Z', until: '2026-10-01T12:00:00Z', used: 60, countedSince: '2026-10-01T08:00:00Z', complete: false, flagged: false, reason: 'You\'ve hit the upload limit' },
+            { at: 'bad', until: '2026-10-01T12:00:00Z', used: 1 }
+          ]
+        },
+        { id: 'profile-1', name: '', limitedUntil: '2026-10-01T13:00:00Z', counting: { images: 3 } },
+        { name: 'no id' }
+      ]
+    }
+    const { profiles } = await read()
+    expect(profiles).toEqual([
+      {
+        id: 'Default', name: 'Main', selected: true, limitedUntil: null, trackingSince: '2026-10-01T08:00:00Z',
+        counting: { since: '2026-10-01T09:00:00Z', images: 14 },
+        uploads: [{ at: '2026-10-01T09:05:00Z', images: 8 }, { at: '2026-10-01T09:10:00Z', images: 6 }],
+        limits: [{ at: '2026-10-01T09:00:00Z', until: '2026-10-01T12:00:00Z', used: 60, countedSince: '2026-10-01T08:00:00Z', complete: false, flagged: false, reason: 'You\'ve hit the upload limit' }]
+      },
+      { id: 'profile-1', name: 'profile-1', selected: false, limitedUntil: '2026-10-01T13:00:00Z', trackingSince: null, counting: null, uploads: [], limits: [] }
+    ])
+
+    // Older phone builds send no profiles.
+    receipt = { series: {} }
+    expect((await read()).profiles).toEqual([])
+  })
 })
