@@ -47,7 +47,12 @@ describe('getPhoneCrops', () => {
           working: { chapter: 'Chapter 010', page: '007.jpg', since: new Date().toISOString(), paused: false },
           chapters: {
             'Chapter 009': { total: 20, done: 10, pages: { '001.jpg': 'done', '011.jpg': 'changed' } },
-            'Chapter 010': { total: 20, done: 2, pages: { '001.jpg': 'done', '002.jpg': 'done', '007.jpg': 'in_progress', 'x.jpg': 'weird' } },
+            'Chapter 010': {
+              total: 20,
+              done: 2,
+              pages: { '001.jpg': 'done', '002.jpg': 'done', '007.jpg': 'in_progress', 'x.jpg': 'weird' },
+              times: { '001.jpg': { took: 192, at: '2026-09-30T09:58:00Z' }, '002.jpg': { took: -1 }, '007.jpg': { took: 30 } }
+            },
             'Chapter 099': { total: 5, done: 5, pages: {} }
           }
         }
@@ -58,6 +63,8 @@ describe('getPhoneCrops', () => {
     expect(status.series).toEqual({ s1: { done: 12, total: 40 } })
     expect(status.chapters).toEqual({ c9: { done: 10, total: 20 }, c10: { done: 2, total: 20 } })
     expect(status.pages).toEqual({ '001.jpg': 'done', '002.jpg': 'done', '007.jpg': 'in_progress' })
+    // Only done pages with a sane time; `at` is optional.
+    expect(status.times).toEqual({ '001.jpg': { took: 192, at: '2026-09-30T09:58:00Z' } })
     expect(status.working).toMatchObject({ chapterId: 'c10', page: '007.jpg', paused: false })
 
     // Without a series only the per-series totals come back.

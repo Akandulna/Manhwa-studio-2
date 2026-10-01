@@ -550,8 +550,11 @@ export async function getPhoneScripts(seriesId?: string, fresh = false): Promise
  * Auto-run, page after page in ChatGPT). When asked (see requestPhoneUpdate)
  * it writes this object: `{ device, updatedAt, answers, series: { <series folder>: { total, done,
  * working?: { chapter, page, since, paused }, workingPages?: [{ chapter, page, since, paused }, …],
- * chapters: { <chapter folder>: { total, done, pages: { <page file>: done|in_progress|changed } } } } } }`,
- * leaving out pages not started and chapters with none started. Auto-run can
+ * chapters: { <chapter folder>: { total, done, pages: { <page file>: done|in_progress|changed },
+ * times?: { <page file>: { took, at } } } } } } }`,
+ * leaving out pages not started and chapters with none started. `times` has
+ * the done pages: `took` is seconds from sections made to JSON exported, wall
+ * clock, and `at` when it was exported; older phone builds leave it out. Auto-run can
  * clip several pages at once (one per ChatGPT tab, across chapters):
  * `workingPages` lists them all, each with its own `since`, and `working` is
  * the first of them, kept for older readers. Older phone builds send only
@@ -571,6 +574,14 @@ export interface PhoneCropsWorking {
   paused: boolean
 }
 
+/** How long a done page took on the phone. */
+export interface PhonePageTime {
+  /** Seconds from making the page's sections to exporting its JSON files, wall clock (pauses count). */
+  took: number
+  /** When its JSON files were exported. */
+  at: string | null
+}
+
 export interface PhoneCropsStatus {
   configured: boolean
   /** When the phone last wrote the receipt; null if it never has. */
@@ -588,6 +599,8 @@ export interface PhoneCropsStatus {
   workingPages: PhoneCropsWorking[]
   /** By page file, for the chapter asked for; pages not started are left out. */
   pages: Record<string, PhonePageState>
+  /** By page file, for the chapter asked for: the done pages the phone timed. */
+  times: Record<string, PhonePageTime>
 }
 
 interface CropsReceipt {
@@ -599,7 +612,7 @@ interface CropsReceipt {
     done?: number
     working?: CropsReceiptWorking
     workingPages?: CropsReceiptWorking[]
-    chapters?: Record<string, { total?: number; done?: number; pages?: Record<string, string> }>
+    chapters?: Record<string, { total?: number; done?: number; pages?: Record<string, string>; times?: Record<string, { took?: number; at?: string }> }>
   }>
 }
 
@@ -623,7 +636,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
  * folder and file name, the names the R2 zip carries to the phone.
  */
 export async function getPhoneCrops(seriesId?: string, chapterId?: string, fresh = false): Promise<PhoneCropsStatus> {
-  const empty = { reportedAt: null, device: null, answers: null, series: {}, chapters: {}, working: null, workingPages: [], pages: {} }
+  const empty = { reportedAt: null, device: null, answers: null, series: {}, chapters: {}, working: null, workingPages: [], pages: {}, times: {} }
   const config = getR2Config()
   const relayed = relayReceipt<CropsReceipt>('crops')
   if (!config && !relayed) return { configured: false, ...empty }
@@ -652,6 +665,11 @@ export async function getPhoneCrops(seriesId?: string, chapterId?: string, fresh
       if (id !== chapterId || !isObject(chapter.pages)) continue
       for (const [page, state] of Object.entries(chapter.pages)) {
         if (PHONE_PAGE_STATES.has(state)) status.pages[page] = state as PhonePageState
+      }
+      for (const [page, time] of Object.entries(isObject(chapter.times) ? chapter.times : {})) {
+        if (status.pages[page] !== 'done' || !isObject(time)) continue
+        const took = Number(time.took)
+        if (Number.isFinite(took) && took >= 0) status.times[page] = { took, at: typeof time.at === 'string' ? time.at : null }
       }
     }
 

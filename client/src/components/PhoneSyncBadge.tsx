@@ -9,7 +9,7 @@
  */
 
 import { Loader2, Pause, Smartphone } from 'lucide-react'
-import type { PhoneChapterScript, PhonePageState, PhoneSeriesSync } from '@/lib/api'
+import type { PhoneChapterScript, PhonePageState, PhonePageTime, PhoneSeriesSync } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 const STYLES: Record<PhoneSeriesSync['state'], { label: string; className: string }> = {
@@ -179,13 +179,29 @@ const PAGE_STYLES: Record<PhonePageState, { label: string; className: string; hi
   }
 }
 
-/** PhonePageBadge — one page's crop status in the Sleeper-Cell app (see usePhoneCrops). */
-export function PhonePageBadge({ state, device }: { state: PhonePageState; device: string | null }) {
+/** A duration in seconds as "45s", "3m 12s" or "1h 05m". */
+export function formatTook(seconds: number): string {
+  const s = Math.round(seconds)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, '0')}s`
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`
+}
+
+/**
+ * PhonePageBadge — one page's crop status in the Sleeper-Cell app (see usePhoneCrops).
+ * A done page shows how long it took there, when the phone timed it.
+ */
+export function PhonePageBadge({ state, device, time }: { state: PhonePageState; device: string | null; time?: PhonePageTime }) {
   const style = PAGE_STYLES[state]
+  const took = state === 'done' && time ? formatTook(time.took) : null
+  const finished = time ? formatWhen(time.at) : null
+  const timing = took ? ` in ${took} (sections made to JSON exported)${finished ? `, finished ${finished}` : ''}` : ''
   return (
-    <span title={`${style.hint} ${onPhone(device)}`} className={cn(PILL, 'flex-shrink-0', style.className)}>
+    <span title={`${style.hint}${timing} ${onPhone(device)}`} className={cn(PILL, 'flex-shrink-0', style.className)}>
       <Smartphone className="h-3 w-3" />
       {style.label}
+      {took && <span className="font-normal opacity-90">· {took}</span>}
     </span>
   )
 }

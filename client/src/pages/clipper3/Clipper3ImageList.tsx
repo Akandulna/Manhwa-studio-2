@@ -82,7 +82,7 @@ import { CandidateOverlay } from '@/components/clipper3/CandidateOverlay'
 import { ReviewWorkspace } from '@/components/clipper3/ReviewWorkspace'
 import { AutoRunBadge, AutoRunDialog, AutoRunStrip, isActiveStep, useAutoRun } from '@/components/clipper3/AutoRun'
 import { seriesSlug, stemOf, exportedFilenameFor } from '@/lib/clipper3Naming'
-import { PhonePageBadge, PhoneWorkingBadge } from '@/components/PhoneSyncBadge'
+import { formatTook, PhonePageBadge, PhoneWorkingBadge } from '@/components/PhoneSyncBadge'
 import { usePhoneCrops } from '@/hooks/usePhoneCrops'
 import { PhoneRefreshButton } from '@/components/PhoneRefreshButton'
 
@@ -189,6 +189,11 @@ export default function Clipper3ImageList() {
     [phoneCrops, chapterId]
   )
   const phoneWorkingByPage = useMemo(() => new Map(phoneWorkingPages.map(w => [w.page, w])), [phoneWorkingPages])
+  // Average time per page the phone timed in this chapter (older phone builds send no times).
+  const phoneAvgTook = useMemo(() => {
+    const times = Object.values(phoneCrops?.times ?? {})
+    return times.length ? times.reduce((sum, t) => sum + t.took, 0) / times.length : null
+  }, [phoneCrops])
   const rowRefs = useRef(new Map<string, HTMLDivElement>())
 
   // The ChatGPT loop run through the OpenAI API (server-side background job).
@@ -1324,6 +1329,7 @@ export default function Clipper3ImageList() {
               title={phoneCrops.device ? `Sleeper-Cell on ${phoneCrops.device}` : 'Sleeper-Cell'}
             >
               {phoneChapter.done}/{phoneChapter.total} pages done on phone
+              {phoneAvgTook !== null && ` · avg ${formatTook(phoneAvgTook)}/page`}
             </span>
           )}
           {phoneWorkingPages.map(working => (
@@ -1473,7 +1479,7 @@ export default function Clipper3ImageList() {
                   {phoneOnThis && phoneWorking ? (
                     <PhoneWorkingBadge page={img.filename} paused={phoneWorking.paused} device={phoneCrops?.device ?? null} showPage={false} />
                   ) : phonePage && (
-                    <PhonePageBadge state={phonePage} device={phoneCrops?.device ?? null} />
+                    <PhonePageBadge state={phonePage} device={phoneCrops?.device ?? null} time={phoneCrops?.times[img.filename]} />
                   )}
                   {autoPage && autoPage.step !== 'queued' && <AutoRunBadge page={autoPage} />}
                   {isDone ? (

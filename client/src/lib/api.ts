@@ -2105,6 +2105,16 @@ export interface PhoneCropsStatus {
   workingPages: PhoneCropsWorking[]
   /** By image filename, for the chapter asked for; pages not started are left out. */
   pages: Record<string, PhonePageState>
+  /** By image filename, for the chapter asked for: how long each done page took on the phone. */
+  times: Record<string, PhonePageTime>
+}
+
+/** How long a done page took on the phone. */
+export interface PhonePageTime {
+  /** Seconds from making the page's sections to exporting its JSON files, wall clock (pauses count). */
+  took: number
+  /** When its JSON files were exported. */
+  at: string | null
 }
 
 /** "Refresh from phone": how the ask went out. */
