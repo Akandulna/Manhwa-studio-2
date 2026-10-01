@@ -8,8 +8,8 @@
  * app's status scheme: green = done, blue = in progress, amber = needs action.
  */
 
-import { Loader2, Pause, Smartphone } from 'lucide-react'
-import type { PhoneChapterScript, PhonePageState, PhonePageTime, PhoneSeriesSync } from '@/lib/api'
+import { Bot, Hand, Loader2, Pause, Smartphone } from 'lucide-react'
+import type { PhoneChapterScript, PhonePageFinish, PhonePageState, PhoneSeriesSync } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 const STYLES: Record<PhoneSeriesSync['state'], { label: string; className: string }> = {
@@ -190,18 +190,52 @@ export function formatTook(seconds: number): string {
 
 /**
  * PhonePageBadge — one page's crop status in the Sleeper-Cell app (see usePhoneCrops).
- * A done page shows how long it took there, when the phone timed it.
+ * A done page also shows how long it took there and, for Auto-run, which
+ * ChatGPT account (browser profile) and model made it, when the phone says.
  */
-export function PhonePageBadge({ state, device, time }: { state: PhonePageState; device: string | null; time?: PhonePageTime }) {
+export function PhonePageBadge({ state, device, finish }: { state: PhonePageState; device: string | null; finish?: PhonePageFinish }) {
   const style = PAGE_STYLES[state]
-  const took = state === 'done' && time ? formatTook(time.took) : null
-  const finished = time ? formatWhen(time.at) : null
-  const timing = took ? ` in ${took} (sections made to JSON exported)${finished ? `, finished ${finished}` : ''}` : ''
+  const done = state === 'done' ? finish : undefined
+  const took = done?.took != null ? formatTook(done.took) : null
+  const finished = done ? formatWhen(done.at) : null
+  const timing = took ? ` in ${took} (sections made to JSON exported)` : ''
   return (
-    <span title={`${style.hint}${timing} ${onPhone(device)}`} className={cn(PILL, 'flex-shrink-0', style.className)}>
-      <Smartphone className="h-3 w-3" />
-      {style.label}
-      {took && <span className="font-normal opacity-90">· {took}</span>}
+    <>
+      <span
+        title={`${style.hint}${timing}${finished ? `, finished ${finished}` : ''} ${onPhone(device)}`}
+        className={cn(PILL, 'flex-shrink-0', style.className)}
+      >
+        <Smartphone className="h-3 w-3" />
+        {style.label}
+        {took && <span className="font-normal opacity-90">· {took}</span>}
+      </span>
+      {done?.run && <PhoneMadeByBadge finish={done} />}
+    </>
+  )
+}
+
+/** Who made a done page on the phone: Auto-run's ChatGPT account and model(s), or by hand. */
+function PhoneMadeByBadge({ finish }: { finish: PhonePageFinish }) {
+  if (finish.run === 'manual') {
+    return (
+      <span title="Crop pointers pasted by hand on the phone" className={cn(PILL, 'flex-shrink-0 bg-background/90 text-muted-foreground border-border font-normal')}>
+        <Hand className="h-3 w-3" />
+        By hand
+      </span>
+    )
+  }
+  const account = finish.account ?? finish.profile
+  const model = finish.models.at(-1) ?? null
+  const parts = [account, model].filter(Boolean)
+  const title = [
+    `Auto-run on the ChatGPT account ${finish.account ?? 'unknown'}${finish.profile ? ` (profile ${finish.profile})` : ''}`,
+    finish.models.length ? `answered by ${finish.models.join(', then ')}` : 'model not recorded'
+  ].join('; ')
+  return (
+    <span title={title} className={cn(PILL, 'flex-shrink-0 max-w-[16rem] bg-background/90 text-muted-foreground border-border font-normal')}>
+      <Bot className="h-3 w-3 flex-shrink-0" />
+      <span className="truncate">{parts.length ? parts.join(' · ') : 'Auto-run'}</span>
+      {finish.models.length > 1 && <span className="opacity-80">+{finish.models.length - 1}</span>}
     </span>
   )
 }

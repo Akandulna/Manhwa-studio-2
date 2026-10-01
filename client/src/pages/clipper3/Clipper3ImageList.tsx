@@ -191,8 +191,8 @@ export default function Clipper3ImageList() {
   const phoneWorkingByPage = useMemo(() => new Map(phoneWorkingPages.map(w => [w.page, w])), [phoneWorkingPages])
   // Average time per page the phone timed in this chapter (older phone builds send no times).
   const phoneAvgTook = useMemo(() => {
-    const times = Object.values(phoneCrops?.times ?? {})
-    return times.length ? times.reduce((sum, t) => sum + t.took, 0) / times.length : null
+    const times = Object.values(phoneCrops?.finished ?? {}).flatMap(f => (f.took === null ? [] : [f.took]))
+    return times.length ? times.reduce((sum, t) => sum + t, 0) / times.length : null
   }, [phoneCrops])
   const rowRefs = useRef(new Map<string, HTMLDivElement>())
 
@@ -1479,7 +1479,7 @@ export default function Clipper3ImageList() {
                   {phoneOnThis && phoneWorking ? (
                     <PhoneWorkingBadge page={img.filename} paused={phoneWorking.paused} device={phoneCrops?.device ?? null} showPage={false} />
                   ) : phonePage && (
-                    <PhonePageBadge state={phonePage} device={phoneCrops?.device ?? null} time={phoneCrops?.times[img.filename]} />
+                    <PhonePageBadge state={phonePage} device={phoneCrops?.device ?? null} finish={phoneCrops?.finished[img.filename]} />
                   )}
                   {autoPage && autoPage.step !== 'queued' && <AutoRunBadge page={autoPage} />}
                   {isDone ? (

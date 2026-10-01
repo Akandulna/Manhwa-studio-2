@@ -2105,16 +2105,23 @@ export interface PhoneCropsStatus {
   workingPages: PhoneCropsWorking[]
   /** By image filename, for the chapter asked for; pages not started are left out. */
   pages: Record<string, PhonePageState>
-  /** By image filename, for the chapter asked for: how long each done page took on the phone. */
-  times: Record<string, PhonePageTime>
+  /** By image filename, for the chapter asked for: how each done page was finished on the phone. */
+  finished: Record<string, PhonePageFinish>
 }
 
-/** How long a done page took on the phone. */
-export interface PhonePageTime {
-  /** Seconds from making the page's sections to exporting its JSON files, wall clock (pauses count). */
-  took: number
+/** How a done page was finished on the phone. */
+export interface PhonePageFinish {
   /** When its JSON files were exported. */
-  at: string | null
+  at: string
+  /** Seconds from making the page's sections to exporting its JSON files, wall clock (pauses count); null if unknown. */
+  took: number | null
+  /** auto: Sleeper-Cell's Auto-run; manual: pasted by hand. null for exports from before this was kept. */
+  run: 'auto' | 'manual' | null
+  /** The browser profile of the ChatGPT account Auto-run used, and that account's name in Sleeper-Cell. */
+  profile: string | null
+  account: string | null
+  /** The ChatGPT models that answered, in order (a fix round can be answered by another). */
+  models: string[]
 }
 
 /** "Refresh from phone": how the ask went out. */

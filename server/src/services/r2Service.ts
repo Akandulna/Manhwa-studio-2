@@ -551,10 +551,12 @@ export async function getPhoneScripts(seriesId?: string, fresh = false): Promise
  * it writes this object: `{ device, updatedAt, answers, series: { <series folder>: { total, done,
  * working?: { chapter, page, since, paused }, workingPages?: [{ chapter, page, since, paused }, …],
  * chapters: { <chapter folder>: { total, done, pages: { <page file>: done|in_progress|changed },
- * times?: { <page file>: { took, at } } } } } } }`,
- * leaving out pages not started and chapters with none started. `times` has
- * the done pages: `took` is seconds from sections made to JSON exported, wall
- * clock, and `at` when it was exported; older phone builds leave it out. Auto-run can
+ * finished?: { <page file>: { at, took?, run?, profile?, account?, models? } } } } } } }`,
+ * leaving out pages not started and chapters with none started. `finished` has
+ * the done pages: `at` is when the JSON was exported, `took` the seconds from
+ * sections made to then (wall clock), `run` auto|manual, and for Auto-run the
+ * ChatGPT account (`profile`, `account`) and `models` that answered. Older phone
+ * builds leave it out, or send only `at` and `took`. Auto-run can
  * clip several pages at once (one per ChatGPT tab, across chapters):
  * `workingPages` lists them all, each with its own `since`, and `working` is
  * the first of them, kept for older readers. Older phone builds send only
@@ -574,12 +576,19 @@ export interface PhoneCropsWorking {
   paused: boolean
 }
 
-/** How long a done page took on the phone. */
-export interface PhonePageTime {
-  /** Seconds from making the page's sections to exporting its JSON files, wall clock (pauses count). */
-  took: number
+/** How a done page was finished on the phone. */
+export interface PhonePageFinish {
   /** When its JSON files were exported. */
-  at: string | null
+  at: string
+  /** Seconds from making the page's sections to exporting its JSON files, wall clock (pauses count); null if unknown. */
+  took: number | null
+  /** auto: Sleeper-Cell's Auto-run; manual: pasted by hand. null for exports from before this was kept. */
+  run: 'auto' | 'manual' | null
+  /** The browser profile of the ChatGPT account Auto-run used, and that account's name in Sleeper-Cell. */
+  profile: string | null
+  account: string | null
+  /** The ChatGPT models that answered, in order (a fix round can be answered by another). */
+  models: string[]
 }
 
 export interface PhoneCropsStatus {
@@ -599,8 +608,8 @@ export interface PhoneCropsStatus {
   workingPages: PhoneCropsWorking[]
   /** By page file, for the chapter asked for; pages not started are left out. */
   pages: Record<string, PhonePageState>
-  /** By page file, for the chapter asked for: the done pages the phone timed. */
-  times: Record<string, PhonePageTime>
+  /** By page file, for the chapter asked for: how each done page was finished. */
+  finished: Record<string, PhonePageFinish>
 }
 
 interface CropsReceipt {
@@ -612,7 +621,7 @@ interface CropsReceipt {
     done?: number
     working?: CropsReceiptWorking
     workingPages?: CropsReceiptWorking[]
-    chapters?: Record<string, { total?: number; done?: number; pages?: Record<string, string>; times?: Record<string, { took?: number; at?: string }> }>
+    chapters?: Record<string, { total?: number; done?: number; pages?: Record<string, string>; finished?: Record<string, Record<string, unknown>> }>
   }>
 }
 
@@ -636,7 +645,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
  * folder and file name, the names the R2 zip carries to the phone.
  */
 export async function getPhoneCrops(seriesId?: string, chapterId?: string, fresh = false): Promise<PhoneCropsStatus> {
-  const empty = { reportedAt: null, device: null, answers: null, series: {}, chapters: {}, working: null, workingPages: [], pages: {}, times: {} }
+  const empty = { reportedAt: null, device: null, answers: null, series: {}, chapters: {}, working: null, workingPages: [], pages: {}, finished: {} }
   const config = getR2Config()
   const relayed = relayReceipt<CropsReceipt>('crops')
   if (!config && !relayed) return { configured: false, ...empty }
@@ -666,10 +675,18 @@ export async function getPhoneCrops(seriesId?: string, chapterId?: string, fresh
       for (const [page, state] of Object.entries(chapter.pages)) {
         if (PHONE_PAGE_STATES.has(state)) status.pages[page] = state as PhonePageState
       }
-      for (const [page, time] of Object.entries(isObject(chapter.times) ? chapter.times : {})) {
-        if (status.pages[page] !== 'done' || !isObject(time)) continue
-        const took = Number(time.took)
-        if (Number.isFinite(took) && took >= 0) status.times[page] = { took, at: typeof time.at === 'string' ? time.at : null }
+      for (const [page, finish] of Object.entries(isObject(chapter.finished) ? chapter.finished : {})) {
+        if (status.pages[page] !== 'done' || !isObject(finish) || typeof finish.at !== 'string') continue
+        const text = (value: unknown) => (typeof value === 'string' && value ? value : null)
+        const took = typeof finish.took === 'number' && Number.isFinite(finish.took) && finish.took >= 0 ? finish.took : null
+        status.finished[page] = {
+          at: finish.at,
+          took,
+          run: finish.run === 'auto' || finish.run === 'manual' ? finish.run : null,
+          profile: text(finish.profile),
+          account: text(finish.account),
+          models: Array.isArray(finish.models) ? finish.models.filter((m): m is string => typeof m === 'string' && !!m) : []
+        }
       }
     }
 

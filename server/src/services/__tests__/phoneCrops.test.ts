@@ -51,7 +51,11 @@ describe('getPhoneCrops', () => {
               total: 20,
               done: 2,
               pages: { '001.jpg': 'done', '002.jpg': 'done', '007.jpg': 'in_progress', 'x.jpg': 'weird' },
-              times: { '001.jpg': { took: 192, at: '2026-09-30T09:58:00Z' }, '002.jpg': { took: -1 }, '007.jpg': { took: 30 } }
+              finished: {
+                '001.jpg': { at: '2026-09-30T09:58:00Z', took: 192, run: 'auto', profile: 'chatgpt-2', account: 'Alt', models: ['gpt-5-thinking', 7] },
+                '002.jpg': { at: '2026-09-30T09:59:00Z', took: -1, profile: null },
+                '007.jpg': { at: '2026-09-30T10:00:00Z', took: 30 }
+              }
             },
             'Chapter 099': { total: 5, done: 5, pages: {} }
           }
@@ -63,8 +67,11 @@ describe('getPhoneCrops', () => {
     expect(status.series).toEqual({ s1: { done: 12, total: 40 } })
     expect(status.chapters).toEqual({ c9: { done: 10, total: 20 }, c10: { done: 2, total: 20 } })
     expect(status.pages).toEqual({ '001.jpg': 'done', '002.jpg': 'done', '007.jpg': 'in_progress' })
-    // Only done pages with a sane time; `at` is optional.
-    expect(status.times).toEqual({ '001.jpg': { took: 192, at: '2026-09-30T09:58:00Z' } })
+    // Only done pages; a bad time or a missing account reads as null.
+    expect(status.finished).toEqual({
+      '001.jpg': { at: '2026-09-30T09:58:00Z', took: 192, run: 'auto', profile: 'chatgpt-2', account: 'Alt', models: ['gpt-5-thinking'] },
+      '002.jpg': { at: '2026-09-30T09:59:00Z', took: null, run: null, profile: null, account: null, models: [] }
+    })
     expect(status.working).toMatchObject({ chapterId: 'c10', page: '007.jpg', paused: false })
 
     // Without a series only the per-series totals come back.
