@@ -80,7 +80,10 @@ function ProfileRow({ usage, now }: { usage: UploadUsage; now: number }) {
   )
 }
 
-export function PhoneUploadUsage({ status, className = '' }: { status: PhoneCropsStatus | null; className?: string }) {
+export function PhoneUploadUsage({ status, className = '' }: {
+  status: Pick<PhoneCropsStatus, 'profiles' | 'reportedAt'> | null
+  className?: string
+}) {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 60_000)

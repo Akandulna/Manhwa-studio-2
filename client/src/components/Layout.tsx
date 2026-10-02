@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { useSocket } from '@/lib/socket'
 import { useTheme } from '@/lib/theme'
+import { usePhoneRelay } from '@/hooks/usePhoneRelay'
 import {
   Library,
   Download,
@@ -19,7 +20,8 @@ import {
   PanelLeftOpen,
   Moon,
   Sun,
-  HardDrive
+  HardDrive,
+  Smartphone
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
@@ -34,6 +36,9 @@ interface NavItem {
   label: string
   href: string
   badge?: number
+  /** A status dot on the icon (a bg-* class). */
+  dot?: string
+  dotTitle?: string
   disabled?: boolean
 }
 
@@ -43,6 +48,7 @@ export default function Layout({ children }: LayoutProps) {
   const location = useLocation()
   const { isConnected, queueStatus } = useSocket()
   const { resolvedTheme, toggleTheme } = useTheme()
+  const relay = usePhoneRelay()
 
   const [collapsed, setCollapsed] = useState<boolean>(
     () => localStorage.getItem(SIDEBAR_STORAGE_KEY) === 'true'
@@ -110,6 +116,19 @@ export default function Layout({ children }: LayoutProps) {
     }
   ]
 
+  // Sleeper Cells: the phone app. The dot is live only with the phone relay.
+  const sleeperModuleItems: NavItem[] = [
+    {
+      icon: <Smartphone className="h-5 w-5" />,
+      label: 'Phone Status',
+      href: '/sleeper-cells',
+      ...(relay?.configured && {
+        dot: !relay.connected ? 'bg-amber-500' : relay.phones > 0 ? 'bg-emerald-500' : 'bg-muted-foreground/60',
+        dotTitle: !relay.connected ? 'Relay offline' : relay.phones > 0 ? 'Sleeper-Cell is open' : 'Sleeper-Cell is closed'
+      })
+    }
+  ]
+
   // Future modules (disabled)
   const futureModules: NavItem[] = [
     {
@@ -125,13 +144,14 @@ export default function Layout({ children }: LayoutProps) {
   const isInClipper3 = location.pathname.startsWith('/clipper3')
   const isInEditor2 = location.pathname.startsWith('/editor2')
   const isInMusic = location.pathname.startsWith('/music')
+  const isInSleeper = location.pathname.startsWith('/sleeper-cells')
 
   // Renders a single nav link, collapsing to an icon-only button when needed.
   const renderNavLink = (item: NavItem, active: boolean) => (
     <Link
       key={item.href}
       to={item.href}
-      title={collapsed ? item.label : undefined}
+      title={collapsed ? [item.label, item.dotTitle].filter(Boolean).join(' · ') : item.dotTitle}
       className={cn(
         "flex items-center gap-3 px-3 py-2 rounded-lg transition-colors",
         collapsed && "justify-center px-0",
@@ -142,6 +162,9 @@ export default function Layout({ children }: LayoutProps) {
     >
       <span className="relative flex-shrink-0">
         {item.icon}
+        {item.dot && (
+          <span className={cn("absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-card", item.dot)} />
+        )}
         {/* Collapsed: surface the badge as a small dot on the icon */}
         {collapsed && item.badge && (
           <span className="absolute -top-1.5 -right-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
@@ -248,6 +271,16 @@ export default function Layout({ children }: LayoutProps) {
               {editorModuleItems.map((item) =>
                 renderNavLink(item, item.href === '/music' ? isInMusic : isInEditor2)
               )}
+            </nav>
+          </div>
+
+          <Separator className="my-2" />
+
+          {/* Sleeper Cells */}
+          <div className="px-4 pb-4">
+            {renderSectionLabel('SLEEPER CELLS')}
+            <nav className="space-y-2">
+              {sleeperModuleItems.map((item) => renderNavLink(item, isInSleeper))}
             </nav>
           </div>
 

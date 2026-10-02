@@ -9,6 +9,7 @@
  *   GET  /phone?fresh=1   which series' zips the Sleeper-Cell phone app has downloaded (cached=1: last bucket listing, any age)
  *   GET  /phone/scripts?seriesId=…&fresh=1   which chapters have a narration script on the phone
  *   GET  /phone/crops?seriesId=…&chapterId=…&fresh=1   which pages have crop JSON on the phone, and the page Auto-run is on
+ *   GET  /phone/overview?fresh=1   all three receipts across every series, for the Sleeper Cells page
  *   POST /phone/request   ask the phone to write both receipts again ("Refresh from phone")
  *   GET  /relay          the phone relay's settings (no token) and connection state
  *   PUT  /relay          { url, token, clearToken } — save; a blank token keeps the saved one
@@ -33,6 +34,7 @@ import {
   getJob,
   getR2Usage,
   getPhoneCrops,
+  getPhoneOverview,
   getPhoneScripts,
   getPhoneSync,
   getR2Config,
@@ -134,6 +136,15 @@ export function initR2Routes(io: Server): Router {
     } catch (error) {
       console.error('R2 phone crops lookup failed:', error)
       res.status(400).json({ error: message(error, 'Could not read the phone crop status') })
+    }
+  })
+
+  router.get('/phone/overview', async (req: Request, res: Response) => {
+    try {
+      res.json(await getPhoneOverview(req.query.fresh === '1'))
+    } catch (error) {
+      console.error('Phone overview lookup failed:', error)
+      res.status(400).json({ error: message(error, 'Could not read the phone status') })
     }
   })
 

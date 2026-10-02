@@ -15,6 +15,7 @@
  */
 
 import { Router, Request, Response } from 'express'
+import { reconcileQuietly } from '../services/diskReconcile.js'
 import {
   CATEGORIES,
   getPublishedChapters,
@@ -59,6 +60,7 @@ export function initStorageRoutes(): Router {
   // what is on disk right now, including what a delete just removed.
   router.get('/overview', async (_req: Request, res: Response) => {
     try {
+      await reconcileQuietly()
       res.json(await scanStorage())
     } catch (error) {
       console.error('Error scanning storage:', error)

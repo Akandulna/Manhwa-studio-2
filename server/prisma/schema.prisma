@@ -423,3 +423,14 @@ model VideoEditEvent {
 
   project VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
 }
+
+// Editor 2.0 — each chapter's pasted timeline JSON and the exact paste that
+// last processed successfully (what turns Start Processing into Preview).
+// Kept here rather than only in the browser so Chrome and the desktop app see
+// the same chapters as processed. One row per chapter, plain id (no relation).
+model Editor2Timeline {
+  chapterId     String   @id
+  json          String   // "" once cleared — kept so other browsers drop their copy too
+  processedJson String?  // null = not processed
+  updatedAt     DateTime // the client's write time; the newest write wins
+}

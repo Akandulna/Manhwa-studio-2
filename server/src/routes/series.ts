@@ -8,12 +8,14 @@ import { inferPattern, sanitizeTitle, zeroPad, generateUrl } from '../utils/urlP
 import { extractSiteDomain, getPageTitle } from '../services/scraper.js';
 import { validateManualChapters } from '../services/discovery.js';
 import { Server } from 'socket.io';
+import { reconcileQuietly } from '../services/diskReconcile.js';
 
 const router = Router();
 
 // Get all series
 router.get('/', async (req: Request, res: Response) => {
   try {
+    await reconcileQuietly();
     const series = await prisma.series.findMany({
       include: {
         _count: {
@@ -64,6 +66,7 @@ router.get('/', async (req: Request, res: Response) => {
 // Get single series with chapters
 router.get('/:id', async (req: Request, res: Response) => {
   try {
+    const reconcile = await reconcileQuietly();
     const series = await prisma.series.findUnique({
       where: { id: req.params.id },
       include: {
@@ -77,7 +80,15 @@ router.get('/:id', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Series not found' });
     }
     
-    res.json(series);
+    // Pages trimmed by hand stay "done" in the database; report the gap so
+    // the row can show it.
+    res.json({
+      ...series,
+      chapters: series.chapters.map(c => ({
+        ...c,
+        missingPages: reconcile?.missingPages[c.id] ?? 0
+      }))
+    });
   } catch (error) {
     console.error('Error fetching series:', error);
     res.status(500).json({ error: 'Failed to fetch series' });

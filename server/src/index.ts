@@ -22,6 +22,7 @@ import { initStorageRoutes } from './routes/storage.js';
 import { initR2Routes } from './routes/r2.js';
 import { DownloadManager } from './services/downloadManager.js';
 import { startPhoneRelay } from './services/phoneRelay.js';
+import { reconcileQuietly } from './services/diskReconcile.js';
 
 dotenv.config();
 
@@ -99,6 +100,9 @@ httpServer.listen(PORT, () => {
   console.log(`🚀 Manhwa Studio server running on http://localhost:${PORT}`);
   console.log(`📁 Download root: ${process.env.DOWNLOAD_ROOT || './downloads'}`);
 });
+
+// Catch up on chapter files deleted by hand while the server was down.
+reconcileQuietly();
 
 // Live phone status through the relay Worker, when Settings → Cloudflare has it set up.
 startPhoneRelay(io);

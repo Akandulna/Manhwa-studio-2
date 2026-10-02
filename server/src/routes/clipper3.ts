@@ -108,6 +108,7 @@ import {
   updateOpenAiConfig
 } from '../services/clipper3/openaiAuto.js'
 import { fetchPhoneCrops } from '../services/phoneCropImport.js'
+import { reconcileQuietly } from '../services/diskReconcile.js'
 import {
   syncChapterProcessed,
   unsyncChapterProcessed,
@@ -253,6 +254,7 @@ export function initClipper3Routes(io: Server): Router {
   /** GET /series — every series with at least one downloaded chapter. */
   router.get('/series', async (_req: Request, res: Response) => {
     try {
+      await reconcileQuietly()
       const series = await prisma.series.findMany({
         select: {
           id: true,
@@ -283,6 +285,7 @@ export function initClipper3Routes(io: Server): Router {
   /** GET /chapters — every downloaded chapter; downloaded is the only requirement. */
   router.get('/chapters', async (_req: Request, res: Response) => {
     try {
+      await reconcileQuietly()
       const chapters = await prisma.chapter.findMany({
         where: { status: 'done' },
         select: {

@@ -6,6 +6,7 @@
  */
 
 import { Router, Request, Response } from 'express'
+import { reconcileQuietly } from '../services/diskReconcile.js'
 import { createReadStream, existsSync, statSync } from 'fs'
 import path from 'path'
 import { Server } from 'socket.io'
@@ -34,6 +35,7 @@ export function initVideoEditor2Routes(io: Server): Router {
   /** GET /series/:seriesId/editable-chapters */
   router.get('/series/:seriesId/editable-chapters', async (req: Request, res: Response) => {
     try {
+      await reconcileQuietly()
       const chapters = await getEditableChapters2(req.params.seriesId)
       res.json(chapters)
     } catch (error) {
@@ -98,6 +100,84 @@ export function initVideoEditor2Routes(io: Server): Router {
       // reason rather than an opaque server error.
       const status = /not found/i.test(message) ? 404 : 400
       res.status(status).json({ error: message })
+    }
+  })
+
+  /**
+   * Stored pastes — the server copy of each chapter's timeline JSON and its
+   * "processed" marker, so every browser and the desktop app agree on which
+   * chapters offer Preview. The client keeps a local cache and reconciles it
+   * against these rows; updatedAt (epoch ms) decides which side is newer.
+   */
+  const toStored = (row: { chapterId: string; json: string; processedJson: string | null; updatedAt: Date }) => ({
+    chapterId: row.chapterId,
+    json: row.json,
+    processedJson: row.processedJson,
+    updatedAt: row.updatedAt.getTime()
+  })
+
+  /** GET /series/:seriesId/timelines — every stored paste for the series. */
+  router.get('/series/:seriesId/timelines', async (req: Request, res: Response) => {
+    try {
+      const chapters = await prisma.chapter.findMany({
+        where: { seriesId: req.params.seriesId },
+        select: { id: true }
+      })
+      const rows = await prisma.editor2Timeline.findMany({
+        where: { chapterId: { in: chapters.map(c => c.id) } }
+      })
+      res.json(rows.map(toStored))
+    } catch (error) {
+      console.error('[videoEditor2] listing stored timelines failed:', error)
+      res.status(500).json({ error: 'Failed to list stored timelines' })
+    }
+  })
+
+  /** GET /chapters/:id/timeline — one chapter's stored paste, or null. */
+  router.get('/chapters/:id/timeline', async (req: Request, res: Response) => {
+    try {
+      const row = await prisma.editor2Timeline.findUnique({ where: { chapterId: req.params.id } })
+      res.json(row ? toStored(row) : null)
+    } catch (error) {
+      console.error('[videoEditor2] reading stored timeline failed:', error)
+      res.status(500).json({ error: 'Failed to read the stored timeline' })
+    }
+  })
+
+  /**
+   * PUT /chapters/:id/timeline { json, processedJson, updatedAt }
+   *
+   * Newest write wins: a write older than the stored row is ignored, so a
+   * browser with a stale copy can never roll back a newer one. Answers with
+   * whatever is stored afterwards.
+   */
+  router.put('/chapters/:id/timeline', async (req: Request, res: Response) => {
+    try {
+      const { json, processedJson, updatedAt } = req.body
+      if (typeof json !== 'string') {
+        return res.status(400).json({ error: 'json (string) is required' })
+      }
+      if (processedJson !== null && typeof processedJson !== 'string') {
+        return res.status(400).json({ error: 'processedJson must be a string or null' })
+      }
+      if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt)) {
+        return res.status(400).json({ error: 'updatedAt (epoch ms) is required' })
+      }
+      const chapterId = req.params.id
+      const existing = await prisma.editor2Timeline.findUnique({ where: { chapterId } })
+      if (existing && existing.updatedAt.getTime() >= updatedAt) {
+        return res.json(toStored(existing))
+      }
+      const data = { json, processedJson, updatedAt: new Date(updatedAt) }
+      const row = await prisma.editor2Timeline.upsert({
+        where: { chapterId },
+        create: { chapterId, ...data },
+        update: data
+      })
+      res.json(toStored(row))
+    } catch (error) {
+      console.error('[videoEditor2] saving stored timeline failed:', error)
+      res.status(500).json({ error: 'Failed to save the timeline' })
     }
   })
 

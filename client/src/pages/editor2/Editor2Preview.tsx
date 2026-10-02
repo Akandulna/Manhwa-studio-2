@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { videoApi2, type PlanImage, type TimelinePlan } from '@/lib/api'
-import { getTimelineJson, markProcessed } from './timelineHandoff'
+import { getTimelineJson, markProcessed, syncChapterTimeline } from './timelineHandoff'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -118,17 +118,23 @@ export default function Editor2Preview() {
 
   useEffect(() => {
     if (!chapterId) return
-    const json = getTimelineJson(chapterId)
-    if (!json) {
-      setProcessing(false)
-      setError('No timeline JSON was handed over. Go back and paste it on the chapter card, then press Start Processing.')
-      return
-    }
     let cancelled = false
+    let json: string | null = null
     setProcessing(true)
-    videoApi2.processTimeline(chapterId, json)
+    // The paste may have been made in another browser, so check the server
+    // copy first.
+    syncChapterTimeline(chapterId)
+      .then(() => {
+        if (cancelled) return null
+        json = getTimelineJson(chapterId)
+        if (!json) {
+          setError('No timeline JSON was handed over. Go back and paste it on the chapter card, then press Start Processing.')
+          return null
+        }
+        return videoApi2.processTimeline(chapterId, json)
+      })
       .then(result => {
-        if (cancelled) return
+        if (cancelled || !result || !json) return
         setPlan(result)
         // Only a successful build counts as processed — that is what lets the
         // chapter card offer Preview instead of Start Processing.

@@ -62,6 +62,8 @@ export interface Chapter {
   downloadedCount: number
   error?: string
   createdAt: string
+  /** Page files listed as downloaded but deleted from disk (series detail only). */
+  missingPages?: number
 }
 
 export interface PatternResult {
@@ -825,7 +827,29 @@ export interface CropRepairResult {
   chaptersChecked: number
 }
 
+/** A chapter's Editor 2.0 paste as the server stores it. json "" = cleared. */
+export interface StoredTimeline2 {
+  chapterId: string
+  json: string
+  processedJson: string | null
+  /** Epoch ms of the write; the newest write wins. */
+  updatedAt: number
+}
+
 export const videoApi2 = {
+  /** Every stored Editor 2.0 paste for a series (see timelineHandoff). */
+  getStoredTimelines: (seriesId: string) =>
+    fetchApi<StoredTimeline2[]>(`/video2/series/${seriesId}/timelines`),
+
+  getStoredTimeline: (chapterId: string) =>
+    fetchApi<StoredTimeline2 | null>(`/video2/chapters/${chapterId}/timeline`),
+
+  saveStoredTimeline: (chapterId: string, body: Omit<StoredTimeline2, 'chapterId'>) =>
+    fetchApi<StoredTimeline2>(`/video2/chapters/${chapterId}/timeline`, {
+      method: 'PUT',
+      body: JSON.stringify(body)
+    }),
+
   getEditableChapters: (seriesId: string) =>
     fetchApi<Editable2Chapter[]>(`/video2/series/${seriesId}/editable-chapters`),
 
@@ -2158,6 +2182,69 @@ export interface PhonePageFinish {
   models: string[]
 }
 
+/** Where a page is: the series and chapter in the library when they match, else the phone's folder names. */
+interface PhoneOverviewPlace {
+  seriesId: string | null
+  series: string
+  chapterId: string | null
+  /** The chapter folder name, as on the phone. */
+  chapter: string
+  chapterNumber: number | null
+}
+
+/** A page the phone's Auto-run is on, in any series. */
+export interface PhoneOverviewWorking extends PhoneOverviewPlace {
+  page: string
+  since: string | null
+  paused: boolean
+}
+
+export interface PhoneOverviewFinish extends PhoneOverviewPlace, PhonePageFinish {
+  page: string
+}
+
+/** A chapter the phone zipped with its JSON files and uploaded to R2. */
+export interface PhoneOverviewChapterZip extends PhoneOverviewPlace {
+  uploadedAt: string | null
+  pages: number
+}
+
+export interface PhoneOverviewSeries {
+  id: string
+  title: string
+  /** Has the phone downloaded this series' zip; null when there's no zip in R2. */
+  sync: PhoneSeriesSync | null
+  /** Chapters with a narration script on the phone; null when it has none. */
+  scripts: { done: number; total: number } | null
+  /** Pages with crop JSON on the phone; null when it has started none. */
+  crops: { done: number; total: number } | null
+  /** Chapters the phone has uploaded with their JSON files. */
+  chaptersUploaded: number
+  /** Pages Auto-run is on in this series right now. */
+  working: number
+}
+
+/** Everything Sleeper-Cell has reported, across every series (the Sleeper Cells page). */
+export interface PhoneOverview {
+  configured: boolean
+  device: string | null
+  /** The latest of the three receipts. */
+  reportedAt: string | null
+  /** When each receipt was last written; null if never. */
+  reported: { sync: string | null; scripts: string | null; crops: string | null }
+  /** The id of the "Refresh from phone" request the crops receipt last answered. */
+  answers: string | null
+  working: PhoneOverviewWorking[]
+  series: PhoneOverviewSeries[]
+  /** Done pages, newest first (the latest few hundred). */
+  recent: PhoneOverviewFinish[]
+  /** True when there were more done pages than `recent` holds. */
+  recentCapped: boolean
+  /** Chapter zips the phone uploaded, newest first. */
+  uploads: PhoneOverviewChapterZip[]
+  profiles: PhoneUploadProfile[]
+}
+
 /** "Refresh from phone": how the ask went out. */
 export interface PhoneUpdateRequest {
   id: string
@@ -2261,6 +2348,10 @@ export const r2Api = {
   },
 
   /** Asks Sleeper-Cell to send its scripts and crops receipts again; they carry `id` in `answers`. */
+  /** All three receipts across every series; `fresh` as for getPhoneScripts. */
+  getPhoneOverview: (fresh = false) =>
+    fetchApi<PhoneOverview>(`/r2/phone/overview${fresh ? '?fresh=1' : ''}`),
+
   requestPhoneUpdate: () =>
     fetchApi<PhoneUpdateRequest>('/r2/phone/request', { method: 'POST' }),
 

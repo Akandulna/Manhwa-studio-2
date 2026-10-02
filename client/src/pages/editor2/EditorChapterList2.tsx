@@ -67,7 +67,8 @@ import {
   isProcessed,
   saveExpanded,
   saveScrollTop,
-  setTimelineJson
+  setTimelineJson,
+  syncSeriesTimelines
 } from './timelineHandoff'
 
 /**
@@ -606,7 +607,10 @@ export default function EditorChapterList2() {
       videoApi2.getEditableChapters(seriesId),
       videoApi2.getExportedChapters(seriesId).catch(() => [] as Exported2Chapter[])
     ])
-      .then(([s, chs, exportedRows]) => {
+      .then(async ([s, chs, exportedRows]) => {
+        // Pull in what was pasted or processed in another browser (or the
+        // desktop app) before reading the local cache below.
+        await syncSeriesTimelines(seriesId, chs.map(ch => ch.id))
         setSeriesTitle(s.title)
         setChapters(chs)
         setExported(Object.fromEntries(exportedRows.map(r => [r.chapterId, r])))

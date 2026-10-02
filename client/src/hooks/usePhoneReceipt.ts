@@ -39,10 +39,10 @@ export interface PhoneReceipt<T> {
 /**
  * `load(fresh)` reads the receipt: from the server's copy, or (without the
  * relay) from R2 when `fresh`. Changing `key` reloads. `kind` is the receipt
- * whose `phone:receipt` event triggers a reload.
+ * whose `phone:receipt` event triggers a reload; 'all' reloads on any of them.
  */
 export function usePhoneReceipt<T extends { configured: boolean; answers: string | null }>(
-  kind: 'scripts' | 'crops',
+  kind: 'scripts' | 'crops' | 'all',
   load: (fresh: boolean) => Promise<T>,
   key: string
 ): PhoneReceipt<T> {
@@ -78,7 +78,7 @@ export function usePhoneReceipt<T extends { configured: boolean; answers: string
   useEffect(() => {
     if (!socket) return
     const onReceipt = (event: { kind: string }) => {
-      if (event.kind !== kind) return
+      if (kind !== 'all' && event.kind !== kind) return
       loadRef.current(false)
         .then(next => {
           if (!alive.current) return

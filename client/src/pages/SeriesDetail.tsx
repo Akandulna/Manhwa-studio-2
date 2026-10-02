@@ -695,6 +695,13 @@ export default function SeriesDetail() {
                           {chapter.error}
                         </div>
                       )}
+
+                      {!!chapter.missingPages && currentStatus === 'done' && (
+                        <div className="flex items-center gap-1 mt-1 text-xs text-amber-500">
+                          <AlertTriangle className="h-3 w-3" />
+                          {chapter.missingPages} page{chapter.missingPages === 1 ? '' : 's'} deleted from disk
+                        </div>
+                      )}
                     </div>
                     
                     <div className="flex items-center gap-2">

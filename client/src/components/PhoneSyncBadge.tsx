@@ -8,7 +8,7 @@
  * app's status scheme: green = done, blue = in progress, amber = needs action.
  */
 
-import { Bot, Hand, Loader2, Pause, Smartphone } from 'lucide-react'
+import { Bot, Clock, Hand, Loader2, Pause, Smartphone } from 'lucide-react'
 import type { PhoneChapterScript, PhonePageFinish, PhonePageState, PhoneSeriesSync } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -188,10 +188,18 @@ export function formatTook(seconds: number): string {
   return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`
 }
 
+/** A time of day as "14:05", with the date in front when it isn't today. */
+function formatClock(date: Date): string {
+  const time = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  if (date.toDateString() === new Date().toDateString()) return time
+  return `${date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ${time}`
+}
+
 /**
  * PhonePageBadge — one page's crop status in the Sleeper-Cell app (see usePhoneCrops).
- * A done page also shows how long it took there and, for Auto-run, which
- * ChatGPT account (browser profile) and model made it, when the phone says.
+ * A done page also shows how long it took there, when it started and finished
+ * and, for Auto-run, which ChatGPT account (browser profile) and model made it,
+ * when the phone says.
  */
 export function PhonePageBadge({ state, device, finish }: { state: PhonePageState; device: string | null; finish?: PhonePageFinish }) {
   const style = PAGE_STYLES[state]
@@ -209,8 +217,29 @@ export function PhonePageBadge({ state, device, finish }: { state: PhonePageStat
         {style.label}
         {took && <span className="font-normal opacity-90">· {took}</span>}
       </span>
+      {done && <PhoneTimesBadge finish={done} />}
       {done?.run && <PhoneMadeByBadge finish={done} />}
     </>
+  )
+}
+
+/**
+ * When a done page was started and finished on the phone. The phone sends only
+ * the export time and the duration, so the start is the export time minus `took`.
+ */
+function PhoneTimesBadge({ finish }: { finish: PhonePageFinish }) {
+  const end = new Date(finish.at)
+  if (Number.isNaN(end.getTime())) return null
+  const start = finish.took != null ? new Date(end.getTime() - finish.took * 1000) : null
+  const title = [
+    start ? `Started ${start.toLocaleString()} (sections made)` : 'Start time not recorded',
+    `finished ${end.toLocaleString()} (JSON exported)`
+  ].join('; ')
+  return (
+    <span title={title} className={cn(PILL, 'flex-shrink-0 bg-background/90 text-muted-foreground border-border font-normal tabular-nums')}>
+      <Clock className="h-3 w-3" />
+      {start ? `${formatClock(start)} → ${formatClock(end)}` : `Finished ${formatClock(end)}`}
+    </span>
   )
 }
 

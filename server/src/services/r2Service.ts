@@ -664,7 +664,7 @@ interface CropsReceipt {
     done?: number
     working?: CropsReceiptWorking
     workingPages?: CropsReceiptWorking[]
-    chapters?: Record<string, { total?: number; done?: number; pages?: Record<string, string>; finished?: Record<string, Record<string, unknown>> }>
+    chapters?: Record<string, { total?: number; done?: number; pages?: Record<string, string>; finished?: Record<string, Record<string, unknown>>; zip?: unknown }>
   }>
 }
 
@@ -765,33 +765,215 @@ export async function getPhoneCrops(seriesId?: string, chapterId?: string, fresh
         if (PHONE_PAGE_STATES.has(state)) status.pages[page] = state as PhonePageState
       }
       for (const [page, finish] of Object.entries(isObject(chapter.finished) ? chapter.finished : {})) {
-        if (status.pages[page] !== 'done' || !isObject(finish) || typeof finish.at !== 'string') continue
-        const text = (value: unknown) => (typeof value === 'string' && value ? value : null)
-        const took = typeof finish.took === 'number' && Number.isFinite(finish.took) && finish.took >= 0 ? finish.took : null
-        status.finished[page] = {
-          at: finish.at,
-          took,
-          run: finish.run === 'auto' || finish.run === 'manual' ? finish.run : null,
-          profile: text(finish.profile),
-          account: text(finish.account),
-          models: Array.isArray(finish.models) ? finish.models.filter((m): m is string => typeof m === 'string' && !!m) : []
-        }
+        if (status.pages[page] !== 'done') continue
+        const parsed = parseFinish(finish)
+        if (parsed) status.finished[page] = parsed
       }
     }
 
     const toWorking = (working: unknown): PhoneCropsWorking | null => {
-      if (!isObject(working) || typeof working.page !== 'string' || !working.page) return null
-      const chapterId = typeof working.chapter === 'string' ? byFolder.get(working.chapter) : undefined
-      const since = typeof working.since === 'string' ? working.since : null
-      if (!chapterId || (since && Date.now() - Date.parse(since) > WORKING_STALE_MS)) return null
-      return { chapterId, page: working.page, since, paused: working.paused === true }
+      const parsed = parseWorking(working)
+      const chapterId = parsed ? byFolder.get(parsed.chapter) : undefined
+      if (!parsed || !chapterId) return null
+      return { chapterId, page: parsed.page, since: parsed.since, paused: parsed.paused }
     }
     status.working = toWorking(entry.working)
-    // Older phone builds send only `working`.
-    const rawPages = Array.isArray(entry.workingPages) ? entry.workingPages : entry.working ? [entry.working] : []
-    status.workingPages = rawPages.map(toWorking).filter((w): w is PhoneCropsWorking => w !== null)
+    status.workingPages = workingEntries(entry).map(toWorking).filter((w): w is PhoneCropsWorking => w !== null)
   }
   return status
+}
+
+/** One of `finished`'s entries, or null when malformed. */
+function parseFinish(finish: unknown): PhonePageFinish | null {
+  if (!isObject(finish) || typeof finish.at !== 'string') return null
+  const text = (value: unknown) => (typeof value === 'string' && value ? value : null)
+  const took = typeof finish.took === 'number' && Number.isFinite(finish.took) && finish.took >= 0 ? finish.took : null
+  return {
+    at: finish.at,
+    took,
+    run: finish.run === 'auto' || finish.run === 'manual' ? finish.run : null,
+    profile: text(finish.profile),
+    account: text(finish.account),
+    models: Array.isArray(finish.models) ? finish.models.filter((m): m is string => typeof m === 'string' && !!m) : []
+  }
+}
+
+/** A `working` entry by chapter folder, or null when malformed or stale (see WORKING_STALE_MS). */
+function parseWorking(working: unknown): { chapter: string; page: string; since: string | null; paused: boolean } | null {
+  if (!isObject(working) || typeof working.page !== 'string' || !working.page || typeof working.chapter !== 'string') return null
+  const since = typeof working.since === 'string' ? working.since : null
+  if (since && Date.now() - Date.parse(since) > WORKING_STALE_MS) return null
+  return { chapter: working.chapter, page: working.page, since, paused: working.paused === true }
+}
+
+/** A series entry's pages in progress; older phone builds send only `working`. */
+function workingEntries(entry: Record<string, unknown>): unknown[] {
+  return Array.isArray(entry.workingPages) ? entry.workingPages : entry.working ? [entry.working] : []
+}
+
+// ============ Phone (Sleeper-Cell) overview ============
+
+/** Where a page is: the series and chapter in the library when they match, else the phone's folder names. */
+interface PhoneOverviewPlace {
+  seriesId: string | null
+  series: string
+  chapterId: string | null
+  chapter: string
+  chapterNumber: number | null
+}
+
+export interface PhoneOverviewWorking extends PhoneOverviewPlace {
+  page: string
+  since: string | null
+  paused: boolean
+}
+
+export interface PhoneOverviewFinish extends PhoneOverviewPlace, PhonePageFinish {
+  page: string
+}
+
+/** A chapter the phone zipped with its JSON files and uploaded to R2. */
+export interface PhoneOverviewChapterZip extends PhoneOverviewPlace {
+  uploadedAt: string | null
+  pages: number
+}
+
+export interface PhoneOverviewSeries {
+  id: string
+  title: string
+  /** Has the phone downloaded this series' zip; null when there's no zip in R2. */
+  sync: PhoneSeriesSync | null
+  /** Chapters with a narration script on the phone; null when it has none. */
+  scripts: { done: number; total: number } | null
+  /** Pages with crop JSON on the phone; null when it has started none. */
+  crops: { done: number; total: number } | null
+  /** Chapters the phone has uploaded with their JSON files. */
+  chaptersUploaded: number
+  /** Pages Auto-run is on in this series right now. */
+  working: number
+}
+
+/** Everything Sleeper-Cell has reported, across every series, for the Sleeper Cells page. */
+export interface PhoneOverview {
+  configured: boolean
+  device: string | null
+  /** The latest of the three receipts. */
+  reportedAt: string | null
+  /** When each receipt was last written; null if never. */
+  reported: { sync: string | null; scripts: string | null; crops: string | null }
+  /** The id of the "Refresh from phone" request the crops receipt last answered. */
+  answers: string | null
+  /** Every page Auto-run is on, across series. */
+  working: PhoneOverviewWorking[]
+  series: PhoneOverviewSeries[]
+  /** Done pages, newest first, at most OVERVIEW_RECENT. */
+  recent: PhoneOverviewFinish[]
+  /** True when there were more done pages than `recent` holds. */
+  recentCapped: boolean
+  /** Chapter zips the phone uploaded, newest first. */
+  uploads: PhoneOverviewChapterZip[]
+  profiles: PhoneUploadProfile[]
+}
+
+const OVERVIEW_RECENT = 300
+const OVERVIEW_UPLOADS = 30
+
+/**
+ * All three receipts at once. Served from the relay or the server's copies;
+ * `fresh` re-reads the scripts and crops receipts from R2 (one HEAD each, a
+ * GET only when changed). The sync receipt comes with the last bucket listing,
+ * however old, so this never lists the bucket once it has been listed.
+ */
+export async function getPhoneOverview(fresh = false): Promise<PhoneOverview> {
+  const config = getR2Config()
+  const relayedCrops = relayReceipt<CropsReceipt>('crops')
+  const empty: PhoneOverview = {
+    configured: false, device: null, reportedAt: null, reported: { sync: null, scripts: null, crops: null },
+    answers: null, working: [], series: [], recent: [], recentCapped: false, uploads: [], profiles: []
+  }
+  if (!config && !relayedCrops) return empty
+
+  const [sync, scripts, crops] = await Promise.all([
+    config ? getPhoneSync(false, true).catch(() => null) : Promise.resolve(null),
+    getPhoneScripts(undefined, fresh).catch(() => null),
+    relayedCrops ?? readPolledReceipt<CropsReceipt>(createClient(config!), config!, CROPS_RECEIPT_NAME, fresh)
+  ])
+
+  const rows = await prisma.series.findMany({
+    select: { id: true, title: true, rootFolder: true, chapters: { select: { id: true, folderPath: true, number: true } } }
+  })
+  const byFolder = new Map(rows.map(row => [path.basename(row.rootFolder), row]))
+  const place = (seriesFolder: string, chapterFolder: string): PhoneOverviewPlace => {
+    const row = byFolder.get(seriesFolder)
+    const chapter = row?.chapters.find(c => path.basename(c.folderPath) === chapterFolder)
+    return {
+      seriesId: row?.id ?? null,
+      series: row?.title ?? seriesFolder,
+      chapterId: chapter?.id ?? null,
+      chapter: chapterFolder,
+      chapterNumber: chapter?.number ?? null
+    }
+  }
+
+  const overview: PhoneOverview = { ...empty, configured: true }
+  overview.answers = crops.answers ?? null
+  overview.profiles = parseUploadProfiles(crops.profiles)
+  overview.reported = { sync: sync?.reportedAt ?? null, scripts: scripts?.reportedAt ?? null, crops: crops.updatedAt ?? null }
+  overview.reportedAt = Object.values(overview.reported)
+    .filter((at): at is string => !!at)
+    .sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null
+  overview.device = crops.device ?? scripts?.device ?? sync?.device ?? null
+
+  const cropsBySeries = new Map<string, { done: number; total: number; chaptersUploaded: number; working: number }>()
+  for (const [seriesFolder, entry] of Object.entries(isObject(crops.series) ? crops.series : {})) {
+    if (!isObject(entry)) continue
+    const summary = { done: Number(entry.done) || 0, total: Number(entry.total) || 0, chaptersUploaded: 0, working: 0 }
+    for (const raw of workingEntries(entry)) {
+      const working = parseWorking(raw)
+      if (!working) continue
+      overview.working.push({ ...place(seriesFolder, working.chapter), page: working.page, since: working.since, paused: working.paused })
+      summary.working++
+    }
+    for (const [chapterFolder, chapter] of Object.entries(isObject(entry.chapters) ? entry.chapters : {})) {
+      if (!isObject(chapter)) continue
+      const pages = isObject(chapter.pages) ? chapter.pages : {}
+      for (const [page, finish] of Object.entries(isObject(chapter.finished) ? chapter.finished : {})) {
+        const parsed = pages[page] === 'done' ? parseFinish(finish) : null
+        if (parsed) overview.recent.push({ ...place(seriesFolder, chapterFolder), page, ...parsed })
+      }
+      const zip = chapter.zip
+      if (isObject(zip)) {
+        summary.chaptersUploaded++
+        overview.uploads.push({
+          ...place(seriesFolder, chapterFolder),
+          uploadedAt: isTime(zip.uploadedAt) ? zip.uploadedAt : null,
+          pages: count(zip.pages)
+        })
+      }
+    }
+    const row = byFolder.get(seriesFolder)
+    if (row) cropsBySeries.set(row.id, summary)
+  }
+  const newest = (a: string | null, b: string | null) => (Date.parse(b ?? '') || 0) - (Date.parse(a ?? '') || 0)
+  overview.recentCapped = overview.recent.length > OVERVIEW_RECENT
+  overview.recent = overview.recent.sort((a, b) => newest(a.at, b.at)).slice(0, OVERVIEW_RECENT)
+  overview.uploads = overview.uploads.sort((a, b) => newest(a.uploadedAt, b.uploadedAt)).slice(0, OVERVIEW_UPLOADS)
+
+  for (const row of rows) {
+    const cropped = cropsBySeries.get(row.id)
+    const entry: PhoneOverviewSeries = {
+      id: row.id,
+      title: row.title,
+      sync: sync?.series[row.id] ?? null,
+      scripts: scripts?.series[row.id] ?? null,
+      crops: cropped ? { done: cropped.done, total: cropped.total } : null,
+      chaptersUploaded: cropped?.chaptersUploaded ?? 0,
+      working: cropped?.working ?? 0
+    }
+    if (entry.sync || entry.scripts || entry.crops) overview.series.push(entry)
+  }
+  overview.series.sort((a, b) => b.working - a.working || a.title.localeCompare(b.title))
+  return overview
 }
 
 /**
