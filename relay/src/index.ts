@@ -16,10 +16,15 @@
  *   relay → desktop  { type: 'hello', phones, request } · { type: 'receipt', kind, at, body }
  *                    { type: 'presence', phones } · { type: 'requested', id, phones }
  *   desktop → relay  { type: 'request', id, requestedAt, action? }
- *   relay → phone    { type: 'request', id, requestedAt, action? }
+ *   relay → phone    { type: 'request', id, requestedAt, action?, series?, tabs? }
  *
  * `action` is optional: "sync" asks the phone to also check R2 for chapters the
- * desktop just sent, before it answers with its receipts.
+ * desktop just sent, before it answers with its receipts. "clipper_start" starts
+ * Image Clipper on the phone, on `series` in `tabs` ChatGPT tabs (both optional:
+ * the phone's last run and tab count), waking it if need be; "clipper_stop" stops
+ * it. The phone acts on those only with its "Start from Manhwa Studio" setting on,
+ * and ignores ones older than 10 minutes, as the last request is handed over again
+ * whenever it connects.
  *   either → relay   "ping"; the runtime answers "pong" without waking the object.
  *
  * Every request needs `Authorization: Bearer <RELAY_TOKEN>` (or `?token=` for
@@ -62,10 +67,13 @@ export default {
   }
 } satisfies ExportedHandler<Env>
 
-interface StoredRequest { id: string; requestedAt: string; action?: string }
+interface StoredRequest { id: string; requestedAt: string; action?: string; series?: string; tabs?: number }
 
 /** What a request may ask of the phone besides its receipts. */
-const ACTIONS = new Set(['sync'])
+const ACTIONS = new Set(['sync', 'clipper_start', 'clipper_stop'])
+
+/** Image Clipper's most ChatGPT tabs at once (ClipperRun.MAX_TABS on the phone). */
+const MAX_TABS = 4
 
 export class Relay extends DurableObject<Env> {
   private sql: SqlStorage
@@ -78,6 +86,8 @@ export class Relay extends DurableObject<Env> {
     // Added after the first deploy; an object created before then lacks it.
     const columns = this.sql.exec<{ name: string }>('PRAGMA table_info(requests)').toArray().map(c => c.name)
     if (!columns.includes('action')) this.sql.exec('ALTER TABLE requests ADD COLUMN action TEXT')
+    if (!columns.includes('series')) this.sql.exec('ALTER TABLE requests ADD COLUMN series TEXT')
+    if (!columns.includes('tabs')) this.sql.exec('ALTER TABLE requests ADD COLUMN tabs INTEGER')
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'))
   }
 
@@ -175,14 +185,21 @@ export class Relay extends DurableObject<Env> {
 
   /** Saves a request and passes it to every connected phone. Null when it isn't a valid request. */
   private storeRequest(value: unknown): { request: StoredRequest; phones: number } | null {
-    const { id, requestedAt, action } = (value ?? {}) as { id?: unknown; requestedAt?: unknown; action?: unknown }
+    const { id, requestedAt, action, series, tabs } = (value ?? {}) as {
+      id?: unknown; requestedAt?: unknown; action?: unknown; series?: unknown; tabs?: unknown
+    }
     if (typeof id !== 'string' || !id || id.length > 100) return null
     const request: StoredRequest = { id, requestedAt: typeof requestedAt === 'string' ? requestedAt : new Date().toISOString() }
     if (typeof action === 'string' && ACTIONS.has(action)) request.action = action
+    if (request.action === 'clipper_start') {
+      if (typeof series === 'string' && series.trim() && series.length <= 200) request.series = series.trim()
+      if (typeof tabs === 'number' && Number.isInteger(tabs) && tabs >= 1 && tabs <= MAX_TABS) request.tabs = tabs
+    }
     this.sql.exec(
-      'INSERT INTO requests (slot, id, requested_at, action) VALUES (1, ?, ?, ?) ' +
-        'ON CONFLICT(slot) DO UPDATE SET id = excluded.id, requested_at = excluded.requested_at, action = excluded.action',
-      request.id, request.requestedAt, request.action ?? null
+      'INSERT INTO requests (slot, id, requested_at, action, series, tabs) VALUES (1, ?, ?, ?, ?, ?) ' +
+        'ON CONFLICT(slot) DO UPDATE SET id = excluded.id, requested_at = excluded.requested_at, action = excluded.action, ' +
+        'series = excluded.series, tabs = excluded.tabs',
+      request.id, request.requestedAt, request.action ?? null, request.series ?? null, request.tabs ?? null
     )
     const message = JSON.stringify({ type: 'request', ...request })
     const phones = this.sockets('phone')
@@ -191,11 +208,15 @@ export class Relay extends DurableObject<Env> {
   }
 
   private lastRequest(): StoredRequest | null {
-    const row = this.sql.exec<{ id: string; requested_at: string; action: string | null }>(
-      'SELECT id, requested_at, action FROM requests WHERE slot = 1'
+    const row = this.sql.exec<{ id: string; requested_at: string; action: string | null; series: string | null; tabs: number | null }>(
+      'SELECT id, requested_at, action, series, tabs FROM requests WHERE slot = 1'
     ).toArray()[0]
     if (!row) return null
-    return row.action ? { id: row.id, requestedAt: row.requested_at, action: row.action } : { id: row.id, requestedAt: row.requested_at }
+    const request: StoredRequest = { id: row.id, requestedAt: row.requested_at }
+    if (row.action) request.action = row.action
+    if (row.series) request.series = row.series
+    if (row.tabs) request.tabs = row.tabs
+    return request
   }
 
   private broadcastPresence(except?: WebSocket): void {

@@ -537,6 +537,7 @@ interface CropsReceipt {
   updatedAt?: string
   answers?: string
   profiles?: unknown
+  automation?: unknown
   series?: Record<string, {
     total?: number
     done?: number
@@ -731,6 +732,17 @@ export interface PhoneOverviewSeries {
   working: number
 }
 
+/** Sleeper-Cell's automation settings, and the run it will start by itself (Automation.json on the phone). */
+export interface PhoneAutomation {
+  /** personal: shows over the lock screen, PIN kept. dedicated: dismisses the lock screen, locks after. */
+  wakeMode: 'personal' | 'dedicated'
+  resumeAfterLimit: boolean
+  /** Manhwa Studio may start and stop Image Clipper (sendClipperCommand). */
+  remoteStart: boolean
+  /** The run waiting for a ChatGPT limit to lift, or for the phone to come online; null when none is. */
+  resume: { seriesId: string | null; series: string; tabs: number; at: string } | null
+}
+
 /** Everything Sleeper-Cell has reported, across every series, for the Sleeper Cells page. */
 export interface PhoneOverview {
   configured: boolean
@@ -751,6 +763,8 @@ export interface PhoneOverview {
   /** Chapter zips the phone uploaded, newest first. */
   uploads: PhoneOverviewChapterZip[]
   profiles: PhoneUploadProfile[]
+  /** Null from Sleeper-Cell builds before automation. */
+  automation: PhoneAutomation | null
 }
 
 const OVERVIEW_RECENT = 300
@@ -767,7 +781,7 @@ export async function getPhoneOverview(sync: PhoneSyncStatus | null, fresh = fal
   const relayedCrops = relayReceipt<CropsReceipt>('crops')
   const empty: PhoneOverview = {
     configured: false, device: null, reportedAt: null, reported: { sync: null, scripts: null, crops: null },
-    answers: null, working: [], series: [], recent: [], recentCapped: false, uploads: [], profiles: []
+    answers: null, working: [], series: [], recent: [], recentCapped: false, uploads: [], profiles: [], automation: null
   }
   if (!config && !relayedCrops) return empty
 
@@ -795,6 +809,7 @@ export async function getPhoneOverview(sync: PhoneSyncStatus | null, fresh = fal
   const overview: PhoneOverview = { ...empty, configured: true }
   overview.answers = crops.answers ?? null
   overview.profiles = parseUploadProfiles(crops.profiles)
+  overview.automation = parseAutomation(crops.automation, folder => byFolder.get(folder) ?? null)
   overview.reported = { sync: sync?.reportedAt ?? null, scripts: scripts?.reportedAt ?? null, crops: crops.updatedAt ?? null }
   overview.reportedAt = Object.values(overview.reported)
     .filter((at): at is string => !!at)
@@ -851,6 +866,48 @@ export async function getPhoneOverview(sync: PhoneSyncStatus | null, fresh = fal
   }
   overview.series.sort((a, b) => b.working - a.working || a.title.localeCompare(b.title))
   return overview
+}
+
+function parseAutomation(raw: unknown, seriesFor: (folder: string) => { id: string; title: string } | null): PhoneAutomation | null {
+  if (!isObject(raw)) return null
+  const resume = isObject(raw.resume) && typeof raw.resume.series === 'string' && isTime(raw.resume.at) ? raw.resume : null
+  const row = resume ? seriesFor(resume.series as string) : null
+  return {
+    wakeMode: raw.wakeMode === 'dedicated' ? 'dedicated' : 'personal',
+    resumeAfterLimit: raw.resumeAfterLimit === true,
+    remoteStart: raw.remoteStart === true,
+    resume: resume
+      ? { seriesId: row?.id ?? null, series: row?.title ?? (resume.series as string), tabs: Number(resume.tabs) || 1, at: resume.at as string }
+      : null
+  }
+}
+
+/** Image Clipper's most ChatGPT tabs at once (ClipperRun.MAX_TABS on the phone). */
+export const PHONE_MAX_TABS = 4
+
+/**
+ * Starts or stops Image Clipper on the phone, through the relay: the phone acts
+ * on it with "Start from Manhwa Studio" on, waking itself if need be, and
+ * ignores it after 10 minutes. `start` clips `seriesId` in `tabs` ChatGPT tabs;
+ * without them it goes on with the phone's last run, in its last tab count.
+ */
+export async function sendClipperCommand(
+  command: 'start' | 'stop',
+  options: { seriesId?: string; tabs?: number } = {}
+): Promise<PhoneUpdateRequest> {
+  if (!relayConfigured()) throw new Error('Starting Image Clipper on the phone needs the phone relay (Settings → Cloudflare)')
+  if (command === 'stop') return { ...(await sendPhoneRequest('clipper_stop')), via: 'relay' }
+  let series: string | undefined
+  if (options.seriesId) {
+    const row = await prisma.series.findUnique({ where: { id: options.seriesId }, select: { rootFolder: true } })
+    if (!row) throw new Error('Series not found')
+    // The phone names series by their folder (see place() in getPhoneOverview).
+    series = path.basename(row.rootFolder)
+  }
+  if (options.tabs !== undefined && !(Number.isInteger(options.tabs) && options.tabs >= 1 && options.tabs <= PHONE_MAX_TABS)) {
+    throw new Error(`tabs must be 1 to ${PHONE_MAX_TABS}`)
+  }
+  return { ...(await sendPhoneRequest('clipper_start', { series, tabs: options.tabs })), via: 'relay' }
 }
 
 /**

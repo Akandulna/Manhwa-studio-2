@@ -11,6 +11,7 @@
  *   GET  /phone/crops?seriesId=…&chapterId=…&fresh=1   which pages have crop JSON on the phone, and the page Auto-run is on
  *   GET  /phone/overview?fresh=1   all three receipts across every series, for the Sleeper Cells page
  *   POST /phone/request   ask the phone to write both receipts again ("Refresh from phone")
+ *   POST /phone/clipper   { command: start|stop, seriesId?, tabs? } — start or stop Image Clipper on the phone, through the relay
  *   GET  /relay          the phone relay's settings (no token) and connection state
  *   PUT  /relay          { url, token, clearToken } — save; a blank token keeps the saved one
  *   POST /relay/test     ask the relay what it holds, to check the URL and token
@@ -41,6 +42,7 @@ import {
   missingR2Env,
   requestPhoneUpdate,
   publicR2Config,
+  sendClipperCommand,
   testR2Connection,
   updateR2Config
 } from '../services/r2Service.js'
@@ -165,6 +167,19 @@ export function initR2Routes(io: Server): Router {
     } catch (error) {
       console.error('R2 phone update request failed:', error)
       res.status(400).json({ error: message(error, 'Could not ask the phone for an update') })
+    }
+  })
+
+  router.post('/phone/clipper', async (req: Request, res: Response) => {
+    try {
+      const { command, seriesId, tabs } = req.body ?? {}
+      if (command !== 'start' && command !== 'stop') throw new Error('command must be start or stop')
+      if (seriesId !== undefined && (typeof seriesId !== 'string' || !seriesId)) throw new Error('seriesId must be a series id')
+      if (tabs !== undefined && typeof tabs !== 'number') throw new Error('tabs must be a number')
+      res.json(await sendClipperCommand(command, { seriesId, tabs }))
+    } catch (error) {
+      console.error('Phone Image Clipper command failed:', error)
+      res.status(400).json({ error: message(error, 'Could not reach the phone') })
     }
   })
 

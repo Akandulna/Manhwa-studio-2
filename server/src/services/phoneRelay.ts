@@ -8,7 +8,8 @@
  * posts it; they are kept here in memory, and r2Service serves them instead of
  * reading R2. Each arrival is pushed to the browser as `phone:receipt`
  * ({ kind }), and connection/phone presence changes as `phone:relay`.
- * "Refresh from phone" goes to the relay as a request message.
+ * "Refresh from phone" goes to the relay as a request message, and so do
+ * Image Clipper's start and stop (see sendClipperCommand in r2Service).
  *
  * Settings → Cloudflare writes RELAY_URL / RELAY_TOKEN to the server's .env.
  * Without them nothing here runs and r2Service falls back to R2.
@@ -25,6 +26,20 @@ import { writeEnvVars } from '../utils/envFile.js'
 
 export type ReceiptKind = 'sync' | 'scripts' | 'crops'
 
+/**
+ * What a request may ask of the phone besides its receipts: `sync` checks R2
+ * for chapters just sent; `clipper_start` / `clipper_stop` start or stop Image
+ * Clipper (with "Start from Manhwa Studio" on in Sleeper-Cell). Keep in step
+ * with ACTIONS in relay/src/index.ts and Automation.kt on the phone.
+ */
+export type PhoneAction = 'sync' | 'clipper_start' | 'clipper_stop'
+
+/** For `clipper_start`: the phone's series folder and ChatGPT tabs; without them, its last run's. */
+export interface PhoneRequestArgs {
+  series?: string
+  tabs?: number
+}
+
 const KINDS = new Set<string>(['sync', 'scripts', 'crops'])
 
 export interface RelayStatus {
@@ -32,7 +47,10 @@ export interface RelayStatus {
   url: string
   hasToken: boolean
   connected: boolean
-  /** Sleeper-Cell sockets open right now, i.e. the app is open on the phone. */
+  /**
+   * Sleeper-Cell sockets open right now: the app is open on the phone, or its
+   * "Start from Manhwa Studio" setting keeps the socket open in the background.
+   */
   phones: number
   lastError: string | null
   /** When the relay last passed on a receipt. */
@@ -205,11 +223,21 @@ function handle(text: string): void {
  * when it isn't, the relay keeps the request for when it opens. `action:
  * 'sync'` has the phone first check R2 for chapters just sent; a relay
  * deployed before actions existed drops it, and the phone only answers.
+ * `args` go with `clipper_start` (a relay deployed before it drops both).
  */
-export async function sendPhoneRequest(action?: 'sync'): Promise<{ id: string; requestedAt: string; phones: number }> {
+export async function sendPhoneRequest(
+  action?: PhoneAction,
+  args: PhoneRequestArgs = {}
+): Promise<{ id: string; requestedAt: string; phones: number }> {
   const env = relayEnv()
   if (!env) throw new Error('The phone relay is not set up')
-  const request = { id: randomUUID(), requestedAt: new Date().toISOString(), ...(action ? { action } : {}) }
+  const request = {
+    id: randomUUID(),
+    requestedAt: new Date().toISOString(),
+    ...(action ? { action } : {}),
+    ...(args.series ? { series: args.series } : {}),
+    ...(args.tabs ? { tabs: args.tabs } : {})
+  }
   if (socket && connected && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: 'request', ...request }))
     return { ...request, phones }

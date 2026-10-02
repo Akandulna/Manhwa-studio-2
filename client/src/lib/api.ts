@@ -2299,6 +2299,17 @@ export interface PhoneOverviewSeries {
   working: number
 }
 
+/** Sleeper-Cell's automation settings (Tools → Settings → Automation), and the run it will start by itself. */
+export interface PhoneAutomation {
+  /** personal: shows over the lock screen, PIN kept. dedicated: dismisses the lock screen, locks after. */
+  wakeMode: 'personal' | 'dedicated'
+  resumeAfterLimit: boolean
+  /** "Start from Manhwa Studio" is on: the Start and Stop buttons reach it. */
+  remoteStart: boolean
+  /** The run waiting for a ChatGPT limit to lift, or for the phone to come online; null when none is. */
+  resume: { seriesId: string | null; series: string; tabs: number; at: string } | null
+}
+
 /** Everything Sleeper-Cell has reported, across every series (the Sleeper Cells page). */
 export interface PhoneOverview {
   configured: boolean
@@ -2318,6 +2329,8 @@ export interface PhoneOverview {
   /** Chapter zips the phone uploaded, newest first. */
   uploads: PhoneOverviewChapterZip[]
   profiles: PhoneUploadProfile[]
+  /** Null from Sleeper-Cell builds before automation. */
+  automation: PhoneAutomation | null
 }
 
 /** "Refresh from phone": how the ask went out. */
@@ -2336,7 +2349,10 @@ export interface RelayStatus {
   url: string
   hasToken: boolean
   connected: boolean
-  /** Sleeper-Cell sockets open right now, i.e. the app is open on the phone. */
+  /**
+   * Sleeper-Cell sockets open right now: the app is open on the phone, or its
+   * "Start from Manhwa Studio" setting keeps the socket open in the background.
+   */
   phones: number
   lastError: string | null
   lastReceiptAt: string | null
@@ -2426,6 +2442,13 @@ export const r2Api = {
 
   requestPhoneUpdate: () =>
     fetchApi<PhoneUpdateRequest>('/r2/phone/request', { method: 'POST' }),
+
+  /**
+   * Starts Image Clipper on the phone, through the relay: on `seriesId` in
+   * `tabs` ChatGPT tabs, or without them the phone's last run. Or stops it.
+   */
+  sendPhoneClipper: (command: 'start' | 'stop', options: { seriesId?: string; tabs?: number } = {}) =>
+    fetchApi<PhoneUpdateRequest>('/r2/phone/clipper', { method: 'POST', body: JSON.stringify({ command, ...options }) }),
 
   getRelay: () => fetchApi<RelayStatus>('/r2/relay'),
 

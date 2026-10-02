@@ -11,7 +11,10 @@ vi.mock('@aws-sdk/client-s3', async importOriginal => {
 vi.mock('../r2Usage.js', () => ({ FREE_PLAN: {}, attachUsageCounter: () => {}, getMonthUsage: () => ({}), monthKey: () => '' }))
 vi.mock('../../index.js', () => ({
   prisma: {
-    series: { findMany: async () => [{ id: 's1', rootFolder: '/lib/Solo Hero' }] },
+    series: {
+      findMany: async () => [{ id: 's1', rootFolder: '/lib/Solo Hero' }],
+      findUnique: async ({ where }: { where: { id: string } }) => (where.id === 's1' ? { rootFolder: '/lib/Solo Hero' } : null)
+    },
     chapter: { findMany: async () => [{ id: 'c1', folderPath: 'Solo Hero/Chapter 001' }] }
   }
 }))
@@ -36,7 +39,7 @@ Object.assign(process.env, {
   RELAY_URL: `http://localhost:${(relay.address() as AddressInfo).port}/`, RELAY_TOKEN: 't0ken'
 })
 const { startPhoneRelay, relayStatus } = await import('../phoneRelay.js')
-const { getPhoneScripts, getPhoneCrops, requestPhoneUpdate } = await import('../r2Service.js')
+const { getPhoneScripts, getPhoneCrops, getPhoneOverview, requestPhoneUpdate, sendClipperCommand } = await import('../r2Service.js')
 
 const emitted: { event: string; payload: unknown }[] = []
 startPhoneRelay({ emit: (event: string, payload: unknown) => emitted.push({ event, payload }) } as never)
@@ -75,6 +78,40 @@ describe('phone relay', () => {
     await until(() => received.some(m => m.includes(request.id)))
     expect(JSON.parse(received.find(m => m.includes(request.id))!)).toEqual({ type: 'request', id: request.id, requestedAt: request.requestedAt })
     expect(send).not.toHaveBeenCalled()
+  })
+
+  it('starts Image Clipper on the phone with the series folder and tabs, and stops it', async () => {
+    const start = await sendClipperCommand('start', { seriesId: 's1', tabs: 3 })
+    expect(start).toMatchObject({ via: 'relay', phones: 1 })
+    await until(() => received.some(m => m.includes(start.id)))
+    expect(JSON.parse(received.find(m => m.includes(start.id))!)).toEqual({
+      type: 'request', id: start.id, requestedAt: start.requestedAt, action: 'clipper_start', series: 'Solo Hero', tabs: 3
+    })
+
+    const stop = await sendClipperCommand('stop')
+    await until(() => received.some(m => m.includes(stop.id)))
+    expect(JSON.parse(received.find(m => m.includes(stop.id))!)).toEqual({
+      type: 'request', id: stop.id, requestedAt: stop.requestedAt, action: 'clipper_stop'
+    })
+
+    await expect(sendClipperCommand('start', { seriesId: 'nope' })).rejects.toThrow('Series not found')
+    await expect(sendClipperCommand('start', { tabs: 9 })).rejects.toThrow('tabs must be 1 to 4')
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it('reads the phone\'s automation from the crops receipt', async () => {
+    emitted.length = 0
+    desktop!.send(JSON.stringify({
+      type: 'receipt', kind: 'crops', at: 3, body: {
+        series: {},
+        automation: { wakeMode: 'dedicated', resumeAfterLimit: true, remoteStart: true, resume: { series: 'Solo Hero', tabs: 2, at: '2026-10-02T15:40:00.000Z' } }
+      }
+    }))
+    await until(() => emitted.some(e => e.event === 'phone:receipt'))
+    expect((await getPhoneOverview(null)).automation).toEqual({
+      wakeMode: 'dedicated', resumeAfterLimit: true, remoteStart: true,
+      resume: { seriesId: 's1', series: 'Solo Hero', tabs: 2, at: '2026-10-02T15:40:00.000Z' }
+    })
   })
 
   it('tracks the phone coming and going', async () => {
