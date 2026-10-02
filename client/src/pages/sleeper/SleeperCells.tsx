@@ -260,7 +260,7 @@ export default function SleeperCells() {
           </div>
           {overview?.configured && (
             <div className="flex flex-wrap gap-x-5 gap-y-1 border-t pt-3 text-xs text-muted-foreground">
-              <span title="Written after the phone downloads a series zip">Downloads: {clock(overview.reported.sync)}</span>
+              <span title="Written after the phone downloads or clears a chapter">Downloads: {clock(overview.reported.sync)}</span>
               <span title="Narration scripts written on the phone">Scripts: {clock(overview.reported.scripts)}</span>
               <span title="Crop pointers, Auto-run and upload counts">Crops &amp; uploads: {clock(overview.reported.crops)}</span>
               {!relay?.configured && (

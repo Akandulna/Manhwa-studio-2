@@ -20,6 +20,8 @@ import { initVideoEditor2Routes } from './routes/videoEditor2.js';
 import { initMurgaaRoutes } from './routes/murgaa.js';
 import { initStorageRoutes } from './routes/storage.js';
 import { initR2Routes } from './routes/r2.js';
+import { initStitchRoutes } from './routes/stitch.js';
+import { initPagePreviewRoutes } from './routes/pagePreview.js';
 import { DownloadManager } from './services/downloadManager.js';
 import { startPhoneRelay } from './services/phoneRelay.js';
 import { reconcileQuietly } from './services/diskReconcile.js';
@@ -63,6 +65,8 @@ app.use('/api/music', initMusicRoutes());            // Music Library (global ba
 app.use('/api/video2', initVideoEditor2Routes(io));  // Module 4v2: Editor 2.0
 app.use('/api/murgaa', initMurgaaRoutes());          // Narration: Murgaa reference popup (global per page)
 app.use('/api/storage', initStorageRoutes());        // Storage: local disk usage + reclaiming it
+app.use('/api/stitch', initStitchRoutes());          // Library: stitch a chapter's many short pages into a few tall ones
+app.use('/api/page-preview', initPagePreviewRoutes()); // Library: preview a chapter's pages and delete unwanted ones
 app.use('/api/r2', initR2Routes(io));                // Cloud backup: upload series folders to Cloudflare R2
 
 // Health check

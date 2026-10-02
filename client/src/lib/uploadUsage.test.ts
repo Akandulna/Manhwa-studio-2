@@ -21,58 +21,54 @@ function limit(over: Partial<PhoneUploadLimit> = {}): PhoneUploadLimit {
 }
 
 describe('uploadUsage', () => {
-  it('takes the latest complete limit and runs out at the last half hour\'s pace', () => {
+  it('counts the last 3 hours against 80 and runs out at the recent pace', () => {
     const usage = uploadUsage(profile({
-      counting: { since: at(300), images: 30 },
-      uploads: [{ at: at(30), images: 10 }, { at: at(15), images: 10 }, { at: at(5), images: 10 }],
-      limits: [limit({ used: 50 }), limit({ used: 60 }), limit({ used: 99, flagged: true })]
+      uploads: [{ at: at(200), images: 40 }, { at: at(170), images: 20 }, { at: at(30), images: 10 }, { at: at(15), images: 10 }, { at: at(5), images: 10 }],
+      limits: [limit(), limit({ flagged: true })]
     }), NOW)
-    assert.equal(usage.limit, 60)
-    assert.equal(usage.limitAtLeast, false)
+    assert.equal(usage.limit, 80)
+    assert.equal(usage.used, 50) // the slot from 200 minutes ago has aged out
     assert.equal(usage.left, 30)
+    assert.equal(usage.nextFreeAt, NOW + 15 * 60_000) // 170 minutes ago + its 5-minute slot + 3 hours
+    assert.equal(usage.nextFree, 20)
     assert.equal(usage.lastHour, 30)
     assert.equal(usage.pace, 60) // 30 images over the 30 minutes since the first slot
     assert.equal(usage.exhaustsAt, NOW + 30 * 60_000)
+    assert.equal(usage.lastLimit?.flagged, false)
   })
 
-  it('treats a first limit as a lower bound and knows nothing before one', () => {
-    const first = uploadUsage(profile({ limits: [limit({ complete: false, used: 40 })] }), NOW)
-    assert.equal(first.limit, 40)
-    assert.equal(first.limitAtLeast, true)
-
-    const none = uploadUsage(profile({ uploads: [{ at: at(2), images: 4 }], counting: { since: at(600), images: 4 } }), NOW)
-    assert.equal(none.limit, null)
-    assert.equal(none.left, null)
-    assert.equal(none.exhaustsAt, null)
-    assert.equal(none.pace, 24) // 4 images over the 10-minute minimum window
+  it('is limited with a full window until enough uploads age out', () => {
+    const full = uploadUsage(profile({ uploads: [{ at: at(170), images: 30 }, { at: at(100), images: 30 }, { at: at(60), images: 20 }] }), NOW)
+    assert.equal(full.used, 80)
+    assert.equal(full.left, 0)
+    assert.equal(full.limitedUntil, NOW + 15 * 60_000)
+    assert.equal(full.exhaustsAt, null)
   })
 
-  it('has nothing left while limited, and is idle without recent uploads', () => {
-    const limited = uploadUsage(profile({ limitedUntil: at(-90), limits: [limit()], uploads: [{ at: at(3), images: 5 }] }), NOW)
+  it('takes ChatGPT\'s own limit, and is idle without recent uploads', () => {
+    const limited = uploadUsage(profile({ limitedUntil: at(-90), uploads: [{ at: at(3), images: 5 }] }), NOW)
     assert.equal(limited.limitedUntil, NOW + 90 * 60_000)
     assert.equal(limited.left, 0)
     assert.equal(limited.exhaustsAt, null)
 
-    const lifted = uploadUsage(profile({ limitedUntil: at(10), limits: [limit()] }), NOW)
+    const lifted = uploadUsage(profile({ limitedUntil: at(10), uploads: [{ at: at(60), images: 4 }] }), NOW)
     assert.equal(lifted.limitedUntil, null)
-    assert.equal(lifted.left, 60)
+    assert.equal(lifted.left, 76)
     assert.equal(lifted.pace, null)
   })
 })
 
 describe('uploadOverview', () => {
   it('adds up what is left and runs the profiles out one after another', () => {
-    const main = uploadUsage(profile({ limits: [limit()], counting: { since: at(300), images: 50 }, uploads: [{ at: at(10), images: 10 }] }), NOW)
-    const alt = uploadUsage(profile({ id: 'alt', limits: [limit({ used: 40 })] }), NOW)
-    const off = uploadUsage(profile({ id: 'off', limitedUntil: at(-30), limits: [limit()] }), NOW)
+    const main = uploadUsage(profile({ uploads: [{ at: at(100), images: 20 }, { at: at(10), images: 10 }] }), NOW)
+    const alt = uploadUsage(profile({ id: 'alt' }), NOW)
+    const off = uploadUsage(profile({ id: 'off', limitedUntil: at(-30) }), NOW)
     const overview = uploadOverview([main, alt, off], NOW)
-    assert.equal(overview.left, 50)
-    assert.equal(overview.unknown, 0)
+    assert.equal(overview.left, 50 + 80)
     assert.equal(overview.pace, 60)
-    assert.equal(overview.allUsedAt, NOW + 50 * 60_000)
+    assert.equal(overview.allUsedAt, NOW + 130 * 60_000)
     assert.equal(overview.nextLiftAt, NOW + 30 * 60_000)
 
-    const fresh = uploadUsage(profile({ id: 'new' }), NOW)
-    assert.equal(uploadOverview([main, fresh], NOW).allUsedAt, null)
+    assert.equal(uploadOverview([alt], NOW).allUsedAt, null)
   })
 })

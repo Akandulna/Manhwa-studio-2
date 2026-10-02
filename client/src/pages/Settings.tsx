@@ -33,6 +33,9 @@ interface ExtendedSettings extends SettingsType {
   ttsApiKey?: string
   ttsVoice?: string
   ttsKokoroVoice?: string
+  // Voice for the Hindi narration tab (a Kokoro voice speaks one language)
+  ttsVoiceHi?: string
+  ttsKokoroVoiceHi?: string
   ttsSpeed?: string
   ttsStylePrompt?: string
   ttsNormalizeText?: string
@@ -1022,6 +1025,29 @@ STYLE RULES:
                 <br />
                 <span className="text-amber-600 dark:text-amber-400">Tip: More expressive voices exaggerate emotion — audition several and pick the most even-sounding one for narration.</span>
               </p>
+
+              <div className="flex items-center gap-2 pt-2">
+                <Mic className="h-4 w-4 text-muted-foreground" />
+                <Label>Hindi Voice</Label>
+              </div>
+              <Select
+                value={settings.ttsVoiceHi || settings.ttsVoice || 'Iapetus'}
+                onValueChange={(value) => updateSetting('ttsVoiceHi', value)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select voice" />
+                </SelectTrigger>
+                <SelectContent className="max-h-[300px]">
+                  {GEMINI_VOICES.map((voice) => (
+                    <SelectItem key={voice.value} value={voice.value}>
+                      <span>{voice.label} - <span className="text-muted-foreground">{voice.description}</span></span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Used by the Hindi tab of the Narration Library. Gemini voices speak Hindi too, so this follows the voice above until you pick one.
+              </p>
             </div>
           )}
           
@@ -1058,6 +1084,29 @@ STYLE RULES:
                   ))}
                 </SelectContent>
               </Select>
+              <div className="flex items-center gap-2 pt-2">
+                <Mic className="h-4 w-4 text-muted-foreground" />
+                <Label>Hindi Voice</Label>
+              </div>
+              <Select
+                value={settings.ttsKokoroVoiceHi || 'hf_alpha'}
+                onValueChange={(value) => updateSetting('ttsKokoroVoiceHi', value)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select voice" />
+                </SelectTrigger>
+                <SelectContent className="max-h-[300px]">
+                  {KOKORO_VOICES.filter(voice => /^h[fm]_/.test(voice.value)).map((voice) => (
+                    <SelectItem key={voice.value} value={voice.value}>
+                      <span>{voice.label} - <span className="text-muted-foreground">{voice.description}</span></span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Used by the Hindi tab of the Narration Library — each Kokoro voice speaks only its own language.
+              </p>
+
               {kokoroStatus && !kokoroStatus.available ? (
                 <p className="text-xs text-red-600 dark:text-red-400">
                   Cannot reach the Kokoro app at {kokoroStatus.url || 'http://127.0.0.1:7860'}. Start it before generating audio.
@@ -1176,7 +1225,7 @@ STYLE RULES:
       <Editor2PromptCard />
           </TabsContent>
 
-          {/* Cloudflare Tab — R2 credentials for the Library's "Upload to R2" backup */}
+          {/* Cloudflare Tab — R2 credentials for the Library's "Send to phone" */}
           <TabsContent value="cloudflare" className="mt-0 p-6 max-w-4xl space-y-6">
             <CloudflareTab />
           </TabsContent>

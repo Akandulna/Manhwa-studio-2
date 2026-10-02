@@ -9,6 +9,7 @@ import { prisma } from '../index.js';
 import { getChapterImages, DetectedImage } from './scraper.js';
 import { zeroPad, sanitizeTitle } from '../utils/urlPattern.js';
 import { storePageImage } from './pageImageStore.js';
+import { flushAutoSend, noteChapterDownloaded } from './phoneSend.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as https from 'https';
@@ -55,6 +56,8 @@ export class DownloadManager {
     
     this.queue.on('idle', () => {
       this.emitStatus();
+      // Series set to auto-send get their new chapters sent to the phone now the downloads are done.
+      flushAutoSend(this.io);
     });
   }
   
@@ -299,6 +302,7 @@ export class DownloadManager {
       
       if (finalStatus === 'done') {
         this.completedCount++;
+        await noteChapterDownloaded(task.seriesId);
       } else {
         this.failedCount++;
       }

@@ -73,7 +73,8 @@ export function initStorageRoutes(): Router {
   router.get('/published', async (req: Request, res: Response) => {
     try {
       const seriesId = typeof req.query.seriesId === 'string' ? req.query.seriesId : undefined
-      res.json(await getPublishedChapters(seriesId))
+      const lang = req.query.lang === 'en' || req.query.lang === 'hi' ? req.query.lang : undefined
+      res.json(await getPublishedChapters(seriesId, lang))
     } catch (error) {
       console.error('Error resolving published chapters:', error)
       res.status(500).json({ error: 'Failed to resolve published chapters' })

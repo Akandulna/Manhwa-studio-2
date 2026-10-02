@@ -44,6 +44,8 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useToast } from '@/components/ui/use-toast'
 import { useSocket } from '@/lib/socket'
+import { LanguageTabs } from '@/components/LanguageTabs'
+import { useNarrationLanguage, withLang } from '@/lib/narrationLanguage'
 import {
   ArrowLeft,
   ArrowRight,
@@ -131,11 +133,13 @@ export default function VoiceoverEditor() {
   const navigate = useNavigate()
   const { toast } = useToast()
   const { socket } = useSocket()
+  // English and Hindi voiceovers are separate sections and audio.
+  const [language, setLanguage] = useNarrationLanguage('narration')
   
   // Chapter data
-  // Already rendered to video — surfaced in the header so a published chapter
-  // is not re-voiced by mistake.
-  const { isPublished } = usePublishedChapters()
+  // Already rendered to video in this language — surfaced in the header so a
+  // published chapter is not re-voiced by mistake.
+  const { isPublished } = usePublishedChapters(undefined, language)
 
   const [chapter, setChapter] = useState<VoiceoverChapterDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -395,13 +399,20 @@ export default function VoiceoverEditor() {
   // Load chapter data
   useEffect(() => {
     if (id) {
+      // A switch of tab shows another language's sections and audio.
+      audioRef.current?.pause()
+      setIsPlaying(false)
+      setCurrentAudioFile(null)
+      setMismatchedSectionIds(new Set())
+      setAlignFailedSectionIds(new Set())
       loadChapter()
     }
-  }, [id])
+  }, [id, language])
 
   // Pick up the TTS provider + voice chosen in Settings > Voiceover.
   // Gemini and Kokoro have separate voice namespaces, so the saved voice is
-  // read from the key matching the active provider.
+  // read from the key matching the active provider — and the Hindi tab has its
+  // own saved voice, since a Kokoro voice only speaks its own language.
   useEffect(() => {
     let cancelled = false
 
@@ -409,11 +420,19 @@ export default function VoiceoverEditor() {
       .then(all => {
         if (cancelled) return
 
-        const s = all as { ttsProvider?: string; ttsVoice?: string; ttsKokoroVoice?: string }
+        const s = all as {
+          ttsProvider?: string
+          ttsVoice?: string
+          ttsKokoroVoice?: string
+          ttsVoiceHi?: string
+          ttsKokoroVoiceHi?: string
+        }
         const provider = s.ttsProvider || 'gemini'
         setTtsProvider(provider)
 
-        const savedVoice = provider === 'kokoro' ? s.ttsKokoroVoice : s.ttsVoice
+        const savedVoice = language === 'hi'
+          ? (provider === 'kokoro' ? s.ttsKokoroVoiceHi : (s.ttsVoiceHi || s.ttsVoice))
+          : (provider === 'kokoro' ? s.ttsKokoroVoice : s.ttsVoice)
         setSelectedVoice(savedVoice || (provider === 'kokoro' ? 'hf_alpha' : 'Iapetus'))
       })
       .catch(() => {
@@ -421,14 +440,18 @@ export default function VoiceoverEditor() {
       })
 
     return () => { cancelled = true }
-  }, [])
+  }, [language])
 
   // Socket event handlers
   useEffect(() => {
     if (!socket) return
 
-    const handleSectionStart = (data: { chapterId: string; sectionId: string }) => {
-      if (data.chapterId === id) {
+    // Events for this chapter in the language this tab is showing.
+    const isMine = (data: { chapterId: string; language?: string }) =>
+      data.chapterId === id && (data.language ?? 'en') === language
+
+    const handleSectionStart = (data: { chapterId: string; language?: string; sectionId: string }) => {
+      if (isMine(data)) {
         setChapter(prev => {
           if (!prev) return prev
           return {
@@ -441,8 +464,8 @@ export default function VoiceoverEditor() {
       }
     }
 
-    const handleSectionComplete = (data: { chapterId: string; sectionId: string; audioFileId: string }) => {
-      if (data.chapterId === id) {
+    const handleSectionComplete = (data: { chapterId: string; language?: string; sectionId: string; audioFileId: string }) => {
+      if (isMine(data)) {
         loadChapter()
       }
     }
@@ -459,21 +482,21 @@ export default function VoiceoverEditor() {
       })
     }
 
-    const handleBatchStart = (data: { chapterId: string; totalSections: number }) => {
-      if (data.chapterId === id) {
+    const handleBatchStart = (data: { chapterId: string; language?: string; totalSections: number }) => {
+      if (isMine(data)) {
         setGeneratingAll(true)
         setBatchProgress({ completed: 0, total: data.totalSections })
       }
     }
 
-    const handleBatchProgress = (data: { chapterId: string; completed: number; total: number }) => {
-      if (data.chapterId === id) {
+    const handleBatchProgress = (data: { chapterId: string; language?: string; completed: number; total: number }) => {
+      if (isMine(data)) {
         setBatchProgress({ completed: data.completed, total: data.total })
       }
     }
 
-    const handleBatchComplete = (data: { chapterId: string; successful: number; failed: number }) => {
-      if (data.chapterId === id) {
+    const handleBatchComplete = (data: { chapterId: string; language?: string; successful: number; failed: number }) => {
+      if (isMine(data)) {
         setGeneratingAll(false)
         setBatchProgress({ completed: 0, total: 0 })
         loadChapter()
@@ -484,8 +507,8 @@ export default function VoiceoverEditor() {
       }
     }
 
-    const handleJoinComplete = (data: { chapterId: string }) => {
-      if (data.chapterId === id) {
+    const handleJoinComplete = (data: { chapterId: string; language?: string }) => {
+      if (isMine(data)) {
         setJoiningAudio(false)
         loadChapter()
         toast({
@@ -500,12 +523,13 @@ export default function VoiceoverEditor() {
     // new value rather than autosaving its stale contents over it.
     const handleAlignmentProgress = (data: {
       chapterId: string
+      language?: string
       sectionId: string
       index: number
       stage: 'aligning' | 'done' | 'failed'
       error?: string
     }) => {
-      if (data.chapterId !== id) return
+      if (!isMine(data)) return
 
       setAligningSectionId(data.stage === 'aligning' ? data.sectionId : null)
 
@@ -529,7 +553,7 @@ export default function VoiceoverEditor() {
         // Pull the freshly written timeline in. If this is the section the
         // editor has open, push it into the textarea too - the restore effect
         // only reruns on a section change, so a reload alone would not.
-        voiceoverApi.getChapterDetail(id!)
+        voiceoverApi.getChapterDetail(id!, language)
           .then(detail => {
             setChapter(detail)
             const updated = detail.sections.find(s => s.id === data.sectionId)
@@ -570,7 +594,7 @@ export default function VoiceoverEditor() {
       socket.off('voiceover:batch-complete', handleBatchComplete)
       socket.off('voiceover:join-complete', handleJoinComplete)
     }
-  }, [socket, id])
+  }, [socket, id, language])
 
   // Audio player effects
   useEffect(() => {
@@ -594,13 +618,14 @@ export default function VoiceoverEditor() {
 
   const loadChapter = async () => {
     try {
-      const data = await voiceoverApi.getChapterDetail(id!)
+      const data = await voiceoverApi.getChapterDetail(id!, language)
       setChapter(data)
       
-      // Select first section if none selected
-      if (!selectedSection && data.sections.length > 0) {
-        setSelectedSection(data.sections[0].id)
-      }
+      // Select the first section if none is selected, or the selection belongs
+      // to the other language's sections
+      setSelectedSection(prev =>
+        prev && data.sections.some(s => s.id === prev) ? prev : (data.sections[0]?.id ?? null)
+      )
     } catch (error) {
       toast({
         title: 'Error',
@@ -615,7 +640,7 @@ export default function VoiceoverEditor() {
   // Section operations
   const handleInitializeSections = async () => {
     try {
-      const result = await voiceoverApi.initializeSections(id!)
+      const result = await voiceoverApi.initializeSections(id!, language)
       toast({
         title: 'Sections Created',
         description: `Created ${result.count} sections from script`
@@ -637,7 +662,7 @@ export default function VoiceoverEditor() {
   const handleResplitSections = async () => {
     setResplitting(true)
     try {
-      const result = await voiceoverApi.initializeSections(id!, resplitTargetLength)
+      const result = await voiceoverApi.initializeSections(id!, language, resplitTargetLength)
       const discarded = result.discardedAudio > 0
         ? `, discarded ${result.discardedAudio} audio file${result.discardedAudio === 1 ? '' : 's'}`
         : ''
@@ -708,7 +733,7 @@ export default function VoiceoverEditor() {
     
     setAddingSection(true)
     try {
-      await voiceoverApi.addSection(id!, newSectionText.trim())
+      await voiceoverApi.addSection(id!, language, newSectionText.trim())
       setNewSectionText('')
       setAddSectionOpen(false)
       loadChapter()
@@ -746,7 +771,7 @@ export default function VoiceoverEditor() {
   const handleGenerateAll = async () => {
     setGeneratingAll(true)
     try {
-      await voiceoverApi.generateAllSections(id!, selectedVoice, stylePrompt || undefined)
+      await voiceoverApi.generateAllSections(id!, language, selectedVoice, stylePrompt || undefined)
     } catch (error) {
       setGeneratingAll(false)
       toast({
@@ -761,7 +786,7 @@ export default function VoiceoverEditor() {
   const handleJoinAudio = async () => {
     setJoiningAudio(true)
     try {
-      await voiceoverApi.joinChapterAudio(id!, true, 'mp3')
+      await voiceoverApi.joinChapterAudio(id!, language, true, 'mp3')
     } catch (error) {
       setJoiningAudio(false)
       toast({
@@ -776,7 +801,7 @@ export default function VoiceoverEditor() {
   const handleCheckVoices = async () => {
     setCheckingVoices(true)
     try {
-      const result = await voiceoverApi.checkVoiceConsistency(id!, selectedVoice)
+      const result = await voiceoverApi.checkVoiceConsistency(id!, language, selectedVoice)
       
       if (result.consistent) {
         setMismatchedSectionIds(new Set())
@@ -850,7 +875,7 @@ export default function VoiceoverEditor() {
       if (uploadSectionId) {
         await voiceoverApi.uploadSectionAudio(uploadSectionId, file)
       } else {
-        await voiceoverApi.uploadChapterAudio(id!, file)
+        await voiceoverApi.uploadChapterAudio(id!, language, file)
       }
       loadChapter()
       toast({
@@ -1014,7 +1039,7 @@ export default function VoiceoverEditor() {
       <div className="border-b p-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <Link to={`/narration/series/${chapter.series.id}`}>
+            <Link to={withLang(`/narration/series/${chapter.series.id}`, language)}>
               <Button variant="ghost" size="sm">
                 <ArrowLeft className="h-4 w-4 mr-2" />
                 Back
@@ -1027,6 +1052,12 @@ export default function VoiceoverEditor() {
               </h1>
               <p className="text-sm text-muted-foreground">{chapter.series.title}</p>
             </div>
+            {/* Locked mid-edit or mid-run, so the work isn't left on a hidden tab */}
+            <LanguageTabs
+              value={language}
+              onChange={setLanguage}
+              disabled={!!editingSection || generatingAll || joiningAudio}
+            />
           </div>
           
           <div className="flex items-center gap-2">
@@ -1039,7 +1070,7 @@ export default function VoiceoverEditor() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => navigate(`/narration/voiceover/${chapter.prevChapterId}`)}
+                onClick={() => navigate(withLang(`/narration/voiceover/${chapter.prevChapterId}`, language))}
               >
                 <ArrowLeft className="h-4 w-4 mr-1" />
                 Prev
@@ -1049,7 +1080,7 @@ export default function VoiceoverEditor() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => navigate(`/narration/voiceover/${chapter.nextChapterId}`)}
+                onClick={() => navigate(withLang(`/narration/voiceover/${chapter.nextChapterId}`, language))}
               >
                 Next
                 <ArrowRight className="h-4 w-4 ml-1" />
@@ -1227,6 +1258,12 @@ export default function VoiceoverEditor() {
                     ))}
                   </SelectContent>
                 </Select>
+                {/* Kokoro voices speak one language; Gemini voices read Hindi as-is */}
+                {language === 'hi' && isKokoro && !/^h[fm]_/.test(selectedVoice) && (
+                  <p className="mt-1 text-xs text-yellow-600">
+                    This is a Hindi script — pick a Hindi Kokoro voice (Hindi Alpha, Beta, Omega or Psi).
+                  </p>
+                )}
               </div>
             </div>
 

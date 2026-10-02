@@ -246,13 +246,18 @@ async function buildPreview(seriesId: string, zip: PhoneScriptsZip, parsed: Pars
     include: {
       chapters: {
         where: { status: 'done' },
-        include: { script: true, _count: { select: { audioSections: true } } },
+        // The phone writes English narration, so it is compared with — and
+        // imported into — the English script only; Hindi is never touched.
+        include: {
+          scripts: { where: { language: 'en' } },
+          _count: { select: { audioSections: { where: { language: 'en' } } } }
+        },
         orderBy: { number: 'asc' }
       }
     }
   })
   if (!series) throw new Error('Series not found')
-  const published = (await getPublishedChapters(seriesId)).chapters
+  const published = (await getPublishedChapters(seriesId, 'en')).chapters
   const byFolder = new Map(series.chapters.map(c => [path.basename(c.folderPath), c]))
 
   const chapters: PhoneImportChapter[] = []
@@ -263,17 +268,18 @@ async function buildPreview(seriesId: string, zip: PhoneScriptsZip, parsed: Pars
       unmatched.push(phone.folder)
       continue
     }
-    const current = await readScript(chapter.script?.scriptPath)
+    const script = chapter.scripts[0]
+    const current = await readScript(script?.scriptPath)
     const same =
       current === phone.script &&
-      (chapter.script?.rollingSummary ?? null) === phone.summary &&
-      (chapter.script?.closingParagraph ?? null) === phone.closing
+      (script?.rollingSummary ?? null) === phone.summary &&
+      (script?.closingParagraph ?? null) === phone.closing
     chapters.push({
       chapterId: chapter.id,
       number: chapter.number,
       folder: phone.folder,
       action: current === null ? 'new' : same ? 'same' : 'replace',
-      desktopStatus: chapter.script && chapter.script.status !== 'none' ? chapter.script.status : null,
+      desktopStatus: script && script.status !== 'none' ? script.status : null,
       hasSummary: !!phone.summary,
       hasClosing: !!phone.closing,
       savedAt: phone.savedAt,
@@ -325,7 +331,6 @@ export async function importPhoneScripts(seriesId: string, etag: string, chapter
   const series = await prisma.series.findUniqueOrThrow({ where: { id: seriesId } })
   const chapters = await prisma.chapter.findMany({
     where: { id: { in: preview.chapters.filter(c => wanted.has(c.chapterId)).map(c => c.chapterId) } },
-    include: { script: true }
   })
 
   let imported = 0
@@ -345,9 +350,9 @@ export async function importPhoneScripts(seriesId: string, etag: string, chapter
       error: null
     }
     await prisma.chapterScript.upsert({
-      where: { chapterId: chapter.id },
+      where: { chapterId_language: { chapterId: chapter.id, language: 'en' } },
       update: data,
-      create: { chapterId: chapter.id, ...data }
+      create: { chapterId: chapter.id, language: 'en', ...data }
     })
     imported++
   }

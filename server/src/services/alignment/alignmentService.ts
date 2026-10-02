@@ -20,9 +20,7 @@ import { Server } from 'socket.io'
 import { prisma } from '../../index.js'
 import { buildTimelineScript, type AlignedWord } from './beatFormatter.js'
 import { cachedProbe, isAvailable } from '../../utils/cachedProbe.js'
-
-/** Alignment is English-only for now; Hindi is future scope. */
-const ALIGN_LANGUAGE = 'en'
+import { NarrationLanguage, parseLanguage } from '../narrationLanguage.js'
 
 /** Serialized: one alignment at a time, so peak memory stays predictable. */
 const alignQueue = new PQueue({ concurrency: 1 })
@@ -111,8 +109,13 @@ async function probeAlignmentAvailable(): Promise<{
 }
 export const checkAlignmentAvailable = cachedProbe(probeAlignmentAvailable, { isOk: isAvailable })
 
-/** Spawn the sidecar for one alignment job and parse its JSON result. */
-function runAligner(audioPath: string, text: string): Promise<{
+/**
+ * Spawn the sidecar for one alignment job and parse its JSON result.
+ *
+ * `language` picks WhisperX's wav2vec2 alignment model: its default English
+ * model, or its Hindi one for a Hindi section (downloaded on first use).
+ */
+function runAligner(audioPath: string, text: string, language: NarrationLanguage): Promise<{
   words: AlignedWord[]
   durationSec: number
 }> {
@@ -169,7 +172,7 @@ function runAligner(audioPath: string, text: string): Promise<{
     proc.stdin.write(JSON.stringify({
       audio_path: audioPath,
       text,
-      language: ALIGN_LANGUAGE
+      language
     }))
     proc.stdin.end()
   })
@@ -203,13 +206,14 @@ export async function alignSection(
 
     io?.emit('alignment:progress', {
       chapterId: section.chapterId,
+      language: section.language,
       sectionId,
       index: section.index,
       stage: 'aligning'
     })
 
     try {
-      const { words, durationSec } = await runAligner(audioPath, section.text)
+      const { words, durationSec } = await runAligner(audioPath, section.text, parseLanguage(section.language))
 
       if (words.length === 0) {
         throw new Error('The aligner produced no word timings for this audio')
@@ -226,6 +230,7 @@ export async function alignSection(
 
       io?.emit('alignment:progress', {
         chapterId: section.chapterId,
+        language: section.language,
         sectionId,
         index: section.index,
         stage: 'done',
@@ -238,6 +243,7 @@ export async function alignSection(
 
       io?.emit('alignment:progress', {
         chapterId: section.chapterId,
+        language: section.language,
         sectionId,
         index: section.index,
         stage: 'failed',
@@ -266,10 +272,11 @@ export function alignSectionInBackground(sectionId: string, io?: Server | null):
 /** Align every section of a chapter that has audio, in reading order. */
 export async function alignChapter(
   chapterId: string,
-  io?: Server
+  io?: Server,
+  language: NarrationLanguage = 'en'
 ): Promise<{ aligned: number; failed: number; errors: string[] }> {
   const sections = await prisma.audioSection.findMany({
-    where: { chapterId, audioFile: { isNot: null } },
+    where: { chapterId, language, audioFile: { isNot: null } },
     orderBy: { index: 'asc' },
     include: { audioFile: true }
   })
@@ -289,7 +296,7 @@ export async function alignChapter(
     }
   }
 
-  io?.emit('alignment:chapter-complete', { chapterId, aligned, failed })
+  io?.emit('alignment:chapter-complete', { chapterId, language, aligned, failed })
 
   return { aligned, failed, errors }
 }

@@ -11,6 +11,7 @@ import { spawn } from 'child_process'
 import path from 'path'
 import { prisma } from '../index.js'
 import { cachedProbe, isAvailable } from '../utils/cachedProbe.js'
+import type { NarrationLanguage } from './narrationLanguage.js'
 
 export interface VoiceAnalysisResult {
   verdict: 'consistent' | 'mismatch' | 'inconclusive'
@@ -169,7 +170,8 @@ export async function analyzeChapterVoices(
   options: {
     threshold?: number
     includeAcoustic?: boolean
-  } = {}
+  } = {},
+  language: NarrationLanguage = 'en'
 ): Promise<VoiceAnalysisResult> {
   const threshold = options.threshold ?? DEFAULT_SIMILARITY_THRESHOLD
   const includeAcoustic = options.includeAcoustic ?? true
@@ -180,6 +182,7 @@ export async function analyzeChapterVoices(
   const audioFiles = await prisma.audioFile.findMany({
     where: {
       chapterId,
+      language,
       kind: { not: 'joined' },
       status: 'done'
     },
@@ -308,9 +311,10 @@ export async function analyzeChapterVoices(
   
   // Save analysis result to database
   await prisma.audioAnalysis.upsert({
-    where: { chapterId },
+    where: { chapterId_language: { chapterId, language } },
     create: {
       chapterId,
+      language,
       threshold,
       verdict,
       details: JSON.stringify({
@@ -347,9 +351,12 @@ export async function analyzeChapterVoices(
 /**
  * Get the last analysis result for a chapter
  */
-export async function getLastAnalysisResult(chapterId: string): Promise<VoiceAnalysisResult | null> {
+export async function getLastAnalysisResult(
+  chapterId: string,
+  language: NarrationLanguage = 'en'
+): Promise<VoiceAnalysisResult | null> {
   const analysis = await prisma.audioAnalysis.findUnique({
-    where: { chapterId }
+    where: { chapterId_language: { chapterId, language } }
   })
   
   if (!analysis) {

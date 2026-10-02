@@ -1,49 +1,26 @@
 /**
- * Cloudflare R2 — back up series to an R2 bucket as one zip per series.
+ * Cloudflare R2: settings, the free-plan guard, and what the Sleeper-Cell phone
+ * app reports back.
  *
  * R2 speaks the S3 API, so this is the AWS S3 client pointed at the account's
- * R2 endpoint. For each selected series:
+ * R2 endpoint. Sending chapters to the phone (one zip per chapter) lives in
+ * phoneSend.ts; this file holds what both share:
  *
- *   1. zip   every chapter folder that is NOT published (a rendered video
- *            exists — the same test as the Library's "Published" badge) into a
- *            temp file. Entries are `<Series folder>/<Chapter folder>/…`, so
- *            extracting the zip yields one folder named after the manhwa with
- *            its chapter folders inside.
- *   2. upload the zip as `<R2_PREFIX><Series folder>.zip`, replacing any earlier
- *            backup of that series.
- *   3. delete the temp zip — always, whether the upload worked or not.
- *
- * Free plan guard: before a series is zipped, and again once its real size is
- * known, the upload is refused if it would take the bucket past the free 10 GB
- * or the month's Class A requests past 1M (see r2Usage.ts). Nothing here ever
- * spends past the free plan.
- *
- * Series go one at a time, so the disk only ever holds one zip. Only chapter
- * folders are included; series-level material (about.md, Processed/, Crops/,
- * rendered video folders) is not.
- *
- * Credentials are set in Settings → Cloudflare, which writes them to the
- * server's .env (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
- * R2_BUCKET, optional R2_PREFIX / R2_CONCURRENCY). An unset R2_PREFIX means
- * DEFAULT_R2_PREFIX, the folder Sleeper-Cell reads its manhwa from.
- *
- * Only one job runs at a time. Its state lives in memory and is pushed to the
- * client as `r2:progress`; the last finished job stays readable through
- * `getJob()` so the Library page can show the result after a reload.
+ *   - config: credentials are set in Settings → Cloudflare, which writes them to
+ *     the server's .env (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
+ *     R2_BUCKET, optional R2_PREFIX / R2_CONCURRENCY). An unset R2_PREFIX means
+ *     DEFAULT_R2_PREFIX.
+ *   - free plan guard: an upload is refused if it would take the bucket past the
+ *     free 10 GB or the month's Class A requests past 1M (see r2Usage.ts).
+ *   - the phone's receipts (scripts, crops) and "Refresh from phone" requests.
  */
 
-import fs from 'fs'
-import fsp from 'fs/promises'
-import os from 'os'
 import path from 'path'
 import { randomUUID } from 'crypto'
-import type { Server } from 'socket.io'
-import archiver from 'archiver'
 import { S3Client, HeadBucketCommand, HeadObjectCommand, ListObjectsV2Command, DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3'
-import { Upload } from '@aws-sdk/lib-storage'
 import { prisma } from '../index.js'
 import { writeEnvVars } from '../utils/envFile.js'
-import { getPublishedChapters } from './storageService.js'
+import type { PhoneSeriesSync, PhoneSyncStatus } from './phoneSend.js'
 import { FREE_PLAN, attachUsageCounter, getMonthUsage, monthKey } from './r2Usage.js'
 import { relayConfigured, relayReceipt, sendPhoneRequest } from './phoneRelay.js'
 import { analyticsConfigured, getCloudflareMonthOps, invalidateAnalytics } from './r2Analytics.js'
@@ -139,7 +116,7 @@ export interface R2ConfigUpdate {
  * has to echo a secret back to be re-saved.
  */
 export async function updateR2Config(update: R2ConfigUpdate): Promise<void> {
-  if (currentJob?.state === 'running') throw new Error('Wait for the running upload to finish before changing R2 settings')
+  if (uploadBusy) throw new Error('Wait for the running upload to finish before changing R2 settings')
   const vars: Record<string, string> = {}
 
   if (typeof update.accountId === 'string') {
@@ -201,6 +178,13 @@ export async function testR2Connection(): Promise<{ bucket: string }> {
 
 // ============ Free plan: storage, usage, guard ============
 
+/** Set by phoneSend.ts while it sends chapters, so settings and deletes wait for it. */
+let uploadBusy = false
+
+export function setUploadBusy(busy: boolean): void {
+  uploadBusy = busy
+}
+
 export interface R2Object {
   key: string
   size: number
@@ -223,7 +207,7 @@ const STORAGE_CACHE_MS = 60_000
  * list, so the result is cached for a minute; the guard asks for a fresh one.
  * `anyAge` takes the cached copy however old it is.
  */
-async function measureBucket(client: S3Client, bucket: string, fresh = false, anyAge = false): Promise<BucketStorage> {
+export async function measureBucket(client: S3Client, bucket: string, fresh = false, anyAge = false): Promise<BucketStorage> {
   if (!fresh && storageCache?.bucket === bucket && (anyAge || Date.now() - storageCache.at < STORAGE_CACHE_MS)) {
     return storageCache.value
   }
@@ -247,7 +231,7 @@ async function measureBucket(client: S3Client, bucket: string, fresh = false, an
   return value
 }
 
-function invalidateStorage(): void {
+export function invalidateStorage(): void {
   storageCache = null
 }
 
@@ -293,115 +277,9 @@ export async function getR2Usage() {
 export async function deleteR2Object(key: string): Promise<void> {
   const config = getR2Config()
   if (!config) throw new Error(`R2 is not configured. Missing: ${missingR2Env().join(', ')}`)
-  if (currentJob?.state === 'running') throw new Error('Wait for the running upload to finish before deleting backups')
+  if (uploadBusy) throw new Error('Wait for the running upload to finish before deleting objects')
   await createClient(config).send(new DeleteObjectCommand({ Bucket: config.bucket, Key: key }))
   invalidateStorage()
-}
-
-// ============ Phone (Sleeper-Cell) receipt ============
-
-/**
- * The Sleeper-Cell Android app downloads these zips. After each sync it writes
- * this object next to them: `{ device, updatedAt, series: { <zip key>: { etag,
- * state: 'downloaded' | 'downloading', at? } } }`. Keep the name in step with
- * RECEIPT_NAME in its ManhwaSync.kt.
- *
- * With the phone relay set up (phoneRelay.ts), the phone posts all three
- * receipts to the relay instead and they are served from its copy; R2 is read
- * for them only without it.
- */
-const PHONE_RECEIPT_NAME = '_sleeper-cell.json'
-
-export type PhoneSeriesState = 'downloaded' | 'downloading' | 'outdated' | 'missing'
-
-export interface PhoneSeriesSync {
-  /**
-   * downloaded:  the phone has unzipped the zip now in R2
-   * downloading: the phone is downloading it
-   * outdated:    the phone has an earlier upload of this series
-   * missing:     the phone has none
-   */
-  state: PhoneSeriesState
-  /** When the phone finished unzipping the copy it has. */
-  phoneAt: string | null
-  /** When the zip now in R2 was uploaded. */
-  uploadedAt: string | null
-}
-
-export interface PhoneSyncStatus {
-  configured: boolean
-  /** When the phone last wrote its receipt; null if it never has. */
-  reportedAt: string | null
-  device: string | null
-  /** By series id; only series with a zip in R2. */
-  series: Record<string, PhoneSeriesSync>
-}
-
-interface PhoneReceipt {
-  device?: string
-  updatedAt?: string
-  series?: Record<string, { etag?: string; state?: string; at?: string }>
-}
-
-/** The receipt changes only when the phone syncs, so it is re-read only when its ETag moves. */
-let receiptCache: { bucket: string; key: string; etag: string; value: PhoneReceipt } | null = null
-
-async function readPhoneReceipt(client: S3Client, bucket: string, obj: R2Object): Promise<PhoneReceipt> {
-  if (receiptCache?.bucket === bucket && receiptCache.key === obj.key && receiptCache.etag === obj.etag) {
-    return receiptCache.value
-  }
-  const res = await client.send(new GetObjectCommand({ Bucket: bucket, Key: obj.key }))
-  const text = (await res.Body?.transformToString()) ?? '{}'
-  let value: PhoneReceipt = {}
-  try {
-    const parsed = JSON.parse(text)
-    if (parsed && typeof parsed === 'object') value = parsed
-  } catch {
-    console.warn(`R2: ${obj.key} is not valid JSON; ignoring it`)
-  }
-  receiptCache = { bucket, key: obj.key, etag: obj.etag, value }
-  return value
-}
-
-/**
- * Which series' zips the phone has downloaded. One bucket list (cached for a
- * minute unless `fresh`) plus, when the phone has written a new receipt, one read.
- * `cached` uses the last listing however old: a new receipt from the relay
- * changes what the phone has, not what is in the bucket.
- */
-export async function getPhoneSync(fresh = false, cached = false): Promise<PhoneSyncStatus> {
-  const config = getR2Config()
-  if (!config) return { configured: false, reportedAt: null, device: null, series: {} }
-
-  const client = createClient(config)
-  const storage = await measureBucket(client, config.bucket, fresh, cached)
-  const byKey = new Map(storage.objects.map(o => [o.key, o]))
-  const receiptObj = byKey.get(`${config.prefix}${PHONE_RECEIPT_NAME}`)
-  const receipt = relayReceipt<PhoneReceipt>('sync')
-    ?? (receiptObj ? await readPhoneReceipt(client, config.bucket, receiptObj) : {})
-  const phoneSeries = receipt.series && typeof receipt.series === 'object' ? receipt.series : {}
-
-  const rows = await prisma.series.findMany({ select: { id: true, rootFolder: true } })
-  const series: Record<string, PhoneSeriesSync> = {}
-  for (const row of rows) {
-    const key = `${config.prefix}${path.basename(row.rootFolder)}.zip`
-    const zip = byKey.get(key)
-    if (!zip) continue
-    const entry = phoneSeries[key]
-    const current = !!entry && (entry.etag ?? '').replace(/"/g, '') === zip.etag
-    series[row.id] = {
-      state: !entry ? 'missing' : !current ? 'outdated' : entry.state === 'downloading' ? 'downloading' : 'downloaded',
-      phoneAt: entry?.state === 'downloaded' ? entry.at ?? null : null,
-      uploadedAt: zip.lastModified
-    }
-  }
-
-  return {
-    configured: true,
-    reportedAt: receipt.updatedAt ?? null,
-    device: receipt.device ?? null,
-    series
-  }
 }
 
 // ============ Phone (Sleeper-Cell) scripts receipt ============
@@ -468,7 +346,7 @@ export function isNotFound(error: unknown): boolean {
  * tried too. One HEAD (Class B) per look; the body is fetched only when the
  * phone has written a new receipt.
  */
-async function readPolledReceipt<T extends object>(client: S3Client, config: R2Config, name: string, fresh: boolean): Promise<T> {
+export async function readPolledReceipt<T extends object>(client: S3Client, config: R2Config, name: string, fresh: boolean): Promise<T> {
   const found = receiptCaches.get(name)
   const cached = found?.bucket === config.bucket ? found : null
   if (cached && !fresh) return cached.value as T
@@ -841,7 +719,7 @@ export interface PhoneOverviewChapterZip extends PhoneOverviewPlace {
 export interface PhoneOverviewSeries {
   id: string
   title: string
-  /** Has the phone downloaded this series' zip; null when there's no zip in R2. */
+  /** What the phone has of the chapters sent to it; null when none were sent. */
   sync: PhoneSeriesSync | null
   /** Chapters with a narration script on the phone; null when it has none. */
   scripts: { done: number; total: number } | null
@@ -884,7 +762,7 @@ const OVERVIEW_UPLOADS = 30
  * GET only when changed). The sync receipt comes with the last bucket listing,
  * however old, so this never lists the bucket once it has been listed.
  */
-export async function getPhoneOverview(fresh = false): Promise<PhoneOverview> {
+export async function getPhoneOverview(sync: PhoneSyncStatus | null, fresh = false): Promise<PhoneOverview> {
   const config = getR2Config()
   const relayedCrops = relayReceipt<CropsReceipt>('crops')
   const empty: PhoneOverview = {
@@ -893,8 +771,7 @@ export async function getPhoneOverview(fresh = false): Promise<PhoneOverview> {
   }
   if (!config && !relayedCrops) return empty
 
-  const [sync, scripts, crops] = await Promise.all([
-    config ? getPhoneSync(false, true).catch(() => null) : Promise.resolve(null),
+  const [scripts, crops] = await Promise.all([
     getPhoneScripts(undefined, fresh).catch(() => null),
     relayedCrops ?? readPolledReceipt<CropsReceipt>(createClient(config!), config!, CROPS_RECEIPT_NAME, fresh)
   ])
@@ -986,7 +863,7 @@ export async function getPhoneOverview(fresh = false): Promise<PhoneOverview> {
 const REQUEST_NAME = '_sleeper-cell-request.json'
 
 /** Where the phone keeps its receipts, which is where it looks for the request. */
-async function phoneFolders(client: S3Client, config: R2Config): Promise<string[]> {
+export async function phoneFolders(client: S3Client, config: R2Config): Promise<string[]> {
   const folderOf = (key: string) => key.slice(0, key.lastIndexOf('/') + 1)
   const known = (): string[] => {
     const keys = [...receiptCaches.values()].filter(c => c.bucket === config.bucket && c.key).map(c => c.key!)
@@ -1017,13 +894,14 @@ export interface PhoneUpdateRequest {
 /**
  * Asks the phone for fresh receipts: through the relay when it is set up (no
  * R2 operations), else one PUT (Class A), two if its folder is unknown.
+ * `action: 'sync'` also has it check R2 for chapters just sent (see phoneSend.ts).
  */
-export async function requestPhoneUpdate(): Promise<PhoneUpdateRequest> {
-  if (relayConfigured()) return { ...(await sendPhoneRequest()), via: 'relay' }
+export async function requestPhoneUpdate(action?: 'sync'): Promise<PhoneUpdateRequest> {
+  if (relayConfigured()) return { ...(await sendPhoneRequest(action)), via: 'relay' }
   const config = getR2Config()
   if (!config) throw new Error('Cloudflare R2 is not set up')
   const client = createClient(config)
-  const request = { id: randomUUID(), requestedAt: new Date().toISOString() }
+  const request = { id: randomUUID(), requestedAt: new Date().toISOString(), ...(action ? { action } : {}) }
   const body = JSON.stringify(request)
   for (const folder of await phoneFolders(client, config)) {
     await client.send(new PutObjectCommand({
@@ -1036,16 +914,12 @@ export async function requestPhoneUpdate(): Promise<PhoneUpdateRequest> {
   return { ...request, via: 'r2', phones: null }
 }
 
-const PART_SIZE = 16 * 1024 * 1024
+export const PART_SIZE = 16 * 1024 * 1024
 
 function formatSize(bytes: number): string {
   return bytes >= 1000 ** 3 ? `${(bytes / 1000 ** 3).toFixed(2)} GB` : `${(bytes / 1000 ** 2).toFixed(1)} MB`
 }
 
-/**
- * Throw if uploading `bytes` to `key` would go past the free plan. An upload
- * replacing `key` frees the old object, so its size is netted out.
- */
 /**
  * Class A requests used this month: Cloudflare's count when the analytics
  * token is set, else only this server's. Cloudflare's runs a few minutes
@@ -1057,20 +931,26 @@ async function classAUsed(): Promise<number> {
   return Math.max(local, cloudflare?.classA ?? 0)
 }
 
-async function assertWithinFreePlan(client: S3Client, bucket: string, key: string, bytes: number): Promise<void> {
+/**
+ * Throw if these uploads would go past the free plan. An upload replacing a
+ * key frees the old object, so its size is netted out. One fresh bucket list.
+ */
+export async function assertWithinFreePlan(client: S3Client, bucket: string, uploads: { key: string; bytes: number }[]): Promise<BucketStorage> {
   const storage = await measureBucket(client, bucket, true)
-  const replaced = storage.objects.find(o => o.key === key)?.size ?? 0
+  const sizes = new Map(storage.objects.map(o => [o.key, o.size]))
+  const replaced = uploads.reduce((sum, u) => sum + (sizes.get(u.key) ?? 0), 0)
+  const bytes = uploads.reduce((sum, u) => sum + u.bytes, 0)
   const after = storage.bytes - replaced + bytes
   if (after > FREE_PLAN.storageBytes) {
     throw new Error(
       `Blocked to stay on the free plan: the bucket would hold ${formatSize(after)} of the free ` +
-      `${formatSize(FREE_PLAN.storageBytes)} (now ${formatSize(storage.bytes)}, this zip ~${formatSize(bytes)}` +
+      `${formatSize(FREE_PLAN.storageBytes)} (now ${formatSize(storage.bytes)}, these zips ~${formatSize(bytes)}` +
       `${replaced ? `, replacing ${formatSize(replaced)}` : ''}). ` +
-      'Delete old backups in Settings → Cloudflare, or upload fewer series.'
+      'Clear done chapters on the phone, or delete old objects in Settings → Cloudflare.'
     )
   }
-  // Create + one per 16 MB part + complete.
-  const requests = Math.ceil(bytes / PART_SIZE) + 2
+  // Per upload: create + one per 16 MB part + complete (a small one is a single PUT, so this overestimates).
+  const requests = uploads.reduce((sum, u) => sum + Math.ceil(u.bytes / PART_SIZE) + 2, 0)
   const classA = await classAUsed()
   if (classA + requests > FREE_PLAN.classA) {
     throw new Error(
@@ -1078,366 +958,5 @@ async function assertWithinFreePlan(client: S3Client, bucket: string, key: strin
       `${classA.toLocaleString()} of ${FREE_PLAN.classA.toLocaleString()} are used this month.`
     )
   }
-}
-
-// ============ Job state ============
-
-export type R2SeriesState = 'queued' | 'zipping' | 'uploading' | 'done' | 'skipped' | 'failed' | 'cancelled'
-export type R2JobState = 'running' | 'done' | 'cancelled'
-
-export interface R2SeriesProgress {
-  seriesId: string
-  title: string
-  state: R2SeriesState
-  /** Unpublished chapters with a folder on disk — what goes in the zip. */
-  chaptersIncluded: number
-  /** Published chapters left out. */
-  chaptersPublished: number
-  /** Bytes of chapter files to zip, and how many are in so far. */
-  zipBytesTotal: number
-  zipBytesDone: number
-  /** Size of the finished zip, and how much of it has reached R2. */
-  uploadBytesTotal: number
-  uploadBytesDone: number
-  /** Object key in the bucket once uploaded. */
-  key?: string
-  /** Why a series was skipped or failed. */
-  note?: string
-  error?: string
-}
-
-export interface R2UploadJob {
-  id: string
-  state: R2JobState
-  bucket: string
-  startedAt: string
-  finishedAt?: string
-  series: R2SeriesProgress[]
-}
-
-let currentJob: R2UploadJob | null = null
-let cancelRequested = false
-let activeArchive: archiver.Archiver | null = null
-let activeUpload: Upload | null = null
-
-export function getJob(): R2UploadJob | null {
-  return currentJob
-}
-
-// ============ Helpers ============
-
-/** Temp zips live here, one sub-folder per job; wiped at the start of each job. */
-const TEMP_ROOT = path.join(os.tmpdir(), 'manhwa-studio-r2')
-
-/** Already-compressed formats: deflating them costs CPU and saves ~nothing. */
-const STORE_EXTENSIONS = new Set([
-  '.webp', '.jpg', '.jpeg', '.png', '.gif', '.avif',
-  '.mp3', '.m4a', '.aac', '.ogg', '.flac',
-  '.mp4', '.mov', '.mkv', '.webm', '.zip'
-])
-
-interface LocalFile {
-  absPath: string
-  /** POSIX path relative to the chapter folder. */
-  relPath: string
-  size: number
-}
-
-/** Every file under `root`, skipping dotfiles (.DS_Store and the like). */
-async function walk(root: string, rel = ''): Promise<LocalFile[]> {
-  const entries = await fsp.readdir(path.join(root, rel), { withFileTypes: true })
-  const out: LocalFile[] = []
-  for (const entry of entries) {
-    if (entry.name.startsWith('.')) continue
-    const childRel = rel ? `${rel}/${entry.name}` : entry.name
-    if (entry.isDirectory()) {
-      out.push(...(await walk(root, childRel)))
-    } else if (entry.isFile()) {
-      const absPath = path.join(root, childRel)
-      const { size } = await fsp.stat(absPath)
-      out.push({ absPath, relPath: childRel, size })
-    }
-  }
-  return out
-}
-
-interface ChapterFiles {
-  /** Folder name inside the zip, e.g. "Chapter 001". */
-  folderName: string
-  files: LocalFile[]
-}
-
-/** The unpublished chapters of a series that have files on disk, in chapter order. */
-async function collectChapters(
-  seriesId: string,
-  downloadRoot: string
-): Promise<{ chapters: ChapterFiles[]; publishedCount: number }> {
-  const [rows, published] = await Promise.all([
-    prisma.chapter.findMany({
-      where: { seriesId },
-      select: { id: true, folderPath: true },
-      orderBy: { number: 'asc' }
-    }),
-    getPublishedChapters(seriesId)
-  ])
-
-  const chapters: ChapterFiles[] = []
-  let publishedCount = 0
-  for (const row of rows) {
-    if (published.chapters[row.id]) {
-      publishedCount++
-      continue
-    }
-    const folder = path.join(downloadRoot, row.folderPath)
-    let files: LocalFile[]
-    try {
-      files = await walk(folder)
-    } catch {
-      continue // Never downloaded, or deleted by hand.
-    }
-    if (files.length > 0) chapters.push({ folderName: path.basename(row.folderPath), files })
-  }
-  return { chapters, publishedCount }
-}
-
-/** Free bytes on the volume holding `dir`, or null if the OS will not say. */
-async function freeBytes(dir: string): Promise<number | null> {
-  try {
-    const stats = await fsp.statfs(dir)
-    return stats.bavail * stats.bsize
-  } catch {
-    return null
-  }
-}
-
-function formatGB(bytes: number): string {
-  return `${(bytes / 1024 ** 3).toFixed(1)} GB`
-}
-
-/** Write the zip; resolves once the file is fully flushed to disk. */
-function writeZip(
-  zipPath: string,
-  rootName: string,
-  chapters: ChapterFiles[],
-  onProgress: (processedBytes: number) => void
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const output = fs.createWriteStream(zipPath)
-    // Level 6 applies only to the text entries (JSON, scripts); media is stored.
-    const archive = archiver('zip', { zlib: { level: 6 } })
-    activeArchive = archive
-
-    let settled = false
-    const finish = (error?: Error) => {
-      if (settled) return
-      settled = true
-      activeArchive = null
-      if (error) reject(error)
-      else resolve()
-    }
-
-    output.on('close', () => finish(cancelRequested ? new Error('Cancelled') : undefined))
-    output.on('error', err => finish(err))
-    archive.on('error', err => finish(err))
-    archive.on('warning', err => finish(err))
-    archive.on('progress', p => onProgress(p.fs.processedBytes))
-
-    archive.pipe(output)
-    for (const chapter of chapters) {
-      for (const file of chapter.files) {
-        // `store` is a per-entry zip option archiver honours but its types omit.
-        const entry = {
-          name: `${rootName}/${chapter.folderName}/${file.relPath}`,
-          store: STORE_EXTENSIONS.has(path.extname(file.relPath).toLowerCase())
-        }
-        archive.file(file.absPath, entry)
-      }
-    }
-    void archive.finalize()
-  })
-}
-
-// ============ Upload ============
-
-/**
- * Start backing up the given series. Returns immediately with the job;
- * progress arrives over the socket. Throws if R2 is unconfigured or a job is
- * already running.
- */
-export async function startUpload(seriesIds: string[], io: Server): Promise<R2UploadJob> {
-  const config = getR2Config()
-  if (!config) throw new Error(`R2 is not configured. Missing: ${missingR2Env().join(', ')}`)
-  if (currentJob?.state === 'running') throw new Error('An upload is already running')
-  if (seriesIds.length === 0) throw new Error('No series selected')
-
-  const rows = await prisma.series.findMany({
-    where: { id: { in: seriesIds } },
-    select: { id: true, title: true, rootFolder: true }
-  })
-  if (rows.length === 0) throw new Error('None of the selected series exist')
-  // Keep the order the user picked them in.
-  rows.sort((a, b) => seriesIds.indexOf(a.id) - seriesIds.indexOf(b.id))
-
-  const job: R2UploadJob = {
-    id: randomUUID(),
-    state: 'running',
-    bucket: config.bucket,
-    startedAt: new Date().toISOString(),
-    series: rows.map(s => ({
-      seriesId: s.id,
-      title: s.title,
-      state: 'queued',
-      chaptersIncluded: 0,
-      chaptersPublished: 0,
-      zipBytesTotal: 0,
-      zipBytesDone: 0,
-      uploadBytesTotal: 0,
-      uploadBytesDone: 0
-    }))
-  }
-  currentJob = job
-  cancelRequested = false
-
-  // Progress fires per file / per multipart chunk; throttle the socket to
-  // ~4/s and send state changes straight away.
-  let lastEmit = 0
-  const emit = (force = false) => {
-    const now = Date.now()
-    if (!force && now - lastEmit < 250) return
-    lastEmit = now
-    io.emit('r2:progress', job)
-  }
-  emit(true)
-
-  const client = createClient(config)
-  const downloadRoot = process.env.DOWNLOAD_ROOT || './downloads'
-  const jobDir = path.join(TEMP_ROOT, job.id)
-
-  void (async () => {
-    // No job is running, so anything left here is from a crash or a kill.
-    await fsp.rm(TEMP_ROOT, { recursive: true, force: true })
-    await fsp.mkdir(jobDir, { recursive: true })
-
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i]
-      const progress = job.series[i]
-      if (cancelRequested) {
-        progress.state = 'cancelled'
-        continue
-      }
-
-      const rootName = path.basename(row.rootFolder)
-      const zipPath = path.join(jobDir, `${rootName}.zip`)
-      try {
-        const { chapters, publishedCount } = await collectChapters(row.id, downloadRoot)
-        progress.chaptersIncluded = chapters.length
-        progress.chaptersPublished = publishedCount
-        if (chapters.length === 0) {
-          progress.state = 'skipped'
-          progress.note = publishedCount > 0
-            ? 'Every chapter is published — nothing to back up'
-            : 'No chapter files on disk'
-          emit(true)
-          continue
-        }
-
-        progress.zipBytesTotal = chapters.reduce(
-          (sum, c) => sum + c.files.reduce((s, f) => s + f.size, 0),
-          0
-        )
-        const key = `${config.prefix}${rootName}.zip`
-        // Most content is stored, not deflated, so the zip is about the size of its
-        // input — close enough to refuse early, before spending time zipping.
-        await assertWithinFreePlan(client, config.bucket, key, progress.zipBytesTotal)
-
-        const free = await freeBytes(jobDir)
-        if (free !== null && free < progress.zipBytesTotal * 1.05 + 512 * 1024 ** 2) {
-          throw new Error(
-            `Not enough disk space to build the zip: needs ~${formatGB(progress.zipBytesTotal)}, ${formatGB(free)} free`
-          )
-        }
-
-        // 1. Zip
-        progress.state = 'zipping'
-        emit(true)
-        await writeZip(zipPath, rootName, chapters, processed => {
-          progress.zipBytesDone = Math.min(processed, progress.zipBytesTotal)
-          emit()
-        })
-        progress.zipBytesDone = progress.zipBytesTotal
-
-        // 2. Upload
-        const { size } = await fsp.stat(zipPath)
-        // Re-check with the real size before sending a single byte.
-        await assertWithinFreePlan(client, config.bucket, key, size)
-        progress.uploadBytesTotal = size
-        progress.state = 'uploading'
-        emit(true)
-
-        const upload = new Upload({
-          client,
-          params: {
-            Bucket: config.bucket,
-            Key: key,
-            Body: fs.createReadStream(zipPath),
-            ContentType: 'application/zip',
-            ContentLength: size
-          },
-          partSize: PART_SIZE,
-          queueSize: config.concurrency
-        })
-        upload.on('httpUploadProgress', p => {
-          progress.uploadBytesDone = Math.min(p.loaded ?? 0, size)
-          emit()
-        })
-        activeUpload = upload
-        try {
-          await upload.done()
-        } finally {
-          activeUpload = null
-          invalidateStorage()
-        }
-        progress.uploadBytesDone = size
-        progress.key = key
-        progress.state = 'done'
-      } catch (error) {
-        progress.state = cancelRequested ? 'cancelled' : 'failed'
-        if (!cancelRequested) {
-          progress.error = error instanceof Error ? error.message : String(error)
-          console.error(`R2 backup failed for series ${row.title}:`, error)
-        }
-      } finally {
-        // 3. Never keep the zip, whatever happened above.
-        await fsp.rm(zipPath, { force: true }).catch(() => {})
-      }
-      emit(true)
-    }
-
-    await fsp.rm(jobDir, { recursive: true, force: true }).catch(() => {})
-    job.state = cancelRequested ? 'cancelled' : 'done'
-    job.finishedAt = new Date().toISOString()
-    emit(true)
-  })().catch(error => {
-    // Only the temp-folder setup can land here; the per-series loop catches its own.
-    console.error('R2 backup job failed:', error)
-    for (const s of job.series) {
-      if (s.state === 'queued') {
-        s.state = 'failed'
-        s.error = error instanceof Error ? error.message : String(error)
-      }
-    }
-    job.state = 'done'
-    job.finishedAt = new Date().toISOString()
-    emit(true)
-  })
-
-  return job
-}
-
-/** Stop the running job: the current zip or upload is aborted, the rest skipped. */
-export async function cancelUpload(): Promise<void> {
-  if (currentJob?.state !== 'running') return
-  cancelRequested = true
-  activeArchive?.abort()
-  await activeUpload?.abort().catch(() => {})
+  return storage
 }

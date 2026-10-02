@@ -19,6 +19,12 @@
 import fs from 'fs/promises'
 import path from 'path'
 import { prisma } from '../index.js'
+import {
+  NARRATION_LANGUAGES,
+  NarrationLanguage,
+  audioFolderName,
+  video2FolderName
+} from './narrationLanguage.js'
 
 /** Resolve a stored (possibly relative) download path against DOWNLOAD_ROOT. */
 function getFullFolderPath(relativePath: string): string {
@@ -107,11 +113,19 @@ const DIR_CATEGORY: Record<string, CategoryKey> = {
   crop_points: 'cropJson',
   crop_points3: 'cropJson',
   crop_metadata3: 'cropJson',
-  audio: 'audio'
+  audio: 'audio',
+  audio_hi: 'audio'
 }
 
-/** Series-level folders holding rendered video (Editor 1.0 and 2.0). */
-const VIDEO_DIRS = ['_video', '_video2']
+/** Series-level folders holding rendered video (Editor 1.0, and 2.0 in English and Hindi). */
+type VideoDir = '_video' | '_video2' | '_video2_hi'
+const VIDEO_DIRS: VideoDir[] = ['_video', '_video2', '_video2_hi']
+
+/** The video folders that count as one narration language's renders. */
+function videoDirsFor(language?: NarrationLanguage): VideoDir[] {
+  if (!language) return VIDEO_DIRS
+  return language === 'en' ? ['_video', '_video2'] : [video2FolderName('hi') as VideoDir]
+}
 
 /** Classify a loose file sitting directly in a chapter folder. */
 function categorizeChapterFile(name: string): CategoryKey {
@@ -195,10 +209,13 @@ async function measureDir(dir: string): Promise<{ bytes: number; files: number }
  * chapter and are counted as series-level video instead of marking anything
  * exported; guessing would be the one error that costs source material.
  */
-async function scanExportedChapterNumbers(rootFolder: string): Promise<Set<number>> {
+async function scanExportedChapterNumbers(
+  rootFolder: string,
+  dirs: VideoDir[] = VIDEO_DIRS
+): Promise<Set<number>> {
   const found = new Set<number>()
 
-  for (const dirName of VIDEO_DIRS) {
+  for (const dirName of dirs) {
     const dir = path.join(getFullFolderPath(rootFolder), dirName)
     let entries: string[]
     try {
@@ -512,11 +529,22 @@ export async function deleteChapterData(
     freedBytes: 0
   }
 
+  // Audio belongs to one narration language, so it is only reclaimed for a
+  // language whose video exists — an English render must not cost the Hindi
+  // voiceover that hasn't been rendered yet. Pages and crops are shared, so any
+  // render clears them, as before.
+  let audioLanguages: NarrationLanguage[] = [...NARRATION_LANGUAGES]
   if (!options.allowUnexported) {
-    const exportedNumbers = await scanExportedChapterNumbers(chapter.series.rootFolder)
-    if (!exportedNumbers.has(Math.round(chapter.number))) {
+    const number = Math.round(chapter.number)
+    const exportedIn: NarrationLanguage[] = []
+    for (const language of NARRATION_LANGUAGES) {
+      const numbers = await scanExportedChapterNumbers(chapter.series.rootFolder, videoDirsFor(language))
+      if (numbers.has(number)) exportedIn.push(language)
+    }
+    if (exportedIn.length === 0) {
       return { ...base, skipped: 'Chapter has not been exported to video' }
     }
+    audioLanguages = exportedIn
   }
 
   // Measured before the delete so the number reported back is what was really
@@ -539,6 +567,13 @@ export async function deleteChapterData(
         if (!entry.isFile()) continue
         if (categorizeChapterFile(entry.name) !== 'pages') continue
         await removeWithin(path.join(dir, entry.name))
+      }
+      continue
+    }
+
+    if (key === 'audio') {
+      for (const language of audioLanguages) {
+        await removeWithin(path.join(dir, audioFolderName(language)))
       }
       continue
     }
@@ -570,9 +605,10 @@ export async function deleteChapterData(
   if (selected.includes('audio')) {
     // Audio rows point at files that are now gone; the sections they belong to
     // survive, so the script can be re-voiced without being retyped.
-    await prisma.audioFile.deleteMany({ where: { chapterId: chapter.id } })
+    const language = { in: audioLanguages }
+    await prisma.audioFile.deleteMany({ where: { chapterId: chapter.id, language } })
     await prisma.audioSection.updateMany({
-      where: { chapterId: chapter.id },
+      where: { chapterId: chapter.id, language },
       data: { status: 'none' }
     })
   }
@@ -611,7 +647,7 @@ export async function deleteSeriesExportedData(
 /** One rendered MP4 under a series' _video / _video2 folder. */
 export interface VideoFileInfo {
   seriesId: string
-  dir: '_video' | '_video2'
+  dir: VideoDir
   fileName: string
   bytes: number
   modifiedAt: string
@@ -644,7 +680,7 @@ export async function listSeriesVideos(seriesId: string): Promise<VideoFileInfo[
         const m = /_ch(\d{3,})_/.exec(name)
         out.push({
           seriesId: series.id,
-          dir: dirName as '_video' | '_video2',
+          dir: dirName,
           fileName: name,
           bytes: stat.size,
           modifiedAt: stat.mtime.toISOString(),
@@ -677,7 +713,7 @@ export async function deleteSeriesVideo(
   })
   if (!series) throw new Error('Series not found')
 
-  if (!VIDEO_DIRS.includes(dirName)) {
+  if (!(VIDEO_DIRS as string[]).includes(dirName)) {
     throw new Error('Unknown video folder')
   }
   // The filename comes from the client, so a path of any kind is rejected
@@ -723,7 +759,16 @@ export interface PublishedMap {
  * Deliberately cheap: the expensive part of `scanStorage` is measuring every
  * chapter folder, and none of that is needed to answer "is this published?".
  */
-export async function getPublishedChapters(seriesId?: string): Promise<PublishedMap> {
+/**
+ * `language` narrows "published" to one narration language's renders — the
+ * Hindi tabs ask whether the Hindi video exists, since an English one doesn't
+ * make the Hindi voiceover redundant. Without it, any render counts (what the
+ * image modules want: crops are shared by both languages).
+ */
+export async function getPublishedChapters(
+  seriesId?: string,
+  language?: NarrationLanguage
+): Promise<PublishedMap> {
   const allSeries = await prisma.series.findMany({
     where: seriesId ? { id: seriesId } : undefined,
     select: { id: true, rootFolder: true, chapters: { select: { id: true, number: true } } }
@@ -733,7 +778,7 @@ export async function getPublishedChapters(seriesId?: string): Promise<Published
   const series: Record<string, { published: number; total: number }> = {}
 
   for (const s of allSeries) {
-    const exportedNumbers = await scanExportedChapterNumbers(s.rootFolder)
+    const exportedNumbers = await scanExportedChapterNumbers(s.rootFolder, videoDirsFor(language))
     let published = 0
     for (const ch of s.chapters) {
       const isPublished = exportedNumbers.has(Math.round(ch.number))

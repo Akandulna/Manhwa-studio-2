@@ -24,6 +24,7 @@
 import fs from 'fs/promises'
 import path from 'path'
 import { prisma } from '../index.js'
+import type { NarrationLanguage } from './narrationLanguage.js'
 import {
   extractCrops,
   getOutputDir,
@@ -136,6 +137,8 @@ export interface PlanSection {
 
 export interface TimelinePlan {
   chapterId: string
+  /** Narration language whose voice sections the timeline plays. */
+  language: NarrationLanguage
   chapterNumber: number
   chapterTitle: string | null
   seriesTitle: string
@@ -399,7 +402,8 @@ async function buildCropFileIndex(folderPath: string): Promise<CropIndex> {
  */
 export async function processTimelineJson(
   chapterId: string,
-  rawJson: string
+  rawJson: string,
+  language: NarrationLanguage = 'en'
 ): Promise<TimelinePlan> {
   let parsed: unknown
   try {
@@ -417,7 +421,7 @@ export async function processTimelineJson(
     where: { id: chapterId },
     include: {
       series: { select: { title: true } },
-      audioSections: { orderBy: { index: 'asc' }, include: { audioFile: true } }
+      audioSections: { where: { language }, orderBy: { index: 'asc' }, include: { audioFile: true } }
     }
   })
   if (!chapter) throw new Error('Chapter not found')
@@ -571,6 +575,7 @@ export async function processTimelineJson(
 
   return {
     chapterId: chapter.id,
+    language,
     chapterNumber: chapter.number,
     chapterTitle: chapter.title,
     seriesTitle: chapter.series.title,

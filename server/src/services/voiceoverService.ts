@@ -23,6 +23,7 @@ import {
   checkFfmpegInstalled,
   validateAudioFile
 } from './audioProcessor.js'
+import { NarrationLanguage, audioFolderName, parseLanguage } from './narrationLanguage.js'
 
 // Default configuration
 const DEFAULT_TARGET_LENGTH = 500  // characters per section
@@ -36,17 +37,22 @@ function getFullFolderPath(relativePath: string): string {
   return path.join(downloadRoot, relativePath)
 }
 
+/** A chapter's voiceover audio folder for one narration language. */
+function getAudioFolder(folderPath: string, language: string): string {
+  return path.join(getFullFolderPath(folderPath), audioFolderName(parseLanguage(language)))
+}
+
 /**
  * Backup an audio file before overwriting
- * Saves to: chapter_folder/audio/backup/
+ * Saves to: backup/ next to the file (chapter_folder/audio/backup/ for English)
  */
-async function backupAudioFile(filePath: string, chapterFolder: string): Promise<void> {
+async function backupAudioFile(filePath: string): Promise<void> {
   try {
     // Check if file exists
     await fs.access(filePath)
     
     // Create backup folder
-    const backupFolder = path.join(chapterFolder, 'audio', 'backup')
+    const backupFolder = path.join(path.dirname(filePath), 'backup')
     await fs.mkdir(backupFolder, { recursive: true })
     
     // Generate backup filename with timestamp
@@ -188,8 +194,8 @@ export function splitScriptIntoSections(
  * Split text by sentences, grouping them to stay under target length
  */
 function splitBySentences(text: string, targetLength: number): string[] {
-  // Match sentences ending with . ! ? followed by space or end
-  const sentenceRegex = /[^.!?]*[.!?]+(?:\s+|$)/g
+  // Match sentences ending with . ! ? (or the Hindi danda । ॥) followed by space or end
+  const sentenceRegex = /[^.!?।॥]*[.!?।॥]+(?:\s+|$)/g
   const sentences: string[] = []
   let match: RegExpExecArray | null
   
@@ -234,11 +240,12 @@ function splitBySentences(text: string, targetLength: number): string[] {
  */
 export async function initializeSections(
   chapterId: string,
-  sections: { index: number; text: string }[]
+  sections: { index: number; text: string }[],
+  language: NarrationLanguage = 'en'
 ): Promise<AudioSection[]> {
   // Drop per-section audio files that are about to lose their section
   const staleAudio = await prisma.audioFile.findMany({
-    where: { chapterId, sectionId: { not: null } }
+    where: { chapterId, language, sectionId: { not: null } }
   })
 
   for (const audio of staleAudio) {
@@ -259,9 +266,9 @@ export async function initializeSections(
     })
   }
 
-  // Delete existing sections
+  // Delete existing sections (this language only — the other keeps its own)
   await prisma.audioSection.deleteMany({
-    where: { chapterId }
+    where: { chapterId, language }
   })
   
   // Create new sections
@@ -270,6 +277,7 @@ export async function initializeSections(
       prisma.audioSection.create({
         data: {
           chapterId,
+          language,
           index: section.index,
           text: section.text,
           status: 'pending'
@@ -352,8 +360,7 @@ export async function generateSectionAudio(
     })
     
     // Create audio folder
-    const chapterFolder = getFullFolderPath(folderPath)
-    const audioFolder = path.join(chapterFolder, 'audio')
+    const audioFolder = getAudioFolder(folderPath, section.language)
     await fs.mkdir(audioFolder, { recursive: true })
     
     // Save as WAV
@@ -380,7 +387,7 @@ export async function generateSectionAudio(
     // Backup and delete old audio file if exists
     if (section.audioFile) {
       // Create backup before deleting
-      await backupAudioFile(section.audioFile.filePath, chapterFolder)
+      await backupAudioFile(section.audioFile.filePath)
       
       await prisma.audioFile.delete({
         where: { id: section.audioFile.id }
@@ -392,6 +399,7 @@ export async function generateSectionAudio(
       data: {
         chapterId: section.chapterId,
         sectionId: section.id,
+        language: section.language,
         kind: 'generated',
         provider: provider.name,
         model: provider.model,
@@ -439,12 +447,14 @@ export async function generateAllSections(
   folderPath: string,
   settings: VoiceoverSettings,
   concurrency: number = DEFAULT_GENERATION_CONCURRENCY,
-  io?: Server
+  io?: Server,
+  language: NarrationLanguage = 'en'
 ): Promise<GenerationResult[]> {
   // Get pending sections
   const sections = await prisma.audioSection.findMany({
     where: { 
       chapterId,
+      language,
       status: { in: ['pending', 'error'] }
     },
     orderBy: { index: 'asc' }
@@ -474,6 +484,7 @@ export async function generateAllSections(
         if (io) {
           io.emit('voiceover:batch-progress', {
             chapterId,
+            language,
             completed: completed + 1,
             total: sections.length
           })
@@ -535,8 +546,7 @@ export async function uploadSectionAudio(
   }
   
   // Create audio folder
-  const chapterFolder = getFullFolderPath(folderPath)
-  const audioFolder = path.join(chapterFolder, 'audio')
+  const audioFolder = getAudioFolder(folderPath, section.language)
   await fs.mkdir(audioFolder, { recursive: true })
   
   // Copy file
@@ -561,6 +571,7 @@ export async function uploadSectionAudio(
     data: {
       chapterId: section.chapterId,
       sectionId: section.id,
+      language: section.language,
       kind: 'uploaded',
       filePath: destPath,
       originalName: originalName || null,
@@ -587,7 +598,8 @@ export async function uploadSectionAudio(
 export async function joinChapterAudio(
   chapterId: string,
   folderPath: string,
-  options: { normalize?: boolean; outputFormat?: string } = {}
+  options: { normalize?: boolean; outputFormat?: string } = {},
+  language: NarrationLanguage = 'en'
 ): Promise<any> {
   // Check ffmpeg
   const ffmpegCheck = checkFfmpegInstalled()
@@ -597,7 +609,7 @@ export async function joinChapterAudio(
   
   // Get sections with audio
   const sections = await prisma.audioSection.findMany({
-    where: { chapterId },
+    where: { chapterId, language },
     orderBy: { index: 'asc' },
     include: { audioFile: true }
   })
@@ -616,8 +628,7 @@ export async function joinChapterAudio(
   const audioPaths = sections.map(s => s.audioFile!.filePath)
   
   // Create output path
-  const chapterFolder = getFullFolderPath(folderPath)
-  const audioFolder = path.join(chapterFolder, 'audio')
+  const audioFolder = getAudioFolder(folderPath, language)
   const outputFormat = (options.outputFormat || DEFAULT_OUTPUT_FORMAT) as 'wav' | 'mp3'
   
   // Get chapter number for filename
@@ -637,13 +648,14 @@ export async function joinChapterAudio(
   
   // Delete old joined file
   await prisma.audioFile.deleteMany({
-    where: { chapterId, kind: 'joined' }
+    where: { chapterId, language, kind: 'joined' }
   })
   
   // Create audio file record
   const audioFile = await prisma.audioFile.create({
     data: {
       chapterId,
+      language,
       sectionId: null,
       kind: 'joined',
       filePath: outputPath,

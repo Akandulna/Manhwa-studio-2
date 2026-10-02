@@ -32,6 +32,7 @@ import {
 import { ensureFfmpegAvailable, normalizePartDurations } from './videoMath.js'
 import { processTimelineJson, type PlanSection, type TimelinePlan } from './editor2Timeline.js'
 import { prisma } from '../index.js'
+import { NarrationLanguage, video2FolderName } from './narrationLanguage.js'
 
 const DEFAULT_FPS = 30
 const DEFAULT_CRF = 18
@@ -68,9 +69,13 @@ function slugify(s: string): string {
 // a cleared browser, and a job swept out of the in-memory map, and a file the
 // user deletes by hand correctly reads as not exported again.
 
-/** Where one series' Editor 2.0 renders live. */
-function exportDirFor(rootFolder: string): string {
-  return path.join(getFullFolderPath(rootFolder), '_video2')
+/**
+ * Where one series' Editor 2.0 renders live: `_video2` for English,
+ * `_video2_hi` for Hindi. Separate folders keep the chapter-number scan below
+ * from mistaking one language's render for the other's.
+ */
+function exportDirFor(rootFolder: string, language: NarrationLanguage = 'en'): string {
+  return path.join(getFullFolderPath(rootFolder), video2FolderName(language))
 }
 
 /**
@@ -108,9 +113,10 @@ export interface Export2Existing {
  * the user would consider current.
  */
 export async function listExistingExports(
-  rootFolder: string
+  rootFolder: string,
+  language: NarrationLanguage = 'en'
 ): Promise<Map<number, Export2Existing>> {
-  const dir = exportDirFor(rootFolder)
+  const dir = exportDirFor(rootFolder, language)
   const found = new Map<number, Export2Existing>()
 
   let entries: string[]
@@ -157,7 +163,10 @@ export async function listExistingExports(
  * The scan works in chapter numbers because that is what the filename carries;
  * this maps them back to ids, which is what every caller upstream speaks.
  */
-export async function getExportedChapterIds(seriesId: string): Promise<
+export async function getExportedChapterIds(
+  seriesId: string,
+  language: NarrationLanguage = 'en'
+): Promise<
   { chapterId: string; chapterNumber: number; fileName: string; size: number; modifiedAt: number }[]
 > {
   const series = await prisma.series.findUnique({
@@ -166,7 +175,7 @@ export async function getExportedChapterIds(seriesId: string): Promise<
   })
   if (!series) return []
 
-  const existing = await listExistingExports(series.rootFolder)
+  const existing = await listExistingExports(series.rootFolder, language)
   if (existing.size === 0) return []
 
   const chapters = await prisma.chapter.findMany({
@@ -217,6 +226,7 @@ export type Export2JobStatus = 'running' | 'done' | 'failed' | 'cancelled'
 export interface Export2Job {
   id: string
   seriesId: string
+  language: NarrationLanguage
   status: Export2JobStatus
   /** 0-100 across every chapter in the job, weighted by runtime. */
   percent: number
@@ -236,6 +246,8 @@ export interface Export2Options {
   resolution: string
   preset: string
   fps?: number
+  /** Narration language being rendered; picks the voice sections and the output folder. */
+  language?: NarrationLanguage
   /**
    * Re-render chapters that already have an MP4 in `_video2`. Off by default:
    * the common press of Export All is "finish the rest of the series", and
@@ -521,6 +533,7 @@ export async function startBatchExport(
 
   const fps = [24, 30, 60].includes(options.fps ?? 0) ? options.fps! : DEFAULT_FPS
   const x264Preset = X264_PRESET[options.preset] || 'medium'
+  const language = options.language ?? 'en'
 
   const series = await prisma.series.findUnique({
     where: { id: seriesId },
@@ -536,12 +549,13 @@ export async function startBatchExport(
 
   // What is already on disk. Resolved once, up front, so the decision to skip
   // is made before any FFmpeg starts rather than per chapter mid-run.
-  const already = options.force ? new Map() : await listExistingExports(series.rootFolder)
+  const already = options.force ? new Map() : await listExistingExports(series.rootFolder, language)
 
   const jobId = randomUUID()
   const job: Export2Job = {
     id: jobId,
     seriesId,
+    language,
     status: 'running',
     percent: 0,
     chapters: inputs.map(input => {
@@ -572,7 +586,7 @@ export async function startBatchExport(
     input => job.chapters.find(c => c.chapterId === input.chapterId)?.status === 'pending'
   )
 
-  const outputDir = path.join(getFullFolderPath(series.rootFolder), '_video2')
+  const outputDir = exportDirFor(series.rootFolder, language)
   const opts: RenderOpts = { res, fps, x264Preset, crf: DEFAULT_CRF }
 
   // Chapters are equal slices of the bar. Weighting by runtime was considered,
@@ -583,6 +597,7 @@ export async function startBatchExport(
     job.percent = Math.round(done / job.chapters.length)
     io?.emit('editor2:export-progress', {
       jobId,
+      language,
       percent: job.percent,
       status: job.status,
       chapters: job.chapters
@@ -603,12 +618,15 @@ export async function startBatchExport(
           // Re-process here rather than trusting a plan from the client: the
           // JSON is the authored artifact, and processing it server-side is
           // what guarantees the export matches the preview.
-          const plan = await processTimelineJson(input.chapterId, input.json)
+          const plan = await processTimelineJson(input.chapterId, input.json, language)
           state.chapterNumber = plan.chapterNumber
           state.chapterTitle = plan.chapterTitle
 
           const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-          const name = `${slugify(series.title)}_ch${String(plan.chapterNumber).padStart(3, '0')}_${options.resolution}_${stamp}.mp4`
+          // The `_ch007_` segment is what listExistingExports reads back; the
+          // language tag after it only makes a Hindi file recognisable by name.
+          const langTag = language === 'en' ? '' : `_${language}`
+          const name = `${slugify(series.title)}_ch${String(plan.chapterNumber).padStart(3, '0')}${langTag}_${options.resolution}_${stamp}.mp4`
           const outputPath = path.join(outputDir, name)
 
           await renderChapter(rt, plan, outputPath, opts, percent => {

@@ -1,10 +1,10 @@
 /**
- * PhoneSyncBadge — has the Sleeper-Cell phone app downloaded this series' R2 zip?
+ * PhoneSyncBadge — does the Sleeper-Cell phone app have the chapters sent to it?
  * PhoneScriptBadge (below) — has the phone written this chapter's narration script?
  * PhoneCropsBadge / PhonePageBadge (below) — how far the phone's Image Clipper has got.
  *
- * The phone writes a receipt to the bucket after each sync (see r2Service
- * getPhoneSync). Shown only for series with a zip in R2. Colours follow the
+ * The phone reports each chapter it unpacks or clears (see phoneSend.ts
+ * getPhoneSync). Shown only for series with chapters sent. Colours follow the
  * app's status scheme: green = done, blue = in progress, amber = needs action.
  */
 
@@ -12,11 +12,11 @@ import { Bot, Clock, Hand, Loader2, Pause, Smartphone } from 'lucide-react'
 import type { PhoneChapterScript, PhonePageFinish, PhonePageState, PhoneSeriesSync } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
-const STYLES: Record<PhoneSeriesSync['state'], { label: string; className: string }> = {
-  downloaded: { label: 'On phone', className: 'bg-emerald-600 text-white' },
-  downloading: { label: 'Downloading', className: 'bg-sky-600 text-white' },
-  outdated: { label: 'Phone: old copy', className: 'bg-amber-500 text-white' },
-  missing: { label: 'Not on phone', className: 'bg-background/90 text-muted-foreground border-border' }
+const STYLES: Record<PhoneSeriesSync['state'], { label: (s: PhoneSeriesSync) => string; className: string }> = {
+  downloaded: { label: s => (s.sent > 0 ? `On phone ${s.onPhone}` : `Cleared ${s.cleared}`), className: 'bg-emerald-600 text-white' },
+  downloading: { label: s => `Downloading ${s.downloading}`, className: 'bg-sky-600 text-white' },
+  outdated: { label: s => `Phone: ${s.onPhone}/${s.sent}`, className: 'bg-amber-500 text-white' },
+  missing: { label: () => 'Not on phone', className: 'bg-background/90 text-muted-foreground border-border' }
 }
 
 function formatWhen(iso: string | null): string | null {
@@ -29,19 +29,20 @@ function formatWhen(iso: string | null): string | null {
 
 function describe(sync: PhoneSeriesSync, device: string | null): string {
   const phone = device ? `The phone (${device})` : 'The phone'
-  const uploaded = formatWhen(sync.uploadedAt)
-  const upload = uploaded ? `the upload from ${uploaded}` : 'the latest upload'
+  const sent = formatWhen(sync.uploadedAt)
+  const cleared = sync.cleared > 0 ? ` ${sync.cleared} cleared there once done.` : ''
+  const chapters = `${sync.sent} chapter${sync.sent === 1 ? '' : 's'} sent${sent ? ` (last ${sent})` : ''}`
   switch (sync.state) {
     case 'downloaded': {
       const at = formatWhen(sync.phoneAt)
-      return `${phone} has ${upload}${at ? ` (unzipped ${at})` : ''}`
+      return `${phone} has all ${chapters}${at ? `, last unpacked ${at}` : ''}.${cleared}`
     }
     case 'downloading':
-      return `${phone} is downloading ${upload}`
+      return `${phone} is downloading ${sync.downloading} of ${chapters}; it has ${sync.onPhone}.${cleared}`
     case 'outdated':
-      return `${phone} has an earlier upload, not ${upload}. Tap "Check for new uploads" on the phone.`
+      return `${phone} has ${sync.onPhone} of ${chapters}. Tap "Check for new uploads" on the phone.${cleared}`
     case 'missing':
-      return `${phone} hasn't downloaded this series yet. Tap "Check for new uploads" on the phone.`
+      return `${phone} has none of ${chapters} yet. Tap "Check for new uploads" on the phone.${cleared}`
   }
 }
 
@@ -58,7 +59,7 @@ export function PhoneSyncBadge({ sync, device }: { sync: PhoneSeriesSync; device
       {sync.state === 'downloading'
         ? <Loader2 className="h-3 w-3 animate-spin" />
         : <Smartphone className="h-3 w-3" />}
-      {style.label}
+      {style.label(sync)}
     </span>
   )
 }

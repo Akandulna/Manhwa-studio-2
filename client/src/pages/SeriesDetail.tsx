@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { usePublishedChapters } from '@/hooks/usePublishedChapters'
 import { PublishedBadge, publishedRowClass } from '@/components/PublishedBadge'
 import { useParams, useNavigate } from 'react-router-dom'
-import { seriesApi, downloadsApi, chaptersApi, Series, Chapter } from '@/lib/api'
+import { seriesApi, downloadsApi, chaptersApi, Series, Chapter, LARGE_CHAPTER_PAGES } from '@/lib/api'
 import { useSocket } from '@/lib/socket'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -30,7 +30,9 @@ import {
   Trash2,
   Plus,
   Link2,
-  Pencil
+  Pencil,
+  Layers,
+  Images
 } from 'lucide-react'
 
 /**
@@ -709,6 +711,36 @@ export default function SeriesDetail() {
                         <span className="text-sm text-muted-foreground">
                           {chapter.downloadedCount}/{chapter.pageCount} pages
                         </span>
+                      )}
+                      {currentStatus === 'done' && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7"
+                          title="Look through the pages and delete the ones that don't belong (credits, ads)"
+                          onClick={e => {
+                            e.stopPropagation()
+                            navigate(`/chapter/${chapter.id}/preview`)
+                          }}
+                        >
+                          <Images className="h-3.5 w-3.5 mr-1" />
+                          Preview
+                        </Button>
+                      )}
+                      {currentStatus === 'done' && (chapter.pageCount ?? 0) > LARGE_CHAPTER_PAGES && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 border-amber-500 text-amber-600 dark:text-amber-400"
+                          title="Too many pages to process — stitch them into fewer, taller pages"
+                          onClick={e => {
+                            e.stopPropagation()
+                            navigate(`/stitch/chapter/${chapter.id}`)
+                          }}
+                        >
+                          <Layers className="h-3.5 w-3.5 mr-1" />
+                          Stitch
+                        </Button>
                       )}
                       {isPublished(chapter.id) && <PublishedBadge />}
                       {getStatusBadge(currentStatus)}

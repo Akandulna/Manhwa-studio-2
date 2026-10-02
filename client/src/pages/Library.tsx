@@ -2,9 +2,10 @@ import { useCallback, useEffect, useState } from 'react'
 import { usePublishedChapters } from '@/hooks/usePublishedChapters'
 import { publishedRowClass } from '@/components/PublishedBadge'
 import { Link, useNavigate } from 'react-router-dom'
-import { seriesApi, r2Api, Series, R2UploadJob, R2Usage, PhoneSyncStatus } from '@/lib/api'
+import { seriesApi, r2Api, stitchApi, Series, PhoneSendJob, PhoneSyncStatus, LARGE_CHAPTER_PAGES } from '@/lib/api'
 import { useSocket } from '@/lib/socket'
-import { R2UploadStatusBar, R2SelectionBar } from '@/components/R2UploadStatusBar'
+import { PhoneSendStatusBar } from '@/components/PhoneSendStatusBar'
+import { PhoneSendDialog } from '@/components/PhoneSendDialog'
 import { PhoneSyncBadge } from '@/components/PhoneSyncBadge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -20,7 +21,7 @@ import {
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Plus, BookOpen, Globe, CheckCircle, XCircle, Clock, Loader2, FolderInput, RefreshCw, UploadCloud } from 'lucide-react'
+import { Plus, BookOpen, Globe, Loader2, FolderInput, RefreshCw, Smartphone, Layers } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 
 const API_BASE = 'http://localhost:3002/api'
@@ -45,43 +46,46 @@ export default function Library() {
   const [selectedForImport, setSelectedForImport] = useState<Set<string>>(new Set())
   const { toast } = useToast()
 
-  // Cloudflare R2 backup: pick series with checkboxes, then upload them.
+  // Chapters too long for the pipeline (normal ones are 14–20 pages), for the Stitch button's count.
+  const [largeChapters, setLargeChapters] = useState(0)
+
+  // Sending chapters to the Sleeper-Cell phone app through Cloudflare R2.
   const { socket } = useSocket()
   const navigate = useNavigate()
-  const [r2SelectMode, setR2SelectMode] = useState(false)
-  const [r2Selected, setR2Selected] = useState<Set<string>>(new Set())
-  const [r2Starting, setR2Starting] = useState(false)
-  const [r2Job, setR2Job] = useState<R2UploadJob | null>(null)
-  const [r2DismissedJobId, setR2DismissedJobId] = useState<string | null>(null)
-  const [r2Usage, setR2Usage] = useState<R2Usage | null>(null)
+  const [sendOpen, setSendOpen] = useState(false)
+  const [sendJob, setSendJob] = useState<PhoneSendJob | null>(null)
+  const [dismissedJobId, setDismissedJobId] = useState<string | null>(null)
 
-  // Which series' zips the Sleeper-Cell phone app has downloaded.
+  // What the phone has of the chapters sent to it.
   const [phoneSync, setPhoneSync] = useState<PhoneSyncStatus | null>(null)
-  const loadPhoneSync = useCallback((fresh: boolean, cached = false) => {
-    r2Api.getPhoneSync(fresh, cached).then(setPhoneSync).catch(() => {})
+  const loadPhoneSync = useCallback(() => {
+    r2Api.getPhoneSync().then(setPhoneSync).catch(() => {})
   }, [])
 
   useEffect(() => {
     loadSeries()
-    // Pick up an upload that is running, or finished while this page was closed.
-    r2Api.getStatus().then(status => setR2Job(status.job)).catch(() => {})
-    // Once per visit, from the server's one-minute bucket cache. No re-list on
-    // window focus: each list is a Class A operation, and R2 must stay in the free tier.
-    loadPhoneSync(false)
+    // Pick up a send that is running, or finished while this page was closed (auto-send runs on its own).
+    r2Api.getStatus().then(status => setSendJob(status.job)).catch(() => {})
+    // From the server's copy of the phone's receipt. Nothing on window focus:
+    // R2 operations must stay in the free tier.
+    loadPhoneSync()
+    stitchApi
+      .getChapters()
+      .then(rows => setLargeChapters(rows.filter(r => r.pageCount > LARGE_CHAPTER_PAGES && !r.stitched).length))
+      .catch(() => {})
   }, [loadPhoneSync])
 
-  // A finished upload replaces zips, so their phone state changes.
-  const r2JobFinished = r2Job !== null && r2Job.state !== 'running'
+  // A finished send adds chapters the phone doesn't have yet.
+  const sendFinished = sendJob !== null && sendJob.state !== 'running'
   useEffect(() => {
-    if (r2JobFinished) loadPhoneSync(false)
-  }, [r2JobFinished, r2Job?.id, loadPhoneSync])
+    if (sendFinished) loadPhoneSync()
+  }, [sendFinished, sendJob?.id, loadPhoneSync])
 
-  // Through the phone relay the phone reports each sync as it happens. Its
-  // receipt says nothing new about the bucket, so the last listing is reused.
+  // Through the phone relay the phone reports each chapter it unpacks or clears.
   useEffect(() => {
     if (!socket) return
     const onReceipt = (event: { kind: string }) => {
-      if (event.kind === 'sync') loadPhoneSync(false, true)
+      if (event.kind === 'sync') loadPhoneSync()
     }
     socket.on('phone:receipt', onReceipt)
     return () => {
@@ -91,30 +95,27 @@ export default function Library() {
 
   useEffect(() => {
     if (!socket) return
-    const handleProgress = (job: R2UploadJob) => setR2Job(job)
-    socket.on('r2:progress', handleProgress)
+    const handleProgress = (job: PhoneSendJob) => setSendJob(job)
+    socket.on('phone-send:progress', handleProgress)
     return () => {
-      socket.off('r2:progress', handleProgress)
+      socket.off('phone-send:progress', handleProgress)
     }
   }, [socket])
 
-  const handleStartR2Select = async () => {
+  const handleOpenSend = async () => {
     try {
       const status = await r2Api.getStatus()
       if (!status.configured) {
         toast({
           title: 'Connect Cloudflare R2 first',
-          description: 'Add your R2 credentials here, then come back to the Library to upload.'
+          description: 'Add your R2 credentials here, then come back to the Library to send chapters.'
         })
         navigate('/settings?tab=cloudflare')
         return
       }
-      setR2Job(status.job)
-      setR2Selected(new Set())
-      setR2SelectMode(true)
-      // Free-plan headroom for the selection bar; the server enforces the limit either way.
-      r2Api.getUsage().then(setR2Usage).catch(() => setR2Usage(null))
-    } catch (error) {
+      setSendJob(status.job)
+      setSendOpen(true)
+    } catch {
       toast({
         title: 'Error',
         description: 'Could not reach the server to check R2 settings',
@@ -123,50 +124,30 @@ export default function Library() {
     }
   }
 
-  const toggleR2Series = (id: string) => {
-    setR2Selected(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
-  const toggleR2All = () => {
-    setR2Selected(prev =>
-      prev.size === series.length ? new Set() : new Set(series.map(s => s.id))
-    )
-  }
-
-  const handleR2Upload = async () => {
-    setR2Starting(true)
+  const handleSend = async (picked: { seriesId: string; chapterIds: string[] }[]) => {
     try {
-      const job = await r2Api.upload(series.filter(s => r2Selected.has(s.id)).map(s => s.id))
-      setR2Job(job)
-      setR2SelectMode(false)
-      setR2Selected(new Set())
+      setSendJob(await r2Api.sendToPhone(picked))
     } catch (error) {
       toast({
-        title: 'Upload failed to start',
+        title: 'Sending failed to start',
         description: error instanceof Error ? error.message : 'Unknown error',
         variant: 'destructive'
       })
-    } finally {
-      setR2Starting(false)
+      throw error
     }
   }
 
-  const handleR2Cancel = async () => {
+  const handleCancelSend = async () => {
     try {
       const { job } = await r2Api.cancel()
-      if (job) setR2Job(job)
+      if (job) setSendJob(job)
     } catch {
       // The socket will still report the job's real state.
     }
   }
 
-  const r2Running = r2Job?.state === 'running'
-  const showR2Status = r2Job !== null && (r2Running || r2Job.id !== r2DismissedJobId)
+  const sendRunning = sendJob?.state === 'running'
+  const showSendStatus = sendJob !== null && (sendRunning || sendJob.id !== dismissedJobId)
 
   const loadSeries = async () => {
     try {
@@ -339,14 +320,21 @@ export default function Library() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button
-            variant={r2SelectMode ? 'secondary' : 'outline'}
-            onClick={r2SelectMode ? () => setR2SelectMode(false) : handleStartR2Select}
-            disabled={series.length === 0}
-          >
-            <UploadCloud className="h-4 w-4 mr-2" />
-            {r2SelectMode ? 'Cancel Upload' : 'Upload to R2'}
+          <Button variant="outline" onClick={handleOpenSend} disabled={series.length === 0}>
+            <Smartphone className="h-4 w-4 mr-2" />
+            Send to phone
           </Button>
+          <Link to="/stitch">
+            <Button variant="outline" title={`Chapters with more than ${LARGE_CHAPTER_PAGES} pages need stitching`}>
+              <Layers className="h-4 w-4 mr-2" />
+              Stitch Pages
+              {largeChapters > 0 && (
+                <Badge className="ml-2 border-transparent bg-amber-500 text-white hover:bg-amber-500">
+                  {largeChapters}
+                </Badge>
+              )}
+            </Button>
+          </Link>
           <Button variant="outline" onClick={handleOpenImportDialog}>
             <FolderInput className="h-4 w-4 mr-2" />
             Import Existing
@@ -359,6 +347,13 @@ export default function Library() {
           </Link>
         </div>
       </div>
+
+      <PhoneSendDialog
+        open={sendOpen}
+        onOpenChange={setSendOpen}
+        busy={sendRunning}
+        onSend={handleSend}
+      />
 
       {/* Import Dialog */}
       <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
@@ -475,36 +470,19 @@ export default function Library() {
             // null until the lookup resolves, or when nothing is published yet.
             const rollup = seriesPublished(s.id)
             const published = rollup && rollup.published > 0 ? rollup : null
-            const r2Checked = r2Selected.has(s.id)
             const onPhone = phoneSync?.series[s.id]
 
             return (
-              <Link
-                to={`/series/${s.id}`}
-                key={s.id}
-                onClick={e => {
-                  // While picking series for R2, a card click selects instead of navigating.
-                  if (!r2SelectMode) return
-                  e.preventDefault()
-                  toggleR2Series(s.id)
-                }}
-              >
+              <Link to={`/series/${s.id}`} key={s.id}>
                 <Card className={`h-full hover:shadow-lg transition-shadow cursor-pointer overflow-hidden ${
                   published ? publishedRowClass : ''
-                } ${r2SelectMode && r2Checked ? 'ring-2 ring-primary' : ''}`}>
+                }`}>
                   {/* Cover image placeholder */}
                   <div className="aspect-[3/4] bg-gradient-to-br from-primary/20 to-primary/5 relative">
                     <div className="absolute inset-0 flex items-center justify-center">
                       <BookOpen className="h-16 w-16 text-primary/30" />
                     </div>
                     <div className="absolute top-2 right-2 flex flex-col items-end gap-1.5">
-                      {r2SelectMode && (
-                        // Visual only: the card's click toggles it, so the box
-                        // must not also handle the click and undo it.
-                        <div className="rounded-md bg-background/90 p-1.5 shadow pointer-events-none">
-                          <Checkbox checked={r2Checked} className="h-5 w-5" />
-                        </div>
-                      )}
                       {onPhone && <PhoneSyncBadge sync={onPhone} device={phoneSync?.device ?? null} />}
                     </div>
                     <div className="absolute bottom-2 right-2">
@@ -555,26 +533,13 @@ export default function Library() {
       )}
     </div>
 
-      {(r2SelectMode || showR2Status) && (
+      {showSendStatus && sendJob && (
         <div className="sticky bottom-0 z-20">
-          {r2SelectMode && (
-            <R2SelectionBar
-              count={r2Selected.size}
-              total={series.length}
-              busy={r2Starting || r2Running}
-              storage={r2Usage ? { used: r2Usage.storage.bytes, limit: r2Usage.limits.storageBytes } : null}
-              onToggleAll={toggleR2All}
-              onCancel={() => setR2SelectMode(false)}
-              onUpload={handleR2Upload}
-            />
-          )}
-          {showR2Status && r2Job && (
-            <R2UploadStatusBar
-              job={r2Job}
-              onCancel={handleR2Cancel}
-              onDismiss={() => setR2DismissedJobId(r2Job.id)}
-            />
-          )}
+          <PhoneSendStatusBar
+            job={sendJob}
+            onCancel={handleCancelSend}
+            onDismiss={() => setDismissedJobId(sendJob.id)}
+          />
         </div>
       )}
     </div>

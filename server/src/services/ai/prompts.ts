@@ -20,6 +20,26 @@ STYLE RULES:
 - Avoid excessive punctuation (!!!, ???, ...) - use periods and commas
 - Write for a neutral reading pace - no dramatic pauses needed`
 
+/**
+ * Extra instructions for a non-English narration. Appended to the base style
+ * prompt (and to the summary/outro system prompts) so every call in the Hindi
+ * pipeline writes Hindi, while the response delimiters stay the English
+ * markers the parser looks for. Empty for English, which keeps its prompts
+ * exactly as they were.
+ */
+export function getLanguageDirective(language: 'en' | 'hi' = 'en'): string {
+  if (language !== 'hi') return ''
+  return `
+
+LANGUAGE: HINDI
+- Write all narration in natural, spoken Hindi using Devanagari script - the conversational Hindi a Hindi recap narrator would use, not formal or literary Hindi
+- Write character names, places and techniques in Devanagari as they are pronounced; do not add English translations or Roman-script words in brackets
+- Common English words that Hindi speakers use naturally may stay, but write them in Devanagari
+- End sentences with the Hindi full stop (।)
+- The story summary and the closing paragraph must also be in Hindi, and the closing paragraph must be copied word for word from the Hindi script
+- Keep the section markers (===SCRIPT===, ===SUMMARY===, ===CLOSING===, ===ABOUT===, ===OUTRO===) exactly as given, in English`
+}
+
 // System prompt for script generation
 export function getScriptSystemPrompt(baseStylePrompt: string): string {
   return `${baseStylePrompt}

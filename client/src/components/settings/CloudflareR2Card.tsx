@@ -11,7 +11,7 @@ import { R2UsageCard } from './R2UsageCard'
 import { PhoneRelayCard } from './PhoneRelayCard'
 
 /**
- * Settings → Cloudflare: credentials for the Library's "Upload to R2" backup.
+ * Settings → Cloudflare: credentials for the Library's "Send to phone".
  * Saved to the server's .env and applied immediately. The secret is never sent
  * back — the key fields stay blank and a blank field keeps what is saved.
  */
@@ -107,8 +107,9 @@ export function CloudflareR2Card({ onSaved }: { onSaved?: () => void } = {}) {
           )}
         </CardTitle>
         <CardDescription>
-          Used by <strong>Upload to R2</strong> on the Library page: each selected series' unpublished chapter folders
-          are zipped, uploaded to your bucket, and the local zip is deleted. Published chapters are left out.
+          Used by <strong>Send to phone</strong> on the Library page: each chapter's pages are zipped and uploaded to
+          your bucket for Sleeper-Cell, one zip per chapter, and the local zip is deleted. The phone deletes a
+          chapter's zip when it clears the chapter.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">

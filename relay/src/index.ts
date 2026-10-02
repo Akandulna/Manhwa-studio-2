@@ -7,7 +7,7 @@
  *
  *   POST /receipt/:kind   phone → relay. Body: the receipt JSON (kind: sync | scripts | crops).
  *                         Stored, then pushed to every connected desktop.
- *   POST /request         desktop → relay, when its socket is down. Body: { id, requestedAt }.
+ *   POST /request         desktop → relay, when its socket is down. Body: { id, requestedAt, action? }.
  *   GET  /state           what is stored (sizes and times, not bodies), and who is connected.
  *   GET  /ws?role=desktop|phone   WebSocket. A desktop is sent { type: 'hello' } and every
  *                         stored receipt, then each new one. A phone is sent the last request.
@@ -15,8 +15,11 @@
  * Messages on the sockets (JSON):
  *   relay → desktop  { type: 'hello', phones, request } · { type: 'receipt', kind, at, body }
  *                    { type: 'presence', phones } · { type: 'requested', id, phones }
- *   desktop → relay  { type: 'request', id, requestedAt }
- *   relay → phone    { type: 'request', id, requestedAt }
+ *   desktop → relay  { type: 'request', id, requestedAt, action? }
+ *   relay → phone    { type: 'request', id, requestedAt, action? }
+ *
+ * `action` is optional: "sync" asks the phone to also check R2 for chapters the
+ * desktop just sent, before it answers with its receipts.
  *   either → relay   "ping"; the runtime answers "pong" without waking the object.
  *
  * Every request needs `Authorization: Bearer <RELAY_TOKEN>` (or `?token=` for
@@ -59,7 +62,10 @@ export default {
   }
 } satisfies ExportedHandler<Env>
 
-interface StoredRequest { id: string; requestedAt: string }
+interface StoredRequest { id: string; requestedAt: string; action?: string }
+
+/** What a request may ask of the phone besides its receipts. */
+const ACTIONS = new Set(['sync'])
 
 export class Relay extends DurableObject<Env> {
   private sql: SqlStorage
@@ -69,6 +75,9 @@ export class Relay extends DurableObject<Env> {
     this.sql = ctx.storage.sql
     this.sql.exec('CREATE TABLE IF NOT EXISTS receipts (kind TEXT PRIMARY KEY, body TEXT NOT NULL, at INTEGER NOT NULL)')
     this.sql.exec('CREATE TABLE IF NOT EXISTS requests (slot INTEGER PRIMARY KEY, id TEXT NOT NULL, requested_at TEXT NOT NULL)')
+    // Added after the first deploy; an object created before then lacks it.
+    const columns = this.sql.exec<{ name: string }>('PRAGMA table_info(requests)').toArray().map(c => c.name)
+    if (!columns.includes('action')) this.sql.exec('ALTER TABLE requests ADD COLUMN action TEXT')
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'))
   }
 
@@ -166,12 +175,14 @@ export class Relay extends DurableObject<Env> {
 
   /** Saves a request and passes it to every connected phone. Null when it isn't a valid request. */
   private storeRequest(value: unknown): { request: StoredRequest; phones: number } | null {
-    const { id, requestedAt } = (value ?? {}) as { id?: unknown; requestedAt?: unknown }
+    const { id, requestedAt, action } = (value ?? {}) as { id?: unknown; requestedAt?: unknown; action?: unknown }
     if (typeof id !== 'string' || !id || id.length > 100) return null
-    const request = { id, requestedAt: typeof requestedAt === 'string' ? requestedAt : new Date().toISOString() }
+    const request: StoredRequest = { id, requestedAt: typeof requestedAt === 'string' ? requestedAt : new Date().toISOString() }
+    if (typeof action === 'string' && ACTIONS.has(action)) request.action = action
     this.sql.exec(
-      'INSERT INTO requests (slot, id, requested_at) VALUES (1, ?, ?) ON CONFLICT(slot) DO UPDATE SET id = excluded.id, requested_at = excluded.requested_at',
-      request.id, request.requestedAt
+      'INSERT INTO requests (slot, id, requested_at, action) VALUES (1, ?, ?, ?) ' +
+        'ON CONFLICT(slot) DO UPDATE SET id = excluded.id, requested_at = excluded.requested_at, action = excluded.action',
+      request.id, request.requestedAt, request.action ?? null
     )
     const message = JSON.stringify({ type: 'request', ...request })
     const phones = this.sockets('phone')
@@ -180,8 +191,11 @@ export class Relay extends DurableObject<Env> {
   }
 
   private lastRequest(): StoredRequest | null {
-    const row = this.sql.exec<{ id: string; requested_at: string }>('SELECT id, requested_at FROM requests WHERE slot = 1').toArray()[0]
-    return row ? { id: row.id, requestedAt: row.requested_at } : null
+    const row = this.sql.exec<{ id: string; requested_at: string; action: string | null }>(
+      'SELECT id, requested_at, action FROM requests WHERE slot = 1'
+    ).toArray()[0]
+    if (!row) return null
+    return row.action ? { id: row.id, requestedAt: row.requested_at, action: row.action } : { id: row.id, requestedAt: row.requested_at }
   }
 
   private broadcastPresence(except?: WebSocket): void {

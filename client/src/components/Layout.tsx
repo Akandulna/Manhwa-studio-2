@@ -21,7 +21,8 @@ import {
   Moon,
   Sun,
   HardDrive,
-  Smartphone
+  Smartphone,
+  Layers
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
@@ -81,6 +82,11 @@ export default function Layout({ children }: LayoutProps) {
       label: 'Downloads',
       href: '/queue',
       badge: activeDownloads > 0 ? activeDownloads : undefined
+    },
+    {
+      icon: <Layers className="h-5 w-5" />,
+      label: 'Page Stitcher',
+      href: '/stitch'
     }
   ]
 
@@ -236,7 +242,9 @@ export default function Layout({ children }: LayoutProps) {
               {libraryModuleItems.map((item) =>
                 renderNavLink(
                   item,
-                  location.pathname === item.href && !isInNarration
+                  (location.pathname === item.href ||
+                    (item.href === '/stitch' && location.pathname.startsWith('/stitch/'))) &&
+                    !isInNarration
                 )
               )}
             </nav>

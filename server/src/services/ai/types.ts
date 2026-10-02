@@ -33,6 +33,7 @@ export interface SummaryGenerationInput {
   scriptText: string
   previousSummary?: string
   isFirstChapter: boolean
+  language?: 'en' | 'hi'  // Narration language; summary and closing are written in it
 }
 
 export interface SummaryGenerationResult {
@@ -47,6 +48,7 @@ export interface OutroGenerationInput {
   aboutSummary: string
   rollingSummary: string
   partNumber: number
+  language?: 'en' | 'hi'  // Narration language the outro is written in
 }
 
 export interface OutroGenerationResult {

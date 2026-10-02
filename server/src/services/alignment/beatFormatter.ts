@@ -24,10 +24,13 @@ export interface Beat {
   text: string
 }
 
+/** Sentence-ending marks: Latin . ! ? plus the Hindi danda । and double danda ॥. */
+const SENTENCE_END = new Set(['.', '!', '?', '।', '॥'])
+
 /**
  * Split script text into sentence-sized beats.
  *
- * Splits after . ! ? (and their closing quotes/brackets) when followed by
+ * Splits after . ! ? । ॥ (and their closing quotes/brackets) when followed by
  * whitespace. Common abbreviations and decimal numbers are left intact so
  * "Mr. Han" and "3.5" do not become beat boundaries.
  */
@@ -47,7 +50,7 @@ export function splitIntoSentences(text: string): string[] {
     const char = normalized[i]
     current += char
 
-    if (char !== '.' && char !== '!' && char !== '?') continue
+    if (!SENTENCE_END.has(char)) continue
 
     // Absorb any closing punctuation that belongs to this sentence.
     let j = i + 1
@@ -87,9 +90,14 @@ export function splitIntoSentences(text: string): string[] {
   return sentences
 }
 
-/** Strip everything but letters/digits so aligner tokens can be matched to script tokens. */
+/**
+ * Strip everything but letters/digits so aligner tokens can be matched to
+ * script tokens. Unicode-aware, with combining marks kept, so a Devanagari
+ * word ("नमस्ते", whose vowel signs are marks) counts as a token instead of
+ * normalizing to nothing.
+ */
 function normalizeToken(token: string): string {
-  return token.toLowerCase().replace(/[^a-z0-9]/gi, '')
+  return token.toLowerCase().replace(/[^\p{L}\p{M}\p{N}]/gu, '')
 }
 
 /**

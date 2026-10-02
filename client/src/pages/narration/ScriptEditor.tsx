@@ -26,6 +26,8 @@ import {
 import { MurgaaDialog } from '@/components/narration/MurgaaDialog'
 import { useToast } from '@/components/ui/use-toast'
 import { useSocket } from '@/lib/socket'
+import { LanguageTabs } from '@/components/LanguageTabs'
+import { useNarrationLanguage, withLang } from '@/lib/narrationLanguage'
 import {
   ArrowLeft,
   ArrowRight,
@@ -49,11 +51,15 @@ export default function ScriptEditor() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { toast } = useToast()
-  const { narrationProgress } = useSocket()
+  const { narrationProgress: anyNarrationProgress } = useSocket()
+  const [language, setLanguage] = useNarrationLanguage('narration')
+  // Only this tab's language — the other one may be generating the same chapter.
+  const narrationProgress =
+    anyNarrationProgress && (anyNarrationProgress.language ?? 'en') === language ? anyNarrationProgress : null
 
-  // Already rendered to video — surfaced in the header so a published chapter
-  // is not rewritten by mistake.
-  const { isPublished } = usePublishedChapters()
+  // Already rendered to video in this language — surfaced in the header so a
+  // published chapter is not rewritten by mistake.
+  const { isPublished } = usePublishedChapters(undefined, language)
 
   const [chapter, setChapter] = useState<ChapterScriptDetail | null>(null)
   const [aiStatus, setAIStatus] = useState<AIStatus | null>(null)
@@ -96,9 +102,12 @@ export default function ScriptEditor() {
 
   useEffect(() => {
     if (id) {
+      // The manual prompt carries this language's continuity, so it is rebuilt.
+      setManualPrompt(null)
+      setManualResponse('')
       loadData()
     }
-  }, [id])
+  }, [id, language])
 
 
   // Handle generation progress
@@ -125,12 +134,13 @@ export default function ScriptEditor() {
   const loadData = async () => {
     try {
       const [chapterData, aiData] = await Promise.all([
-        narrationApi.getChapterDetail(id!),
+        narrationApi.getChapterDetail(id!, language),
         narrationApi.getAIStatus()
       ])
       setChapter(chapterData)
       setAIStatus(aiData)
       setScriptContent(chapterData.script?.content || '')
+      setHasChanges(false)
       setMode(aiData.configured ? 'api' : 'manual')
     } catch (error) {
       toast({
@@ -145,7 +155,7 @@ export default function ScriptEditor() {
 
   const loadChapter = async () => {
     try {
-      const data = await narrationApi.getChapterDetail(id!)
+      const data = await narrationApi.getChapterDetail(id!, language)
       setChapter(data)
       setScriptContent(data.script?.content || '')
       setHasChanges(false)
@@ -162,7 +172,7 @@ export default function ScriptEditor() {
   const handleSave = async () => {
     setSaving(true)
     try {
-      await narrationApi.saveScript(id!, scriptContent)
+      await narrationApi.saveScript(id!, language, scriptContent)
       setHasChanges(false)
       toast({
         title: 'Script Saved',
@@ -183,7 +193,7 @@ export default function ScriptEditor() {
   const handleGenerate = async () => {
     setGenerating(true)
     try {
-      await narrationApi.generateScript(id!)
+      await narrationApi.generateScript(id!, language)
       toast({
         title: 'Generation Started',
         description: 'This may take a minute...'
@@ -200,7 +210,7 @@ export default function ScriptEditor() {
 
   const handleLoadManualPrompt = async () => {
     try {
-      const data = await narrationApi.getManualPrompt(id!)
+      const data = await narrationApi.getManualPrompt(id!, language)
       setManualPrompt(data)
     } catch (error) {
       toast({
@@ -235,7 +245,7 @@ export default function ScriptEditor() {
 
     setSaving(true)
     try {
-      const result = await narrationApi.submitManualResult(id!, manualResponse)
+      const result = await narrationApi.submitManualResult(id!, language, manualResponse)
       
       if (result.needsSummaryRegeneration) {
         toast({
@@ -267,7 +277,7 @@ export default function ScriptEditor() {
   const handleRegenerateSummary = async () => {
     setSaving(true)
     try {
-      await narrationApi.regenerateSummary(id!)
+      await narrationApi.regenerateSummary(id!, language)
       toast({
         title: 'Summary Regenerated',
         description: 'Continuity metadata updated from current script'
@@ -286,7 +296,7 @@ export default function ScriptEditor() {
 
   const handleTogglePartEnd = async () => {
     try {
-      const result = await narrationApi.togglePartEnd(id!)
+      const result = await narrationApi.togglePartEnd(id!, language)
       toast({
         title: result.isPartEnd ? 'Marked as Part End' : 'Unmarked as Part End'
       })
@@ -303,7 +313,7 @@ export default function ScriptEditor() {
   const handleGenerateOutro = async () => {
     setGenerating(true)
     try {
-      const result = await narrationApi.generateOutro(id!)
+      const result = await narrationApi.generateOutro(id!, language)
       if (result.success) {
         toast({
           title: 'Outro Generated',
@@ -365,7 +375,7 @@ export default function ScriptEditor() {
     return (
       <div className="p-6 text-center">
         <h2 className="text-xl font-semibold">Chapter not found</h2>
-        <Button variant="link" onClick={() => navigate('/narration')}>
+        <Button variant="link" onClick={() => navigate(withLang('/narration', language))}>
           Return to Library
         </Button>
       </div>
@@ -379,14 +389,18 @@ export default function ScriptEditor() {
     <div className="p-6 h-full flex flex-col">
       {/* Header */}
       <div className="flex items-start gap-4 mb-4">
-        <Button variant="ghost" size="icon" onClick={() => navigate(`/narration/series/${chapter.seriesId}`)}>
+        <Button variant="ghost" size="icon" onClick={() => navigate(withLang(`/narration/series/${chapter.seriesId}`, language))}>
           <ArrowLeft className="h-5 w-5" />
         </Button>
         
         <div className="flex-1">
-          <h1 className="text-2xl font-bold">
-            {chapter.seriesTitle} - Chapter {chapter.number}
-          </h1>
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-2xl font-bold">
+              {chapter.seriesTitle} - Chapter {chapter.number}
+            </h1>
+            {/* Locked with unsaved edits, like Prev/Next, so they aren't lost */}
+            <LanguageTabs value={language} onChange={setLanguage} disabled={hasChanges} />
+          </div>
           {chapter.title && (
             <p className="text-muted-foreground">{chapter.title}</p>
           )}
@@ -432,7 +446,7 @@ export default function ScriptEditor() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => chapter.prevChapterId && navigate(`/narration/chapter/${chapter.prevChapterId}`)}
+              onClick={() => chapter.prevChapterId && navigate(withLang(`/narration/chapter/${chapter.prevChapterId}`, language))}
               disabled={!chapter.prevChapterId || hasChanges}
               title={chapter.prevChapterId ? `Go to Chapter ${chapter.prevChapterNumber}` : 'No previous chapter'}
             >
@@ -442,7 +456,7 @@ export default function ScriptEditor() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => chapter.nextChapterId && navigate(`/narration/chapter/${chapter.nextChapterId}`)}
+              onClick={() => chapter.nextChapterId && navigate(withLang(`/narration/chapter/${chapter.nextChapterId}`, language))}
               disabled={!chapter.nextChapterId || hasChanges}
               title={chapter.nextChapterId ? `Go to Chapter ${chapter.nextChapterNumber}` : 'No next chapter'}
             >

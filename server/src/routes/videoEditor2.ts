@@ -28,6 +28,7 @@ import {
   startBatchExport,
   type Export2Input
 } from '../services/editor2Export.js'
+import { NarrationLanguage, requestLanguage } from '../services/narrationLanguage.js'
 
 export function initVideoEditor2Routes(io: Server): Router {
   const router = Router()
@@ -36,7 +37,7 @@ export function initVideoEditor2Routes(io: Server): Router {
   router.get('/series/:seriesId/editable-chapters', async (req: Request, res: Response) => {
     try {
       await reconcileQuietly()
-      const chapters = await getEditableChapters2(req.params.seriesId)
+      const chapters = await getEditableChapters2(req.params.seriesId, requestLanguage(req))
       res.json(chapters)
     } catch (error) {
       console.error('[videoEditor2] listing editable chapters failed:', error)
@@ -52,7 +53,7 @@ export function initVideoEditor2Routes(io: Server): Router {
    */
   router.get('/chapters/:id/timeline-bundle', async (req: Request, res: Response) => {
     try {
-      const bundle = await getChapterTimelineBundle(req.params.id)
+      const bundle = await getChapterTimelineBundle(req.params.id, requestLanguage(req))
       if (!bundle) return res.status(404).json({ error: 'Chapter not found' })
       res.json(bundle)
     } catch (error) {
@@ -91,7 +92,7 @@ export function initVideoEditor2Routes(io: Server): Router {
       if (typeof json !== 'string' || json.trim().length === 0) {
         return res.status(400).json({ error: 'json (non-empty string) is required' })
       }
-      const plan = await processTimelineJson(req.params.id, json)
+      const plan = await processTimelineJson(req.params.id, json, requestLanguage(req))
       res.json(plan)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to process the timeline'
@@ -108,9 +109,11 @@ export function initVideoEditor2Routes(io: Server): Router {
    * "processed" marker, so every browser and the desktop app agree on which
    * chapters offer Preview. The client keeps a local cache and reconciles it
    * against these rows; updatedAt (epoch ms) decides which side is newer.
+   * English and Hindi are separate rows: the same chapter is edited twice.
    */
-  const toStored = (row: { chapterId: string; json: string; processedJson: string | null; updatedAt: Date }) => ({
+  const toStored = (row: { chapterId: string; language: string; json: string; processedJson: string | null; updatedAt: Date }) => ({
     chapterId: row.chapterId,
+    language: row.language as NarrationLanguage,
     json: row.json,
     processedJson: row.processedJson,
     updatedAt: row.updatedAt.getTime()
@@ -124,7 +127,7 @@ export function initVideoEditor2Routes(io: Server): Router {
         select: { id: true }
       })
       const rows = await prisma.editor2Timeline.findMany({
-        where: { chapterId: { in: chapters.map(c => c.id) } }
+        where: { chapterId: { in: chapters.map(c => c.id) }, language: requestLanguage(req) }
       })
       res.json(rows.map(toStored))
     } catch (error) {
@@ -136,7 +139,9 @@ export function initVideoEditor2Routes(io: Server): Router {
   /** GET /chapters/:id/timeline — one chapter's stored paste, or null. */
   router.get('/chapters/:id/timeline', async (req: Request, res: Response) => {
     try {
-      const row = await prisma.editor2Timeline.findUnique({ where: { chapterId: req.params.id } })
+      const row = await prisma.editor2Timeline.findUnique({
+        where: { chapterId_language: { chapterId: req.params.id, language: requestLanguage(req) } }
+      })
       res.json(row ? toStored(row) : null)
     } catch (error) {
       console.error('[videoEditor2] reading stored timeline failed:', error)
@@ -164,14 +169,16 @@ export function initVideoEditor2Routes(io: Server): Router {
         return res.status(400).json({ error: 'updatedAt (epoch ms) is required' })
       }
       const chapterId = req.params.id
-      const existing = await prisma.editor2Timeline.findUnique({ where: { chapterId } })
+      const language = requestLanguage(req)
+      const key = { chapterId_language: { chapterId, language } }
+      const existing = await prisma.editor2Timeline.findUnique({ where: key })
       if (existing && existing.updatedAt.getTime() >= updatedAt) {
         return res.json(toStored(existing))
       }
       const data = { json, processedJson, updatedAt: new Date(updatedAt) }
       const row = await prisma.editor2Timeline.upsert({
-        where: { chapterId },
-        create: { chapterId, ...data },
+        where: key,
+        create: { chapterId, language, ...data },
         update: data
       })
       res.json(toStored(row))
@@ -286,7 +293,7 @@ export function initVideoEditor2Routes(io: Server): Router {
    */
   router.get('/series/:seriesId/exports', async (req: Request, res: Response) => {
     try {
-      const exported = await getExportedChapterIds(req.params.seriesId)
+      const exported = await getExportedChapterIds(req.params.seriesId, requestLanguage(req))
       res.json(exported)
     } catch (error) {
       console.error('[videoEditor2] listing exports failed:', error)
@@ -328,7 +335,13 @@ export function initVideoEditor2Routes(io: Server): Router {
       const jobId = await startBatchExport(
         req.params.seriesId,
         inputs,
-        { resolution, preset, fps: Number(fps) || undefined, force: force === true },
+        {
+          resolution,
+          preset,
+          fps: Number(fps) || undefined,
+          force: force === true,
+          language: requestLanguage(req)
+        },
         io
       )
       res.json({ jobId })

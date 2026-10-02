@@ -202,12 +202,14 @@ function handle(text: string): void {
  * "Refresh from phone" through the relay: the phone answers by posting its
  * receipts with `answers: id`. Over the socket when it's up, else one HTTP
  * request. `phones` says whether Sleeper-Cell is open to answer right away;
- * when it isn't, the relay keeps the request for when it opens.
+ * when it isn't, the relay keeps the request for when it opens. `action:
+ * 'sync'` has the phone first check R2 for chapters just sent; a relay
+ * deployed before actions existed drops it, and the phone only answers.
  */
-export async function sendPhoneRequest(): Promise<{ id: string; requestedAt: string; phones: number }> {
+export async function sendPhoneRequest(action?: 'sync'): Promise<{ id: string; requestedAt: string; phones: number }> {
   const env = relayEnv()
   if (!env) throw new Error('The phone relay is not set up')
-  const request = { id: randomUUID(), requestedAt: new Date().toISOString() }
+  const request = { id: randomUUID(), requestedAt: new Date().toISOString(), ...(action ? { action } : {}) }
   if (socket && connected && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: 'request', ...request }))
     return { ...request, phones }

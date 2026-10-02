@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { videoApi2, type PlanImage, type TimelinePlan } from '@/lib/api'
 import { getTimelineJson, markProcessed, syncChapterTimeline } from './timelineHandoff'
+import { LANGUAGE_LABEL, useNarrationLanguage } from '@/lib/narrationLanguage'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -82,6 +83,8 @@ function motionStyle(image: PlanImage, progress: number, enabled: boolean): Reac
 export default function Editor2Preview() {
   const { chapterId } = useParams<{ chapterId: string }>()
   const navigate = useNavigate()
+  // Which of the chapter's two videos this previews (its paste and voice).
+  const [language] = useNarrationLanguage('editor2')
 
   const [plan, setPlan] = useState<TimelinePlan | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -123,27 +126,27 @@ export default function Editor2Preview() {
     setProcessing(true)
     // The paste may have been made in another browser, so check the server
     // copy first.
-    syncChapterTimeline(chapterId)
+    syncChapterTimeline(chapterId, language)
       .then(() => {
         if (cancelled) return null
-        json = getTimelineJson(chapterId)
+        json = getTimelineJson(chapterId, language)
         if (!json) {
           setError('No timeline JSON was handed over. Go back and paste it on the chapter card, then press Start Processing.')
           return null
         }
-        return videoApi2.processTimeline(chapterId, json)
+        return videoApi2.processTimeline(chapterId, language, json)
       })
       .then(result => {
         if (cancelled || !result || !json) return
         setPlan(result)
         // Only a successful build counts as processed — that is what lets the
         // chapter card offer Preview instead of Start Processing.
-        markProcessed(chapterId, json)
+        markProcessed(chapterId, language, json)
       })
       .catch(err => { if (!cancelled) setError(err instanceof Error ? err.message : 'Processing failed') })
       .finally(() => { if (!cancelled) setProcessing(false) })
     return () => { cancelled = true }
-  }, [chapterId])
+  }, [chapterId, language])
 
   // ---------- Derived timeline ----------
 
@@ -348,7 +351,7 @@ export default function Editor2Preview() {
             {plan.chapterTitle ? ` — ${plan.chapterTitle}` : ''}
           </h1>
           <p className="text-xs text-muted-foreground">
-            {plan.seriesTitle} · {plan.sections.length} sections · {plan.imageCount} images · {fmt(plan.totalDuration)}
+            {plan.seriesTitle} · {LANGUAGE_LABEL[language]} · {plan.sections.length} sections · {plan.imageCount} images · {fmt(plan.totalDuration)}
           </p>
         </div>
       </div>

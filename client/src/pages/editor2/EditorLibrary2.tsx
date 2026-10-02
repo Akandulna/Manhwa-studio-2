@@ -3,6 +3,9 @@
  *
  * Series picker landing page. Pick a series to see its chapters' readiness
  * for Editor 2.0 (script, audio, Image Clipper 3.0 crops, script with timeline).
+ *
+ * The English / Hindi tab picks which narration the series is edited with;
+ * the same manhwa can be processed once in each.
  */
 
 import { useEffect, useState } from 'react'
@@ -11,8 +14,11 @@ import { seriesApi, type Series } from '@/lib/api'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Clapperboard, Globe, Loader2 } from 'lucide-react'
+import { LanguageTabs } from '@/components/LanguageTabs'
+import { LANGUAGE_LABEL, useNarrationLanguage, withLang } from '@/lib/narrationLanguage'
 
 export default function EditorLibrary2() {
+  const [language, setLanguage] = useNarrationLanguage('editor2')
   const [series, setSeries] = useState<Series[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -58,15 +64,18 @@ export default function EditorLibrary2() {
             <h1 className="text-3xl font-bold">Video Editor 2.0</h1>
           </div>
           <p className="text-muted-foreground mt-1">
-            Select a series to see its chapters' readiness
+            Select a series to see its chapters' readiness for the {LANGUAGE_LABEL[language]} video
           </p>
         </div>
-        <span className="text-sm text-muted-foreground">{series.length} series</span>
+        <div className="flex items-center gap-4">
+          <span className="text-sm text-muted-foreground">{series.length} series</span>
+          <LanguageTabs value={language} onChange={setLanguage} />
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {series.map((s) => (
-          <Link key={s.id} to={`/editor2/${s.id}`}>
+          <Link key={s.id} to={withLang(`/editor2/${s.id}`, language)}>
             <Card className="h-full hover:border-primary transition-colors cursor-pointer">
               <CardContent className="p-4">
                 <div className="aspect-[3/4] bg-muted rounded-lg mb-3 flex items-center justify-center overflow-hidden">

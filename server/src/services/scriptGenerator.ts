@@ -23,8 +23,15 @@ import {
   getBeatsToScriptChapter1Prompt,
   getBeatsToScriptChapterNPrompt,
   getBeatsToScriptSystemPrompt,
+  getLanguageDirective,
   DEFAULT_BASE_STYLE_PROMPT
 } from './ai/index.js'
+import {
+  NarrationLanguage,
+  scriptFileName,
+  outroFileName,
+  partExportSuffix
+} from './narrationLanguage.js'
 import {
   preprocessChapterImages,
   toImageInputs,
@@ -51,6 +58,7 @@ export interface GenerationConfig {
 export interface GenerationProgress {
   chapterId: string
   chapterNumber: number
+  language?: NarrationLanguage
   stage: 'preprocessing' | 'extracting-beats' | 'generating-script' | 'generating-summary' | 'saving' | 'done' | 'failed'
   batchCurrent?: number
   batchTotal?: number
@@ -61,6 +69,11 @@ export interface GenerationProgress {
 export interface RangeGenerationProgress extends GenerationProgress {
   overallCurrent: number
   overallTotal: number
+}
+
+/** Prisma include for one language's script row (a chapter has one per language). */
+function scriptIn(language: NarrationLanguage) {
+  return { scripts: { where: { language } } }
 }
 
 const DEFAULT_CONFIG: GenerationConfig = {
@@ -88,7 +101,8 @@ export class ScriptGenerationService {
   async generateChapterScript(
     chapterId: string,
     mode: 'api' | 'manual' = 'api',
-    config: Partial<GenerationConfig> = {}
+    config: Partial<GenerationConfig> = {},
+    language: NarrationLanguage = 'en'
   ): Promise<{ success: boolean; error?: string }> {
     const cfg = { ...DEFAULT_CONFIG, ...config }
     
@@ -98,7 +112,7 @@ export class ScriptGenerationService {
         where: { id: chapterId },
         include: {
           series: true,
-          script: true
+          ...scriptIn(language)
         }
       })
       
@@ -120,15 +134,17 @@ export class ScriptGenerationService {
       this.emitProgress({
         chapterId,
         chapterNumber: chapter.number,
+        language,
         stage: 'preprocessing',
         preprocessPercent: 0
       })
       
       // Create or update script record
       const scriptRecord = await prisma.chapterScript.upsert({
-        where: { chapterId },
+        where: { chapterId_language: { chapterId, language } },
         create: {
           chapterId,
+          language,
           mode,
           status: 'generating'
         },
@@ -140,18 +156,19 @@ export class ScriptGenerationService {
       })
       
       // Get continuity context
-      const { previousSummary, previousClosing, aboutSummary } = await this.getContinuityContext(chapter)
+      const { previousSummary, previousClosing, aboutSummary } = await this.getContinuityContext(chapter, language)
       
       if (chapter.number > 1 && !previousSummary) {
         throw new Error(`Cannot generate Chapter ${chapter.number}: previous chapter's summary is missing. Generate chapters in order.`)
       }
       
       // Get base style prompt from settings
-      const baseStylePrompt = await this.getBaseStylePrompt()
+      const baseStylePrompt = await this.getBaseStylePrompt(language)
       
       if (mode === 'api') {
         return await this.generateWithAPI(
           chapter,
+          language,
           scriptRecord.id,
           baseStylePrompt,
           aboutSummary,
@@ -168,7 +185,7 @@ export class ScriptGenerationService {
       const message = error instanceof Error ? error.message : 'Unknown error'
       
       await prisma.chapterScript.update({
-        where: { chapterId },
+        where: { chapterId_language: { chapterId, language } },
         data: { 
           status: 'failed',
           error: message
@@ -178,6 +195,7 @@ export class ScriptGenerationService {
       this.emitProgress({
         chapterId,
         chapterNumber: 0,
+        language,
         stage: 'failed',
         error: message
       })
@@ -193,7 +211,8 @@ export class ScriptGenerationService {
     seriesId: string,
     fromChapter: number,
     toChapter: number,
-    config: Partial<GenerationConfig> = {}
+    config: Partial<GenerationConfig> = {},
+    language: NarrationLanguage = 'en'
   ): Promise<{ success: boolean; completed: number; failed: number; errors: string[] }> {
     // Get all chapters in range
     const chapters = await prisma.chapter.findMany({
@@ -203,7 +222,7 @@ export class ScriptGenerationService {
         status: 'done'  // Only downloaded chapters
       },
       orderBy: { number: 'asc' },
-      include: { script: true }
+      include: scriptIn(language)
     })
     
     if (chapters.length === 0) {
@@ -222,10 +241,10 @@ export class ScriptGenerationService {
           seriesId,
           number: chapters[0].number - 1
         },
-        include: { script: true }
+        include: scriptIn(language)
       })
       
-      if (!prevChapter?.script?.rollingSummary) {
+      if (!prevChapter?.scripts[0]?.rollingSummary) {
         return {
           success: false,
           completed: 0,
@@ -246,10 +265,11 @@ export class ScriptGenerationService {
         overallCurrent: i + 1,
         overallTotal: chapters.length,
         chapterId: chapter.id,
-        chapterNumber: chapter.number
+        chapterNumber: chapter.number,
+        language
       })
       
-      const result = await this.generateChapterScript(chapter.id, 'api', config)
+      const result = await this.generateChapterScript(chapter.id, 'api', config, language)
       
       if (result.success) {
         completed++
@@ -273,7 +293,10 @@ export class ScriptGenerationService {
   /**
    * Regenerate summary and closing from edited script
    */
-  async regenerateSummary(chapterId: string): Promise<{ success: boolean; error?: string }> {
+  async regenerateSummary(
+    chapterId: string,
+    language: NarrationLanguage = 'en'
+  ): Promise<{ success: boolean; error?: string }> {
     const provider = aiProviderFactory.getDefaultProvider()
     if (!provider) {
       return { success: false, error: 'No AI provider configured' }
@@ -284,25 +307,27 @@ export class ScriptGenerationService {
         where: { id: chapterId },
         include: { 
           series: true,
-          script: true 
+          ...scriptIn(language)
         }
       })
       
-      if (!chapter?.script?.scriptPath) {
+      const script = chapter?.scripts[0]
+      if (!chapter || !script?.scriptPath) {
         return { success: false, error: 'No script found for this chapter' }
       }
       
       // Read the script file
-      const scriptText = await fs.readFile(chapter.script.scriptPath, 'utf-8')
+      const scriptText = await fs.readFile(script.scriptPath, 'utf-8')
       
       // Get previous summary for context
-      const { previousSummary } = await this.getContinuityContext(chapter)
+      const { previousSummary } = await this.getContinuityContext(chapter, language)
       
       // Generate new summary
       const result = await provider.generateSummary({
         scriptText,
         previousSummary: previousSummary ?? undefined,
-        isFirstChapter: chapter.number === 1
+        isFirstChapter: chapter.number === 1,
+        language
       })
       
       // Update database
@@ -313,7 +338,7 @@ export class ScriptGenerationService {
         updatedAt: new Date()
       }
       
-      if (chapter.number === 1 && result.aboutSummary) {
+      if (chapter.number === 1 && result.aboutSummary && this.ownsAbout(language, chapter.series.aboutSummary)) {
         // Also update series about summary
         await prisma.series.update({
           where: { id: chapter.seriesId },
@@ -322,12 +347,12 @@ export class ScriptGenerationService {
       }
       
       await prisma.chapterScript.update({
-        where: { id: chapter.script.id },
+        where: { id: script.id },
         data: updateData
       })
       
       // Mark downstream chapters as stale
-      await this.markDownstreamStale(chapter.seriesId, chapter.number)
+      await this.markDownstreamStale(chapter.seriesId, chapter.number, language)
       
       return { success: true }
       
@@ -342,7 +367,10 @@ export class ScriptGenerationService {
   /**
    * Generate outro for a part-end chapter
    */
-  async generateOutro(chapterId: string): Promise<{ success: boolean; outroText?: string; error?: string }> {
+  async generateOutro(
+    chapterId: string,
+    language: NarrationLanguage = 'en'
+  ): Promise<{ success: boolean; outroText?: string; error?: string }> {
     const provider = aiProviderFactory.getDefaultProvider()
     if (!provider) {
       return { success: false, error: 'No AI provider configured' }
@@ -353,42 +381,44 @@ export class ScriptGenerationService {
         where: { id: chapterId },
         include: { 
           series: true,
-          script: true 
+          ...scriptIn(language)
         }
       })
       
-      if (!chapter?.script) {
+      const script = chapter?.scripts[0]
+      if (!chapter || !script) {
         return { success: false, error: 'No script found for this chapter' }
       }
       
-      if (!chapter.script.isPartEnd) {
+      if (!script.isPartEnd) {
         return { success: false, error: 'Chapter is not marked as part end' }
       }
       
-      if (!chapter.script.rollingSummary) {
+      if (!script.rollingSummary) {
         return { success: false, error: 'Chapter summary not generated yet' }
       }
       
       // Calculate part number
-      const partNumber = await this.calculatePartNumber(chapter.seriesId, chapter.number)
+      const partNumber = await this.calculatePartNumber(chapter.seriesId, chapter.number, language)
       
       const result = await provider.generateOutro({
         seriesTitle: chapter.series.title,
         partNumber,
         aboutSummary: chapter.series.aboutSummary || '',
-        rollingSummary: chapter.script.rollingSummary
+        rollingSummary: script.rollingSummary,
+        language
       })
       
       // Save outro to disk
-      const outroPath = path.join(getFullFolderPath(chapter.folderPath), 'outro.md')
+      const outroPath = path.join(getFullFolderPath(chapter.folderPath), outroFileName(language))
       await fs.writeFile(outroPath, result.outroText, 'utf-8')
       
       // Update database
       await prisma.chapterScript.update({
-        where: { id: chapter.script.id },
+        where: { id: script.id },
         data: { 
           outroText: result.outroText,
-          tokensUsed: (chapter.script.tokensUsed || 0) + (result.tokensUsed || 0)
+          tokensUsed: (script.tokensUsed || 0) + (result.tokensUsed || 0)
         }
       })
       
@@ -405,7 +435,11 @@ export class ScriptGenerationService {
   /**
    * Export a Part's scripts concatenated
    */
-  async exportPart(seriesId: string, partNumber: number): Promise<{ success: boolean; path?: string; error?: string }> {
+  async exportPart(
+    seriesId: string,
+    partNumber: number,
+    language: NarrationLanguage = 'en'
+  ): Promise<{ success: boolean; path?: string; error?: string }> {
     try {
       const series = await prisma.series.findUnique({
         where: { id: seriesId }
@@ -416,7 +450,7 @@ export class ScriptGenerationService {
       }
       
       // Find all chapters in this part
-      const chapters = await this.getPartChapters(seriesId, partNumber)
+      const chapters = await this.getPartChapters(seriesId, partNumber, language)
       
       if (chapters.length === 0) {
         return { success: false, error: 'No chapters found for this part' }
@@ -427,15 +461,16 @@ export class ScriptGenerationService {
       let outroText = ''
       
       for (const chapter of chapters) {
-        if (!chapter.script?.scriptPath) {
+        const record = chapter.scripts[0]
+        if (!record?.scriptPath) {
           return { success: false, error: `Chapter ${chapter.number} has no script` }
         }
         
-        const script = await fs.readFile(chapter.script.scriptPath, 'utf-8')
+        const script = await fs.readFile(record.scriptPath, 'utf-8')
         scriptParts.push(`## Chapter ${chapter.number}\n\n${script}`)
         
-        if (chapter.script.isPartEnd && chapter.script.outroText) {
-          outroText = chapter.script.outroText
+        if (record.isPartEnd && record.outroText) {
+          outroText = record.outroText
         }
       }
       
@@ -449,7 +484,10 @@ export class ScriptGenerationService {
       
       // Save to series folder
       const paddedPart = String(partNumber).padStart(2, '0')
-      const exportPath = path.join(getFullFolderPath(series.rootFolder), `Part ${paddedPart} - full script.md`)
+      const exportPath = path.join(
+        getFullFolderPath(series.rootFolder),
+        `Part ${paddedPart} - full script${partExportSuffix(language)}.md`
+      )
       await fs.writeFile(exportPath, content, 'utf-8')
       
       return { success: true, path: exportPath }
@@ -466,6 +504,7 @@ export class ScriptGenerationService {
   
   private async generateWithAPI(
     chapter: any,
+    language: NarrationLanguage,
     scriptRecordId: string,
     baseStylePrompt: string,
     aboutSummary: string | null,
@@ -482,6 +521,7 @@ export class ScriptGenerationService {
     this.emitProgress({
       chapterId: chapter.id,
       chapterNumber: chapter.number,
+      language,
       stage: 'preprocessing',
       preprocessPercent: 0
     })
@@ -498,6 +538,7 @@ export class ScriptGenerationService {
         this.emitProgress({
           chapterId: chapter.id,
           chapterNumber: chapter.number,
+          language,
           stage: 'preprocessing',
           preprocessPercent: Math.round((current / total) * 100)
         })
@@ -513,6 +554,7 @@ export class ScriptGenerationService {
       this.emitProgress({
         chapterId: chapter.id,
         chapterNumber: chapter.number,
+        language,
         stage: 'generating-script'
       })
       
@@ -545,6 +587,7 @@ export class ScriptGenerationService {
         this.emitProgress({
           chapterId: chapter.id,
           chapterNumber: chapter.number,
+          language,
           stage: 'extracting-beats',
           batchCurrent: i + 1,
           batchTotal: batches.length
@@ -564,6 +607,7 @@ export class ScriptGenerationService {
       this.emitProgress({
         chapterId: chapter.id,
         chapterNumber: chapter.number,
+        language,
         stage: 'generating-script'
       })
       
@@ -591,6 +635,7 @@ export class ScriptGenerationService {
     this.emitProgress({
       chapterId: chapter.id,
       chapterNumber: chapter.number,
+      language,
       stage: 'generating-summary'
     })
     
@@ -603,7 +648,8 @@ export class ScriptGenerationService {
       const summaryResult = await provider.generateSummary({
         scriptText: parsed.script,
         previousSummary: previousSummary || undefined,
-        isFirstChapter: chapter.number === 1
+        isFirstChapter: chapter.number === 1,
+        language
       })
       
       rollingSummary = summaryResult.rollingSummary
@@ -616,10 +662,11 @@ export class ScriptGenerationService {
     this.emitProgress({
       chapterId: chapter.id,
       chapterNumber: chapter.number,
+      language,
       stage: 'saving'
     })
     
-    const scriptPath = path.join(getFullFolderPath(chapter.folderPath), 'script.md')
+    const scriptPath = path.join(getFullFolderPath(chapter.folderPath), scriptFileName(language))
     await fs.writeFile(scriptPath, parsed.script, 'utf-8')
     
     // Update chapter script record
@@ -638,7 +685,7 @@ export class ScriptGenerationService {
     })
     
     // Update series aboutSummary if this is chapter 1
-    if (chapter.number === 1 && newAboutSummary) {
+    if (chapter.number === 1 && newAboutSummary && this.ownsAbout(language, chapter.series.aboutSummary)) {
       await prisma.series.update({
         where: { id: chapter.seriesId },
         data: { aboutSummary: newAboutSummary }
@@ -652,13 +699,14 @@ export class ScriptGenerationService {
     this.emitProgress({
       chapterId: chapter.id,
       chapterNumber: chapter.number,
+      language,
       stage: 'done'
     })
     
     return { success: true }
   }
   
-  private async getContinuityContext(chapter: any): Promise<{
+  private async getContinuityContext(chapter: any, language: NarrationLanguage): Promise<{
     previousSummary: string | null
     previousClosing: string | null
     aboutSummary: string | null
@@ -678,37 +726,50 @@ export class ScriptGenerationService {
         number: { lt: chapter.number }
       },
       orderBy: { number: 'desc' },
-      include: { script: true }
+      include: scriptIn(language)
     })
     
     return {
-      previousSummary: prevChapter?.script?.rollingSummary || null,
-      previousClosing: prevChapter?.script?.closingParagraph || null,
+      previousSummary: prevChapter?.scripts[0]?.rollingSummary || null,
+      previousClosing: prevChapter?.scripts[0]?.closingParagraph || null,
       aboutSummary: chapter.series?.aboutSummary || null
     }
   }
   
-  private async getBaseStylePrompt(): Promise<string> {
+  private async getBaseStylePrompt(language: NarrationLanguage): Promise<string> {
     const setting = await prisma.setting.findUnique({
       where: { key: 'narrationBasePrompt' }
     })
     
-    return setting?.value || DEFAULT_BASE_STYLE_PROMPT
+    return (setting?.value || DEFAULT_BASE_STYLE_PROMPT) + getLanguageDirective(language)
+  }
+
+  /**
+   * The series "about" overview is shared by both languages and feeds every
+   * later chapter's prompt. English owns it; Hindi only fills it in when the
+   * series has none yet, so a Hindi run never replaces the English overview.
+   */
+  private ownsAbout(language: NarrationLanguage, currentAbout: string | null | undefined): boolean {
+    return language === 'en' || !currentAbout
   }
   
-  private async markDownstreamStale(seriesId: string, afterChapterNumber: number): Promise<void> {
+  private async markDownstreamStale(
+    seriesId: string,
+    afterChapterNumber: number,
+    language: NarrationLanguage
+  ): Promise<void> {
     // Find all scripts for chapters after this one
     const downstreamChapters = await prisma.chapter.findMany({
       where: {
         seriesId,
         number: { gt: afterChapterNumber }
       },
-      include: { script: true }
+      include: scriptIn(language)
     })
     
     const scriptsToMark = downstreamChapters
-      .filter(c => c.script && c.script.status === 'done')
-      .map(c => c.script!.id)
+      .filter(c => c.scripts[0]?.status === 'done')
+      .map(c => c.scripts[0].id)
     
     if (scriptsToMark.length > 0) {
       await prisma.chapterScript.updateMany({
@@ -718,7 +779,11 @@ export class ScriptGenerationService {
     }
   }
   
-  private async calculatePartNumber(seriesId: string, upToChapterNumber: number): Promise<number> {
+  private async calculatePartNumber(
+    seriesId: string,
+    upToChapterNumber: number,
+    language: NarrationLanguage
+  ): Promise<number> {
     // Count how many part-end chapters come before this one, plus 1
     const partEnds = await prisma.chapterScript.count({
       where: {
@@ -726,6 +791,7 @@ export class ScriptGenerationService {
           seriesId,
           number: { lt: upToChapterNumber }
         },
+        language,
         isPartEnd: true
       }
     })
@@ -733,12 +799,16 @@ export class ScriptGenerationService {
     return partEnds + 1
   }
   
-  private async getPartChapters(seriesId: string, partNumber: number): Promise<any[]> {
+  private async getPartChapters(
+    seriesId: string,
+    partNumber: number,
+    language: NarrationLanguage
+  ): Promise<any[]> {
     // Get all chapters with scripts, in order
     const chapters = await prisma.chapter.findMany({
       where: { seriesId },
       orderBy: { number: 'asc' },
-      include: { script: true }
+      include: scriptIn(language)
     })
     
     // Find part boundaries
@@ -750,7 +820,7 @@ export class ScriptGenerationService {
         partChapters.push(chapter)
       }
       
-      if (chapter.script?.isPartEnd) {
+      if (chapter.scripts[0]?.isPartEnd) {
         if (currentPart === partNumber) {
           break  // We've collected all chapters for this part
         }

@@ -9,6 +9,7 @@
  */
 
 import { prisma } from '../index.js'
+import type { NarrationLanguage } from './narrationLanguage.js'
 import { getChapterManifest } from './chapterManifest.js'
 import {
   extractCrops,
@@ -110,19 +111,25 @@ function joinReasons(missing: ReasonLabel[]): string | null {
  * editable when it has a generated script, full section audio, Clipper 3.0
  * crops done for every image, and a timeline script on every section.
  */
-export async function getEditableChapters2(seriesId: string): Promise<Editable2Chapter[]> {
+export async function getEditableChapters2(
+  seriesId: string,
+  language: NarrationLanguage = 'en'
+): Promise<Editable2Chapter[]> {
+  // Script, audio and timeline gates are checked in the requested language;
+  // crops are shared, since both languages cut the same images.
   const chapters = await prisma.chapter.findMany({
     where: { seriesId },
     orderBy: { number: 'asc' },
     include: {
-      audioSections: { include: { audioFile: true } },
-      script: { select: { status: true, isPartEnd: true } }
+      audioSections: { where: { language }, include: { audioFile: true } },
+      scripts: { where: { language }, select: { status: true, isPartEnd: true } }
     }
   })
 
   return Promise.all(
     chapters.map(async ch => {
-      const hasScript = ch.script?.status === 'done' || ch.script?.status === 'edited'
+      const script = ch.scripts[0]
+      const hasScript = script?.status === 'done' || script?.status === 'edited'
       const sectionCount = ch.audioSections.length
       const hasSectionAudio = sectionCount > 0 && ch.audioSections.every(sectionHasAudio)
       const hasTimelineScript =
@@ -151,7 +158,7 @@ export async function getEditableChapters2(seriesId: string): Promise<Editable2C
         cropImageCount: cropStatus.total,
         cropDoneCount: cropStatus.done,
         hasTimelineScript,
-        isPartEnd: ch.script?.isPartEnd ?? false
+        isPartEnd: script?.isPartEnd ?? false
       }
     })
   )
@@ -169,7 +176,10 @@ export async function getEditableChapters2(seriesId: string): Promise<Editable2C
  * Sections with nothing saved are skipped rather than emitting an empty
  * heading — the gap is visible in the readiness badges, not here.
  */
-export async function getChapterTimelineBundle(chapterId: string): Promise<{
+export async function getChapterTimelineBundle(
+  chapterId: string,
+  language: NarrationLanguage = 'en'
+): Promise<{
   chapterId: string
   number: number
   title: string | null
@@ -179,7 +189,7 @@ export async function getChapterTimelineBundle(chapterId: string): Promise<{
 } | null> {
   const chapter = await prisma.chapter.findUnique({
     where: { id: chapterId },
-    include: { audioSections: { orderBy: { index: 'asc' } } }
+    include: { audioSections: { where: { language }, orderBy: { index: 'asc' } } }
   })
   if (!chapter) return null
 

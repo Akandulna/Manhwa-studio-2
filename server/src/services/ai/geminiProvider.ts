@@ -34,6 +34,7 @@ import {
   getBeatsToScriptChapterNPrompt,
   getOutroSystemPrompt,
   getOutroPrompt,
+  getLanguageDirective,
   parseDelimitedResponse
 } from './prompts.js'
 
@@ -134,7 +135,7 @@ export class GeminiProvider implements AIProvider {
       throw new Error('Gemini API key not configured')
     }
     
-    const systemPrompt = getSummarySystemPrompt()
+    const systemPrompt = getSummarySystemPrompt() + getLanguageDirective(input.language)
     const userPrompt = input.isFirstChapter
       ? getChapter1SummaryPrompt(input.scriptText)
       : getChapterNSummaryPrompt(input.scriptText, input.previousSummary || '')
@@ -173,7 +174,7 @@ export class GeminiProvider implements AIProvider {
       throw new Error('Gemini API key not configured')
     }
     
-    const systemPrompt = getOutroSystemPrompt()
+    const systemPrompt = getOutroSystemPrompt() + getLanguageDirective(input.language)
     const userPrompt = getOutroPrompt(
       input.seriesTitle,
       input.partNumber,

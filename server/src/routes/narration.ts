@@ -13,15 +13,27 @@ import {
   aiProviderFactory, 
   buildManualModePrompt,
   parseDelimitedResponse,
+  getLanguageDirective,
   DEFAULT_BASE_STYLE_PROMPT
 } from '../services/ai/index.js'
 import { Server } from 'socket.io'
 import { cachedProbe } from '../utils/cachedProbe.js'
+import {
+  NarrationLanguage,
+  requestLanguage,
+  scriptFileName,
+  outroFileName
+} from '../services/narrationLanguage.js'
 
 const router = Router()
 
 // Store script generator instance
 let scriptGenerator: ScriptGenerationService | null = null
+
+/** Prisma include for one language's script row (a chapter has one per language). */
+function scriptIn(language: NarrationLanguage) {
+  return { scripts: { where: { language } } }
+}
 
 // Helper to get the full folder path by prepending DOWNLOAD_ROOT
 function getFullFolderPath(relativePath: string): string {
@@ -41,11 +53,12 @@ export function initNarrationRoutes(io: Server): Router {
  */
 router.get('/series', async (req: Request, res: Response) => {
   try {
+    const language = requestLanguage(req)
     const series = await prisma.series.findMany({
       include: {
         chapters: {
           where: { status: 'done' },  // Only show downloaded chapters
-          include: { script: true },
+          include: scriptIn(language),
           orderBy: { number: 'asc' }
         },
         _count: {
@@ -61,7 +74,7 @@ router.get('/series', async (req: Request, res: Response) => {
     const result = series.map(s => {
       const downloadedCount = s._count.chapters
       const scriptedCount = s.chapters.filter(c => 
-        c.script?.status === 'done' || c.script?.status === 'edited'
+        c.scripts[0]?.status === 'done' || c.scripts[0]?.status === 'edited'
       ).length
       
       return {
@@ -89,14 +102,15 @@ router.get('/series', async (req: Request, res: Response) => {
  */
 router.get('/series/:id', async (req: Request, res: Response) => {
   try {
+    const language = requestLanguage(req)
     const series = await prisma.series.findUnique({
       where: { id: req.params.id },
       include: {
         chapters: {
           where: { status: 'done' },
           include: {
-            script: true,
-            audioSections: { select: { status: true } }
+            ...scriptIn(language),
+            audioSections: { where: { language }, select: { status: true } }
           },
           orderBy: { number: 'asc' }
         }
@@ -110,8 +124,9 @@ router.get('/series/:id', async (req: Request, res: Response) => {
     // Calculate part numbers for chapters
     let currentPart = 1
     const chaptersWithParts = series.chapters.map(chapter => {
+      const script = chapter.scripts[0]
       const partNum = currentPart
-      if (chapter.script?.isPartEnd) {
+      if (script?.isPartEnd) {
         currentPart++
       }
 
@@ -131,14 +146,14 @@ router.get('/series/:id', async (req: Request, res: Response) => {
           totalSections: vo.totalSections,
           withAudio: vo.generatedSections
         },
-        script: chapter.script ? {
-          id: chapter.script.id,
-          status: chapter.script.status,
-          mode: chapter.script.mode,
-          isPartEnd: chapter.script.isPartEnd,
-          hasOutro: !!chapter.script.outroText,
-          error: chapter.script.error,
-          updatedAt: chapter.script.updatedAt
+        script: script ? {
+          id: script.id,
+          status: script.status,
+          mode: script.mode,
+          isPartEnd: script.isPartEnd,
+          hasOutro: !!script.outroText,
+          error: script.error,
+          updatedAt: script.updatedAt
         } : null,
         partNumber: partNum
       }
@@ -152,6 +167,7 @@ router.get('/series/:id', async (req: Request, res: Response) => {
       rootFolder: series.rootFolder,
       aboutSummary: series.aboutSummary,
       createdAt: series.createdAt,
+      language,
       chapters: chaptersWithParts
     })
   } catch (error) {
@@ -167,11 +183,12 @@ router.get('/series/:id', async (req: Request, res: Response) => {
  */
 router.get('/chapters/:id', async (req: Request, res: Response) => {
   try {
+    const language = requestLanguage(req)
     const chapter = await prisma.chapter.findUnique({
       where: { id: req.params.id },
       include: {
         series: true,
-        script: true
+        ...scriptIn(language)
       }
     })
     
@@ -192,23 +209,26 @@ router.get('/chapters/:id', async (req: Request, res: Response) => {
           number: { lt: chapter.number }
         },
         orderBy: { number: 'desc' },
-        include: { script: true }
+        include: scriptIn(language)
       })
       
-      if (prevChapter?.script) {
+      const prevScript = prevChapter?.scripts[0]
+      if (prevChapter && prevScript) {
         previousContext = {
           chapterNumber: prevChapter.number,
-          rollingSummary: prevChapter.script.rollingSummary,
-          closingParagraph: prevChapter.script.closingParagraph
+          rollingSummary: prevScript.rollingSummary,
+          closingParagraph: prevScript.closingParagraph
         }
       }
     }
     
+    const script = chapter.scripts[0]
+
     // Read script content if exists
     let scriptContent = null
-    if (chapter.script?.scriptPath) {
+    if (script?.scriptPath) {
       try {
-        scriptContent = await fs.readFile(chapter.script.scriptPath, 'utf-8')
+        scriptContent = await fs.readFile(script.scriptPath, 'utf-8')
       } catch {
         // File might not exist
       }
@@ -216,12 +236,12 @@ router.get('/chapters/:id', async (req: Request, res: Response) => {
     
     // Read outro if exists
     let outroContent = null
-    if (chapter.script?.isPartEnd) {
-      const outroPath = path.join(fullFolderPath, 'outro.md')
+    if (script?.isPartEnd) {
+      const outroPath = path.join(fullFolderPath, outroFileName(language))
       try {
         outroContent = await fs.readFile(outroPath, 'utf-8')
       } catch {
-        outroContent = chapter.script.outroText || null
+        outroContent = script.outroText || null
       }
     }
     
@@ -258,8 +278,9 @@ router.get('/chapters/:id', async (req: Request, res: Response) => {
       imagesValid: imageValidation.valid,
       imageError: imageValidation.error,
       aboutSummary: chapter.series.aboutSummary,
-      script: chapter.script ? {
-        ...chapter.script,
+      language,
+      script: script ? {
+        ...script,
         content: scriptContent,
         outroContent
       } : null,
@@ -289,7 +310,8 @@ router.post('/chapters/:id/generate', async (req: Request, res: Response) => {
     const result = await scriptGenerator.generateChapterScript(
       req.params.id,
       'api',
-      config
+      config,
+      requestLanguage(req)
     )
     
     if (result.success) {
@@ -310,11 +332,11 @@ router.post('/chapters/:id/generate', async (req: Request, res: Response) => {
  */
 router.get('/chapters/:id/manual-prompt', async (req: Request, res: Response) => {
   try {
+    const language = requestLanguage(req)
     const chapter = await prisma.chapter.findUnique({
       where: { id: req.params.id },
       include: {
-        series: true,
-        script: true
+        series: true
       }
     })
     
@@ -326,7 +348,7 @@ router.get('/chapters/:id/manual-prompt', async (req: Request, res: Response) =>
     const styleSetting = await prisma.setting.findUnique({
       where: { key: 'narrationBasePrompt' }
     })
-    const baseStylePrompt = styleSetting?.value || DEFAULT_BASE_STYLE_PROMPT
+    const baseStylePrompt = (styleSetting?.value || DEFAULT_BASE_STYLE_PROMPT) + getLanguageDirective(language)
     
     // Get continuity context
     let previousSummary: string | undefined
@@ -339,11 +361,11 @@ router.get('/chapters/:id/manual-prompt', async (req: Request, res: Response) =>
           number: { lt: chapter.number }
         },
         orderBy: { number: 'desc' },
-        include: { script: true }
+        include: scriptIn(language)
       })
       
-      previousSummary = prevChapter?.script?.rollingSummary || undefined
-      previousClosing = prevChapter?.script?.closingParagraph || undefined
+      previousSummary = prevChapter?.scripts[0]?.rollingSummary || undefined
+      previousClosing = prevChapter?.scripts[0]?.closingParagraph || undefined
     }
     
     const prompt = buildManualModePrompt(
@@ -377,6 +399,7 @@ router.get('/chapters/:id/manual-prompt', async (req: Request, res: Response) =>
 router.post('/chapters/:id/manual-submit', async (req: Request, res: Response) => {
   try {
     const { response } = req.body
+    const language = requestLanguage(req)
     
     if (!response) {
       return res.status(400).json({ error: 'Response text required' })
@@ -386,7 +409,7 @@ router.post('/chapters/:id/manual-submit', async (req: Request, res: Response) =
       where: { id: req.params.id },
       include: {
         series: true,
-        script: true
+        ...scriptIn(language)
       }
     })
     
@@ -401,7 +424,7 @@ router.post('/chapters/:id/manual-submit', async (req: Request, res: Response) =
     const scriptContent = parsed.script || response
     
     // Save script to disk
-    const scriptPath = path.join(getFullFolderPath(chapter.folderPath), 'script.md')
+    const scriptPath = path.join(getFullFolderPath(chapter.folderPath), scriptFileName(language))
     await fs.writeFile(scriptPath, scriptContent, 'utf-8')
     
     // Create or update script record
@@ -414,22 +437,24 @@ router.post('/chapters/:id/manual-submit', async (req: Request, res: Response) =
       error: null
     }
     
-    if (chapter.script) {
+    if (chapter.scripts[0]) {
       await prisma.chapterScript.update({
-        where: { id: chapter.script.id },
+        where: { id: chapter.scripts[0].id },
         data: scriptData
       })
     } else {
       await prisma.chapterScript.create({
         data: {
           chapterId: chapter.id,
+          language,
           ...scriptData
         }
       })
     }
     
-    // Update series about if this is chapter 1 and we got an about
-    if (chapter.number === 1 && parsed.about) {
+    // Update series about if this is chapter 1 and we got an about. English
+    // owns the shared overview; Hindi only fills it in when there is none.
+    if (chapter.number === 1 && parsed.about && (language === 'en' || !chapter.series.aboutSummary)) {
       await prisma.series.update({
         where: { id: chapter.seriesId },
         data: { aboutSummary: parsed.about }
@@ -462,6 +487,7 @@ router.post('/chapters/:id/manual-submit', async (req: Request, res: Response) =
 router.put('/chapters/:id/script', async (req: Request, res: Response) => {
   try {
     const { content } = req.body
+    const language = requestLanguage(req)
     
     if (content === undefined) {
       return res.status(400).json({ error: 'Script content required' })
@@ -469,19 +495,19 @@ router.put('/chapters/:id/script', async (req: Request, res: Response) => {
     
     const chapter = await prisma.chapter.findUnique({
       where: { id: req.params.id },
-      include: { script: true }
+      include: scriptIn(language)
     })
     
     if (!chapter) {
       return res.status(404).json({ error: 'Chapter not found' })
     }
     
-    const scriptPath = path.join(getFullFolderPath(chapter.folderPath), 'script.md')
+    const scriptPath = path.join(getFullFolderPath(chapter.folderPath), scriptFileName(language))
     await fs.writeFile(scriptPath, content, 'utf-8')
     
-    if (chapter.script) {
+    if (chapter.scripts[0]) {
       await prisma.chapterScript.update({
-        where: { id: chapter.script.id },
+        where: { id: chapter.scripts[0].id },
         data: {
           scriptPath,
           status: 'edited'
@@ -491,6 +517,7 @@ router.put('/chapters/:id/script', async (req: Request, res: Response) => {
       await prisma.chapterScript.create({
         data: {
           chapterId: chapter.id,
+          language,
           scriptPath,
           mode: 'manual',
           status: 'edited'
@@ -514,7 +541,7 @@ router.post('/chapters/:id/regenerate-summary', async (req: Request, res: Respon
   }
   
   try {
-    const result = await scriptGenerator.regenerateSummary(req.params.id)
+    const result = await scriptGenerator.regenerateSummary(req.params.id, requestLanguage(req))
     
     if (result.success) {
       res.json({ success: true })
@@ -532,26 +559,29 @@ router.post('/chapters/:id/regenerate-summary', async (req: Request, res: Respon
  */
 router.post('/chapters/:id/toggle-part-end', async (req: Request, res: Response) => {
   try {
+    const language = requestLanguage(req)
     const chapter = await prisma.chapter.findUnique({
       where: { id: req.params.id },
-      include: { script: true }
+      include: scriptIn(language)
     })
     
     if (!chapter) {
       return res.status(404).json({ error: 'Chapter not found' })
     }
     
-    const newIsPartEnd = !chapter.script?.isPartEnd
+    const script = chapter.scripts[0]
+    const newIsPartEnd = !script?.isPartEnd
     
-    if (chapter.script) {
+    if (script) {
       await prisma.chapterScript.update({
-        where: { id: chapter.script.id },
+        where: { id: script.id },
         data: { isPartEnd: newIsPartEnd }
       })
     } else {
       await prisma.chapterScript.create({
         data: {
           chapterId: chapter.id,
+          language,
           mode: 'manual',
           status: 'none',
           isPartEnd: newIsPartEnd
@@ -575,7 +605,7 @@ router.post('/chapters/:id/generate-outro', async (req: Request, res: Response) 
   }
   
   try {
-    const result = await scriptGenerator.generateOutro(req.params.id)
+    const result = await scriptGenerator.generateOutro(req.params.id, requestLanguage(req))
     
     if (result.success) {
       res.json({ success: true, outroText: result.outroText })
@@ -600,6 +630,7 @@ router.post('/series/:id/generate-range', async (req: Request, res: Response) =>
   
   try {
     const { fromChapter, toChapter, config } = req.body
+    const language = requestLanguage(req)
     
     if (fromChapter === undefined || toChapter === undefined) {
       return res.status(400).json({ error: 'fromChapter and toChapter required' })
@@ -610,13 +641,15 @@ router.post('/series/:id/generate-range', async (req: Request, res: Response) =>
       req.params.id,
       fromChapter,
       toChapter,
-      config
+      config,
+      language
     ).then(result => {
       const io = req.app.get('io') as Server
-      io.emit('narration:range-complete', result)
+      io.emit('narration:range-complete', { ...result, language })
     }).catch(error => {
       const io = req.app.get('io') as Server
       io.emit('narration:range-complete', {
+        language,
         success: false,
         completed: 0,
         failed: 1,
@@ -648,7 +681,7 @@ router.post('/series/:id/export-part', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'partNumber required' })
     }
     
-    const result = await scriptGenerator.exportPart(req.params.id, partNumber)
+    const result = await scriptGenerator.exportPart(req.params.id, partNumber, requestLanguage(req))
     
     if (result.success) {
       res.json({ success: true, path: result.path })

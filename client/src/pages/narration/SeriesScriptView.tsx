@@ -22,6 +22,8 @@ import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { useToast } from '@/components/ui/use-toast'
 import { useSocket } from '@/lib/socket'
+import { LanguageTabs } from '@/components/LanguageTabs'
+import { LANGUAGE_LABEL, NarrationLanguage, useNarrationLanguage, withLang } from '@/lib/narrationLanguage'
 import {
   ArrowLeft,
   FileText,
@@ -87,12 +89,19 @@ export default function SeriesScriptView() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { toast } = useToast()
-  const { socket, narrationProgress, narrationRangeProgress, narrationRangeComplete } = useSocket()
+  const { socket, narrationProgress: anyNarrationProgress, narrationRangeProgress: anyRangeProgress, narrationRangeComplete } = useSocket()
+  const [language, setLanguage] = useNarrationLanguage('narration')
+  // Progress events from the other language's pipeline are not this tab's.
+  const isThisLanguage = (event: { language?: NarrationLanguage } | null) =>
+    !!event && (event.language ?? 'en') === language
+  const narrationProgress = isThisLanguage(anyNarrationProgress) ? anyNarrationProgress : null
+  const narrationRangeProgress = isThisLanguage(anyRangeProgress) ? anyRangeProgress : null
 
   const [series, setSeries] = useState<NarrationSeriesDetail | null>(null)
 
-  // Chapters already rendered to video — no need to rewrite or re-voice them.
-  const { isPublished } = usePublishedChapters(id)
+  // Chapters already rendered to video in this language — no need to rewrite
+  // or re-voice them.
+  const { isPublished } = usePublishedChapters(id, language)
   // Scripts written in the Sleeper-Cell phone app, updated as the phone saves them.
   const phoneScriptsReceipt = usePhoneScripts(id)
   const phoneScripts = phoneScriptsReceipt.status
@@ -119,16 +128,19 @@ export default function SeriesScriptView() {
 
   useEffect(() => {
     if (id) {
+      // Runs shown in the list belong to the tab they were started from.
+      setVoiceoverRuns({})
       loadData()
     }
-  }, [id])
+  }, [id, language])
 
   // Live progress for one-click voiceover runs started from this page.
   useEffect(() => {
     if (!socket) return
 
-    const handlePipeline = (data: VoiceoverRun & { chapterId: string }) => {
-      const { chapterId, ...run } = data
+    const handlePipeline = (data: VoiceoverRun & { chapterId: string; language?: NarrationLanguage }) => {
+      const { chapterId, language: runLanguage, ...run } = data
+      if ((runLanguage ?? 'en') !== language) return
       setVoiceoverRuns(prev => ({ ...prev, [chapterId]: run }))
 
       if (run.stage === 'complete') {
@@ -170,11 +182,11 @@ export default function SeriesScriptView() {
     return () => {
       socket.off('voiceover:pipeline', handlePipeline)
     }
-  }, [socket, id])
+  }, [socket, id, language])
 
   // Reload when generation completes
   useEffect(() => {
-    if (narrationRangeComplete) {
+    if (narrationRangeComplete && isThisLanguage(narrationRangeComplete)) {
       loadSeries()
       setGenerating(false)
       
@@ -203,7 +215,7 @@ export default function SeriesScriptView() {
   const loadData = async () => {
     try {
       const [seriesData, aiData] = await Promise.all([
-        narrationApi.getSeriesDetail(id!),
+        narrationApi.getSeriesDetail(id!, language),
         narrationApi.getAIStatus()
       ])
       setSeries(seriesData)
@@ -215,6 +227,9 @@ export default function SeriesScriptView() {
         if (firstUnscripted) {
           setRangeFrom(String(firstUnscripted.number))
           setRangeTo(String(Math.min(firstUnscripted.number + 4, seriesData.chapters[seriesData.chapters.length - 1].number)))
+        } else {
+          setRangeFrom('')
+          setRangeTo('')
         }
       }
     } catch (error) {
@@ -230,7 +245,7 @@ export default function SeriesScriptView() {
 
   const loadSeries = async () => {
     try {
-      const data = await narrationApi.getSeriesDetail(id!)
+      const data = await narrationApi.getSeriesDetail(id!, language)
       setSeries(data)
     } catch (error) {
       console.error('Failed to reload series:', error)
@@ -249,7 +264,7 @@ export default function SeriesScriptView() {
 
     setGenerating(true)
     try {
-      await narrationApi.generateScript(chapterId)
+      await narrationApi.generateScript(chapterId, language)
       toast({
         title: 'Generation Started',
         description: 'Check progress in the chapter card'
@@ -288,7 +303,7 @@ export default function SeriesScriptView() {
 
     setGenerating(true)
     try {
-      await narrationApi.generateRange(id!, from, to)
+      await narrationApi.generateRange(id!, language, from, to)
       toast({
         title: 'Range Generation Started',
         description: `Generating chapters ${from} to ${to}`
@@ -305,7 +320,7 @@ export default function SeriesScriptView() {
 
   const handleExportPart = async (partNumber: number) => {
     try {
-      const result = await narrationApi.exportPart(id!, partNumber)
+      const result = await narrationApi.exportPart(id!, language, partNumber)
       if (result.success) {
         toast({
           title: 'Part Exported',
@@ -341,7 +356,7 @@ export default function SeriesScriptView() {
   const handleGenerateVoiceover = async (chapter: NarrationChapterSummary) => {
     setVoiceoverRuns(prev => ({ ...prev, [chapter.id]: { stage: 'splitting' } }))
     try {
-      await voiceoverApi.runPipeline(chapter.id)
+      await voiceoverApi.runPipeline(chapter.id, language)
       toast({
         title: 'Voiceover Started',
         description: `Chapter ${chapter.number}: splitting script, then generating audio`
@@ -414,7 +429,7 @@ export default function SeriesScriptView() {
         const timer = setTimeout(() => finish('failed'), BULK_CHAPTER_TIMEOUT_MS)
         bulkWaiterRef.current = finish
 
-        voiceoverApi.runPipeline(chapter.id).catch(error => {
+        voiceoverApi.runPipeline(chapter.id, language).catch(error => {
           toast({
             title: `Chapter ${chapter.number} Failed to Start`,
             description: error instanceof Error ? error.message : 'Could not start voiceover',
@@ -567,7 +582,7 @@ export default function SeriesScriptView() {
     return (
       <div className="p-6 text-center">
         <h2 className="text-xl font-semibold">Series not found</h2>
-        <Button variant="link" onClick={() => navigate('/narration')}>
+        <Button variant="link" onClick={() => navigate(withLang('/narration', language))}>
           Return to Library
         </Button>
       </div>
@@ -588,18 +603,27 @@ export default function SeriesScriptView() {
     <div className="p-6">
       {/* Header */}
       <div className="flex items-start gap-6 mb-6">
-        <Button variant="ghost" size="icon" onClick={() => navigate('/narration')}>
+        <Button variant="ghost" size="icon" onClick={() => navigate(withLang('/narration', language))}>
           <ArrowLeft className="h-5 w-5" />
         </Button>
         
         <div className="flex-1">
-          <h1 className="text-3xl font-bold mb-2">{series.title}</h1>
+          <div className="flex flex-wrap items-center gap-4 mb-2">
+            <h1 className="text-3xl font-bold">{series.title}</h1>
+            {/* Locked while a bulk voiceover runs: it waits on this tab's events */}
+            <LanguageTabs
+              value={language}
+              onChange={setLanguage}
+              disabled={!!bulkVoiceover}
+            />
+          </div>
           
           <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground mb-4">
             <span>{series.chapters.length} chapters available</span>
             <span>•</span>
-            <span>{scriptedCount} scripted</span>
-            {phoneScripts?.series[series.id] && (
+            <span>{scriptedCount} scripted in {LANGUAGE_LABEL[language]}</span>
+            {/* The phone writes English scripts only */}
+            {language === 'en' && phoneScripts?.series[series.id] && (
               <>
                 <span>•</span>
                 <span title={phoneScripts.device ? `Sleeper-Cell on ${phoneScripts.device}` : 'Sleeper-Cell'}>
@@ -607,13 +631,13 @@ export default function SeriesScriptView() {
                 </span>
               </>
             )}
-            <PhoneRefreshButton receipt={phoneScriptsReceipt} />
+            {language === 'en' && <PhoneRefreshButton receipt={phoneScriptsReceipt} />}
           </div>
           
           {/* Progress bar */}
           <div className="max-w-md">
             <div className="flex items-center justify-between text-sm mb-1">
-              <span>Script Progress</span>
+              <span>{LANGUAGE_LABEL[language]} Script Progress</span>
               <span>{progress}%</span>
             </div>
             <Progress value={progress} className="h-2" />
@@ -644,7 +668,9 @@ export default function SeriesScriptView() {
       )}
 
       {/* Scripts written on the Sleeper-Cell phone, uploaded as one zip */}
-      <PhoneScriptImport seriesId={series.id} phoneScripts={phoneScripts} onImported={loadSeries} />
+      {language === 'en' && (
+        <PhoneScriptImport seriesId={series.id} phoneScripts={phoneScripts} onImported={loadSeries} />
+      )}
 
       {/* Series-wide voiceover */}
       <Card className="mb-6">
@@ -703,7 +729,9 @@ export default function SeriesScriptView() {
                 </Button>
 
                 <span className="text-sm text-muted-foreground">
-                  {voiceableCount === 0
+                  {scriptedCount === 0
+                    ? `No chapter has a ${LANGUAGE_LABEL[language]} script yet`
+                    : voiceableCount === 0
                     ? 'Every scripted chapter is already voiced'
                     : `${voiceableCount} chapter(s) ready - runs one after another`}
                 </span>
@@ -821,7 +849,7 @@ export default function SeriesScriptView() {
                       </div>
                       
                       <div className="flex items-center gap-2">
-                        {phoneScripts?.chapters[chapter.id] && (
+                        {language === 'en' && phoneScripts?.chapters[chapter.id] && (
                           <PhoneScriptBadge
                             script={phoneScripts.chapters[chapter.id]}
                             device={phoneScripts.device}
@@ -851,7 +879,7 @@ export default function SeriesScriptView() {
                           </Badge>
                         )}
 
-                        <Link to={`/narration/chapter/${chapter.id}`}>
+                        <Link to={withLang(`/narration/chapter/${chapter.id}`, language)}>
                           <Button variant="outline" size="sm">
                             {chapter.script?.status === 'done' || chapter.script?.status === 'edited' ? (
                               <>
@@ -889,7 +917,7 @@ export default function SeriesScriptView() {
                               </Button>
                             )}
 
-                            <Link to={`/narration/voiceover/${chapter.id}`}>
+                            <Link to={withLang(`/narration/voiceover/${chapter.id}`, language)}>
                               <Button variant="outline" size="sm">
                                 <Volume2 className="h-4 w-4 mr-1" />
                                 Voice

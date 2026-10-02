@@ -1,3 +1,5 @@
+import type { NarrationLanguage } from './narrationLanguage'
+
 const API_BASE = '/api'
 
 async function fetchApi<T>(
@@ -311,6 +313,7 @@ export interface NarrationSeriesDetail {
   rootFolder: string
   aboutSummary?: string
   createdAt: string
+  language: NarrationLanguage
   chapters: NarrationChapterSummary[]
 }
 
@@ -325,6 +328,7 @@ export interface ChapterScriptDetail {
   imagesValid: boolean
   imageError?: string
   aboutSummary?: string
+  language: NarrationLanguage
   script: {
     id: string
     status: string
@@ -370,67 +374,72 @@ export interface AIStatus {
   } | null
 }
 
+// Every chapter- and series-level narration, voiceover and Editor 2.0 call
+// takes the narration language: English and Hindi are separate scripts,
+// voiceovers and timelines on the server. Section- and file-level calls don't,
+// because a section or audio file already belongs to one language.
+
 export const narrationApi = {
   // Series listing
-  getSeries: () => fetchApi<NarrationSeries[]>('/narration/series'),
+  getSeries: (lang: NarrationLanguage) => fetchApi<NarrationSeries[]>(`/narration/series?lang=${lang}`),
   
-  getSeriesDetail: (id: string) => 
-    fetchApi<NarrationSeriesDetail>(`/narration/series/${id}`),
+  getSeriesDetail: (id: string, lang: NarrationLanguage) => 
+    fetchApi<NarrationSeriesDetail>(`/narration/series/${id}?lang=${lang}`),
   
   // Chapter operations
-  getChapterDetail: (id: string) =>
-    fetchApi<ChapterScriptDetail>(`/narration/chapters/${id}`),
+  getChapterDetail: (id: string, lang: NarrationLanguage) =>
+    fetchApi<ChapterScriptDetail>(`/narration/chapters/${id}?lang=${lang}`),
   
-  generateScript: (chapterId: string, config?: Record<string, number>) =>
-    fetchApi<{ success: boolean }>(`/narration/chapters/${chapterId}/generate`, {
+  generateScript: (chapterId: string, lang: NarrationLanguage, config?: Record<string, number>) =>
+    fetchApi<{ success: boolean }>(`/narration/chapters/${chapterId}/generate?lang=${lang}`, {
       method: 'POST',
       body: JSON.stringify({ config })
     }),
   
-  getManualPrompt: (chapterId: string) =>
-    fetchApi<ManualPromptResponse>(`/narration/chapters/${chapterId}/manual-prompt`),
+  getManualPrompt: (chapterId: string, lang: NarrationLanguage) =>
+    fetchApi<ManualPromptResponse>(`/narration/chapters/${chapterId}/manual-prompt?lang=${lang}`),
   
-  submitManualResult: (chapterId: string, response: string) =>
+  submitManualResult: (chapterId: string, lang: NarrationLanguage, response: string) =>
     fetchApi<{ 
       success: boolean
       parsed: { hasScript: boolean; hasSummary: boolean; hasClosing: boolean; hasAbout: boolean }
       needsSummaryRegeneration: boolean
-    }>(`/narration/chapters/${chapterId}/manual-submit`, {
+    }>(`/narration/chapters/${chapterId}/manual-submit?lang=${lang}`, {
       method: 'POST',
       body: JSON.stringify({ response })
     }),
   
-  saveScript: (chapterId: string, content: string) =>
-    fetchApi<{ success: boolean }>(`/narration/chapters/${chapterId}/script`, {
+  saveScript: (chapterId: string, lang: NarrationLanguage, content: string) =>
+    fetchApi<{ success: boolean }>(`/narration/chapters/${chapterId}/script?lang=${lang}`, {
       method: 'PUT',
       body: JSON.stringify({ content })
     }),
   
-  regenerateSummary: (chapterId: string) =>
-    fetchApi<{ success: boolean }>(`/narration/chapters/${chapterId}/regenerate-summary`, {
+  regenerateSummary: (chapterId: string, lang: NarrationLanguage) =>
+    fetchApi<{ success: boolean }>(`/narration/chapters/${chapterId}/regenerate-summary?lang=${lang}`, {
       method: 'POST'
     }),
   
-  togglePartEnd: (chapterId: string) =>
-    fetchApi<{ success: boolean; isPartEnd: boolean }>(`/narration/chapters/${chapterId}/toggle-part-end`, {
+  togglePartEnd: (chapterId: string, lang: NarrationLanguage) =>
+    fetchApi<{ success: boolean; isPartEnd: boolean }>(`/narration/chapters/${chapterId}/toggle-part-end?lang=${lang}`, {
       method: 'POST'
     }),
   
-  generateOutro: (chapterId: string) =>
-    fetchApi<{ success: boolean; outroText?: string }>(`/narration/chapters/${chapterId}/generate-outro`, {
+  generateOutro: (chapterId: string, lang: NarrationLanguage) =>
+    fetchApi<{ success: boolean; outroText?: string }>(`/narration/chapters/${chapterId}/generate-outro?lang=${lang}`, {
       method: 'POST'
     }),
   
   // Range generation
-  generateRange: (seriesId: string, fromChapter: number, toChapter: number, config?: Record<string, number>) =>
-    fetchApi<{ started: boolean }>(`/narration/series/${seriesId}/generate-range`, {
+  generateRange: (seriesId: string, lang: NarrationLanguage, fromChapter: number, toChapter: number, config?: Record<string, number>) =>
+    fetchApi<{ started: boolean }>(`/narration/series/${seriesId}/generate-range?lang=${lang}`, {
       method: 'POST',
       body: JSON.stringify({ fromChapter, toChapter, config })
     }),
   
   // Part export
-  exportPart: (seriesId: string, partNumber: number) =>
-    fetchApi<{ success: boolean; path?: string }>(`/narration/series/${seriesId}/export-part`, {
+  exportPart: (seriesId: string, lang: NarrationLanguage, partNumber: number) =>
+    fetchApi<{ success: boolean; path?: string }>(`/narration/series/${seriesId}/export-part?lang=${lang}`, {
       method: 'POST',
       body: JSON.stringify({ partNumber })
     }),
@@ -518,6 +527,7 @@ export interface VoiceoverChapterDetail {
     id: string
     title: string
   }
+  language: NarrationLanguage
   script: {
     id: string
     status: string
@@ -547,28 +557,28 @@ export interface VoiceInfo {
 
 export const voiceoverApi = {
   // Series listing
-  getSeries: () => fetchApi<VoiceoverSeries[]>('/voiceover/series'),
+  getSeries: (lang: NarrationLanguage) => fetchApi<VoiceoverSeries[]>(`/voiceover/series?lang=${lang}`),
   
   // Chapter operations
-  getChapterDetail: (id: string) =>
-    fetchApi<VoiceoverChapterDetail>(`/voiceover/chapters/${id}`),
+  getChapterDetail: (id: string, lang: NarrationLanguage) =>
+    fetchApi<VoiceoverChapterDetail>(`/voiceover/chapters/${id}?lang=${lang}`),
   
   // Section operations
-  initializeSections: (chapterId: string, targetLength?: number) =>
+  initializeSections: (chapterId: string, lang: NarrationLanguage, targetLength?: number) =>
     fetchApi<{
       count: number
       replacedSections: number
       discardedAudio: number
       sections: AudioSection[]
-    }>(`/voiceover/chapters/${chapterId}/init-sections`, {
+    }>(`/voiceover/chapters/${chapterId}/init-sections?lang=${lang}`, {
       method: 'POST',
       body: JSON.stringify({ targetLength })
     }),
   
   // One-click: split script -> generate all audio -> align every section.
   // Returns as soon as the run starts; progress arrives on `voiceover:pipeline`.
-  runPipeline: (chapterId: string, opts?: { voice?: string; targetLength?: number }) =>
-    fetchApi<{ message: string; chapterId: string }>(`/voiceover/chapters/${chapterId}/pipeline`, {
+  runPipeline: (chapterId: string, lang: NarrationLanguage, opts?: { voice?: string; targetLength?: number }) =>
+    fetchApi<{ message: string; chapterId: string }>(`/voiceover/chapters/${chapterId}/pipeline?lang=${lang}`, {
       method: 'POST',
       body: JSON.stringify(opts ?? {})
     }),
@@ -593,9 +603,9 @@ export const voiceoverApi = {
       { method: 'POST' }
     ),
 
-  alignChapter: (chapterId: string) =>
+  alignChapter: (chapterId: string, lang: NarrationLanguage) =>
     fetchApi<{ aligned: number; failed: number; errors: string[] }>(
-      `/voiceover/chapters/${chapterId}/align`,
+      `/voiceover/chapters/${chapterId}/align?lang=${lang}`,
       { method: 'POST' }
     ),
 
@@ -607,8 +617,8 @@ export const voiceoverApi = {
       method: 'DELETE'
     }),
   
-  addSection: (chapterId: string, text: string, index?: number) =>
-    fetchApi<AudioSection>(`/voiceover/chapters/${chapterId}/sections`, {
+  addSection: (chapterId: string, lang: NarrationLanguage, text: string, index?: number) =>
+    fetchApi<AudioSection>(`/voiceover/chapters/${chapterId}/sections?lang=${lang}`, {
       method: 'POST',
       body: JSON.stringify({ text, index })
     }),
@@ -620,8 +630,8 @@ export const voiceoverApi = {
       body: JSON.stringify({ voice, stylePrompt })
     }),
   
-  generateAllSections: (chapterId: string, voice?: string, stylePrompt?: string, concurrency?: number) =>
-    fetchApi<{ results: Array<{ sectionId: string; success: boolean; error?: string }> }>(`/voiceover/chapters/${chapterId}/generate-all`, {
+  generateAllSections: (chapterId: string, lang: NarrationLanguage, voice?: string, stylePrompt?: string, concurrency?: number) =>
+    fetchApi<{ results: Array<{ sectionId: string; success: boolean; error?: string }> }>(`/voiceover/chapters/${chapterId}/generate-all?lang=${lang}`, {
       method: 'POST',
       body: JSON.stringify({ voice, stylePrompt, concurrency })
     }),
@@ -639,10 +649,10 @@ export const voiceoverApi = {
     })
   },
   
-  uploadChapterAudio: (chapterId: string, file: File) => {
+  uploadChapterAudio: (chapterId: string, lang: NarrationLanguage, file: File) => {
     const formData = new FormData()
     formData.append('audio', file)
-    return fetch(`${API_BASE}/voiceover/chapters/${chapterId}/upload`, {
+    return fetch(`${API_BASE}/voiceover/chapters/${chapterId}/upload?lang=${lang}`, {
       method: 'POST',
       body: formData
     }).then(res => {
@@ -657,33 +667,33 @@ export const voiceoverApi = {
     }),
   
   // Join audio
-  joinChapterAudio: (chapterId: string, normalize?: boolean, outputFormat?: string) =>
-    fetchApi<AudioFile>(`/voiceover/chapters/${chapterId}/join`, {
+  joinChapterAudio: (chapterId: string, lang: NarrationLanguage, normalize?: boolean, outputFormat?: string) =>
+    fetchApi<AudioFile>(`/voiceover/chapters/${chapterId}/join?lang=${lang}`, {
       method: 'POST',
       body: JSON.stringify({ normalize, outputFormat })
     }),
   
   // Analysis
-  analyzeVoices: (chapterId: string, threshold?: number, includeAcoustic?: boolean) =>
-    fetchApi<VoiceAnalysisResult>(`/voiceover/chapters/${chapterId}/analyze`, {
+  analyzeVoices: (chapterId: string, lang: NarrationLanguage, threshold?: number, includeAcoustic?: boolean) =>
+    fetchApi<VoiceAnalysisResult>(`/voiceover/chapters/${chapterId}/analyze?lang=${lang}`, {
       method: 'POST',
       body: JSON.stringify({ threshold, includeAcoustic })
     }),
   
-  getAnalysis: (chapterId: string) =>
-    fetchApi<VoiceAnalysisResult>(`/voiceover/chapters/${chapterId}/analysis`),
+  getAnalysis: (chapterId: string, lang: NarrationLanguage) =>
+    fetchApi<VoiceAnalysisResult>(`/voiceover/chapters/${chapterId}/analysis?lang=${lang}`),
   
   checkAnalysisAvailable: () =>
     fetchApi<{ available: boolean; error?: string }>('/voiceover/analysis/status'),
   
   // Check voice consistency - returns mismatch info without deleting
-  checkVoiceConsistency: (chapterId: string, targetVoice?: string) =>
+  checkVoiceConsistency: (chapterId: string, lang: NarrationLanguage, targetVoice?: string) =>
     fetchApi<{
       consistent: boolean
       message: string
       expectedVoice: string | null
       mismatchedSections: Array<{ sectionId: string; sectionIndex?: number; currentVoice?: string; expectedVoice?: string }>
-    }>(`/voiceover/chapters/${chapterId}/check-voices`, {
+    }>(`/voiceover/chapters/${chapterId}/check-voices?lang=${lang}`, {
       method: 'POST',
       body: JSON.stringify({ targetVoice })
     }),
@@ -830,6 +840,7 @@ export interface CropRepairResult {
 /** A chapter's Editor 2.0 paste as the server stores it. json "" = cleared. */
 export interface StoredTimeline2 {
   chapterId: string
+  language: NarrationLanguage
   json: string
   processedJson: string | null
   /** Epoch ms of the write; the newest write wins. */
@@ -838,33 +849,33 @@ export interface StoredTimeline2 {
 
 export const videoApi2 = {
   /** Every stored Editor 2.0 paste for a series (see timelineHandoff). */
-  getStoredTimelines: (seriesId: string) =>
-    fetchApi<StoredTimeline2[]>(`/video2/series/${seriesId}/timelines`),
+  getStoredTimelines: (seriesId: string, lang: NarrationLanguage) =>
+    fetchApi<StoredTimeline2[]>(`/video2/series/${seriesId}/timelines?lang=${lang}`),
 
-  getStoredTimeline: (chapterId: string) =>
-    fetchApi<StoredTimeline2 | null>(`/video2/chapters/${chapterId}/timeline`),
+  getStoredTimeline: (chapterId: string, lang: NarrationLanguage) =>
+    fetchApi<StoredTimeline2 | null>(`/video2/chapters/${chapterId}/timeline?lang=${lang}`),
 
-  saveStoredTimeline: (chapterId: string, body: Omit<StoredTimeline2, 'chapterId'>) =>
-    fetchApi<StoredTimeline2>(`/video2/chapters/${chapterId}/timeline`, {
+  saveStoredTimeline: (chapterId: string, lang: NarrationLanguage, body: Omit<StoredTimeline2, 'chapterId' | 'language'>) =>
+    fetchApi<StoredTimeline2>(`/video2/chapters/${chapterId}/timeline?lang=${lang}`, {
       method: 'PUT',
       body: JSON.stringify(body)
     }),
 
-  getEditableChapters: (seriesId: string) =>
-    fetchApi<Editable2Chapter[]>(`/video2/series/${seriesId}/editable-chapters`),
+  getEditableChapters: (seriesId: string, lang: NarrationLanguage) =>
+    fetchApi<Editable2Chapter[]>(`/video2/series/${seriesId}/editable-chapters?lang=${lang}`),
 
-  /** Which chapters of this series have already been rendered to MP4. */
-  getExportedChapters: (seriesId: string) =>
-    fetchApi<Exported2Chapter[]>(`/video2/series/${seriesId}/exports`),
+  /** Which chapters of this series have already been rendered to MP4 in this language. */
+  getExportedChapters: (seriesId: string, lang: NarrationLanguage) =>
+    fetchApi<Exported2Chapter[]>(`/video2/series/${seriesId}/exports?lang=${lang}`),
 
-  getTimelineBundle: (chapterId: string) =>
-    fetchApi<ChapterTimelineBundle>(`/video2/chapters/${chapterId}/timeline-bundle`),
+  getTimelineBundle: (chapterId: string, lang: NarrationLanguage) =>
+    fetchApi<ChapterTimelineBundle>(`/video2/chapters/${chapterId}/timeline-bundle?lang=${lang}`),
 
   getCropMetadataBundle: (chapterId: string) =>
     fetchApi<ChapterCropMetadataBundle>(`/video2/chapters/${chapterId}/crop-metadata-bundle`),
 
-  processTimeline: (chapterId: string, json: string) =>
-    fetchApi<TimelinePlan>(`/video2/chapters/${chapterId}/process-timeline`, {
+  processTimeline: (chapterId: string, lang: NarrationLanguage, json: string) =>
+    fetchApi<TimelinePlan>(`/video2/chapters/${chapterId}/process-timeline?lang=${lang}`, {
       method: 'POST',
       body: JSON.stringify({ json })
     }),
@@ -879,10 +890,11 @@ export const videoApi2 = {
    */
   exportAll: (
     seriesId: string,
+    lang: NarrationLanguage,
     chapters: { chapterId: string; json: string }[],
     options?: { resolution?: string; preset?: string; fps?: number; force?: boolean }
   ) =>
-    fetchApi<{ jobId: string }>(`/video2/series/${seriesId}/export-all`, {
+    fetchApi<{ jobId: string }>(`/video2/series/${seriesId}/export-all?lang=${lang}`, {
       method: 'POST',
       body: JSON.stringify({ chapters, ...options })
     }),
@@ -982,6 +994,7 @@ export interface PlanSection {
 
 export interface TimelinePlan {
   chapterId: string
+  language: NarrationLanguage
   chapterNumber: number
   chapterTitle: string | null
   seriesTitle: string
@@ -1902,7 +1915,7 @@ export interface StorageDeleteResult {
 
 export interface StorageVideoFile {
   seriesId: string
-  dir: '_video' | '_video2'
+  dir: '_video' | '_video2' | '_video2_hi'
   fileName: string
   bytes: number
   modifiedAt: string
@@ -1919,8 +1932,14 @@ export const storageApi = {
   getOverview: () => fetchApi<StorageOverview>('/storage/overview'),
 
   // Cheap per-chapter "has a rendered video" lookup for the module pages.
-  getPublished: (seriesId?: string) =>
-    fetchApi<PublishedMap>(`/storage/published${seriesId ? `?seriesId=${seriesId}` : ''}`),
+  /** `lang` limits "published" to that narration language's renders; omit it for any render. */
+  getPublished: (seriesId?: string, lang?: NarrationLanguage) => {
+    const params = new URLSearchParams()
+    if (seriesId) params.set('seriesId', seriesId)
+    if (lang) params.set('lang', lang)
+    const query = params.toString()
+    return fetchApi<PublishedMap>(`/storage/published${query ? `?${query}` : ''}`)
+  },
 
   getCategories: () => fetchApi<StorageCategoryMeta[]>('/storage/categories'),
 
@@ -1954,37 +1973,88 @@ export const storageApi = {
     )
 }
 
-// ============ Cloudflare R2 backup ============
+// ============ Cloudflare R2: sending chapters to the phone ============
 
-export type R2SeriesState = 'queued' | 'zipping' | 'uploading' | 'done' | 'skipped' | 'failed' | 'cancelled'
+/**
+ * new:         never sent
+ * changed:     sent, but its pages changed since (e.g. stitched)
+ * sent:        in R2, the phone hasn't got it yet
+ * downloading: the phone is downloading it
+ * on_phone:    the phone has this copy
+ * cleared:     the phone cleared it; not sent again unless picked
+ */
+export type PhoneChapterState = 'new' | 'changed' | 'sent' | 'downloading' | 'on_phone' | 'cleared'
 
-export interface R2SeriesProgress {
+export interface PhoneSendChapter {
+  chapterId: string
+  number: number
+  folder: string
+  pages: number
+  bytes: number
+  state: PhoneChapterState
+  sentAt: string | null
+  clearedAt: string | null
+  /** When the phone unpacked this copy. */
+  phoneAt: string | null
+  /** Over the page limit: stitch it before sending (auto-send skips it). */
+  needsStitch: boolean
+  /** What the phone's "Clear done chapters" ticks: published, or crops and script. */
+  desktop: { crops: boolean; script: boolean; published: boolean; done: boolean }
+}
+
+export interface PhoneSendSeries {
   seriesId: string
   title: string
-  state: R2SeriesState
-  /** Unpublished chapters that go in the zip. */
-  chaptersIncluded: number
-  /** Published chapters left out. */
-  chaptersPublished: number
-  zipBytesTotal: number
-  zipBytesDone: number
-  /** Size of the finished zip, and how much has reached R2. */
-  uploadBytesTotal: number
-  uploadBytesDone: number
-  /** Object key in the bucket once uploaded. */
-  key?: string
-  /** Why a series was skipped. */
+  folder: string
+  autoSend: boolean
+  chapters: PhoneSendChapter[]
+  /** New or changed: what a send picks by default. */
+  toSend: number
+  onPhone: number
+  /** Sent, not on the phone yet. */
+  waiting: number
+  cleared: number
+  /** The phone's chapter index is behind the desktop (chapters finished since). */
+  indexStale: boolean
+}
+
+export interface PhoneSendPlan {
+  configured: boolean
+  missing: string[]
+  device: string | null
+  reportedAt: string | null
+  series: PhoneSendSeries[]
+}
+
+export type PhoneSendSeriesState = 'queued' | 'sending' | 'done' | 'skipped' | 'failed' | 'cancelled'
+
+export interface PhoneSendSeriesProgress {
+  seriesId: string
+  title: string
+  state: PhoneSendSeriesState
+  chaptersTotal: number
+  chaptersSent: number
+  current?: { folder: string; phase: 'zipping' | 'uploading' }
+  bytesTotal: number
+  bytesDone: number
+  /** The series' folder in R2, once known. */
+  folder?: string
   note?: string
   error?: string
 }
 
-export interface R2UploadJob {
+export interface PhoneSendJob {
   id: string
   state: 'running' | 'done' | 'cancelled'
   bucket: string
+  /** Started by auto-send after downloads. */
+  auto: boolean
   startedAt: string
   finishedAt?: string
-  series: R2SeriesProgress[]
+  /** How the phone was asked to fetch the new chapters. */
+  phone: PhoneUpdateRequest | null
+  phoneError?: string
+  series: PhoneSendSeriesProgress[]
 }
 
 export interface R2Status {
@@ -1992,7 +2062,7 @@ export interface R2Status {
   missing: string[]
   bucket: string | null
   prefix: string
-  job: R2UploadJob | null
+  job: PhoneSendJob | null
 }
 
 export interface R2Config {
@@ -2045,25 +2115,30 @@ export interface R2Usage {
 
 export interface PhoneSeriesSync {
   /**
-   * downloaded:  the phone has unzipped the zip now in R2
-   * downloading: the phone is downloading it
-   * outdated:    the phone has an earlier upload of this series
-   * missing:     the phone has none
+   * downloaded:  the phone has every chapter sent (and not cleared)
+   * downloading: it is downloading some
+   * outdated:    some chapters sent aren't on the phone yet
+   * missing:     it has none of them
    */
   state: 'downloaded' | 'downloading' | 'outdated' | 'missing'
-  /** When the phone finished unzipping the copy it has. */
+  /** When the phone last unpacked a chapter. */
   phoneAt: string | null
-  /** When the zip now in R2 was uploaded. */
+  /** When a chapter was last sent. */
   uploadedAt: string | null
+  sent: number
+  onPhone: number
+  downloading: number
+  /** Chapters the phone cleared once done. */
+  cleared: number
 }
 
-/** What the Sleeper-Cell phone app has downloaded, from the receipt it writes to R2. */
+/** What the Sleeper-Cell phone app has of the chapters sent to it, from its receipt. */
 export interface PhoneSyncStatus {
   configured: boolean
   /** When the phone last reported; null if it never has. */
   reportedAt: string | null
   device: string | null
-  /** By series id; only series with a zip in R2. */
+  /** By series id; only series with chapters sent. */
   series: Record<string, PhoneSeriesSync>
 }
 
@@ -2315,12 +2390,9 @@ export interface PhoneImportPreview {
 export const r2Api = {
   getStatus: () => fetchApi<R2Status>('/r2/status'),
 
-  /**
-   * `fresh` re-lists the bucket instead of using the server's one-minute cache;
-   * `cached` takes the last listing however old (no R2 operation once listed).
-   */
-  getPhoneSync: (fresh = false, cached = false) =>
-    fetchApi<PhoneSyncStatus>(`/r2/phone${fresh ? '?fresh=1' : cached ? '?cached=1' : ''}`),
+  /** From the server's copy of the phone's receipt; `fresh` re-reads it from R2 when there is no relay. */
+  getPhoneSync: (fresh = false) =>
+    fetchApi<PhoneSyncStatus>(`/r2/phone${fresh ? '?fresh=1' : ''}`),
 
   /**
    * With `seriesId`, also that series' chapters. The server answers from its
@@ -2393,11 +2465,136 @@ export const r2Api = {
 
   test: () => fetchApi<{ ok: true; bucket: string }>('/r2/test', { method: 'POST' }),
 
-  upload: (seriesIds: string[]) =>
-    fetchApi<R2UploadJob>('/r2/upload', {
+  /** Per series: chapters to send, on the phone, cleared there. Reads disk only, plus the phone's receipt. */
+  getSendPlan: (fresh = false) =>
+    fetchApi<PhoneSendPlan>(`/r2/phone-send/plan${fresh ? '?fresh=1' : ''}`),
+
+  /** Sends each series' new and changed chapters, or exactly `chapterIds`. Progress comes as `phone-send:progress`. */
+  sendToPhone: (series: { seriesId: string; chapterIds?: string[] }[]) =>
+    fetchApi<PhoneSendJob>('/r2/phone-send', {
       method: 'POST',
-      body: JSON.stringify({ seriesIds })
+      body: JSON.stringify({ series })
     }),
 
-  cancel: () => fetchApi<{ job: R2UploadJob | null }>('/r2/cancel', { method: 'POST' })
+  setAutoSend: (seriesId: string, enabled: boolean) =>
+    fetchApi<{ ok: true }>('/r2/phone-send/auto', { method: 'PUT', body: JSON.stringify({ seriesId, enabled }) }),
+
+  /** Writes the phone's chapter index where it is behind, so its clear dialog ticks newly finished chapters. */
+  updatePhoneIndex: (seriesId?: string) =>
+    fetchApi<{ written: number }>('/r2/phone-send/index', { method: 'POST', body: JSON.stringify({ seriesId }) }),
+
+  cancel: () => fetchApi<{ job: PhoneSendJob | null }>('/r2/cancel', { method: 'POST' })
+}
+
+// ============ Page Stitcher ============
+
+/** A chapter with more pages than this is flagged for stitching; normal chapters run 14–20. */
+export const LARGE_CHAPTER_PAGES = 40
+
+export interface StitchChapterRow {
+  id: string
+  number: number
+  title: string | null
+  seriesId: string
+  seriesTitle: string
+  pageCount: number
+  /** Set while the originals are still backed up, so the stitch can be undone. */
+  stitched: { originalPages: number; stitchedAt: string } | null
+}
+
+export interface StitchPage {
+  filename: string
+  width: number
+  height: number
+  format: string
+  bytes: number
+}
+
+export interface StitchRecord {
+  stitchedAt: string
+  originals: string[]
+  excluded: string[]
+  outputs: { filename: string; sources: string[]; width: number; height: number; bytes: number }[]
+}
+
+export interface StitchChapterState {
+  chapterId: string
+  number: number
+  title: string | null
+  seriesId: string
+  seriesTitle: string
+  /** Tallest page a multi-page group may produce. */
+  maxHeight: number
+  pages: StitchPage[]
+  record: StitchRecord | null
+  backupBytes: number
+  blockers: string[]
+}
+
+export const stitchApi = {
+  getChapters: () => fetchApi<StitchChapterRow[]>('/stitch/chapters'),
+
+  getChapter: (id: string) => fetchApi<StitchChapterState>(`/stitch/chapters/${id}`),
+
+  /** `version` busts the cache: file names are reused across a stitch and its undo. */
+  thumbUrl: (id: string, filename: string, version: string) =>
+    `${API_BASE}/stitch/chapters/${id}/thumb/${encodeURIComponent(filename)}?v=${encodeURIComponent(version)}`,
+
+  imageUrl: (id: string, filename: string, version: string) =>
+    `${API_BASE}/stitch/chapters/${id}/image/${encodeURIComponent(filename)}?v=${encodeURIComponent(version)}`,
+
+  stitch: (id: string, groups: string[][]) =>
+    fetchApi<{ originalPages: number; stitchedPages: number; excluded: number }>(`/stitch/chapters/${id}`, {
+      method: 'POST',
+      body: JSON.stringify({ groups })
+    }),
+
+  undo: (id: string) => fetchApi<{ ok: true }>(`/stitch/chapters/${id}/undo`, { method: 'POST' }),
+
+  discardBackup: (id: string) =>
+    fetchApi<{ ok: true }>(`/stitch/chapters/${id}/backup`, { method: 'DELETE' })
+}
+
+// ============ Chapter page preview ============
+
+export interface DeletedPage {
+  filename: string
+  deletedAt: string
+  width: number
+  height: number
+  bytes: number
+}
+
+export interface ChapterPagesState {
+  chapterId: string
+  number: number
+  title: string | null
+  seriesId: string
+  seriesTitle: string
+  pages: StitchPage[]
+  /** Pages in the chapter's bin, restorable until the bin is emptied. */
+  deleted: DeletedPage[]
+  blockers: string[]
+}
+
+export const pagePreviewApi = {
+  getChapter: (id: string) => fetchApi<ChapterPagesState>(`/page-preview/chapters/${id}`),
+
+  deletePages: (id: string, filenames: string[]) =>
+    fetchApi<{ deleted: number }>(`/page-preview/chapters/${id}/delete`, {
+      method: 'POST',
+      body: JSON.stringify({ filenames })
+    }),
+
+  restorePages: (id: string, filenames: string[]) =>
+    fetchApi<{ restored: number }>(`/page-preview/chapters/${id}/restore`, {
+      method: 'POST',
+      body: JSON.stringify({ filenames })
+    }),
+
+  emptyBin: (id: string) => fetchApi<{ removed: number }>(`/page-preview/chapters/${id}/bin`, { method: 'DELETE' }),
+
+  /** Live pages use the stitcher's thumb/image endpoints; this one reads the bin. */
+  binThumbUrl: (id: string, filename: string) =>
+    `${API_BASE}/page-preview/chapters/${id}/bin/${encodeURIComponent(filename)}/thumb`
 }

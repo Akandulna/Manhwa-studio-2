@@ -6,6 +6,9 @@ import AddSeries from '@/pages/AddSeries'
 import ManualUpload from '@/pages/ManualUpload'
 import SeriesDetail from '@/pages/SeriesDetail'
 import DownloadQueue from '@/pages/DownloadQueue'
+import StitchLibrary from '@/pages/stitch/StitchLibrary'
+import StitchWorkspace from '@/pages/stitch/StitchWorkspace'
+import ChapterPreview from '@/pages/ChapterPreview'
 import Settings from '@/pages/Settings'
 import { SocketProvider } from '@/lib/socket'
 
@@ -46,6 +49,9 @@ function App() {
           <Route path="/add/manual" element={<ManualUpload />} />
           <Route path="/series/:id" element={<SeriesDetail />} />
           <Route path="/queue" element={<DownloadQueue />} />
+          <Route path="/stitch" element={<StitchLibrary />} />
+          <Route path="/stitch/chapter/:id" element={<StitchWorkspace />} />
+          <Route path="/chapter/:id/preview" element={<ChapterPreview />} />
           
           {/* Module 2: Narration Studio */}
           <Route path="/narration" element={<NarrationLibrary />} />

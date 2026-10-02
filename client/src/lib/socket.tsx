@@ -31,9 +31,13 @@ interface DiscoveryProgress {
 }
 
 // Module 2: Narration progress
+// Narration and voiceover events carry the narration language ('en' | 'hi'):
+// the English and Hindi pipelines of one chapter can run at the same time, so
+// a page only reacts to events for the tab it is showing.
 interface NarrationProgress {
   chapterId: string
   chapterNumber: number
+  language?: 'en' | 'hi'
   stage: 'preprocessing' | 'extracting-beats' | 'generating-script' | 'generating-summary' | 'saving' | 'done' | 'failed'
   batchCurrent?: number
   batchTotal?: number
@@ -47,6 +51,7 @@ interface NarrationRangeProgress extends NarrationProgress {
 }
 
 interface NarrationRangeComplete {
+  language?: 'en' | 'hi'
   success: boolean
   completed: number
   failed: number
@@ -56,18 +61,21 @@ interface NarrationRangeComplete {
 // Module 2 Part 2: Voiceover progress
 interface VoiceoverSectionProgress {
   chapterId: string
+  language?: 'en' | 'hi'
   sectionId: string
   index: number
 }
 
 interface VoiceoverBatchProgress {
   chapterId: string
+  language?: 'en' | 'hi'
   completed: number
   total: number
 }
 
 interface VoiceoverBatchComplete {
   chapterId: string
+  language?: 'en' | 'hi'
   successful: number
   failed: number
 }

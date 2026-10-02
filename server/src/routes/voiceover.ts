@@ -45,6 +45,12 @@ import {
   alignSectionInBackground,
   checkAlignmentAvailable
 } from '../services/alignment/alignmentService.js'
+import {
+  NarrationLanguage,
+  audioFolderName,
+  parseLanguage,
+  requestLanguage
+} from '../services/narrationLanguage.js'
 
 const router = Router()
 
@@ -55,6 +61,9 @@ const uploadStorage = multer.diskStorage({
   destination: async (req, file, cb) => {
     try {
       let folderPath: string | null = null
+      // The multipart body isn't parsed yet here, so a chapter upload names its
+      // language in the query string; a section upload takes its section's.
+      let language: NarrationLanguage = parseLanguage(req.query.lang)
 
       if (req.params.chapterId) {
         const chapter = await prisma.chapter.findUnique({ where: { id: req.params.chapterId } })
@@ -65,6 +74,7 @@ const uploadStorage = multer.diskStorage({
           include: { chapter: true }
         })
         folderPath = section?.chapter.folderPath ?? null
+        language = parseLanguage(section?.language)
       }
 
       if (!folderPath) {
@@ -73,7 +83,7 @@ const uploadStorage = multer.diskStorage({
       }
 
       const downloadRoot = process.env.DOWNLOAD_ROOT || './downloads'
-      const audioDir = path.join(downloadRoot, folderPath, 'audio')
+      const audioDir = path.join(downloadRoot, folderPath, audioFolderName(language))
       await fs.mkdir(audioDir, { recursive: true })
       cb(null, audioDir)
     } catch (error) {
@@ -138,6 +148,8 @@ async function getTTSSettings(): Promise<Record<string, string>> {
           'ttsNormAcronymAllowlist',
           'ttsVoice',
           'ttsKokoroVoice',
+          'ttsVoiceHi',
+          'ttsKokoroVoiceHi',
           'ttsProvider',
           'ttsSpeed'
         ]
@@ -160,16 +172,24 @@ async function getTTSSettings(): Promise<Record<string, string>> {
  * Voice defaults are provider-specific: Gemini voices ("Iapetus") and Kokoro
  * voices ("hf_alpha") are separate namespaces, so a voice saved for one
  * provider must not leak into the other.
+ *
+ * They are language-specific too. A Kokoro voice speaks one language, so Hindi
+ * has its own saved voice (a Hindi one by default) instead of reading Hindi
+ * with the English narrator. Gemini voices read any language, so Hindi falls
+ * back to the English choice until one is saved for it.
  */
 function buildVoiceoverSettings(
   ttsSettings: Record<string, string>,
   normalizationOptions: Partial<NormalizationOptions>,
-  overrides: { voice?: string; stylePrompt?: string } = {}
+  overrides: { voice?: string; stylePrompt?: string } = {},
+  language: NarrationLanguage = 'en'
 ): VoiceoverSettings {
   const provider = ttsSettings.ttsProvider || process.env.TTS_PROVIDER || 'gemini'
   const isKokoro = provider === 'kokoro'
 
-  const savedVoice = isKokoro ? ttsSettings.ttsKokoroVoice : ttsSettings.ttsVoice
+  const savedVoice = language === 'hi'
+    ? (isKokoro ? ttsSettings.ttsKokoroVoiceHi : (ttsSettings.ttsVoiceHi || ttsSettings.ttsVoice))
+    : (isKokoro ? ttsSettings.ttsKokoroVoice : ttsSettings.ttsVoice)
   const fallbackVoice = isKokoro
     ? DEFAULT_KOKORO_VOICE
     : (process.env.TTS_DEFAULT_VOICE || 'Iapetus')
@@ -197,15 +217,16 @@ function buildVoiceoverSettings(
  */
 router.get('/series', async (req: Request, res: Response) => {
   try {
+    const language = requestLanguage(req)
     const series = await prisma.series.findMany({
       include: {
         chapters: {
           where: { status: 'done' },
           include: { 
-            script: true,
-            audioSections: true,
+            scripts: { where: { language } },
+            audioSections: { where: { language } },
             audioFiles: {
-              where: { kind: 'joined' }
+              where: { kind: 'joined', language }
             }
           },
           orderBy: { number: 'asc' }
@@ -217,7 +238,7 @@ router.get('/series', async (req: Request, res: Response) => {
     const result = series.map(s => {
       // Count chapters with scripts
       const scriptedChapters = s.chapters.filter(c => 
-        c.script?.status === 'done' || c.script?.status === 'edited'
+        c.scripts[0]?.status === 'done' || c.scripts[0]?.status === 'edited'
       )
       
       // Count chapters with audio
@@ -256,18 +277,21 @@ router.get('/series', async (req: Request, res: Response) => {
  */
 router.get('/chapters/:id', async (req: Request, res: Response) => {
   try {
+    const language = requestLanguage(req)
     const chapter = await prisma.chapter.findUnique({
       where: { id: req.params.id },
       include: {
         series: true,
-        script: true,
+        scripts: { where: { language } },
         audioSections: {
+          where: { language },
           orderBy: { index: 'asc' }
         },
         audioFiles: {
+          where: { language },
           orderBy: { createdAt: 'asc' }
         },
-        audioAnalysis: true
+        audioAnalyses: { where: { language } }
       }
     })
     
@@ -275,11 +299,14 @@ router.get('/chapters/:id', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Chapter not found' })
     }
     
+    const script = chapter.scripts[0]
+    const analysis = chapter.audioAnalyses[0]
+
     // Read script content
     let scriptContent = null
-    if (chapter.script?.scriptPath) {
+    if (script?.scriptPath) {
       try {
-        scriptContent = await fs.readFile(chapter.script.scriptPath, 'utf-8')
+        scriptContent = await fs.readFile(script.scriptPath, 'utf-8')
       } catch {
         // File might not exist
       }
@@ -308,9 +335,10 @@ router.get('/chapters/:id', async (req: Request, res: Response) => {
         id: chapter.series.id,
         title: chapter.series.title
       },
-      script: chapter.script ? {
-        id: chapter.script.id,
-        status: chapter.script.status,
+      language,
+      script: script ? {
+        id: script.id,
+        status: script.status,
         content: scriptContent
       } : null,
       sections: chapter.audioSections.map(sec => ({
@@ -334,9 +362,9 @@ router.get('/chapters/:id', async (req: Request, res: Response) => {
         originalName: af.originalName,
         createdAt: af.createdAt
       })),
-      analysis: chapter.audioAnalysis ? {
-        verdict: chapter.audioAnalysis.verdict,
-        updatedAt: chapter.audioAnalysis.createdAt
+      analysis: analysis ? {
+        verdict: analysis.verdict,
+        updatedAt: analysis.createdAt
       } : null,
       status,
       prevChapterId,
@@ -362,21 +390,23 @@ router.post('/chapters/:id/init-sections', async (req: Request, res: Response) =
       return res.status(400).json({ error: 'targetLength must be between 100 and 5000' })
     }
 
+    const language = requestLanguage(req)
     const chapter = await prisma.chapter.findUnique({
       where: { id: req.params.id },
-      include: { script: true }
+      include: { scripts: { where: { language } } }
     })
     
     if (!chapter) {
       return res.status(404).json({ error: 'Chapter not found' })
     }
     
-    if (!chapter.script?.scriptPath) {
+    const scriptPath = chapter.scripts[0]?.scriptPath
+    if (!scriptPath) {
       return res.status(400).json({ error: 'Chapter has no script' })
     }
     
     // Read script content
-    const scriptContent = await fs.readFile(chapter.script.scriptPath, 'utf-8')
+    const scriptContent = await fs.readFile(scriptPath, 'utf-8')
     
     // Split into sections
     const sections = splitScriptIntoSections(scriptContent, targetLength)
@@ -387,12 +417,12 @@ router.post('/chapters/:id/init-sections', async (req: Request, res: Response) =
 
     // Count what the re-split is about to discard, so the client can report it
     const [replacedSections, discardedAudio] = await Promise.all([
-      prisma.audioSection.count({ where: { chapterId: chapter.id } }),
-      prisma.audioFile.count({ where: { chapterId: chapter.id, sectionId: { not: null } } })
+      prisma.audioSection.count({ where: { chapterId: chapter.id, language } }),
+      prisma.audioFile.count({ where: { chapterId: chapter.id, language, sectionId: { not: null } } })
     ])
 
     // Initialize in database (replaces existing sections and their audio)
-    const dbSections = await initializeSections(chapter.id, sections)
+    const dbSections = await initializeSections(chapter.id, sections, language)
     
     res.json({
       message: 'Sections initialized',
@@ -503,7 +533,7 @@ router.post('/sections/:id/align', async (req: Request, res: Response) => {
  */
 router.post('/chapters/:id/align', async (req: Request, res: Response) => {
   try {
-    const result = await alignChapter(req.params.id, io || undefined)
+    const result = await alignChapter(req.params.id, io || undefined, requestLanguage(req))
     res.json(result)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Alignment failed'
@@ -539,11 +569,12 @@ router.delete('/sections/:id', async (req: Request, res: Response) => {
 router.post('/chapters/:id/check-voices', async (req: Request, res: Response) => {
   try {
     const { targetVoice } = req.body
+    const language = requestLanguage(req)
     
     // Get all audio files for this chapter's sections
     const audioFiles = await prisma.audioFile.findMany({
       where: {
-        section: { chapterId: req.params.id },
+        section: { chapterId: req.params.id, language },
         kind: 'generated'
       },
       include: { section: true }
@@ -616,6 +647,7 @@ router.post('/chapters/:id/check-voices', async (req: Request, res: Response) =>
 router.post('/chapters/:id/sections', async (req: Request, res: Response) => {
   try {
     const { text, index } = req.body
+    const language = requestLanguage(req)
     
     if (!text || typeof text !== 'string') {
       return res.status(400).json({ error: 'Invalid text' })
@@ -626,6 +658,7 @@ router.post('/chapters/:id/sections', async (req: Request, res: Response) => {
       await prisma.audioSection.updateMany({
         where: {
           chapterId: req.params.id,
+          language,
           index: { gte: index }
         },
         data: {
@@ -636,7 +669,7 @@ router.post('/chapters/:id/sections', async (req: Request, res: Response) => {
     
     // Get max index if not specified
     const maxSection = await prisma.audioSection.findFirst({
-      where: { chapterId: req.params.id },
+      where: { chapterId: req.params.id, language },
       orderBy: { index: 'desc' }
     })
     
@@ -645,6 +678,7 @@ router.post('/chapters/:id/sections', async (req: Request, res: Response) => {
     const section = await prisma.audioSection.create({
       data: {
         chapterId: req.params.id,
+        language,
         index: newIndex,
         text,
         status: 'pending'
@@ -680,6 +714,7 @@ router.post('/sections/:id/generate', async (req: Request, res: Response) => {
     if (io) {
       io.emit('voiceover:section-start', {
         chapterId: section.chapterId,
+        language: section.language,
         sectionId: section.id,
         index: section.index
       })
@@ -692,7 +727,8 @@ router.post('/sections/:id/generate', async (req: Request, res: Response) => {
     const settings: VoiceoverSettings = buildVoiceoverSettings(
       ttsSettings,
       normalizationOptions,
-      { voice, stylePrompt }
+      { voice, stylePrompt },
+      parseLanguage(section.language)
     )
     
     const audioFile = await generateSectionAudio(section.id, section.chapter.folderPath, settings)
@@ -701,6 +737,7 @@ router.post('/sections/:id/generate', async (req: Request, res: Response) => {
     if (io) {
       io.emit('voiceover:section-complete', {
         chapterId: section.chapterId,
+        language: section.language,
         sectionId: section.id,
         audioFileId: audioFile.id
       })
@@ -727,8 +764,10 @@ router.post('/sections/:id/generate', async (req: Request, res: Response) => {
   }
 })
 
-// Chapters with a pipeline run in flight. Guards against a double-click
-// kicking off two runs that would fight over the same sections.
+// Chapter+language pairs with a pipeline run in flight. Guards against a
+// double-click kicking off two runs that would fight over the same sections;
+// the English and Hindi voiceovers of one chapter are separate sections, so
+// they may run side by side.
 const pipelineRunning = new Set<string>()
 
 /**
@@ -738,12 +777,13 @@ const pipelineRunning = new Set<string>()
  */
 async function runVoiceoverPipeline(
   chapterId: string,
+  language: NarrationLanguage,
   folderPath: string,
   scriptPath: string,
   opts: { voice?: string; stylePrompt?: string; concurrency: number; targetLength: number }
 ): Promise<void> {
   const emit = (payload: Record<string, unknown>) =>
-    io?.emit('voiceover:pipeline', { chapterId, ...payload })
+    io?.emit('voiceover:pipeline', { chapterId, language, ...payload })
 
   // --- 1. Split the script into sections -----------------------------------
   emit({ stage: 'splitting' })
@@ -755,7 +795,7 @@ async function runVoiceoverPipeline(
     throw new Error('Script is empty - nothing to voice')
   }
 
-  const sections = await initializeSections(chapterId, split)
+  const sections = await initializeSections(chapterId, split, language)
   emit({ stage: 'split', totalSections: sections.length })
 
   // --- 2. Generate audio for every section ---------------------------------
@@ -766,14 +806,15 @@ async function runVoiceoverPipeline(
   const settings = buildVoiceoverSettings(ttsSettings, normalizationOptions, {
     voice: opts.voice,
     stylePrompt: opts.stylePrompt
-  })
+  }, language)
 
   const results = await generateAllSections(
     chapterId,
     folderPath,
     settings,
     opts.concurrency,
-    io || undefined
+    io || undefined,
+    language
   )
 
   const generated = results.filter((r: GenerationResult) => r.success)
@@ -834,35 +875,38 @@ async function runVoiceoverPipeline(
 router.post('/chapters/:id/pipeline', async (req: Request, res: Response) => {
   try {
     const { voice, stylePrompt, concurrency = 3, targetLength = 500 } = req.body
+    const language = requestLanguage(req)
 
     const chapter = await prisma.chapter.findUnique({
       where: { id: req.params.id },
-      include: { script: true, audioSections: true }
+      include: { scripts: { where: { language } } }
     })
 
     if (!chapter) {
       return res.status(404).json({ error: 'Chapter not found' })
     }
 
-    if (!chapter.script?.scriptPath) {
+    const script = chapter.scripts[0]
+    if (!script?.scriptPath) {
       return res.status(400).json({ error: 'Chapter has no script' })
     }
 
-    const scriptStatus = chapter.script.status
+    const scriptStatus = script.status
     if (scriptStatus !== 'done' && scriptStatus !== 'edited') {
       return res.status(400).json({ error: 'Chapter script is not ready' })
     }
 
-    if (pipelineRunning.has(chapter.id)) {
+    const runKey = `${chapter.id}:${language}`
+    if (pipelineRunning.has(runKey)) {
       return res.status(409).json({ error: 'Voiceover is already running for this chapter' })
     }
 
-    pipelineRunning.add(chapter.id)
-    res.status(202).json({ message: 'Voiceover pipeline started', chapterId: chapter.id })
+    pipelineRunning.add(runKey)
+    res.status(202).json({ message: 'Voiceover pipeline started', chapterId: chapter.id, language })
 
     // Everything past this point is background work - the response is already
     // sent, so failures are reported over the socket, never thrown to express.
-    void runVoiceoverPipeline(chapter.id, chapter.folderPath, chapter.script.scriptPath, {
+    void runVoiceoverPipeline(chapter.id, language, chapter.folderPath, script.scriptPath, {
       voice,
       stylePrompt,
       concurrency,
@@ -872,11 +916,12 @@ router.post('/chapters/:id/pipeline', async (req: Request, res: Response) => {
       console.error(`[pipeline] chapter ${chapter.id}: ${message}`)
       io?.emit('voiceover:pipeline', {
         chapterId: chapter.id,
+        language,
         stage: 'failed',
         error: message
       })
     }).finally(() => {
-      pipelineRunning.delete(chapter.id)
+      pipelineRunning.delete(runKey)
     })
   } catch (error) {
     console.error('Error starting voiceover pipeline:', error)
@@ -892,10 +937,11 @@ router.post('/chapters/:id/pipeline', async (req: Request, res: Response) => {
 router.post('/chapters/:id/generate-all', async (req: Request, res: Response) => {
   try {
     const { voice, stylePrompt, concurrency = 3 } = req.body
+    const language = requestLanguage(req)
     
     const chapter = await prisma.chapter.findUnique({
       where: { id: req.params.id },
-      include: { audioSections: true }
+      include: { audioSections: { where: { language } } }
     })
     
     if (!chapter) {
@@ -914,6 +960,7 @@ router.post('/chapters/:id/generate-all', async (req: Request, res: Response) =>
     if (io) {
       io.emit('voiceover:batch-start', {
         chapterId: chapter.id,
+        language,
         totalSections: pendingSections.length
       })
     }
@@ -925,7 +972,8 @@ router.post('/chapters/:id/generate-all', async (req: Request, res: Response) =>
     const settings: VoiceoverSettings = buildVoiceoverSettings(
       ttsSettings,
       normalizationOptions,
-      { voice, stylePrompt }
+      { voice, stylePrompt },
+      language
     )
     
     const results = await generateAllSections(
@@ -933,13 +981,15 @@ router.post('/chapters/:id/generate-all', async (req: Request, res: Response) =>
       chapter.folderPath,
       settings,
       concurrency,
-      io || undefined
+      io || undefined,
+      language
     )
     
     // Emit batch complete
     if (io) {
       io.emit('voiceover:batch-complete', {
         chapterId: chapter.id,
+        language,
         successful: results.filter((r: GenerationResult) => r.success).length,
         failed: results.filter((r: GenerationResult) => !r.success).length
       })
@@ -1028,6 +1078,7 @@ router.post('/chapters/:chapterId/upload', upload.single('audio'), async (req: R
     const audioFile = await prisma.audioFile.create({
       data: {
         chapterId: chapter.id,
+        language: requestLanguage(req),
         kind: 'uploaded',
         filePath: req.file.path,
         originalName: req.file.originalname,
@@ -1052,6 +1103,7 @@ router.post('/chapters/:chapterId/upload', upload.single('audio'), async (req: R
 router.post('/chapters/:id/join', async (req: Request, res: Response) => {
   try {
     const { normalize = true, outputFormat = 'mp3' } = req.body
+    const language = requestLanguage(req)
     
     const chapter = await prisma.chapter.findUnique({
       where: { id: req.params.id }
@@ -1064,20 +1116,23 @@ router.post('/chapters/:id/join', async (req: Request, res: Response) => {
     // Emit join start
     if (io) {
       io.emit('voiceover:join-start', {
-        chapterId: chapter.id
+        chapterId: chapter.id,
+        language
       })
     }
     
     const audioFile = await joinChapterAudio(
       chapter.id,
       chapter.folderPath,
-      { normalize, outputFormat }
+      { normalize, outputFormat },
+      language
     )
     
     // Emit join complete
     if (io) {
       io.emit('voiceover:join-complete', {
         chapterId: chapter.id,
+        language,
         audioFileId: audioFile.id
       })
     }
@@ -1089,6 +1144,7 @@ router.post('/chapters/:id/join', async (req: Request, res: Response) => {
     if (io) {
       io.emit('voiceover:join-failed', {
         chapterId: req.params.id,
+        language: requestLanguage(req),
         error: error.message
       })
     }
@@ -1109,7 +1165,7 @@ router.post('/chapters/:id/analyze', async (req: Request, res: Response) => {
     const result = await analyzeChapterVoices(req.params.id, {
       threshold,
       includeAcoustic
-    })
+    }, requestLanguage(req))
     
     res.json(result)
   } catch (error) {
@@ -1123,7 +1179,7 @@ router.post('/chapters/:id/analyze', async (req: Request, res: Response) => {
  */
 router.get('/chapters/:id/analysis', async (req: Request, res: Response) => {
   try {
-    const result = await getLastAnalysisResult(req.params.id)
+    const result = await getLastAnalysisResult(req.params.id, requestLanguage(req))
     
     if (!result) {
       return res.status(404).json({ error: 'No analysis found' })
@@ -1232,7 +1288,8 @@ router.get('/audio/:id/download', async (req: Request, res: Response) => {
     }
     
     const ext = path.extname(audioFile.filePath)
-    const filename = `${audioFile.chapter.series.title} - Ch${audioFile.chapter.number}${ext}`
+    const langTag = audioFile.language === 'hi' ? ' (Hindi)' : ''
+    const filename = `${audioFile.chapter.series.title} - Ch${audioFile.chapter.number}${langTag}${ext}`
     
     res.download(audioFile.filePath, filename)
   } catch (error) {

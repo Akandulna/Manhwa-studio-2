@@ -3,6 +3,9 @@
  * 
  * Shows all series with downloaded chapters, mirroring Module 1's library
  * but with script progress instead of download progress.
+ *
+ * English and Hindi tabs: the same manhwa is narrated once per language, each
+ * with its own scripts and voiceover. The chosen tab travels with every link.
  */
 
 import { useEffect, useState } from 'react'
@@ -23,8 +26,11 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { useSocket } from '@/lib/socket'
 import { usePhoneScripts } from '@/hooks/usePhoneScripts'
+import { LanguageTabs } from '@/components/LanguageTabs'
+import { LANGUAGE_LABEL, useNarrationLanguage, withLang } from '@/lib/narrationLanguage'
 
 export default function NarrationLibrary() {
+  const [language, setLanguage] = useNarrationLanguage('narration')
   const [series, setSeries] = useState<NarrationSeries[]>([])
   const [loading, setLoading] = useState(true)
   const { toast } = useToast()
@@ -35,7 +41,7 @@ export default function NarrationLibrary() {
 
   useEffect(() => {
     loadSeries()
-  }, [])
+  }, [language])
 
   // Reload when range generation completes
   useEffect(() => {
@@ -46,7 +52,7 @@ export default function NarrationLibrary() {
 
   const loadSeries = async () => {
     try {
-      const data = await narrationApi.getSeries()
+      const data = await narrationApi.getSeries(language)
       setSeries(data)
     } catch (error) {
       toast({
@@ -104,7 +110,10 @@ export default function NarrationLibrary() {
   if (series.length === 0) {
     return (
       <div className="p-6">
-        <h1 className="text-3xl font-bold mb-6">Narration Library</h1>
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-3xl font-bold">Narration Library</h1>
+          <LanguageTabs value={language} onChange={setLanguage} />
+        </div>
         
         <div className="text-center py-12">
           <BookOpen className="h-16 w-16 mx-auto text-muted-foreground mb-4" />
@@ -123,14 +132,15 @@ export default function NarrationLibrary() {
         <div>
           <h1 className="text-3xl font-bold">Narration Library</h1>
           <p className="text-muted-foreground">
-            Generate narration scripts for your downloaded manhwa chapters
+            Generate {LANGUAGE_LABEL[language]} narration scripts and voiceovers for your downloaded manhwa chapters
           </p>
         </div>
+        <LanguageTabs value={language} onChange={setLanguage} />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {series.map((s) => (
-          <Link key={s.id} to={`/narration/series/${s.id}`}>
+          <Link key={s.id} to={withLang(`/narration/series/${s.id}`, language)}>
             <Card className="h-full hover:border-primary transition-colors cursor-pointer">
               <CardContent className="p-4">
                 {/* Cover placeholder or image */}
@@ -168,7 +178,8 @@ export default function NarrationLibrary() {
                     </span>
                   </div>
                   <Progress value={getScriptProgress(s)} className="h-1.5" />
-                  {phoneScripts?.series[s.id] && (
+                  {/* The phone writes English scripts only */}
+                  {language === 'en' && phoneScripts?.series[s.id] && (
                     <div className="flex items-center gap-1 text-xs text-muted-foreground">
                       <Smartphone className="h-3 w-3" />
                       {phoneScripts.series[s.id].done}/{phoneScripts.series[s.id].total} done on phone

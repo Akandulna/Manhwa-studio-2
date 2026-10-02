@@ -161,7 +161,7 @@ export function R2UsageCard() {
               <ShieldCheck className="h-4 w-4 mt-0.5 shrink-0 text-green-500" />
               <span>
                 Uploads that would go past the free plan are <strong>blocked</strong> before anything is zipped or sent,
-                so Upload to R2 never costs money.
+                so sending chapters to the phone never costs money.
               </span>
             </div>
 

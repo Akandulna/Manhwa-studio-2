@@ -1,7 +1,7 @@
 /**
  * PhoneUploadUsage — how many images each Sleeper-Cell profile has uploaded
- * to ChatGPT, how many its upload limit leaves, and when, at the pace of the
- * run, it will be used up (see lib/uploadUsage). One row per browser profile
+ * to ChatGPT in the last 3 hours, how many of the 80 that leaves, and when, at
+ * the pace of the run, it will be used up (see lib/uploadUsage). One row per browser profile
  * on the phone, so a profile added there shows up here by itself.
  *
  * It reads the crops receipt the page already has; the only timer re-renders
@@ -14,7 +14,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import type { PhoneCropsStatus } from '@/lib/api'
-import { uploadOverview, uploadUsage, type UploadUsage } from '@/lib/uploadUsage'
+import { UPLOAD_LIMIT, uploadOverview, uploadUsage, type UploadUsage } from '@/lib/uploadUsage'
 
 function clock(ms: number): string {
   const date = new Date(ms)
@@ -33,7 +33,7 @@ function span(ms: number): string {
 
 function ProfileRow({ usage, now }: { usage: UploadUsage; now: number }) {
   const { profile, limit, left, used, pace } = usage
-  const percent = limit ? Math.min(100, (used / limit) * 100) : 0
+  const percent = Math.min(100, (used / limit) * 100)
   const state = usage.limitedUntil
     ? <Badge variant="destructive">Limited · lifts ~{clock(usage.limitedUntil)}</Badge>
     : pace
@@ -47,19 +47,13 @@ function ProfileRow({ usage, now }: { usage: UploadUsage; now: number }) {
         {profile.selected && <Badge variant="secondary">selected on phone</Badge>}
         {state}
         <span className="ml-auto text-muted-foreground tabular-nums">
-          {limit === null
-            ? `${used} images · limit not seen yet`
-            : usage.limitedUntil
-              ? `limit ${usage.limitAtLeast ? '≥' : ''}${limit}`
-              : `${used} / ${usage.limitAtLeast ? '≥' : ''}${limit} · ${left} left`}
+          {used} / {limit} in 3h · {left} left
         </span>
       </div>
-      {limit !== null && (
-        <Progress
-          value={usage.limitedUntil ? 100 : percent}
-          className={`h-1.5 ${usage.limitedUntil || percent >= 85 ? '[&>div]:bg-destructive' : percent >= 60 ? '[&>div]:bg-amber-500' : ''}`}
-        />
-      )}
+      <Progress
+        value={usage.limitedUntil ? 100 : percent}
+        className={`h-1.5 ${usage.limitedUntil || percent >= 85 ? '[&>div]:bg-destructive' : percent >= 60 ? '[&>div]:bg-amber-500' : ''}`}
+      />
       <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-muted-foreground tabular-nums">
         {pace !== null && <span>Pace ~{Math.round(pace)}/h</span>}
         {usage.exhaustsAt !== null && (
@@ -68,11 +62,12 @@ function ProfileRow({ usage, now }: { usage: UploadUsage; now: number }) {
           </span>
         )}
         <span>Last hour {usage.lastHour} · last 24h {usage.lastDay}</span>
-        {usage.countingSince !== null && <span>Counting since {clock(usage.countingSince)}</span>}
+        {usage.nextFreeAt !== null && !usage.limitedUntil && (
+          <span>+{usage.nextFree} free again ~{clock(usage.nextFreeAt)}</span>
+        )}
         {usage.lastLimit && (
           <span title={usage.lastLimit.reason || undefined}>
-            Last limit {clock(Date.parse(usage.lastLimit.at))} after {usage.lastLimit.used} images
-            {usage.lastLimit.complete ? '' : ' (counted from first use, may be more)'}
+            Last stopped by ChatGPT {clock(Date.parse(usage.lastLimit.at))}
           </span>
         )}
       </div>
@@ -105,15 +100,14 @@ export function PhoneUploadUsage({ status, className = '' }: {
           </span>
           <span className="text-xs text-muted-foreground tabular-nums">
             ~{overview.left} images left across {profiles.length} profile{profiles.length === 1 ? '' : 's'}
-            {overview.unknown > 0 && ` (+${overview.unknown} with no limit seen yet)`}
             {overview.allUsedAt !== null && ` · all used up ~${clock(overview.allUsedAt)} at ~${Math.round(overview.pace!)}/h`}
             {overview.nextLiftAt !== null && ` · next lift ~${clock(overview.nextLiftAt)}`}
           </span>
         </div>
         {usages.map(usage => <ProfileRow key={usage.profile.id} usage={usage} now={now} />)}
         <p className="text-[11px] text-muted-foreground">
-          ChatGPT doesn&apos;t publish its upload limit, so each profile&apos;s is learnt from the last time it was
-          stopped. As of {status?.reportedAt ? clock(Date.parse(status.reportedAt)) : 'the last report'}.
+          ChatGPT takes {UPLOAD_LIMIT} files per account in any 3 hours; each upload frees up 3 hours after it was
+          made. As of {status?.reportedAt ? clock(Date.parse(status.reportedAt)) : 'the last report'}.
         </p>
       </CardContent>
     </Card>

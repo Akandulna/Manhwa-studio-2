@@ -66,7 +66,7 @@ function getFullFolderPath(relativePath: string): string {
  * Get sorted list of image filenames from a chapter folder.
  * Only returns filenames in the root of the folder (no subdirectories).
  */
-async function getImageFiles(folderPath: string): Promise<string[]> {
+export async function getImageFiles(folderPath: string): Promise<string[]> {
   const entries = await fs.readdir(folderPath, { withFileTypes: true })
 
   return entries
