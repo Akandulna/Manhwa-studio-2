@@ -23,20 +23,32 @@ STYLE RULES:
 /**
  * Extra instructions for a non-English narration. Appended to the base style
  * prompt (and to the summary/outro system prompts) so every call in the Hindi
- * pipeline writes Hindi, while the response delimiters stay the English
+ * pipeline writes Hinglish, while the response delimiters stay the English
  * markers the parser looks for. Empty for English, which keeps its prompts
  * exactly as they were.
+ *
+ * "Hindi" narration is Hinglish - everyday Hindi mixed with the English words a
+ * manhwa recap audience actually uses - because pure Hindi sounds stiff for
+ * this content. It stays in Devanagari script on purpose: the Hindi Kokoro
+ * voices and the Hindi WhisperX aligner only read Devanagari, so Roman-script
+ * words would be mispronounced and left without timings.
  */
 export function getLanguageDirective(language: 'en' | 'hi' = 'en'): string {
   if (language !== 'hi') return ''
   return `
 
-LANGUAGE: HINDI
-- Write all narration in natural, spoken Hindi using Devanagari script - the conversational Hindi a Hindi recap narrator would use, not formal or literary Hindi
-- Write character names, places and techniques in Devanagari as they are pronounced; do not add English translations or Roman-script words in brackets
-- Common English words that Hindi speakers use naturally may stay, but write them in Devanagari
+LANGUAGE: HINGLISH (Hindi + English mix, written in Devanagari)
+- Write the narration in Hinglish - the casual Hindi-English mix a popular Hindi manhwa recap YouTuber speaks, the way young Indian viewers actually talk. Not pure, formal, literary or "shuddh" Hindi
+- Sentence structure and grammar stay Hindi (verbs, connectors, flow), but use English words wherever a Hinglish speaker naturally would instead of heavy Hindi words
+- Always prefer the English word for manhwa/game/fantasy terms: power, level, system, skill, rank, quest, dungeon, gate, hunter, monster, boss, guild, mana, energy, attack, damage, fight, training, mission, master, sect, clan, academy, villain, hero, plan, chance, moment, shock, scene, tension, emotional
+- Use English for everyday words people say in English anyway: actually, simply, seriously, finally, exactly, problem, situation, normal, strong, weak, important, team, family, office, school, phone, time, control, focus, support, respect, game, challenge, entry, return
+- Avoid stiff Sanskritised Hindi: say पावर not शक्ति, सिस्टम not प्रणाली, अटैक not आक्रमण, लेवल not स्तर, प्लान not योजना, चांस not अवसर, सिचुएशन not परिस्थिति, फाइट not युद्ध/लड़ाई when it is a fight scene, मिशन not अभियान
+- Keep it natural, not forced: roughly 25-40% English words, never whole English sentences. Hindi words that are already common and simple (लेकिन, फिर, अचानक, सब, डर, गुस्सा, ताकत, दुश्मन) stay Hindi
+- Write EVERYTHING in Devanagari script, including the English words, spelled the way they are spoken: "उसका लेवल अचानक बहुत हाई हो गया।", "सिस्टम ने उसे एक नया क्वेस्ट दिया।" Never use Roman/Latin letters - the voiceover and alignment can only read Devanagari
+- Character names, places and techniques also go in Devanagari as they are pronounced; do not add English translations or Roman-script words in brackets
+- Narration voice: engaging storyteller talking to the viewer, like explaining the story to a friend - but still follow the style rules above (no exaggerated hype, no stage directions)
 - End sentences with the Hindi full stop (।)
-- The story summary and the closing paragraph must also be in Hindi, and the closing paragraph must be copied word for word from the Hindi script
+- The story summary and the closing paragraph must also be in the same Hinglish style, and the closing paragraph must be copied word for word from the script
 - Keep the section markers (===SCRIPT===, ===SUMMARY===, ===CLOSING===, ===ABOUT===, ===OUTRO===) exactly as given, in English`
 }
 
