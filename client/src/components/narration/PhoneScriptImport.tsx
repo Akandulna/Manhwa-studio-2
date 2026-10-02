@@ -2,14 +2,15 @@
  * PhoneScriptImport — "Import from phone" on a series' chapter list.
  *
  * Sleeper-Cell writes narration scripts on the phone. Once every chapter is
- * done there, its "Zip and upload to R2" puts the scripts in R2; this card's
- * button lights up then. Clicking it downloads and parses the zip (nothing is
+ * done there, it uploads the scripts zip to R2 by itself (or with its "Zip and
+ * upload to R2" button); this card's button lights up then. Clicking it downloads and parses the zip (nothing is
  * changed yet) and shows what each chapter would get; confirming attaches
  * script.md plus the summary and closing paragraph from continuity.json to
  * each ticked chapter. Voiceover is then started by hand as usual.
  *
- * Chapters that already have voiceover sections or are published start
- * unticked, since replacing their script leaves that audio out of step.
+ * Only chapters with no script here start ticked: the zip holds every chapter
+ * on the phone, and re-importing the ones already scripted (maybe edited,
+ * voiced or published since) would overwrite them.
  */
 
 import { useEffect, useMemo, useState } from 'react'
@@ -35,9 +36,6 @@ import {
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 
-/** The phone's upload isn't announced anywhere, so the zip is looked for this often. */
-const ZIP_POLL_MS = 30_000
-
 function formatWhen(iso: string | null | undefined): string | null {
   if (!iso) return null
   const date = new Date(iso)
@@ -46,7 +44,7 @@ function formatWhen(iso: string | null | undefined): string | null {
     : date.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 }
 
-const ticksByDefault = (c: PhoneImportChapter) => c.action !== 'same' && !c.hasVoiceover && !c.published
+const ticksByDefault = (c: PhoneImportChapter) => c.action === 'new' && !c.published
 
 const ABOUT_NOTES: Record<PhoneImportPreview['about'], string | null> = {
   set: 'The series has no "about" text yet; the phone\'s will be used.',
@@ -73,32 +71,20 @@ export function PhoneScriptImport({ seriesId, phoneScripts, onImported }: Props)
 
   const phoneSeries = phoneScripts?.series[seriesId]
 
-  // Look for the zip on open, whenever the phone reports, and every so often while visible.
+  // Look for the zip (one R2 HEAD) on open and whenever the phone reports: after
+  // an upload the phone sends its scripts receipt, so no timer is needed.
   useEffect(() => {
     let cancelled = false
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const check = async () => {
-      clearTimeout(timer)
-      try {
-        const next = await r2Api.getPhoneScriptsZip(seriesId)
-        if (cancelled) return
-        setZipStatus(prev => (prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next))
-        if (!next.configured) return
-      } catch {
-        // Advisory; try again later.
-      }
-      if (!cancelled && document.visibilityState === 'visible') timer = setTimeout(check, ZIP_POLL_MS)
-    }
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') check()
-      else clearTimeout(timer)
-    }
-    check()
-    document.addEventListener('visibilitychange', onVisible)
+    r2Api
+      .getPhoneScriptsZip(seriesId)
+      .then(next => {
+        if (!cancelled) setZipStatus(prev => (prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next))
+      })
+      .catch(() => {
+        // Advisory; the next report checks again.
+      })
     return () => {
       cancelled = true
-      clearTimeout(timer)
-      document.removeEventListener('visibilitychange', onVisible)
     }
   }, [seriesId, phoneScripts?.reportedAt])
 
@@ -167,10 +153,10 @@ export function PhoneScriptImport({ seriesId, phoneScripts, onImported }: Props)
   let note: string
   if (!allDone) {
     note = phoneSeries
-      ? `${phoneSeries.done}/${phoneSeries.total} chapters done on the phone — finish them all, then use "Zip and upload to R2" there`
+      ? `${phoneSeries.done}/${phoneSeries.total} chapters done on the phone — it uploads them once they're all done`
       : 'Waiting for the phone to report its scripts'
   } else if (!zip) {
-    note = 'Every chapter is done on the phone — use "Zip and upload to R2" there to send them'
+    note = 'Every chapter is done on the phone — waiting for it to upload them (open the series there if it hasn\'t)'
   } else if (alreadyImported) {
     note = `Imported ${formatWhen(zipStatus.lastImport?.at) ?? ''} (${zipStatus.lastImport?.chapters ?? 0} chapters)`
   } else {
@@ -206,7 +192,8 @@ export function PhoneScriptImport({ seriesId, phoneScripts, onImported }: Props)
             {ready && zipBehindPhone && (
               <span className="text-sm text-amber-600 flex items-center gap-1">
                 <AlertTriangle className="h-4 w-4" />
-                A chapter was saved on the phone after this upload — upload again from the phone to include it
+                A chapter was saved on the phone after this upload — the phone uploads a new zip by itself (open the
+                series there if it doesn't appear)
               </span>
             )}
           </div>
@@ -218,7 +205,8 @@ export function PhoneScriptImport({ seriesId, phoneScripts, onImported }: Props)
           <DialogHeader>
             <DialogTitle>Import scripts from the phone</DialogTitle>
             <DialogDescription>
-              Each ticked chapter gets the phone's script, summary and closing paragraph. Uploaded{' '}
+              Each ticked chapter gets the phone's script, summary and closing paragraph. Chapters that already
+              have a script here start unticked, so they stay as they are. Uploaded{' '}
               {formatWhen(preview?.zip.uploadedAt) ?? 'recently'}.
             </DialogDescription>
           </DialogHeader>
