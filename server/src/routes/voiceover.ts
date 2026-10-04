@@ -39,6 +39,7 @@ import { parseNormalizationOptions } from '../services/tts/textNormalizer.js'
 import type { NormalizationOptions } from '../services/tts/textNormalizer.js'
 import { getAudioMetadata } from '../services/audioProcessor.js'
 import { getKokoroState } from '../services/tts/kokoroSupervisor.js'
+import { fetchPhoneVoiceover } from '../services/phoneVoiceoverImport.js'
 import {
   alignSection,
   alignChapter,
@@ -1050,6 +1051,28 @@ router.post('/sections/:id/upload', upload.single('audio'), async (req: Request,
   } catch (error) {
     console.error('Error uploading audio:', error)
     res.status(500).json({ error: 'Failed to upload audio' })
+  }
+})
+
+/**
+ * POST /series/:id/fetch-phone-voiceover
+ *
+ * Downloads the voiceovers the Sleeper-Cell phone uploaded to R2 for this
+ * series and attaches them: the phone's splits become each chapter's English
+ * sections and its audio their generated audio (see phoneVoiceoverImport.ts).
+ * Only new or re-uploaded chapter zips are downloaded. Body: { chapterIds? }.
+ */
+router.post('/series/:id/fetch-phone-voiceover', async (req: Request, res: Response) => {
+  try {
+    const requested = req.body?.chapterIds
+    const chapterIds = Array.isArray(requested)
+      ? requested.filter((v): v is string => typeof v === 'string')
+      : undefined
+    res.json(await fetchPhoneVoiceover(req.params.id, chapterIds, io))
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    console.error('[voiceover] fetching phone voiceover failed:', message)
+    res.status(500).json({ error: message })
   }
 })
 

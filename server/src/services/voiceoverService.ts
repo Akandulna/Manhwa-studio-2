@@ -46,7 +46,7 @@ function getAudioFolder(folderPath: string, language: string): string {
  * Backup an audio file before overwriting
  * Saves to: backup/ next to the file (chapter_folder/audio/backup/ for English)
  */
-async function backupAudioFile(filePath: string): Promise<void> {
+export async function backupAudioFile(filePath: string): Promise<void> {
   try {
     // Check if file exists
     await fs.access(filePath)

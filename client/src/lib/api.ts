@@ -555,9 +555,40 @@ export interface VoiceInfo {
   provider: string
 }
 
+/** One chapter attached by fetchPhoneVoiceover. */
+export interface PhoneVoiceoverChapter {
+  chapterId: string
+  chapterNumber: number
+  folder: string
+  sections: number
+  /** The phone's splits differed from the chapter's sections, so they were replaced. */
+  resplit: boolean
+  /** Whether this chapter's script.md is the one the phone split; null when unknown. */
+  scriptMatches: boolean | null
+}
+
+/** What fetching the phone's voiceovers from R2 did (see phoneVoiceoverImport.ts). */
+export interface PhoneVoiceoverFetch {
+  configured: boolean
+  found: number
+  fetched: PhoneVoiceoverChapter[]
+  upToDate: number
+  unmatched: string[]
+  failed: { folder: string; reason: string }[]
+}
+
 export const voiceoverApi = {
   // Series listing
   getSeries: (lang: NarrationLanguage) => fetchApi<VoiceoverSeries[]>(`/voiceover/series?lang=${lang}`),
+
+  // Downloads the voiceovers the Sleeper-Cell phone uploaded to R2 and attaches
+  // them: its splits become the English sections, its audio their audio. Only
+  // new or re-uploaded chapter zips are downloaded.
+  fetchPhoneVoiceover: (seriesId: string, chapterIds?: string[]) =>
+    fetchApi<PhoneVoiceoverFetch>(
+      `/voiceover/series/${seriesId}/fetch-phone-voiceover`,
+      { method: 'POST', body: JSON.stringify({ chapterIds }) }
+    ),
   
   // Chapter operations
   getChapterDetail: (id: string, lang: NarrationLanguage) =>

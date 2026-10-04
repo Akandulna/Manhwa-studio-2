@@ -11,6 +11,7 @@ import { PublishedBadge, publishedRowClass } from '@/components/PublishedBadge'
 import { PhoneScriptBadge } from '@/components/PhoneSyncBadge'
 import { usePhoneScripts } from '@/hooks/usePhoneScripts'
 import { PhoneScriptImport } from '@/components/narration/PhoneScriptImport'
+import { PhoneVoiceoverFetch } from '@/components/narration/PhoneVoiceoverFetch'
 import { PhoneRefreshButton } from '@/components/PhoneRefreshButton'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { narrationApi, voiceoverApi, NarrationSeriesDetail, NarrationChapterSummary, AIStatus } from '@/lib/api'
@@ -671,6 +672,9 @@ export default function SeriesScriptView() {
       {language === 'en' && (
         <PhoneScriptImport seriesId={series.id} phoneScripts={phoneScripts} onImported={loadSeries} />
       )}
+
+      {/* Chapters voiced on the phone, uploaded one zip per chapter */}
+      {language === 'en' && <PhoneVoiceoverFetch seriesId={series.id} onFetched={loadSeries} />}
 
       {/* Series-wide voiceover */}
       <Card className="mb-6">
