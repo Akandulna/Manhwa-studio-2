@@ -46,6 +46,37 @@ const X264_PRESET: Record<string, string> = {
   slow: 'slow'
 }
 
+/**
+ * The same presets as VideoToolbox constant-quality levels (1–100). Measured
+ * against a lossless render, q75 lands at SSIM 0.993 vs x264 crf18's 0.994 —
+ * visually the same — at ~2.5× the file size, in a fraction of the CPU time.
+ */
+const VT_QUALITY: Record<string, number> = {
+  fast: 65,
+  medium: 75,
+  slow: 85
+}
+
+/**
+ * Sections of one chapter rendered at once. zoompan keeps each FFmpeg on about
+ * one core, so a single render leaves most of the machine idle; three fit an
+ * M1's four performance cores with the encoder offloaded to VideoToolbox.
+ */
+const SECTION_CONCURRENCY = Math.max(1, parseInt(process.env.EXPORT_SECTION_CONCURRENCY || '', 10) || 3)
+
+/**
+ * Video codec arguments for one render. VideoToolbox when the machine has it,
+ * unless VIDEO_ENCODER=libx264 asks for the software encoder (smaller files).
+ */
+function videoCodecArgs(caps: VideoCapabilities, preset: string): string[] {
+  if (caps.hasVideoToolbox && process.env.VIDEO_ENCODER !== 'libx264') {
+    const q = VT_QUALITY[preset] ?? VT_QUALITY.medium
+    return ['-c:v', 'h264_videotoolbox', '-q:v', String(q), '-profile:v', 'high']
+  }
+  const x264Preset = X264_PRESET[preset] || 'medium'
+  return ['-c:v', 'libx264', '-preset', x264Preset, '-crf', String(DEFAULT_CRF)]
+}
+
 function getFfmpegPath(): string {
   return process.env.FFMPEG_PATH || 'ffmpeg'
 }
@@ -259,7 +290,8 @@ export interface Export2Options {
 interface JobRuntime {
   job: Export2Job
   cancelled: boolean
-  proc: ChildProcess | null
+  /** Every FFmpeg child currently running — several while sections render in parallel. */
+  procs: Set<ChildProcess>
 }
 
 /**
@@ -283,12 +315,12 @@ export function getExport2Job(jobId: string): Export2Job | null {
   return jobs.get(jobId)?.job ?? null
 }
 
-/** Ask a running job to stop; the active FFmpeg child is killed. */
+/** Ask a running job to stop; every active FFmpeg child is killed. */
 export function cancelExport2Job(jobId: string): boolean {
   const rt = jobs.get(jobId)
   if (!rt || rt.job.status !== 'running') return false
   rt.cancelled = true
-  rt.proc?.kill('SIGKILL')
+  for (const proc of rt.procs) proc.kill('SIGKILL')
   return true
 }
 
@@ -304,7 +336,7 @@ function runFfmpeg(
     if (rt.cancelled) return reject(new Error('cancelled'))
 
     const proc = spawn(getFfmpegPath(), args)
-    rt.proc = proc
+    rt.procs.add(proc)
 
     let stderr = ''
     proc.stderr.on('data', d => { stderr += d.toString() })
@@ -324,7 +356,7 @@ function runFfmpeg(
 
     proc.on('error', reject)
     proc.on('close', code => {
-      rt.proc = null
+      rt.procs.delete(proc)
       if (rt.cancelled) return reject(new Error('cancelled'))
       if (code === 0) resolve()
       else reject(new Error(`FFmpeg exited ${code}: ${stderr.slice(-2000)}`))
@@ -342,8 +374,8 @@ async function getImageDimensions(filePath: string): Promise<{ width: number; he
 interface RenderOpts {
   res: { w: number; h: number }
   fps: number
-  x264Preset: string
-  crf: number
+  /** The editor's quality preset (fast | medium | slow). */
+  preset: string
 }
 
 /**
@@ -446,7 +478,7 @@ async function renderSection(
     '-map', '[vout]',
     '-map', `${audioInputIndex}:a`,
     '-r', String(fps),
-    '-c:v', 'libx264', '-preset', opts.x264Preset, '-crf', String(opts.crf), '-pix_fmt', 'yuv420p',
+    ...videoCodecArgs(caps, opts.preset), '-pix_fmt', 'yuv420p',
     '-c:a', 'aac', '-b:a', AUDIO_BITRATE, '-ar', String(AUDIO_SAMPLE_RATE),
     '-shortest',
     '-y', outFile
@@ -456,8 +488,9 @@ async function renderSection(
 }
 
 /**
- * Render one chapter's plan to a finished MP4: every section rendered, then
- * concatenated without re-encoding.
+ * Render one chapter's plan to a finished MP4: every section rendered —
+ * SECTION_CONCURRENCY at a time — then concatenated in order without
+ * re-encoding.
  */
 async function renderChapter(
   rt: JobRuntime,
@@ -474,22 +507,45 @@ async function renderChapter(
   await fs.mkdir(tmpDir, { recursive: true })
 
   try {
-    const partFiles: string[] = []
-    let priorDuration = 0
+    const partFiles = plan.sections.map((_, i) => path.join(tmpDir, `part_${String(i).padStart(4, '0')}.mp4`))
 
-    for (let i = 0; i < plan.sections.length; i++) {
-      if (rt.cancelled) throw new Error('cancelled')
-      const section = plan.sections[i]
-      const partFile = path.join(tmpDir, `part_${String(i).padStart(4, '0')}.mp4`)
-
-      await renderSection(rt, section, partFile, opts, caps, sec => {
-        onPercent(Math.min(99, ((priorDuration + sec) / total) * 100))
-      })
-
-      partFiles.push(partFile)
-      priorDuration += section.audioDuration
-      onPercent(Math.min(99, (priorDuration / total) * 100))
+    // Seconds rendered per section; their sum against the runtime is the
+    // chapter's progress, whichever sections happen to be running.
+    const rendered = plan.sections.map(() => 0)
+    const report = () => {
+      const sum = rendered.reduce((s, sec) => s + sec, 0)
+      onPercent(Math.min(99, (sum / total) * 100))
     }
+
+    let next = 0
+    let failure: Error | null = null
+    const worker = async () => {
+      while (!failure && !rt.cancelled && next < plan.sections.length) {
+        const i = next++
+        const section = plan.sections[i]
+        try {
+          await renderSection(rt, section, partFiles[i], opts, caps, sec => {
+            rendered[i] = Math.min(sec, section.audioDuration)
+            report()
+          })
+        } catch (error) {
+          // The first failure decides the chapter; stop the sibling renders
+          // rather than finishing work that will be thrown away.
+          if (!failure) {
+            failure = error instanceof Error ? error : new Error(String(error))
+            for (const proc of rt.procs) proc.kill('SIGKILL')
+          }
+          return
+        }
+        rendered[i] = section.audioDuration
+        report()
+      }
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(SECTION_CONCURRENCY, plan.sections.length) }, worker)
+    )
+    if (rt.cancelled) throw new Error('cancelled')
+    if (failure) throw failure
 
     const listPath = path.join(tmpDir, 'concat.txt')
     await fs.writeFile(listPath, partFiles.map(p => `file '${p.replace(/'/g, "'\\''")}'`).join('\n'))
@@ -514,9 +570,9 @@ async function renderChapter(
  * Start a batch export and return its job id immediately — rendering runs in
  * the background and is followed through the job status endpoint.
  *
- * Chapters render one at a time rather than in parallel: FFmpeg already
- * saturates the machine on a single chapter, so running several would only
- * trade a readable progress bar for contention.
+ * Chapters render one at a time rather than in parallel: the sections inside a
+ * chapter already render in parallel and fill the machine, so running several
+ * chapters would only trade a readable progress bar for contention.
  */
 export async function startBatchExport(
   seriesId: string,
@@ -532,7 +588,6 @@ export async function startBatchExport(
   if (inputs.length === 0) throw new Error('No chapters to export')
 
   const fps = [24, 30, 60].includes(options.fps ?? 0) ? options.fps! : DEFAULT_FPS
-  const x264Preset = X264_PRESET[options.preset] || 'medium'
   const language = options.language ?? 'en'
 
   const series = await prisma.series.findUnique({
@@ -578,7 +633,7 @@ export async function startBatchExport(
     finishedAt: null,
     error: null
   }
-  const rt: JobRuntime = { job, cancelled: false, proc: null }
+  const rt: JobRuntime = { job, cancelled: false, procs: new Set() }
   jobs.set(jobId, rt)
 
   // Only what is left to render actually goes through the loop below.
@@ -587,7 +642,7 @@ export async function startBatchExport(
   )
 
   const outputDir = exportDirFor(series.rootFolder, language)
-  const opts: RenderOpts = { res, fps, x264Preset, crf: DEFAULT_CRF }
+  const opts: RenderOpts = { res, fps, preset: options.preset }
 
   // Chapters are equal slices of the bar. Weighting by runtime was considered,
   // but that needs every plan processed up front — which would stall the UI

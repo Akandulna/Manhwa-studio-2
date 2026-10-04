@@ -14,7 +14,10 @@ import { execSync } from 'child_process'
 // upscales an already-downscaled image → soft. We render the foreground motion at
 // SUPERSAMPLE× the display size (high-quality lanczos), then downscale: motion
 // becomes sub-pixel-smooth and zoom samples real detail.
-const FG_SUPERSAMPLE = 2
+// zoompan is the render's bottleneck and its cost climbs steeply with buffer
+// size: 2× rendered ~1.75× slower than 1.5×, while 1.5× still steps motion in
+// ⅔-pixel increments — smooth enough for the slow drifts used here.
+const FG_SUPERSAMPLE = 1.5
 const SCALE_FLAGS = 'lanczos'
 
 /** 16:9 output resolutions the editor offers. */
@@ -38,6 +41,8 @@ export interface VideoCapabilities {
   hasZoompan: boolean
   hasDrawtext: boolean
   blurFilter: 'gblur' | 'boxblur' | null // preferred blur, null if neither
+  /** Apple's hardware H.264 encoder — frees the CPU for the filter graph. */
+  hasVideoToolbox: boolean
   error?: string
 }
 
@@ -60,12 +65,15 @@ export function getVideoCapabilities(force = false): VideoCapabilities {
     const hasGblur = has('gblur')
     const hasBoxblur = has('boxblur')
 
+    const encodersOut = execSync(`${getFfmpegPath()} -hide_banner -encoders`, { encoding: 'utf-8', timeout: 5000 })
+
     capabilitiesCache = {
       ffmpegAvailable: true,
       ffmpegVersion: version,
       hasZoompan: has('zoompan'),
       hasDrawtext: has('drawtext'),
-      blurFilter: hasGblur ? 'gblur' : hasBoxblur ? 'boxblur' : null
+      blurFilter: hasGblur ? 'gblur' : hasBoxblur ? 'boxblur' : null,
+      hasVideoToolbox: /\sh264_videotoolbox\s/.test(encodersOut)
     }
   } catch (error) {
     capabilitiesCache = {
@@ -73,6 +81,7 @@ export function getVideoCapabilities(force = false): VideoCapabilities {
       hasZoompan: false,
       hasDrawtext: false,
       blurFilter: null,
+      hasVideoToolbox: false,
       error: error instanceof Error ? error.message : 'FFmpeg not found on PATH'
     }
   }
