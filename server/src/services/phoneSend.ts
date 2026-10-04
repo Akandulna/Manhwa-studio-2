@@ -17,7 +17,8 @@
  *
  * "Done" on the desktop (what the phone ticks for clearing) is: the video is
  * published, or the chapter has its crops (every page pointed and described in
- * Clipper 3) and its English script.
+ * Clipper 3) and its English script. Each index entry also says whether the
+ * Hindi (Hinglish) script is done (`scriptHi`); the phone weighs that itself.
  *
  * Auto-send: a series can be set to send new chapters by itself once the
  * download queue goes idle (noteChapterDownloaded / flushAutoSend).
@@ -220,6 +221,8 @@ export interface DesktopChapterState {
   crops: boolean
   /** The English script is done (or edited). */
   script: boolean
+  /** The Hindi (Hinglish) script is done (or edited). */
+  scriptHi: boolean
   published: boolean
   /** What the phone ticks for clearing: published, or crops and script. */
   done: boolean
@@ -242,17 +245,25 @@ async function desktopStates(
   chapters: { id: string; folderPath: string }[],
   published: Awaited<ReturnType<typeof getPublishedChapters>>
 ): Promise<Map<string, DesktopChapterState>> {
-  const scripts = await prisma.chapterScript.findMany({
-    where: { chapter: { seriesId }, language: 'en', status: { in: ['done', 'edited'] } },
-    select: { chapterId: true }
-  })
-  const scripted = new Set(scripts.map(s => s.chapterId))
+  const scriptedIn = async (language: 'en' | 'hi') => new Set(
+    (await prisma.chapterScript.findMany({
+      where: { chapter: { seriesId }, language, status: { in: ['done', 'edited'] } },
+      select: { chapterId: true }
+    })).map(s => s.chapterId)
+  )
+  const [scripted, scriptedHi] = await Promise.all([scriptedIn('en'), scriptedIn('hi')])
   const states = new Map<string, DesktopChapterState>()
   for (const chapter of chapters) {
     const crops = await cropsDone(chapter.folderPath)
     const script = scripted.has(chapter.id)
     const isPublished = !!published.chapters[chapter.id]
-    states.set(chapter.id, { crops, script, published: isPublished, done: isPublished || (crops && script) })
+    states.set(chapter.id, {
+      crops,
+      script,
+      scriptHi: scriptedHi.has(chapter.id),
+      published: isPublished,
+      done: isPublished || (crops && script)
+    })
   }
   return states
 }
@@ -328,6 +339,7 @@ interface IndexChapter {
   done: boolean
   crops: boolean
   script: boolean
+  scriptHi: boolean
   published: boolean
   cleared: boolean
 }

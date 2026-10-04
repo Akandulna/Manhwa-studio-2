@@ -5,13 +5,15 @@
  * Auto-Split does), voices the splits in AI Studio, and uploads every fully
  * voiced chapter to R2 by itself. Clicking the button downloads the chapters
  * not fetched yet (or re-uploaded since) and attaches them straight away: the
- * phone's splits become the chapter's English sections and its audio their
- * audio, aligned like generated audio. Nothing runs on a timer.
+ * phone's splits become the chapter's sections and its audio their audio,
+ * aligned like generated audio. Nothing runs on a timer. Each language tab
+ * fetches its own voiceovers (the Hindi tab the phone's Hinglish ones).
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AlertTriangle, CheckCircle, DownloadCloud, Loader2, Smartphone } from 'lucide-react'
 import { voiceoverApi, PhoneVoiceoverFetch as FetchResult } from '@/lib/api'
+import type { NarrationLanguage } from '@/lib/narrationLanguage'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { useToast } from '@/components/ui/use-toast'
@@ -60,18 +62,22 @@ function Summary({ result }: { result: FetchResult }) {
 
 interface Props {
   seriesId: string
+  language: NarrationLanguage
   onFetched: () => void
 }
 
-export function PhoneVoiceoverFetch({ seriesId, onFetched }: Props) {
+export function PhoneVoiceoverFetch({ seriesId, language, onFetched }: Props) {
   const { toast } = useToast()
   const [fetching, setFetching] = useState(false)
   const [result, setResult] = useState<FetchResult | null>(null)
 
+  // A result belongs to the tab it was fetched on.
+  useEffect(() => setResult(null), [seriesId, language])
+
   const handleFetch = async () => {
     setFetching(true)
     try {
-      const next = await voiceoverApi.fetchPhoneVoiceover(seriesId)
+      const next = await voiceoverApi.fetchPhoneVoiceover(seriesId, language)
       if (!next.configured) {
         toast({ title: 'R2 is not set up', description: 'Fill in the R2 settings first.', variant: 'destructive' })
         return
@@ -95,7 +101,7 @@ export function PhoneVoiceoverFetch({ seriesId, onFetched }: Props) {
         <div className="flex flex-wrap items-center gap-4">
           <div className="flex items-center gap-2">
             <Smartphone className="h-4 w-4 text-muted-foreground" />
-            <span className="font-medium">Phone voiceover:</span>
+            <span className="font-medium">Phone {language === 'hi' ? 'Hinglish ' : ''}voiceover:</span>
           </div>
 
           <Button

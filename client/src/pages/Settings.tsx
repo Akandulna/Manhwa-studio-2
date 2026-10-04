@@ -16,11 +16,26 @@ import { DocHistoryDialog, DocHistoryButton } from '@/components/settings/DocHis
 import { CloudflareTab } from '@/components/settings/CloudflareR2Card'
 import { archiveVersion, readHistory, type DocVersion } from '@/lib/docHistory'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, Save, RotateCcw, FolderOpen, Gauge, UserCircle, ImageIcon, Wand2, Sparkles, CheckCircle, XCircle, Key, ExternalLink, Volume2, Mic, FileText, Download, Crop, Locate, Upload, Clock, Film, Moon, Sun, Monitor, Palette, Cloud } from 'lucide-react'
+import { Loader2, Save, RotateCcw, FolderOpen, Gauge, UserCircle, ImageIcon, Wand2, Sparkles, CheckCircle, XCircle, Key, ExternalLink, Volume2, Mic, FileText, Download, Crop, Locate, Upload, Clock, Film, Moon, Sun, Monitor, Palette, Cloud, Languages } from 'lucide-react'
+
+// Default Hinglish rules, the same text as the server's DEFAULT_HINGLISH_RULES (hinglishConvert.ts)
+const HINGLISH_RULES_DEFAULT = `LANGUAGE: HINGLISH (Hindi + English mix, written in Devanagari)
+- Write in Hinglish - the casual Hindi-English mix a popular Hindi manhwa recap YouTuber speaks, the way young Indian viewers actually talk. Not pure, formal, literary or "shuddh" Hindi
+- Sentence structure and grammar stay Hindi (verbs, connectors, flow), but use English words wherever a Hinglish speaker naturally would instead of heavy Hindi words
+- Always prefer the English word for manhwa/game/fantasy terms: power, level, system, skill, rank, quest, dungeon, gate, hunter, monster, boss, guild, mana, energy, attack, damage, fight, training, mission, master, sect, clan, academy, villain, hero, plan, chance, moment, shock, scene, tension, emotional
+- Use English for everyday words people say in English anyway: actually, simply, seriously, finally, exactly, problem, situation, normal, strong, weak, important, team, family, office, school, phone, time, control, focus, support, respect, game, challenge, entry, return
+- Avoid stiff Sanskritised Hindi: say पावर not शक्ति, सिस्टम not प्रणाली, अटैक not आक्रमण, लेवल not स्तर, प्लान not योजना, चांस not अवसर, सिचुएशन not परिस्थिति, फाइट not युद्ध/लड़ाई when it is a fight scene, मिशन not अभियान
+- Keep it natural, not forced: roughly 25-40% English words, never whole English sentences. Hindi words that are already common and simple (लेकिन, फिर, अचानक, सब, डर, गुस्सा, ताकत, दुश्मन) stay Hindi
+- Write EVERYTHING in Devanagari script, including the English words, spelled the way they are spoken: "उसका लेवल अचानक बहुत हाई हो गया।", "सिस्टम ने उसे एक नया क्वेस्ट दिया।" Never use Roman/Latin letters - the voiceover and alignment can only read Devanagari
+- Character names, places and techniques also go in Devanagari as they are pronounced; do not add English translations or Roman-script words in brackets
+- Narration voice: an engaging storyteller talking to the viewer, like explaining the story to a friend - but keep the calm, measured tone of the English script (no exaggerated hype, no stage directions like [excited] or *sighs*)
+- End sentences with the Hindi full stop (।)`
 
 // Extended settings type for Module 2 & 3
 interface ExtendedSettings extends SettingsType {
   narrationBasePrompt?: string
+  // Hinglish rules for converting English scripts (server default: DEFAULT_HINGLISH_RULES)
+  narrationHinglishRules?: string
   narrationImageMaxWidth?: string
   narrationSingleCallCap?: string
   narrationBatchSize?: string
@@ -825,6 +840,36 @@ STYLE RULES:
             />
             <p className="text-xs text-muted-foreground">
               This prompt is prepended to every script generation request. Customize the tone and style here.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Hinglish rules */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Languages className="h-5 w-5" />
+            Hinglish (Hindi Scripts)
+          </CardTitle>
+          <CardDescription>
+            Hindi scripts are converted from the English ones, paragraph by paragraph. These rules open every convert
+            prompt; the paragraph-numbered task and the length check after it are fixed.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="hinglishRules">Hinglish Rules</Label>
+            <Textarea
+              id="hinglishRules"
+              rows={10}
+              lang="hi"
+              value={settings.narrationHinglishRules || HINGLISH_RULES_DEFAULT}
+              onChange={(e) => updateSetting('narrationHinglishRules', e.target.value)}
+              className="font-mono text-sm"
+            />
+            <p className="text-xs text-muted-foreground">
+              Keep the rule that everything is written in Devanagari: the voiceover and alignment can only read it.
             </p>
           </div>
         </CardContent>

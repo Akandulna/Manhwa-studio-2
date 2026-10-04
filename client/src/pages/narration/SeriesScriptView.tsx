@@ -3,6 +3,12 @@
  * 
  * Shows all chapters for a series with their script status,
  * part groupings, and generation controls.
+ *
+ * Scripts are generated on the English tab only. Each English script is
+ * converted to Hinglish (the Hindi tab) once it is saved; the English tab also
+ * offers converting every chapter whose Hinglish is missing or stale. The
+ * Hindi tab shows those scripts' status (done / needs review / stale / missing)
+ * and keeps its own voiceover and phone controls.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -14,13 +20,20 @@ import { PhoneScriptImport } from '@/components/narration/PhoneScriptImport'
 import { PhoneVoiceoverFetch } from '@/components/narration/PhoneVoiceoverFetch'
 import { PhoneRefreshButton } from '@/components/PhoneRefreshButton'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { narrationApi, voiceoverApi, NarrationSeriesDetail, NarrationChapterSummary, AIStatus } from '@/lib/api'
+import {
+  narrationApi,
+  voiceoverApi,
+  phoneScriptsIn,
+  NarrationSeriesDetail,
+  NarrationChapterSummary,
+  AIStatus,
+  HinglishEvent
+} from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { Input } from '@/components/ui/input'
-import { Separator } from '@/components/ui/separator'
 import { useToast } from '@/components/ui/use-toast'
 import { useSocket } from '@/lib/socket'
 import { LanguageTabs } from '@/components/LanguageTabs'
@@ -39,7 +52,8 @@ import {
   Play,
   Download,
   RefreshCw,
-  Volume2
+  Volume2,
+  Languages
 } from 'lucide-react'
 
 /** Short human label for the current pipeline stage, shown in the chapter row. */
@@ -65,6 +79,16 @@ function describeVoiceoverRun(run: VoiceoverRun): string {
 // Backstop for a single chapter in the bulk queue. Generation plus alignment on
 // a long chapter runs several minutes; this only fires if a socket event is lost.
 const BULK_CHAPTER_TIMEOUT_MS = 30 * 60 * 1000
+
+/** The Hinglish conversion running for this series, from `narration:hinglish` events. */
+interface HinglishRun {
+  /** Converting now, if any. */
+  chapterId: string | null
+  chapterNumber: number | null
+  stage: HinglishEvent['stage'] | null
+  /** Chapters still queued or converting. */
+  remaining: number
+}
 
 /** Progress of the series-wide sequential voiceover run. */
 interface BulkVoiceoverState {
@@ -103,9 +127,10 @@ export default function SeriesScriptView() {
   // Chapters already rendered to video in this language — no need to rewrite
   // or re-voice them.
   const { isPublished } = usePublishedChapters(id, language)
-  // Scripts written in the Sleeper-Cell phone app, updated as the phone saves them.
+  // Scripts written in the Sleeper-Cell phone app, updated as the phone saves
+  // them: English on the English tab, its Hinglish conversions on the Hindi tab.
   const phoneScriptsReceipt = usePhoneScripts(id)
-  const phoneScripts = phoneScriptsReceipt.status
+  const phoneScripts = phoneScriptsIn(phoneScriptsReceipt.status, language)
   const [aiStatus, setAIStatus] = useState<AIStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
@@ -113,6 +138,10 @@ export default function SeriesScriptView() {
   // Range generation
   const [rangeFrom, setRangeFrom] = useState('')
   const [rangeTo, setRangeTo] = useState('')
+
+  // Hinglish conversions of this series (they run on the server, one at a time)
+  const [hinglishRun, setHinglishRun] = useState<HinglishRun | null>(null)
+  const [queueingHinglish, setQueueingHinglish] = useState(false)
 
   // One-click voiceover pipeline, keyed by chapter id so several chapters can
   // report progress independently in the list.
@@ -185,6 +214,40 @@ export default function SeriesScriptView() {
     }
   }, [socket, id, language])
 
+  // Live Hinglish conversion progress, on both tabs: each finished chapter
+  // changes the Hindi tab's statuses and the English tab's count.
+  useEffect(() => {
+    if (!socket || !id) return
+
+    const handleHinglish = (event: HinglishEvent) => {
+      if (event.seriesId !== id) return
+      const finished = event.stage === 'done' || event.stage === 'review' || event.stage === 'failed'
+      setHinglishRun(event.remaining > 0 || !finished
+        ? {
+            chapterId: finished ? null : event.chapterId,
+            chapterNumber: finished ? null : event.chapterNumber,
+            stage: finished ? null : event.stage,
+            remaining: event.remaining
+          }
+        : null)
+      if (finished) {
+        loadSeries()
+        if (event.stage === 'failed') {
+          toast({
+            title: `Hinglish conversion failed (Chapter ${event.chapterNumber})`,
+            description: event.error || 'Unknown error',
+            variant: 'destructive'
+          })
+        }
+      }
+    }
+
+    socket.on('narration:hinglish', handleHinglish)
+    return () => {
+      socket.off('narration:hinglish', handleHinglish)
+    }
+  }, [socket, id, language])
+
   // Reload when generation completes
   useEffect(() => {
     if (narrationRangeComplete && isThisLanguage(narrationRangeComplete)) {
@@ -221,6 +284,7 @@ export default function SeriesScriptView() {
       ])
       setSeries(seriesData)
       setAIStatus(aiData)
+      setHinglishRun(runFromQueue(seriesData))
       
       // Set default range
       if (seriesData.chapters.length > 0) {
@@ -253,30 +317,44 @@ export default function SeriesScriptView() {
     }
   }
 
-  const handleGenerateChapter = async (chapterId: string) => {
+  /** The server's queue when the page loads, until the next event says more. */
+  const runFromQueue = (data: NarrationSeriesDetail): HinglishRun | null => {
+    const { running, queued } = data.hinglish.queue
+    const remaining = queued.length + (running ? 1 : 0)
+    if (remaining === 0) return null
+    const current = data.chapters.find(c => c.id === running)
+    return { chapterId: running, chapterNumber: current?.number ?? null, stage: running ? 'converting' : 'queued', remaining }
+  }
+
+  /** Queue every chapter whose English is written and whose Hinglish is missing, failed or stale. */
+  const handleConvertHinglish = async () => {
     if (!aiStatus?.configured) {
       toast({
         title: 'AI Not Configured',
-        description: 'Set GEMINI_API_KEY in .env or use Manual mode',
+        description: 'Set GEMINI_API_KEY in .env, or use Copy Hinglish prompt in each chapter\'s Manual mode',
         variant: 'destructive'
       })
       return
     }
 
-    setGenerating(true)
+    setQueueingHinglish(true)
     try {
-      await narrationApi.generateScript(chapterId, language)
+      const result = await narrationApi.convertHinglishSeries(id!)
       toast({
-        title: 'Generation Started',
-        description: 'Check progress in the chapter card'
+        title: 'Converting to Hinglish',
+        description: result.queued > 0
+          ? `${result.queued} chapter(s) queued - they convert one after another`
+          : 'Every chapter that needs converting is already queued'
       })
+      loadSeries()
     } catch (error) {
       toast({
         title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to start generation',
+        description: error instanceof Error ? error.message : 'Failed to queue the conversion',
         variant: 'destructive'
       })
-      setGenerating(false)
+    } finally {
+      setQueueingHinglish(false)
     }
   }
 
@@ -471,7 +549,79 @@ export default function SeriesScriptView() {
     setBulkVoiceover(prev => (prev ? { ...prev, cancelling: true } : prev))
   }
 
+  /** The Hindi tab's status: where the chapter's Hinglish conversion stands. */
+  const getHinglishBadge = (chapter: NarrationChapterSummary) => {
+    if (hinglishRun?.chapterId === chapter.id) {
+      return (
+        <Badge variant="default" className="flex items-center gap-1">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          {hinglishRun.stage === 'retrying' ? 'Fixing...' : 'Converting...'}
+        </Badge>
+      )
+    }
+
+    switch (chapter.hinglish?.state) {
+      case 'done':
+        return chapter.script?.status === 'edited' ? (
+          <Badge variant="default" className="flex items-center gap-1 bg-blue-500">
+            <FileText className="h-3 w-3" />
+            Edited
+          </Badge>
+        ) : (
+          <Badge variant="success" className="flex items-center gap-1">
+            <CheckCircle className="h-3 w-3" />
+            Done
+          </Badge>
+        )
+      case 'review':
+        return (
+          <Badge
+            variant="outline"
+            className="flex items-center gap-1 border-amber-500 text-amber-600"
+            title={chapter.hinglish.review?.join('\n')}
+          >
+            <AlertTriangle className="h-3 w-3" />
+            Needs review
+          </Badge>
+        )
+      case 'stale':
+        return (
+          <Badge
+            variant="outline"
+            className="flex items-center gap-1 border-yellow-500 text-yellow-500"
+            title="The English script changed after this was converted - convert again from the English tab"
+          >
+            <RefreshCw className="h-3 w-3" />
+            Stale
+          </Badge>
+        )
+      case 'failed':
+        return (
+          <Badge variant="destructive" className="flex items-center gap-1">
+            <XCircle className="h-3 w-3" />
+            Failed
+          </Badge>
+        )
+      case 'waiting':
+        return (
+          <Badge variant="outline" className="flex items-center gap-1 text-muted-foreground" title="No English script yet">
+            <Clock className="h-3 w-3" />
+            Waiting for English
+          </Badge>
+        )
+      default:
+        return (
+          <Badge variant="outline" className="flex items-center gap-1">
+            <Clock className="h-3 w-3" />
+            {hinglishRun && series?.hinglish.queue.queued.includes(chapter.id) ? 'Queued' : 'Missing'}
+          </Badge>
+        )
+    }
+  }
+
   const getStatusBadge = (chapter: NarrationChapterSummary) => {
+    if (language === 'hi') return getHinglishBadge(chapter)
+
     // Check if this chapter is currently being generated
     if (narrationProgress?.chapterId === chapter.id) {
       const stage = narrationProgress.stage
@@ -600,6 +750,13 @@ export default function SeriesScriptView() {
   const parts = getChaptersByPart()
   const voiceableCount = getVoiceableChapters().length
 
+  // Hinglish: what "Convert to Hinglish" would pick up, and where the Hindi scripts stand.
+  const convertible = series.hinglish.convertible
+  const convertibleStale = series.chapters.filter(c => convertible.includes(c.id) && c.hinglish?.state === 'stale').length
+  const convertibleFailed = series.chapters.filter(c => convertible.includes(c.id) && c.hinglish?.state === 'failed').length
+  const hinglishCount = (state: string) => series.chapters.filter(c => c.hinglish?.state === state).length
+  const phoneSeries = phoneScripts?.series[series.id]
+
   return (
     <div className="p-6">
       {/* Header */}
@@ -623,16 +780,16 @@ export default function SeriesScriptView() {
             <span>{series.chapters.length} chapters available</span>
             <span>•</span>
             <span>{scriptedCount} scripted in {LANGUAGE_LABEL[language]}</span>
-            {/* The phone writes English scripts only */}
-            {language === 'en' && phoneScripts?.series[series.id] && (
+            {/* The phone writes English scripts and converts them to Hinglish */}
+            {phoneSeries && (
               <>
                 <span>•</span>
-                <span title={phoneScripts.device ? `Sleeper-Cell on ${phoneScripts.device}` : 'Sleeper-Cell'}>
-                  {phoneScripts.series[series.id].done}/{phoneScripts.series[series.id].total} done on phone
+                <span title={phoneScripts?.device ? `Sleeper-Cell on ${phoneScripts.device}` : 'Sleeper-Cell'}>
+                  {phoneSeries.done}/{phoneSeries.total} {language === 'hi' ? 'converted' : 'done'} on phone
                 </span>
               </>
             )}
-            {language === 'en' && <PhoneRefreshButton receipt={phoneScriptsReceipt} />}
+            <PhoneRefreshButton receipt={phoneScriptsReceipt} />
           </div>
           
           {/* Progress bar */}
@@ -668,13 +825,70 @@ export default function SeriesScriptView() {
         </Card>
       )}
 
-      {/* Scripts written on the Sleeper-Cell phone, uploaded as one zip */}
-      {language === 'en' && (
-        <PhoneScriptImport seriesId={series.id} phoneScripts={phoneScripts} onImported={loadSeries} />
-      )}
+      {/* Hinglish: converted from English. Queued from the English tab; the Hindi tab shows where it stands. */}
+      <Card className="mb-6">
+        <CardContent className="py-4">
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="flex items-center gap-2">
+              <Languages className="h-4 w-4 text-muted-foreground" />
+              <span className="font-medium">Hinglish:</span>
+            </div>
 
-      {/* Chapters voiced on the phone, uploaded one zip per chapter */}
-      {language === 'en' && <PhoneVoiceoverFetch seriesId={series.id} onFetched={loadSeries} />}
+            {language === 'en' ? (
+              <>
+                <Button
+                  size="sm"
+                  onClick={handleConvertHinglish}
+                  disabled={queueingHinglish || !aiStatus?.configured || convertible.length === 0}
+                  title="Convert every chapter whose English script is written and whose Hinglish is missing, failed or stale"
+                >
+                  {queueingHinglish ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Languages className="h-4 w-4 mr-2" />}
+                  Convert to Hinglish ({convertible.length})
+                </Button>
+                <span className="text-sm text-muted-foreground">
+                  {convertible.length === 0
+                    ? 'Every English script has an up-to-date Hinglish one'
+                    : [
+                        `${convertible.length - convertibleStale - convertibleFailed} missing`,
+                        convertibleStale > 0 ? `${convertibleStale} stale` : null,
+                        convertibleFailed > 0 ? `${convertibleFailed} failed` : null
+                      ].filter(Boolean).join(', ') + ' - new English scripts convert by themselves'}
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="text-sm text-muted-foreground">
+                  {hinglishCount('done')} done
+                  {hinglishCount('review') > 0 && `, ${hinglishCount('review')} need review`}
+                  {hinglishCount('stale') > 0 && `, ${hinglishCount('stale')} stale`}
+                  {hinglishCount('pending') + hinglishCount('failed') > 0 &&
+                    `, ${hinglishCount('pending') + hinglishCount('failed')} missing`}
+                  {' '}- Hindi scripts are converted from the English ones
+                </span>
+                <Button size="sm" variant="outline" onClick={() => setLanguage('en')} disabled={!!bulkVoiceover}>
+                  Convert on the English tab
+                </Button>
+              </>
+            )}
+
+            {hinglishRun && (
+              <div className="flex items-center gap-2 ml-auto text-sm">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {hinglishRun.chapterNumber !== null
+                  ? `${hinglishRun.stage === 'retrying' ? 'Fixing' : 'Converting'} chapter ${hinglishRun.chapterNumber}`
+                  : 'Queued'}
+                <span className="text-muted-foreground">({hinglishRun.remaining} left)</span>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Scripts written on the Sleeper-Cell phone, uploaded as one zip per language */}
+      <PhoneScriptImport seriesId={series.id} language={language} phoneScripts={phoneScripts} onImported={loadSeries} />
+
+      {/* Chapters voiced on the phone, uploaded one zip per chapter and language */}
+      <PhoneVoiceoverFetch seriesId={series.id} language={language} onFetched={loadSeries} />
 
       {/* Series-wide voiceover */}
       <Card className="mb-6">
@@ -745,7 +959,8 @@ export default function SeriesScriptView() {
         </CardContent>
       </Card>
 
-      {/* Range Generation */}
+      {/* Range Generation — English only: Hindi scripts are converted, never generated */}
+      {language === 'en' && (
       <Card className="mb-6">
         <CardContent className="py-4">
           <div className="flex flex-wrap items-center gap-4">
@@ -793,6 +1008,7 @@ export default function SeriesScriptView() {
           </div>
         </CardContent>
       </Card>
+      )}
 
       {/* Chapters by Part */}
       <div className="space-y-6">
@@ -845,18 +1061,32 @@ export default function SeriesScriptView() {
                           {isPublished(chapter.id) && <PublishedBadge />}
                         </div>
                         
-                        {chapter.script?.error && (
+                        {language === 'en' && chapter.script?.error && (
                           <p className="text-xs text-destructive mt-1 truncate">
                             {chapter.script.error}
+                          </p>
+                        )}
+                        {/* Hindi: the check's issues for a script saved for review, or why converting failed */}
+                        {language === 'hi' && chapter.hinglish?.state === 'review' && chapter.hinglish.review && (
+                          <div className="text-xs text-amber-600 mt-1">
+                            {chapter.hinglish.review.map(line => (
+                              <p key={line} className="truncate" title={line}>{line}</p>
+                            ))}
+                          </div>
+                        )}
+                        {language === 'hi' && chapter.hinglish?.error && (
+                          <p className="text-xs text-destructive mt-1 truncate" title={chapter.hinglish.error}>
+                            {chapter.hinglish.error}
                           </p>
                         )}
                       </div>
                       
                       <div className="flex items-center gap-2">
-                        {language === 'en' && phoneScripts?.chapters[chapter.id] && (
+                        {phoneScripts?.chapters[chapter.id] && (
                           <PhoneScriptBadge
                             script={phoneScripts.chapters[chapter.id]}
                             device={phoneScripts.device}
+                            hinglish={language === 'hi'}
                           />
                         )}
                         {getStatusBadge(chapter)}
@@ -889,6 +1119,11 @@ export default function SeriesScriptView() {
                               <>
                                 <FileText className="h-4 w-4 mr-1" />
                                 Edit
+                              </>
+                            ) : language === 'hi' ? (
+                              <>
+                                <FileText className="h-4 w-4 mr-1" />
+                                Open
                               </>
                             ) : (
                               <>

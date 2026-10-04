@@ -9,7 +9,7 @@
  */
 
 import { Bot, Clock, Hand, Loader2, Pause, Smartphone } from 'lucide-react'
-import type { PhoneChapterScript, PhonePageFinish, PhonePageState, PhoneSeriesSync } from '@/lib/api'
+import type { PhoneChapterHinglish, PhoneChapterScript, PhonePageFinish, PhonePageState, PhoneSeriesSync } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 const STYLES: Record<PhoneSeriesSync['state'], { label: (s: PhoneSeriesSync) => string; className: string }> = {
@@ -64,7 +64,9 @@ export function PhoneSyncBadge({ sync, device }: { sync: PhoneSeriesSync; device
   )
 }
 
-const SCRIPT_STYLES: Record<PhoneChapterScript['status'], { label: string; className: string; hint: string }> = {
+type PhoneScriptStatus = PhoneChapterScript['status'] | PhoneChapterHinglish['status']
+
+const SCRIPT_STYLES: Record<PhoneScriptStatus, { label: string; className: string; hint: string }> = {
   done: { label: 'Phone: Done', className: 'bg-emerald-600 text-white', hint: 'Script, summary and closing saved' },
   needs_summary: {
     label: 'Phone: Needs summary',
@@ -75,12 +77,39 @@ const SCRIPT_STYLES: Record<PhoneChapterScript['status'], { label: string; class
     label: 'Phone: Stale',
     className: 'bg-amber-500 text-white',
     hint: 'An earlier chapter was saved again after this one'
+  },
+  review: {
+    label: 'Phone: Needs review',
+    className: 'bg-amber-500 text-white',
+    hint: 'Hinglish saved even though it failed the length/paragraph check'
   }
 }
 
-/** PhoneScriptBadge — the chapter's narration script status in the Sleeper-Cell app (see usePhoneScripts). */
-export function PhoneScriptBadge({ script, device }: { script: PhoneChapterScript; device: string | null }) {
-  const style = SCRIPT_STYLES[script.status]
+/** On the Hindi tab "stale" means the English script changed after the conversion. */
+const HINGLISH_STYLES: Partial<Record<PhoneScriptStatus, { label: string; className: string; hint: string }>> = {
+  done: { label: 'Phone: Done', className: 'bg-emerald-600 text-white', hint: 'Hinglish converted and checked' },
+  stale: {
+    label: 'Phone: Stale',
+    className: 'bg-amber-500 text-white',
+    hint: 'The English script changed after this was converted'
+  }
+}
+
+/**
+ * PhoneScriptBadge — the chapter's narration script status in the Sleeper-Cell
+ * app (see usePhoneScripts); `hinglish` for the Hindi tab's Hinglish script.
+ */
+export function PhoneScriptBadge({
+  script,
+  device,
+  hinglish = false
+}: {
+  script: { status: PhoneScriptStatus; savedAt: string | null }
+  device: string | null
+  hinglish?: boolean
+}) {
+  const style = (hinglish && HINGLISH_STYLES[script.status]) || SCRIPT_STYLES[script.status]
+  if (!style) return null
   const saved = formatWhen(script.savedAt)
   const where = device ? `on the phone (${device})` : 'on the phone'
   return (

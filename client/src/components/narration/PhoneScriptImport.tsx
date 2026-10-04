@@ -11,6 +11,11 @@
  * Only chapters with no script here start ticked: the zip holds every chapter
  * on the phone, and re-importing the ones already scripted (maybe edited,
  * voiced or published since) would overwrite them.
+ *
+ * Each language tab has its own card: the Hindi tab imports the phone's
+ * Hinglish zip (script.hi.md + continuity.hi.json, no about text) into the
+ * Hindi scripts, keeping the phone's review issues and the English it was
+ * converted from.
  */
 
 import { useEffect, useMemo, useState } from 'react'
@@ -19,9 +24,10 @@ import {
   r2Api,
   PhoneImportChapter,
   PhoneImportPreview,
-  PhoneScriptsStatus,
+  PhoneScriptsView,
   PhoneScriptsZipStatus
 } from '@/lib/api'
+import { LANGUAGE_LABEL, type NarrationLanguage } from '@/lib/narrationLanguage'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
@@ -56,12 +62,13 @@ const ABOUT_NOTES: Record<PhoneImportPreview['about'], string | null> = {
 
 interface Props {
   seriesId: string
-  /** From usePhoneScripts(seriesId). */
-  phoneScripts: PhoneScriptsStatus | null
+  language: NarrationLanguage
+  /** From usePhoneScripts(seriesId), for this language (phoneScriptsIn). */
+  phoneScripts: PhoneScriptsView | null
   onImported: () => void
 }
 
-export function PhoneScriptImport({ seriesId, phoneScripts, onImported }: Props) {
+export function PhoneScriptImport({ seriesId, language, phoneScripts, onImported }: Props) {
   const { toast } = useToast()
   const [zipStatus, setZipStatus] = useState<PhoneScriptsZipStatus | null>(null)
   const [previewing, setPreviewing] = useState(false)
@@ -75,8 +82,9 @@ export function PhoneScriptImport({ seriesId, phoneScripts, onImported }: Props)
   // an upload the phone sends its scripts receipt, so no timer is needed.
   useEffect(() => {
     let cancelled = false
+    setZipStatus(null)
     r2Api
-      .getPhoneScriptsZip(seriesId)
+      .getPhoneScriptsZip(seriesId, language)
       .then(next => {
         if (!cancelled) setZipStatus(prev => (prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next))
       })
@@ -86,7 +94,7 @@ export function PhoneScriptImport({ seriesId, phoneScripts, onImported }: Props)
     return () => {
       cancelled = true
     }
-  }, [seriesId, phoneScripts?.reportedAt])
+  }, [seriesId, language, phoneScripts?.reportedAt])
 
   const zip = zipStatus?.zip ?? null
   const allDone = !!phoneSeries && phoneSeries.total > 0 && phoneSeries.done === phoneSeries.total
@@ -105,7 +113,7 @@ export function PhoneScriptImport({ seriesId, phoneScripts, onImported }: Props)
   const handlePreview = async () => {
     setPreviewing(true)
     try {
-      const result = await r2Api.previewPhoneScripts(seriesId)
+      const result = await r2Api.previewPhoneScripts(seriesId, language)
       setPreview(result)
       setSelected(new Set(result.chapters.filter(ticksByDefault).map(c => c.chapterId)))
     } catch (error) {
@@ -123,13 +131,13 @@ export function PhoneScriptImport({ seriesId, phoneScripts, onImported }: Props)
     if (!preview) return
     setImporting(true)
     try {
-      const result = await r2Api.importPhoneScripts(seriesId, preview.zip.etag, [...selected])
+      const result = await r2Api.importPhoneScripts(seriesId, language, preview.zip.etag, [...selected])
       toast({
         title: 'Phone scripts attached',
         description: `${result.imported} chapter script(s) imported${result.aboutUpdated ? ', about text updated' : ''}. Voiceover is ready to run.`
       })
       setPreview(null)
-      setZipStatus(await r2Api.getPhoneScriptsZip(seriesId).catch(() => zipStatus))
+      setZipStatus(await r2Api.getPhoneScriptsZip(seriesId, language).catch(() => zipStatus))
       onImported()
     } catch (error) {
       toast({
@@ -150,11 +158,14 @@ export function PhoneScriptImport({ seriesId, phoneScripts, onImported }: Props)
       return next
     })
 
+  const hinglish = language === 'hi'
   let note: string
   if (!allDone) {
     note = phoneSeries
-      ? `${phoneSeries.done}/${phoneSeries.total} chapters done on the phone — it uploads them once they're all done`
-      : 'Waiting for the phone to report its scripts'
+      ? hinglish
+        ? `${phoneSeries.done}/${phoneSeries.total} chapters converted to Hinglish on the phone — it uploads them once they're all converted`
+        : `${phoneSeries.done}/${phoneSeries.total} chapters done on the phone — it uploads them once they're all done`
+      : `Waiting for the phone to report its ${hinglish ? 'Hinglish ' : ''}scripts`
   } else if (!zip) {
     note = 'Every chapter is done on the phone — waiting for it to upload them (open the series there if it hasn\'t)'
   } else if (alreadyImported) {
@@ -170,7 +181,7 @@ export function PhoneScriptImport({ seriesId, phoneScripts, onImported }: Props)
           <div className="flex flex-wrap items-center gap-4">
             <div className="flex items-center gap-2">
               <Smartphone className="h-4 w-4 text-muted-foreground" />
-              <span className="font-medium">Phone scripts:</span>
+              <span className="font-medium">Phone {hinglish ? 'Hinglish ' : ''}scripts:</span>
             </div>
 
             <Button
@@ -203,11 +214,11 @@ export function PhoneScriptImport({ seriesId, phoneScripts, onImported }: Props)
       <Dialog open={!!preview} onOpenChange={open => !open && !importing && setPreview(null)}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Import scripts from the phone</DialogTitle>
+            <DialogTitle>Import {LANGUAGE_LABEL[language]} scripts from the phone</DialogTitle>
             <DialogDescription>
-              Each ticked chapter gets the phone's script, summary and closing paragraph. Chapters that already
-              have a script here start unticked, so they stay as they are. Uploaded{' '}
-              {formatWhen(preview?.zip.uploadedAt) ?? 'recently'}.
+              Each ticked chapter gets the phone's {hinglish ? 'Hinglish ' : ''}script, summary and closing paragraph.
+              Chapters that already have a {LANGUAGE_LABEL[language]} script here start unticked, so they stay as
+              they are. Uploaded {formatWhen(preview?.zip.uploadedAt) ?? 'recently'}.
             </DialogDescription>
           </DialogHeader>
 
@@ -239,6 +250,24 @@ export function PhoneScriptImport({ seriesId, phoneScripts, onImported }: Props)
                         </Badge>
                       )}
                       {c.published && <Badge variant="secondary">Published</Badge>}
+                      {c.review && (
+                        <Badge
+                          variant="outline"
+                          className="border-amber-500 text-amber-600"
+                          title={c.review.join('\n')}
+                        >
+                          Needs review
+                        </Badge>
+                      )}
+                      {c.sourceMatches === false && (
+                        <Badge
+                          variant="outline"
+                          className="border-yellow-500 text-yellow-600"
+                          title="The phone converted a different English script than this one; it will show as stale"
+                        >
+                          Other English
+                        </Badge>
+                      )}
                       {(!c.hasSummary || !c.hasClosing) && (
                         <Badge variant="outline" className="text-muted-foreground">
                           No {!c.hasSummary ? 'summary' : 'closing'}

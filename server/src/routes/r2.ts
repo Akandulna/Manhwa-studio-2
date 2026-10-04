@@ -57,6 +57,7 @@ import {
   type PhoneSendRequest
 } from '../services/phoneSend.js'
 import { getPhoneScriptsZip, importPhoneScripts, previewPhoneScripts } from '../services/phoneScriptImport.js'
+import { requestLanguage } from '../services/narrationLanguage.js'
 import { relayStatus, testRelay, updateRelayConfig } from '../services/phoneRelay.js'
 
 function message(error: unknown, fallback: string): string {
@@ -213,7 +214,7 @@ export function initR2Routes(io: Server): Router {
     try {
       const seriesId = typeof req.query.seriesId === 'string' ? req.query.seriesId : ''
       if (!seriesId) throw new Error('seriesId is required')
-      res.json(await getPhoneScriptsZip(seriesId))
+      res.json(await getPhoneScriptsZip(seriesId, requestLanguage(req)))
     } catch (error) {
       console.error('R2 phone script zip lookup failed:', error)
       res.status(400).json({ error: message(error, 'Could not look for the phone script zip') })
@@ -224,7 +225,7 @@ export function initR2Routes(io: Server): Router {
     try {
       const seriesId = req.body?.seriesId
       if (typeof seriesId !== 'string' || !seriesId) throw new Error('seriesId is required')
-      res.json(await previewPhoneScripts(seriesId))
+      res.json(await previewPhoneScripts(seriesId, requestLanguage(req)))
     } catch (error) {
       console.error('Phone script preview failed:', error)
       res.status(400).json({ error: message(error, 'Could not read the phone script zip') })
@@ -239,7 +240,7 @@ export function initR2Routes(io: Server): Router {
       if (!Array.isArray(chapterIds) || !chapterIds.every(id => typeof id === 'string')) {
         throw new Error('chapterIds must be an array of strings')
       }
-      res.json(await importPhoneScripts(seriesId, etag, chapterIds))
+      res.json(await importPhoneScripts(seriesId, etag, chapterIds, requestLanguage(req)))
     } catch (error) {
       console.error('Phone script import failed:', error)
       res.status(400).json({ error: message(error, 'Could not import the phone scripts') })

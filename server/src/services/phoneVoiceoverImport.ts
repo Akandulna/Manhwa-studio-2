@@ -19,6 +19,12 @@
  * any other. The phone's splits win over the desktop's: the audio was made from
  * them.
  *
+ * Hinglish voiceovers (the Hindi tab) sit in the same folder as
+ * `<Chapter>.hi.zip`, laid out the same way, with `"language": "hi"` in the
+ * manifest and `script_sha256` taken over script.hi.md. A fetch handles one
+ * language: its zips only, its sections, its audio folder (audio_hi/) and its
+ * script file. See zipChapter for how the two are told apart.
+ *
  * R2 cost per fetch: one or two LISTs (Class A), plus one GET (Class B) per
  * chapter whose zip changed. A marker file in each chapter's audio folder
  * remembers the ETag it was attached from, so a re-run downloads nothing new.
@@ -36,7 +42,7 @@ import { createClient, getR2Config, type R2Config } from './r2Service.js'
 import { backupAudioFile, initializeSections } from './voiceoverService.js'
 import { validateAudioFile, type AudioMetadata } from './audioProcessor.js'
 import { alignSectionInBackground } from './alignment/alignmentService.js'
-import { audioFolderName, scriptFileName, type NarrationLanguage } from './narrationLanguage.js'
+import { LANGUAGE_NAMES, audioFolderName, scriptFileName, type NarrationLanguage } from './narrationLanguage.js'
 
 /** Folder the phone uploads chapter zips to, inside its R2 prefix. Keep in step with FOLDER in VoiceoverUpload.kt. */
 export const VOICEOVER_FOLDER = 'voiceover/'
@@ -53,9 +59,6 @@ const MAX_ZIP_BYTES = 512 * 1024 * 1024
 /** What the desktop accepts as uploaded section audio (see uploadSectionAudio). */
 const AUDIO_EXTENSIONS = new Set(['wav', 'mp3', 'ogg', 'flac', 'aac', 'm4a', 'opus', 'weba'])
 
-/** The phone only voices English scripts. */
-const LANGUAGE: NarrationLanguage = 'en'
-
 export interface PhoneVoiceoverSection {
   index: number
   text: string
@@ -71,7 +74,7 @@ export interface PhoneVoiceoverChapter {
   model: string | null
   voice: string | null
   style: string | null
-  /** SHA-256 of the script.md the phone split, to tell whether the desktop has the same script. */
+  /** SHA-256 of the script file the phone split, to tell whether the desktop has the same script. */
   scriptSha256: string | null
   sections: PhoneVoiceoverSection[]
 }
@@ -84,14 +87,14 @@ export interface FetchedVoiceover {
   sections: number
   /** The phone's splits differed from the chapter's sections, so they were replaced (losing their audio). */
   resplit: boolean
-  /** Whether the desktop's script.md is the one the phone split; null when either side doesn't say. */
+  /** Whether the desktop's script file is the one the phone split; null when either side doesn't say. */
   scriptMatches: boolean | null
 }
 
 export interface PhoneVoiceoverFetch {
   /** False when R2 is not set up; nothing was looked at. */
   configured: boolean
-  /** Chapter zips in R2 for this series (every one is a fully voiced chapter). */
+  /** Chapter zips in R2 for this series in this language (every one is a fully voiced chapter). */
   found: number
   /** Chapters attached by this run: new, or the phone re-uploaded them. */
   fetched: FetchedVoiceover[]
@@ -115,10 +118,11 @@ const text = (value: unknown): string | null => (typeof value === 'string' && va
  * Reads a chapter zip's manifest and audio. Entries are `<Series>/<Chapter>/…`;
  * both leading folders are dropped rather than checked, so a series or chapter
  * renamed on one side still lands in the chapter the zip was matched to.
- * Throws when the manifest is missing or malformed, the sections aren't
- * numbered 0, 1, 2… in order, or a section's audio isn't in the zip.
+ * Throws when the manifest is missing or malformed, is for another language (a
+ * manifest without one is English), the sections aren't numbered 0, 1, 2… in
+ * order, or a section's audio isn't in the zip.
  */
-export function parseVoiceoverZip(entries: ZipEntry[]): PhoneVoiceoverChapter {
+export function parseVoiceoverZip(entries: ZipEntry[], language: NarrationLanguage = 'en'): PhoneVoiceoverChapter {
   const files = new Map<string, Buffer>()
   for (const { name, data } of entries) {
     const rel = name.split('/').filter(Boolean).slice(2)
@@ -136,8 +140,8 @@ export function parseVoiceoverZip(entries: ZipEntry[]): PhoneVoiceoverChapter {
   if (!SCHEMA.test(String(manifest?.schema_version ?? ''))) {
     throw new Error(`Unknown ${MANIFEST_FILE} version: ${manifest?.schema_version}`)
   }
-  if ((manifest.language ?? LANGUAGE) !== LANGUAGE) {
-    throw new Error(`Only English voiceovers can be fetched (this one is "${manifest.language}")`)
+  if ((manifest.language ?? 'en') !== language) {
+    throw new Error(`Expected a ${LANGUAGE_NAMES[language]} voiceover, but this one is "${manifest.language}"`)
   }
   if (!Array.isArray(manifest.sections) || manifest.sections.length === 0) {
     throw new Error(`${MANIFEST_FILE} lists no sections`)
@@ -173,11 +177,11 @@ function chapterDir(folderPath: string): string {
   return path.join(process.env.DOWNLOAD_ROOT || './downloads', folderPath)
 }
 
-/** Whether the desktop's script.md is byte for byte the one the phone split. */
-async function scriptMatches(folderPath: string, sha256: string | null): Promise<boolean | null> {
+/** Whether the desktop's script file is byte for byte the one the phone split. */
+async function scriptMatches(folderPath: string, sha256: string | null, language: NarrationLanguage): Promise<boolean | null> {
   if (!sha256) return null
   try {
-    const script = await fs.readFile(path.join(chapterDir(folderPath), scriptFileName(LANGUAGE)))
+    const script = await fs.readFile(path.join(chapterDir(folderPath), scriptFileName(language)))
     return crypto.createHash('sha256').update(script).digest('hex') === sha256
   } catch {
     return null
@@ -185,18 +189,19 @@ async function scriptMatches(folderPath: string, sha256: string | null): Promise
 }
 
 /**
- * Makes the phone's splits the chapter's English sections and attaches their
- * audio. Every file is written and checked with ffprobe before anything in the
- * database changes, so a bad zip leaves the chapter as it was. Returns whether
- * the sections had to be replaced.
+ * Makes the phone's splits the chapter's sections in this language and
+ * attaches their audio. Every file is written and checked with ffprobe before
+ * anything in the database changes, so a bad zip leaves the chapter as it was.
+ * Returns whether the sections had to be replaced.
  */
 export async function attachVoiceover(
   chapterId: string,
   folderPath: string,
   voiceover: PhoneVoiceoverChapter,
-  io?: Server | null
+  io?: Server | null,
+  language: NarrationLanguage = 'en'
 ): Promise<boolean> {
-  const audioDir = path.join(chapterDir(folderPath), audioFolderName(LANGUAGE))
+  const audioDir = path.join(chapterDir(folderPath), audioFolderName(language))
   const staging = path.join(audioDir, '.phone-staging')
   await fs.rm(staging, { recursive: true, force: true })
   await fs.mkdir(staging, { recursive: true })
@@ -214,17 +219,17 @@ export async function attachVoiceover(
     }
 
     const existing = await prisma.audioSection.findMany({
-      where: { chapterId, language: LANGUAGE },
+      where: { chapterId, language },
       orderBy: { index: 'asc' }
     })
     const sameSplits = existing.length === voiceover.sections.length &&
       existing.every((s, i) => s.index === i && s.text === voiceover.sections[i].text)
     if (!sameSplits) {
-      await initializeSections(chapterId, voiceover.sections.map(({ index, text }) => ({ index, text })), LANGUAGE)
+      await initializeSections(chapterId, voiceover.sections.map(({ index, text }) => ({ index, text })), language)
     }
 
     const rows = await prisma.audioSection.findMany({
-      where: { chapterId, language: LANGUAGE },
+      where: { chapterId, language },
       include: { audioFile: true },
       orderBy: { index: 'asc' }
     })
@@ -242,7 +247,7 @@ export async function attachVoiceover(
         data: {
           chapterId,
           sectionId: row.id,
-          language: LANGUAGE,
+          language,
           kind: 'generated',
           provider: voiceover.provider ?? 'sleeper-cell',
           model: voiceover.model,
@@ -268,10 +273,25 @@ export async function attachVoiceover(
 
 interface ListedZip {
   key: string
-  /** Chapter folder name: the key's file name without `.zip`. */
-  folder: string
+  /** The key's file name without `.zip`: `<Chapter>`, or `<Chapter>.hi` for Hinglish (see zipChapter). */
+  base: string
   etag: string
   size: number
+}
+
+/**
+ * Which chapter and language a zip in the series folder is for, from its file
+ * name without `.zip`: `<Chapter>.hi` is that chapter's Hinglish voiceover,
+ * anything else an English one. The only ambiguous name is a chapter folder
+ * that itself ends in `.hi`; it is read as English when that folder exists and
+ * the name without `.hi` doesn't.
+ */
+export function zipChapter(base: string, chapterFolders: Set<string>): { folder: string; language: NarrationLanguage } {
+  if (base.endsWith('.hi')) {
+    const stripped = base.slice(0, -'.hi'.length)
+    if (!(chapterFolders.has(base) && !chapterFolders.has(stripped))) return { folder: stripped, language: 'hi' }
+  }
+  return { folder: base, language: 'en' }
 }
 
 /** Where each series' zips were found last time, so a re-run tries that folder first. */
@@ -292,7 +312,7 @@ async function listFolder(client: S3Client, config: R2Config, folder: string): P
       if (!rest.toLowerCase().endsWith('.zip') || rest.includes('/')) continue
       zips.push({
         key: obj.Key!,
-        folder: rest.slice(0, -'.zip'.length),
+        base: rest.slice(0, -'.zip'.length),
         etag: (obj.ETag ?? '').replace(/"/g, ''),
         size: obj.Size ?? 0
       })
@@ -335,18 +355,24 @@ async function readMarkerEtag(audioDir: string): Promise<string | null> {
 const fetching = new Set<string>()
 
 /**
- * Downloads and attaches every chapter voiceover the phone has uploaded for
- * this series that isn't attached yet (or was re-uploaded since). `chapterIds`
- * narrows it to those chapters. A chapter that fails is reported and the rest
- * carry on.
+ * Downloads and attaches every chapter voiceover in `language` the phone has
+ * uploaded for this series that isn't attached yet (or was re-uploaded since).
+ * `chapterIds` narrows it to those chapters. A chapter that fails is reported
+ * and the rest carry on.
  */
-export async function fetchPhoneVoiceover(seriesId: string, chapterIds?: string[], io?: Server | null): Promise<PhoneVoiceoverFetch> {
+export async function fetchPhoneVoiceover(
+  seriesId: string,
+  chapterIds?: string[],
+  io?: Server | null,
+  language: NarrationLanguage = 'en'
+): Promise<PhoneVoiceoverFetch> {
   const result: PhoneVoiceoverFetch = { configured: false, found: 0, fetched: [], upToDate: 0, unmatched: [], failed: [] }
   const config = getR2Config()
   if (!config) return result
   result.configured = true
-  if (fetching.has(seriesId)) throw new Error('A fetch for this series is already running')
-  fetching.add(seriesId)
+  const lock = `${seriesId}:${language}`
+  if (fetching.has(lock)) throw new Error('A fetch for this series is already running')
+  fetching.add(lock)
 
   try {
     const series = await prisma.series.findUnique({
@@ -359,11 +385,15 @@ export async function fetchPhoneVoiceover(seriesId: string, chapterIds?: string[
     if (!series) throw new Error('Series not found')
 
     const client = createClient(config)
-    const zips = await listSeriesZips(client, config, seriesId, path.basename(series.rootFolder))
+    const byFolder = new Map(series.chapters.map(c => [path.basename(c.folderPath), c]))
+    const folders = new Set(byFolder.keys())
+    // The other language's zips share the folder; they are not this fetch's.
+    const zips = (await listSeriesZips(client, config, seriesId, path.basename(series.rootFolder)))
+      .map(zip => ({ ...zip, ...zipChapter(zip.base, folders) }))
+      .filter(zip => zip.language === language)
     result.found = zips.length
 
     const wanted = chapterIds ? new Set(chapterIds) : null
-    const byFolder = new Map(series.chapters.map(c => [path.basename(c.folderPath), c]))
     zips.sort((a, b) => a.folder.localeCompare(b.folder, undefined, { numeric: true }))
 
     for (const zip of zips) {
@@ -374,7 +404,7 @@ export async function fetchPhoneVoiceover(seriesId: string, chapterIds?: string[
       }
       if (wanted && !wanted.has(chapter.id)) continue
 
-      const audioDir = path.join(chapterDir(chapter.folderPath), audioFolderName(LANGUAGE))
+      const audioDir = path.join(chapterDir(chapter.folderPath), audioFolderName(language))
       if (zip.etag && (await readMarkerEtag(audioDir)) === zip.etag) {
         result.upToDate++
         continue
@@ -384,8 +414,8 @@ export async function fetchPhoneVoiceover(seriesId: string, chapterIds?: string[
         if (zip.size > MAX_ZIP_BYTES) throw new Error(`The zip is unexpectedly large (${zip.size} bytes)`)
         const res = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: zip.key }))
         const body = Buffer.from(await res.Body!.transformToByteArray())
-        const voiceover = parseVoiceoverZip(readZip(body))
-        const resplit = await attachVoiceover(chapter.id, chapter.folderPath, voiceover, io)
+        const voiceover = parseVoiceoverZip(readZip(body), language)
+        const resplit = await attachVoiceover(chapter.id, chapter.folderPath, voiceover, io, language)
         const marker = {
           key: zip.key,
           etag: (res.ETag ?? zip.etag).replace(/"/g, ''),
@@ -401,7 +431,7 @@ export async function fetchPhoneVoiceover(seriesId: string, chapterIds?: string[
           folder: zip.folder,
           sections: voiceover.sections.length,
           resplit,
-          scriptMatches: await scriptMatches(chapter.folderPath, voiceover.scriptSha256)
+          scriptMatches: await scriptMatches(chapter.folderPath, voiceover.scriptSha256, language)
         })
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error)
@@ -412,6 +442,6 @@ export async function fetchPhoneVoiceover(seriesId: string, chapterIds?: string[
 
     return result
   } finally {
-    fetching.delete(seriesId)
+    fetching.delete(lock)
   }
 }

@@ -30,7 +30,10 @@ relay.on('connection', (ws, req) => {
   desktop = ws
   ws.on('message', data => received.push(data.toString()))
   ws.send(JSON.stringify({ type: 'hello', phones: 1, request: null }))
-  ws.send(JSON.stringify({ type: 'receipt', kind: 'scripts', at: 1, body: { device: 'Pixel', answers: 'a1', series: { 'Solo Hero': { total: 3, done: 1, chapters: { 'Chapter 001': { status: 'done' } } } } } }))
+  ws.send(JSON.stringify({ type: 'receipt', kind: 'scripts', at: 1, body: { device: 'Pixel', answers: 'a1', series: { 'Solo Hero': {
+    total: 3, done: 1, chapters: { 'Chapter 001': { status: 'done' } },
+    hi: { total: 3, done: 1, uploadedAt: '2026-10-04T10:00:00Z', chapters: { 'Chapter 001': { status: 'review', savedAt: '2026-10-04T09:00:00Z' }, 'Chapter 404': { status: 'done' } } }
+  } } } }))
 })
 await new Promise(resolve => relay.once('listening', resolve))
 
@@ -59,6 +62,11 @@ describe('phone relay', () => {
     const scripts = await getPhoneScripts('s1', true)
     expect(scripts).toMatchObject({ configured: true, device: 'Pixel', answers: 'a1', series: { s1: { done: 1, total: 3 } } })
     expect(scripts.chapters).toEqual({ c1: { status: 'done', savedAt: null } })
+    // The optional Hinglish block, matched to chapters the same way.
+    expect(scripts.hi).toEqual({
+      series: { s1: { done: 1, total: 3, uploadedAt: '2026-10-04T10:00:00Z' } },
+      chapters: { c1: { status: 'review', savedAt: '2026-10-04T09:00:00Z' } }
+    })
     // Nothing from the phone yet for crops: empty, still not R2.
     expect((await getPhoneCrops('s1', undefined, true)).series).toEqual({})
     expect(send).not.toHaveBeenCalled()

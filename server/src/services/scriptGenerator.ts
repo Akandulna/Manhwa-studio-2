@@ -6,6 +6,10 @@
  * - Maintains story continuity across chapters
  * - Handles map-reduce batching for large chapters
  * - Manages the two-call design (script + summary)
+ *
+ * Only English is written from the images. A Hindi (Hinglish) script is always
+ * converted from its chapter's English script (see hinglishService.ts): every
+ * English script generated here is queued for conversion once it is saved.
  */
 
 import fs from 'fs/promises'
@@ -23,7 +27,6 @@ import {
   getBeatsToScriptChapter1Prompt,
   getBeatsToScriptChapterNPrompt,
   getBeatsToScriptSystemPrompt,
-  getLanguageDirective,
   DEFAULT_BASE_STYLE_PROMPT
 } from './ai/index.js'
 import {
@@ -40,6 +43,7 @@ import {
   ProcessedImage,
   ImageProcessingConfig
 } from './imageProcessor.js'
+import { HinglishConversionService, getConvertibleChapters, readEnglishSource } from './hinglishService.js'
 
 // Helper to get full folder path by prepending DOWNLOAD_ROOT
 function getFullFolderPath(relativePath: string): string {
@@ -89,10 +93,13 @@ export class ScriptGenerationService {
   private queue: PQueue
   private isRunning: boolean = false
   private currentChapterId: string | null = null
+  /** Turns English scripts into Hinglish ones, one at a time beside generation. */
+  readonly hinglish: HinglishConversionService
   
   constructor(io: Server) {
     this.io = io
     this.queue = new PQueue({ concurrency: 1 })
+    this.hinglish = new HinglishConversionService(io)
   }
   
   /**
@@ -105,6 +112,12 @@ export class ScriptGenerationService {
     language: NarrationLanguage = 'en'
   ): Promise<{ success: boolean; error?: string }> {
     const cfg = { ...DEFAULT_CONFIG, ...config }
+    
+    // Hindi is never written from the images: queue the chapter's conversion
+    // from its English script instead.
+    if (language === 'hi') {
+      return this.queueHinglish(chapterId)
+    }
     
     try {
       // Get chapter with series and previous chapter info
@@ -163,7 +176,7 @@ export class ScriptGenerationService {
       }
       
       // Get base style prompt from settings
-      const baseStylePrompt = await this.getBaseStylePrompt(language)
+      const baseStylePrompt = await this.getBaseStylePrompt()
       
       if (mode === 'api') {
         return await this.generateWithAPI(
@@ -214,6 +227,10 @@ export class ScriptGenerationService {
     config: Partial<GenerationConfig> = {},
     language: NarrationLanguage = 'en'
   ): Promise<{ success: boolean; completed: number; failed: number; errors: string[] }> {
+    if (language === 'hi') {
+      return this.queueHinglishRange(seriesId, fromChapter, toChapter)
+    }
+    
     // Get all chapters in range
     const chapters = await prisma.chapter.findMany({
       where: {
@@ -281,6 +298,13 @@ export class ScriptGenerationService {
         break
       }
     }
+    
+    // Each chapter written above was queued for Hinglish as it was saved; also
+    // pick up every other chapter of the series whose Hinglish is missing or
+    // stale. They convert in the background after this returns.
+    await getConvertibleChapters(seriesId)
+      .then(ids => this.hinglish.enqueue(ids))
+      .catch(error => console.error('[hinglish] queueing the series failed:', error))
     
     return {
       success: failed === 0,
@@ -351,8 +375,12 @@ export class ScriptGenerationService {
         data: updateData
       })
       
-      // Mark downstream chapters as stale
-      await this.markDownstreamStale(chapter.seriesId, chapter.number, language)
+      // Mark downstream chapters as stale. Hindi chapters don't chain: each is
+      // converted from its own English script, so a summary there affects no
+      // other chapter.
+      if (language === 'en') {
+        await this.markDownstreamStale(chapter.seriesId, chapter.number, language)
+      }
       
       return { success: true }
       
@@ -703,6 +731,14 @@ export class ScriptGenerationService {
       stage: 'done'
     })
     
+    // Convert the new English script to Hinglish. Queued, so a failed
+    // conversion is recorded on the Hindi script and never fails this one.
+    if (language === 'en') {
+      this.hinglish.enqueue([chapter.id]).catch(error =>
+        console.error(`[hinglish] queueing chapter ${chapter.number} failed:`, error)
+      )
+    }
+    
     return { success: true }
   }
   
@@ -736,12 +772,43 @@ export class ScriptGenerationService {
     }
   }
   
-  private async getBaseStylePrompt(language: NarrationLanguage): Promise<string> {
+  private async getBaseStylePrompt(): Promise<string> {
     const setting = await prisma.setting.findUnique({
       where: { key: 'narrationBasePrompt' }
     })
     
-    return (setting?.value || DEFAULT_BASE_STYLE_PROMPT) + getLanguageDirective(language)
+    return setting?.value || DEFAULT_BASE_STYLE_PROMPT
+  }
+  
+  /** Queues one chapter's Hinglish conversion; refused while its English script isn't written. */
+  private async queueHinglish(chapterId: string): Promise<{ success: boolean; error?: string }> {
+    const chapter = await prisma.chapter.findUnique({
+      where: { id: chapterId },
+      include: scriptIn('en')
+    })
+    if (!chapter) return { success: false, error: 'Chapter not found' }
+    if (!(await readEnglishSource(chapter.scripts[0]))) {
+      return { success: false, error: `Generate Chapter ${chapter.number}'s English script first; Hindi is converted from it` }
+    }
+    await this.hinglish.enqueue([chapterId])
+    return { success: true }
+  }
+  
+  /** Queues the conversion of every chapter in range whose Hinglish is missing or stale. */
+  private async queueHinglishRange(
+    seriesId: string,
+    fromChapter: number,
+    toChapter: number
+  ): Promise<{ success: boolean; completed: number; failed: number; errors: string[] }> {
+    const inRange = new Set(
+      (await prisma.chapter.findMany({
+        where: { seriesId, number: { gte: fromChapter, lte: toChapter } },
+        select: { id: true }
+      })).map(c => c.id)
+    )
+    const ids = (await getConvertibleChapters(seriesId)).filter(id => inRange.has(id))
+    const queued = await this.hinglish.enqueue(ids)
+    return { success: true, completed: queued, failed: 0, errors: [] }
   }
 
   /**

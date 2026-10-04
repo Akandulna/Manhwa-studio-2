@@ -63,7 +63,7 @@ vi.mock('../../index.js', () => ({
 }))
 
 Object.assign(process.env, { R2_ACCOUNT_ID: 'a', R2_ACCESS_KEY_ID: 'k', R2_SECRET_ACCESS_KEY: 's', R2_BUCKET: 'b', R2_PREFIX: 'Manhwa' })
-const { fetchPhoneVoiceover, parseVoiceoverZip, FETCH_MARKER } = await import('../phoneVoiceoverImport.js')
+const { fetchPhoneVoiceover, parseVoiceoverZip, zipChapter, FETCH_MARKER } = await import('../phoneVoiceoverImport.js')
 const { readZip } = await import('../../utils/zipReader.js')
 
 async function zipOf(entries: Record<string, string | Buffer>): Promise<Buffer> {
@@ -105,14 +105,14 @@ const manifest = (texts: string[], extra: object = {}) => JSON.stringify({
   ...extra
 })
 
-const chapterZip = (chapter: string, texts: string[], tone = 0) => zipOf({
-  [`Solo Hero/${chapter}/voiceover.json`]: manifest(texts),
+const chapterZip = (chapter: string, texts: string[], tone = 0, extra: object = {}) => zipOf({
+  [`Solo Hero/${chapter}/voiceover.json`]: manifest(texts, extra),
   ...Object.fromEntries(texts.map((_, i) => [`Solo Hero/${chapter}/section_${String(i + 1).padStart(2, '0')}.wav`, wav(tone)]))
 })
 
 let root: string
 let previousRoot: string | undefined
-const audioDir = (chapter: string) => path.join(root, 'Solo Hero', chapter, 'audio')
+const audioDir = (chapter: string, folder = 'audio') => path.join(root, 'Solo Hero', chapter, folder)
 
 beforeEach(async () => {
   previousRoot = process.env.DOWNLOAD_ROOT
@@ -149,6 +149,53 @@ describe('parseVoiceoverZip', () => {
     await expect(async () => parseVoiceoverZip(readZip(await zipOf({
       'a/b/voiceover.json': manifest(['One.', 'Two.']), 'a/b/section_01.wav': wav()
     })))).rejects.toThrow(/section_02.wav is missing/)
+  })
+})
+
+describe('zipChapter', () => {
+  const folders = new Set(['Chapter 009', 'Chapter 010', 'Extra.hi'])
+
+  it('reads <Chapter>.hi as that chapter\'s Hinglish voiceover', () => {
+    expect(zipChapter('Chapter 009', folders)).toEqual({ folder: 'Chapter 009', language: 'en' })
+    expect(zipChapter('Chapter 009.hi', folders)).toEqual({ folder: 'Chapter 009', language: 'hi' })
+    expect(zipChapter('Chapter 404.hi', folders)).toEqual({ folder: 'Chapter 404', language: 'hi' })
+  })
+
+  it('keeps a chapter folder that itself ends in .hi English', () => {
+    expect(zipChapter('Extra.hi', folders)).toEqual({ folder: 'Extra.hi', language: 'en' })
+    expect(zipChapter('Extra.hi.hi', folders)).toEqual({ folder: 'Extra.hi', language: 'hi' })
+  })
+})
+
+describe('fetchPhoneVoiceover in Hinglish', () => {
+  it('fetches only <Chapter>.hi.zip into the Hindi sections and audio_hi/, and English never sees it', async () => {
+    zips.set('voiceover/Solo Hero/Chapter 009.zip', await chapterZip('Chapter 009', ['One.']))
+    etags.set('voiceover/Solo Hero/Chapter 009.zip', 'en9')
+    zips.set('voiceover/Solo Hero/Chapter 009.hi.zip', await chapterZip('Chapter 009', ['एक।', 'दो।'], 0, { language: 'hi' }))
+    etags.set('voiceover/Solo Hero/Chapter 009.hi.zip', 'hi9')
+
+    const hi = await fetchPhoneVoiceover('s3', undefined, null, 'hi')
+    expect(hi).toMatchObject({ found: 1, upToDate: 0, unmatched: [], failed: [] })
+    expect(hi.fetched.map(c => [c.folder, c.sections])).toEqual([['Chapter 009', 2]])
+    expect(sections.map(s => [s.language, s.text])).toEqual([['hi', 'एक।'], ['hi', 'दो।']])
+    expect(files.every(f => f.language === 'hi' && f.filePath.includes(`${path.sep}audio_hi${path.sep}`))).toBe(true)
+    expect((await fs.readdir(audioDir('Chapter 009', 'audio_hi'))).sort()).toEqual([FETCH_MARKER, 'section_01.wav', 'section_02.wav'])
+
+    // English: its own zip only, the Hinglish one is neither fetched nor "unmatched".
+    const en = await fetchPhoneVoiceover('s3')
+    expect(en).toMatchObject({ found: 1, unmatched: [], failed: [] })
+    expect(sections.filter(s => s.language === 'en').map(s => s.text)).toEqual(['One.'])
+    expect(sections.filter(s => s.language === 'hi')).toHaveLength(2)
+  })
+
+  it('refuses a zip whose manifest is for the other language', async () => {
+    const english = readZip(await chapterZip('Chapter 009', ['One.']))
+    expect(() => parseVoiceoverZip(english, 'hi')).toThrow(/Expected a Hindi voiceover, but this one is "en"/)
+    const unlabelled = JSON.parse(manifest(['One.']))
+    delete unlabelled.language
+    const entries = readZip(await zipOf({ 'a/b/voiceover.json': JSON.stringify(unlabelled), 'a/b/section_01.wav': wav() }))
+    expect(parseVoiceoverZip(entries).sections).toHaveLength(1)
+    expect(() => parseVoiceoverZip(entries, 'hi')).toThrow(/this one is "undefined"/)
   })
 })
 

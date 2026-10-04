@@ -3,13 +3,19 @@
  * 
  * The main workspace for generating and editing narration scripts.
  * Supports both API mode and Manual mode.
+ *
+ * Scripts are generated on the English tab only. The Hindi tab edits the
+ * chapter's Hinglish script, which is converted from the English one: in API
+ * mode by itself once the English script is saved (or with "Convert to
+ * Hinglish"), in Manual mode with "Copy Hinglish prompt" and a pasted reply
+ * that is checked before it is saved.
  */
 
 import { useEffect, useRef, useState } from 'react'
 import { usePublishedChapters } from '@/hooks/usePublishedChapters'
 import { PublishedBadge } from '@/components/PublishedBadge'
 import { useParams, useNavigate } from 'react-router-dom'
-import { narrationApi, ChapterScriptDetail, ManualPromptResponse, AIStatus } from '@/lib/api'
+import { narrationApi, ChapterScriptDetail, ManualPromptResponse, AIStatus, HinglishEvent } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -44,14 +50,15 @@ import {
   Flag,
   FileText,
   Sparkles,
-  Bird
+  Bird,
+  Languages
 } from 'lucide-react'
 
 export default function ScriptEditor() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { toast } = useToast()
-  const { narrationProgress: anyNarrationProgress } = useSocket()
+  const { socket, narrationProgress: anyNarrationProgress } = useSocket()
   const [language, setLanguage] = useNarrationLanguage('narration')
   // Only this tab's language — the other one may be generating the same chapter.
   const narrationProgress =
@@ -81,6 +88,13 @@ export default function ScriptEditor() {
   // Continuity panel
   const [showContinuity, setShowContinuity] = useState(true)
 
+  // Hinglish, from the English tab: API conversion, or copy the prompt and paste the reply
+  const [converting, setConverting] = useState(false)
+  const [hinglishReply, setHinglishReply] = useState('')
+  const [hinglishIssues, setHinglishIssues] = useState<{ issues: string[]; followUp: string } | null>(null)
+  const [submittingHinglish, setSubmittingHinglish] = useState(false)
+  const [copiedHinglish, setCopiedHinglish] = useState<'prompt' | 'fix' | null>(null)
+
   const manualStepsRef = useRef<HTMLDivElement>(null)
 
   // Radix keeps the inactive tab's panel mounted but `hidden`, so it has no
@@ -105,9 +119,35 @@ export default function ScriptEditor() {
       // The manual prompt carries this language's continuity, so it is rebuilt.
       setManualPrompt(null)
       setManualResponse('')
+      setHinglishReply('')
+      setHinglishIssues(null)
       loadData()
     }
   }, [id, language])
+
+  // This chapter's Hinglish conversion: refresh its status (and, on the Hindi
+  // tab, the script unless it has unsaved edits) when it finishes.
+  useEffect(() => {
+    if (!socket || !id) return
+    const handleHinglish = (event: HinglishEvent) => {
+      if (event.chapterId !== id) return
+      if (event.stage === 'done' || event.stage === 'review' || event.stage === 'failed') {
+        if (language === 'hi' && !hasChanges) {
+          loadChapter()
+        } else {
+          narrationApi.getChapterDetail(id, language)
+            .then(data => setChapter(prev => (prev ? { ...prev, hinglish: data.hinglish } : data)))
+            .catch(() => {})
+        }
+      } else {
+        setChapter(prev => (prev ? { ...prev, hinglish: { ...prev.hinglish, queued: true } } : prev))
+      }
+    }
+    socket.on('narration:hinglish', handleHinglish)
+    return () => {
+      socket.off('narration:hinglish', handleHinglish)
+    }
+  }, [socket, id, language, hasChanges])
 
 
   // Handle generation progress
@@ -141,7 +181,8 @@ export default function ScriptEditor() {
       setAIStatus(aiData)
       setScriptContent(chapterData.script?.content || '')
       setHasChanges(false)
-      setMode(aiData.configured ? 'api' : 'manual')
+      // Hindi has only the editor: its scripts are converted, never generated here.
+      setMode(aiData.configured || language === 'hi' ? 'api' : 'manual')
     } catch (error) {
       toast({
         title: 'Error',
@@ -332,6 +373,74 @@ export default function ScriptEditor() {
     }
   }
 
+  /** Queue this chapter's Hinglish conversion (API mode), whatever its status. */
+  const handleConvertHinglish = async () => {
+    setConverting(true)
+    try {
+      await narrationApi.convertHinglishChapter(id!)
+      setChapter(prev => (prev ? { ...prev, hinglish: { ...prev.hinglish, queued: true } } : prev))
+      toast({ title: 'Converting to Hinglish', description: 'The Hindi tab gets the script when it is done' })
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: error instanceof Error ? error.message : 'Failed to queue the conversion',
+        variant: 'destructive'
+      })
+    } finally {
+      setConverting(false)
+    }
+  }
+
+  const copyText = async (text: string, which: 'prompt' | 'fix') => {
+    await navigator.clipboard.writeText(text)
+    setCopiedHinglish(which)
+    setTimeout(() => setCopiedHinglish(null), 2000)
+    toast({ title: 'Copied!', description: which === 'prompt' ? 'Hinglish prompt copied' : 'Fix prompt copied' })
+  }
+
+  const handleCopyHinglishPrompt = async () => {
+    try {
+      const { prompt } = await narrationApi.getHinglishPrompt(id!)
+      await copyText(prompt, 'prompt')
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: error instanceof Error ? error.message : 'Failed to build the Hinglish prompt',
+        variant: 'destructive'
+      })
+    }
+  }
+
+  /** Check the pasted reply; it is saved if it passes, or with `force` marked for review. */
+  const handleSubmitHinglish = async (force: boolean) => {
+    setSubmittingHinglish(true)
+    try {
+      const result = await narrationApi.submitHinglish(id!, hinglishReply, force)
+      if (!result.saved) {
+        setHinglishIssues({ issues: result.issues, followUp: result.followUp ?? '' })
+        return
+      }
+      setHinglishIssues(null)
+      setHinglishReply('')
+      toast({
+        title: 'Hinglish Saved',
+        description: result.issues.length > 0
+          ? 'Saved as needing review - it shows on the Hindi tab'
+          : 'Passed the check - it is on the Hindi tab'
+      })
+      const data = await narrationApi.getChapterDetail(id!, language)
+      setChapter(prev => (prev ? { ...prev, hinglish: data.hinglish } : data))
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: error instanceof Error ? error.message : 'Failed to save the Hinglish script',
+        variant: 'destructive'
+      })
+    } finally {
+      setSubmittingHinglish(false)
+    }
+  }
+
   const handleOpenFolder = async () => {
     if (!chapter) return
     try {
@@ -382,6 +491,16 @@ export default function ScriptEditor() {
     )
   }
 
+  const isHindi = language === 'hi'
+  const hinglish = chapter.hinglish
+  const hinglishLabel: Record<typeof hinglish.state, string> = {
+    waiting: 'Waiting for the English script',
+    pending: 'Not converted yet',
+    stale: 'Stale - the English changed since it was converted',
+    review: 'Needs review',
+    done: 'Done',
+    failed: 'Conversion failed'
+  }
   const canGenerate = chapter.imagesValid && aiStatus?.configured && !generating && !hasChanges
   const isGenerating = generating || (narrationProgress?.chapterId === id && narrationProgress?.stage !== 'done' && narrationProgress?.stage !== 'failed')
 
@@ -481,8 +600,52 @@ export default function ScriptEditor() {
         </Card>
       )}
 
-      {/* Stale warning */}
-      {chapter.script?.status === 'stale' && (
+      {/* Hindi: where this Hinglish script stands against its English one */}
+      {isHindi && hinglish.queued && (
+        <Card className="mb-4">
+          <CardContent className="py-3">
+            <div className="flex items-center gap-2 text-sm">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Converting the English script to Hinglish...
+            </div>
+          </CardContent>
+        </Card>
+      )}
+      {isHindi && !hinglish.queued && hinglish.state !== 'done' && (
+        <Card className={`mb-4 ${hinglish.state === 'failed' ? 'border-destructive' : 'border-yellow-500'}`}>
+          <CardContent className="py-3">
+            <div className="flex items-start gap-2 text-yellow-600">
+              <AlertTriangle className="h-5 w-5 mt-0.5 shrink-0" />
+              <div className="flex-1 space-y-1 text-sm">
+                {hinglish.state === 'review' && (
+                  <>
+                    <p className="font-medium">Saved even though it failed the check - review it. Saving your edits clears this.</p>
+                    {hinglish.review?.map(line => <p key={line} className="text-xs">{line}</p>)}
+                  </>
+                )}
+                {hinglish.state === 'stale' && (
+                  <p>The English script changed after this was converted. Convert it again from the English tab.</p>
+                )}
+                {(hinglish.state === 'pending' || hinglish.state === 'failed') && (
+                  <p>No Hinglish script yet. Hindi scripts are converted from the English one, on the English tab.</p>
+                )}
+                {hinglish.state === 'waiting' && (
+                  <p>No English script yet. Generate it on the English tab; it is converted to Hinglish after.</p>
+                )}
+                {hinglish.error && <p className="text-xs text-destructive">Last conversion failed: {hinglish.error}</p>}
+              </div>
+              {hinglish.state !== 'review' && (
+                <Button variant="outline" size="sm" onClick={() => setLanguage('en')} disabled={hasChanges}>
+                  English tab
+                </Button>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Stale warning (English continuity; Hindi chapters don't chain) */}
+      {!isHindi && chapter.script?.status === 'stale' && (
         <Card className="mb-4 border-yellow-500">
           <CardContent className="py-3">
             <div className="flex items-center gap-2 text-yellow-600">
@@ -500,24 +663,28 @@ export default function ScriptEditor() {
       <div className="flex-1 flex gap-4 min-h-0">
         {/* Main Editor Area */}
         <div className="flex-1 flex flex-col min-h-0">
-          <Tabs value={mode} onValueChange={(v: string) => setMode(v as 'api' | 'manual')} className="flex-1 flex flex-col min-h-0">
-            <TabsList className="mb-4">
-              <TabsTrigger value="api" disabled={!aiStatus?.configured}>
-                <Wand2 className="h-4 w-4 mr-2" />
-                API Mode
-              </TabsTrigger>
-              <TabsTrigger value="manual">
-                <FileText className="h-4 w-4 mr-2" />
-                Manual Mode
-              </TabsTrigger>
-            </TabsList>
+          <Tabs value={isHindi ? 'api' : mode} onValueChange={(v: string) => setMode(v as 'api' | 'manual')} className="flex-1 flex flex-col min-h-0">
+            {!isHindi && (
+              <TabsList className="mb-4">
+                <TabsTrigger value="api" disabled={!aiStatus?.configured}>
+                  <Wand2 className="h-4 w-4 mr-2" />
+                  API Mode
+                </TabsTrigger>
+                <TabsTrigger value="manual">
+                  <FileText className="h-4 w-4 mr-2" />
+                  Manual Mode
+                </TabsTrigger>
+              </TabsList>
+            )}
 
             <TabsContent value="api" className="flex-1 flex flex-col min-h-0 mt-0">
               <Card className="flex-1 flex flex-col min-h-0">
                 <CardHeader className="pb-3">
                   <div className="flex items-center justify-between">
-                    <CardTitle className="text-lg">Script</CardTitle>
-                    
+                    <CardTitle className="text-lg">{isHindi ? 'Hinglish Script' : 'Script'}</CardTitle>
+
+                    {/* Generating is English only; Hindi is converted from it */}
+                    {!isHindi && (
                     <div className="flex items-center gap-2">
                       {isGenerating && (
                         <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -539,13 +706,16 @@ export default function ScriptEditor() {
                         {chapter.script?.content ? 'Regenerate' : 'Generate'}
                       </Button>
                     </div>
+                    )}
                   </div>
                 </CardHeader>
                 <CardContent className="flex-1 min-h-0">
                   <Textarea
                     value={scriptContent}
                     onChange={(e) => handleScriptChange(e.target.value)}
-                    placeholder="Script will appear here after generation..."
+                    placeholder={isHindi
+                      ? 'The Hinglish script appears here once the English one is converted...'
+                      : 'Script will appear here after generation...'}
                     className="h-full min-h-[300px] font-mono text-sm resize-none"
                   />
                 </CardContent>
@@ -635,13 +805,124 @@ export default function ScriptEditor() {
                 </CardContent>
               </Card>
 
+              {/* Step 3: Hinglish, converted from the saved English script */}
+              {chapter.script?.content && (
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-lg">Step 3: Hinglish</CardTitle>
+                    <CardDescription>
+                      Copy the Hinglish prompt (it holds the saved English script) into your AI chat, then paste its
+                      reply here. It is checked before it is saved to the Hindi tab.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="flex flex-col gap-3">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <Button variant="outline" onClick={handleCopyHinglishPrompt} disabled={hasChanges}>
+                        {copiedHinglish === 'prompt' ? <Check className="h-4 w-4 mr-2" /> : <Copy className="h-4 w-4 mr-2" />}
+                        Copy Hinglish prompt
+                      </Button>
+                      <span className="text-sm text-muted-foreground">
+                        {hasChanges ? 'Save the English script first' : `Hindi: ${hinglishLabel[hinglish.state]}`}
+                      </span>
+                    </div>
+                    <Textarea
+                      value={hinglishReply}
+                      onChange={(e) => {
+                        setHinglishReply(e.target.value)
+                        setHinglishIssues(null)
+                      }}
+                      placeholder="Paste the Hinglish reply here (===SCRIPT=== with [P1], [P2], ... then ===SUMMARY===)..."
+                      className="min-h-[160px] font-mono text-sm"
+                      lang="hi"
+                    />
+                    {hinglishIssues && (
+                      <div className="rounded-md border border-amber-500 p-3 text-sm space-y-2">
+                        <p className="font-medium text-amber-600 flex items-center gap-1">
+                          <AlertTriangle className="h-4 w-4" />
+                          The reply did not pass the check:
+                        </p>
+                        <ul className="list-disc pl-5 text-xs space-y-0.5">
+                          {hinglishIssues.issues.map(line => <li key={line}>{line}</li>)}
+                        </ul>
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          <Button size="sm" variant="outline" onClick={() => copyText(hinglishIssues.followUp, 'fix')}>
+                            {copiedHinglish === 'fix' ? <Check className="h-4 w-4 mr-2" /> : <Copy className="h-4 w-4 mr-2" />}
+                            Copy fix prompt
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="border-amber-500 text-amber-600"
+                            onClick={() => handleSubmitHinglish(true)}
+                            disabled={submittingHinglish}
+                          >
+                            Save anyway (needs review)
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                    <Button
+                      onClick={() => handleSubmitHinglish(false)}
+                      disabled={!hinglishReply.trim() || submittingHinglish || hasChanges}
+                    >
+                      {submittingHinglish ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Check className="h-4 w-4 mr-2" />}
+                      Check & Save Hinglish
+                    </Button>
+                  </CardContent>
+                </Card>
+              )}
+
             </TabsContent>
           </Tabs>
         </div>
 
         {/* Side Panel */}
         <div className="w-80 space-y-4">
-          {/* Continuity Panel */}
+          {/* Hinglish (English tab): the converted script's status, and converting it */}
+          {!isHindi && (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Languages className="h-4 w-4" />
+                  Hinglish
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-sm">
+                  {hinglish.queued ? (
+                    <span className="flex items-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Converting...
+                    </span>
+                  ) : (
+                    hinglishLabel[hinglish.state]
+                  )}
+                </p>
+                {hinglish.state === 'review' && hinglish.review && (
+                  <div className="text-xs text-amber-600 space-y-0.5">
+                    {hinglish.review.map(line => <p key={line}>{line}</p>)}
+                  </div>
+                )}
+                {hinglish.error && <p className="text-xs text-destructive">Last attempt: {hinglish.error}</p>}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={handleConvertHinglish}
+                  disabled={converting || hinglish.queued || hinglish.state === 'waiting' || hasChanges || !aiStatus?.configured}
+                >
+                  {converting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Languages className="h-4 w-4 mr-2" />}
+                  {hinglish.state === 'pending' || hinglish.state === 'failed' ? 'Convert to Hinglish' : 'Convert again'}
+                </Button>
+                <p className="text-xs text-muted-foreground">
+                  New English scripts convert by themselves. Manual mode has Copy Hinglish prompt.
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Continuity Panel (what generating reads; Hindi isn't generated) */}
+          {!isHindi && (
           <Collapsible open={showContinuity} onOpenChange={setShowContinuity}>
             <Card>
               <CollapsibleTrigger asChild>
@@ -710,6 +991,7 @@ export default function ScriptEditor() {
               </CollapsibleContent>
             </Card>
           </Collapsible>
+          )}
 
           {/* Summary Actions */}
           {chapter.script?.content && (

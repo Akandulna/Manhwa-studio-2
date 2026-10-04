@@ -21,11 +21,12 @@ STYLE RULES:
 - Write for a neutral reading pace - no dramatic pauses needed`
 
 /**
- * Extra instructions for a non-English narration. Appended to the base style
- * prompt (and to the summary/outro system prompts) so every call in the Hindi
- * pipeline writes Hinglish, while the response delimiters stay the English
- * markers the parser looks for. Empty for English, which keeps its prompts
- * exactly as they were.
+ * Extra instructions for a non-English narration. Appended to the summary and
+ * outro system prompts so those Hindi calls write Hinglish, while the response
+ * delimiters stay the English markers the parser looks for. Empty for English,
+ * which keeps its prompts exactly as they were. Hindi scripts themselves are
+ * never written from the images any more: they are converted from the English
+ * script (see hinglishConvert.ts, which has its own rules text).
  *
  * "Hindi" narration is Hinglish - everyday Hindi mixed with the English words a
  * manhwa recap audience actually uses - because pure Hindi sounds stiff for

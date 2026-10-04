@@ -124,6 +124,8 @@ model ChapterScript {
   outroText        String?  // Closing/epilogue lines (only when isPartEnd=true)
   error            String?  // Error message if failed
   tokensUsed       Int?     // Optional token count
+  sourceSha256     String?  // Hindi only: SHA-256 of the trimmed English script it was converted from (stale once that changes)
+  review           String?  // Hindi only: JSON array of check issues when saved despite failing the check; null = passed
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
   

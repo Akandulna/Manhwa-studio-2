@@ -302,7 +302,39 @@ export interface NarrationChapterSummary {
     error?: string
     updatedAt: string
   } | null
+  /** Where the chapter's Hinglish (Hindi) script stands, on either tab. */
+  hinglish: HinglishInfo | null
   partNumber: number
+}
+
+/**
+ * A chapter's Hinglish script, converted from its English one:
+ *   waiting: no English script yet · pending: no Hinglish one yet
+ *   stale:   the English changed since it was converted
+ *   review:  saved despite failing the check (see `review`)
+ *   done:    converted and passed the check (or edited since)
+ *   failed:  its only conversion attempt failed (see `error`)
+ */
+export type HinglishState = 'waiting' | 'pending' | 'stale' | 'review' | 'done' | 'failed'
+
+export interface HinglishInfo {
+  state: HinglishState
+  /** The check's issue lines when saved for review. */
+  review: string[] | null
+  /** Why the last conversion failed; a script already there is kept. */
+  error: string | null
+}
+
+/** Emitted on `narration:hinglish` for each step of a chapter's conversion. */
+export interface HinglishEvent {
+  seriesId: string
+  chapterId: string
+  chapterNumber: number
+  stage: 'queued' | 'converting' | 'retrying' | 'done' | 'review' | 'failed'
+  error?: string
+  issues?: string[]
+  /** Chapters of the series still queued or converting after this event. */
+  remaining: number
 }
 
 export interface NarrationSeriesDetail {
@@ -315,6 +347,11 @@ export interface NarrationSeriesDetail {
   createdAt: string
   language: NarrationLanguage
   chapters: NarrationChapterSummary[]
+  hinglish: {
+    /** Chapters "Convert to Hinglish" would queue: English written, Hinglish missing, failed or stale. */
+    convertible: string[]
+    queue: { running: string | null; queued: string[] }
+  }
 }
 
 export interface ChapterScriptDetail {
@@ -341,8 +378,14 @@ export interface ChapterScriptDetail {
     outroContent?: string
     error?: string
     tokensUsed?: number
+    sourceSha256?: string | null
+    review?: string | null
     updatedAt: string
   } | null
+  hinglish: HinglishInfo & {
+    /** Queued or converting right now. */
+    queued: boolean
+  }
   previousContext: {
     chapterNumber: number
     rollingSummary?: string
@@ -429,6 +472,23 @@ export const narrationApi = {
     fetchApi<{ success: boolean; outroText?: string }>(`/narration/chapters/${chapterId}/generate-outro?lang=${lang}`, {
       method: 'POST'
     }),
+  
+  // Hinglish: converted from the English script (API mode queues, manual mode copies the prompt)
+  getHinglishPrompt: (chapterId: string) =>
+    fetchApi<{ prompt: string; paragraphs: number; sourceSha256: string }>(`/narration/chapters/${chapterId}/hinglish-prompt`),
+  
+  /** Runs the check on a pasted reply: saved when it passes, or with `force` (marked for review). */
+  submitHinglish: (chapterId: string, response: string, force = false) =>
+    fetchApi<{ saved: boolean; issues: string[]; followUp?: string }>(`/narration/chapters/${chapterId}/hinglish-submit`, {
+      method: 'POST',
+      body: JSON.stringify({ response, force })
+    }),
+  
+  convertHinglishChapter: (chapterId: string) =>
+    fetchApi<{ queued: boolean }>(`/narration/chapters/${chapterId}/convert-hinglish`, { method: 'POST' }),
+  
+  convertHinglishSeries: (seriesId: string) =>
+    fetchApi<{ queued: number; chapters: number }>(`/narration/series/${seriesId}/convert-hinglish`, { method: 'POST' }),
   
   // Range generation
   generateRange: (seriesId: string, lang: NarrationLanguage, fromChapter: number, toChapter: number, config?: Record<string, number>) =>
@@ -581,12 +641,12 @@ export const voiceoverApi = {
   // Series listing
   getSeries: (lang: NarrationLanguage) => fetchApi<VoiceoverSeries[]>(`/voiceover/series?lang=${lang}`),
 
-  // Downloads the voiceovers the Sleeper-Cell phone uploaded to R2 and attaches
-  // them: its splits become the English sections, its audio their audio. Only
-  // new or re-uploaded chapter zips are downloaded.
-  fetchPhoneVoiceover: (seriesId: string, chapterIds?: string[]) =>
+  // Downloads the voiceovers the Sleeper-Cell phone uploaded to R2 in this
+  // language and attaches them: its splits become the sections, its audio
+  // their audio. Only new or re-uploaded chapter zips are downloaded.
+  fetchPhoneVoiceover: (seriesId: string, lang: NarrationLanguage, chapterIds?: string[]) =>
     fetchApi<PhoneVoiceoverFetch>(
-      `/voiceover/series/${seriesId}/fetch-phone-voiceover`,
+      `/voiceover/series/${seriesId}/fetch-phone-voiceover?lang=${lang}`,
       { method: 'POST', body: JSON.stringify({ chapterIds }) }
     ),
   
@@ -2030,7 +2090,7 @@ export interface PhoneSendChapter {
   /** Over the page limit: stitch it before sending (auto-send skips it). */
   needsStitch: boolean
   /** What the phone's "Clear done chapters" ticks: published, or crops and script. */
-  desktop: { crops: boolean; script: boolean; published: boolean; done: boolean }
+  desktop: { crops: boolean; script: boolean; scriptHi: boolean; published: boolean; done: boolean }
 }
 
 export interface PhoneSendSeries {
@@ -2197,6 +2257,39 @@ export interface PhoneScriptsStatus {
   series: Record<string, { done: number; total: number }>
   /** By chapter id, for the series asked for; chapters with no script are left out. */
   chapters: Record<string, PhoneChapterScript>
+  /** The same for the phone's Hinglish scripts (Hindi tab). */
+  hi: {
+    /** By series id: chapters converted (done or needing review) out of those on the phone. */
+    series: Record<string, { done: number; total: number; uploadedAt: string | null }>
+    chapters: Record<string, PhoneChapterHinglish>
+  }
+}
+
+/**
+ * A chapter's Hinglish script on the phone:
+ *   done:   converted and passed the check
+ *   review: saved despite failing the check
+ *   stale:  converted from an English script the phone has since changed
+ */
+export interface PhoneChapterHinglish {
+  status: 'done' | 'review' | 'stale'
+  savedAt: string | null
+}
+
+/** One language's view of the phone's scripts receipt. */
+export interface PhoneScriptsView {
+  reportedAt: string | null
+  device: string | null
+  series: Record<string, { done: number; total: number }>
+  chapters: Record<string, { status: PhoneChapterScript['status'] | PhoneChapterHinglish['status']; savedAt: string | null }>
+}
+
+export function phoneScriptsIn(status: PhoneScriptsStatus | null, lang: NarrationLanguage): PhoneScriptsView | null {
+  if (!status) return null
+  const { reportedAt, device } = status
+  if (lang === 'en') return { reportedAt, device, series: status.series, chapters: status.chapters }
+  // Older servers and phones send no Hinglish block.
+  return { reportedAt, device, series: status.hi?.series ?? {}, chapters: status.hi?.chapters ?? {} }
 }
 
 /**
@@ -2423,6 +2516,10 @@ export interface PhoneImportChapter {
   /** Voiceover sections were already split from the desktop's script. */
   hasVoiceover: boolean
   published: boolean
+  /** Hinglish only: the phone saved it despite failing the check, with these issues. */
+  review: string[] | null
+  /** Hinglish only: converted from the English script this desktop has now (false: imports as stale). */
+  sourceMatches: boolean | null
 }
 
 export interface PhoneImportPreview {
@@ -2490,19 +2587,20 @@ export const r2Api = {
   testRelay: () =>
     fetchApi<{ ok: true; receipts: { kind: string; at: number; size: number }[]; phones: number }>('/r2/relay/test', { method: 'POST' }),
 
-  getPhoneScriptsZip: (seriesId: string) =>
-    fetchApi<PhoneScriptsZipStatus>(`/r2/phone/scripts/zip?seriesId=${encodeURIComponent(seriesId)}`),
+  /** `lang` picks the zip: the English one, or the Hinglish `<Series>.hi.zip`. */
+  getPhoneScriptsZip: (seriesId: string, lang: NarrationLanguage) =>
+    fetchApi<PhoneScriptsZipStatus>(`/r2/phone/scripts/zip?seriesId=${encodeURIComponent(seriesId)}&lang=${lang}`),
 
   /** Downloads and parses the phone's script zip; nothing is changed yet. */
-  previewPhoneScripts: (seriesId: string) =>
-    fetchApi<PhoneImportPreview>('/r2/phone/scripts/preview', {
+  previewPhoneScripts: (seriesId: string, lang: NarrationLanguage) =>
+    fetchApi<PhoneImportPreview>(`/r2/phone/scripts/preview?lang=${lang}`, {
       method: 'POST',
       body: JSON.stringify({ seriesId })
     }),
 
-  /** Attaches the previewed zip's scripts to `chapterIds`. */
-  importPhoneScripts: (seriesId: string, etag: string, chapterIds: string[]) =>
-    fetchApi<{ imported: number; aboutUpdated: boolean }>('/r2/phone/scripts/import', {
+  /** Attaches the previewed zip's scripts to `chapterIds`, in that language's scripts. */
+  importPhoneScripts: (seriesId: string, lang: NarrationLanguage, etag: string, chapterIds: string[]) =>
+    fetchApi<{ imported: number; aboutUpdated: boolean }>(`/r2/phone/scripts/import?lang=${lang}`, {
       method: 'POST',
       body: JSON.stringify({ seriesId, etag, chapterIds })
     }),

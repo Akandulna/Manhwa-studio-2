@@ -1058,9 +1058,10 @@ router.post('/sections/:id/upload', upload.single('audio'), async (req: Request,
  * POST /series/:id/fetch-phone-voiceover
  *
  * Downloads the voiceovers the Sleeper-Cell phone uploaded to R2 for this
- * series and attaches them: the phone's splits become each chapter's English
- * sections and its audio their generated audio (see phoneVoiceoverImport.ts).
- * Only new or re-uploaded chapter zips are downloaded. Body: { chapterIds? }.
+ * series and attaches them: the phone's splits become each chapter's sections
+ * in that language and its audio their generated audio (see
+ * phoneVoiceoverImport.ts). Only new or re-uploaded chapter zips are
+ * downloaded. `?lang=hi` fetches the Hinglish ones. Body: { chapterIds? }.
  */
 router.post('/series/:id/fetch-phone-voiceover', async (req: Request, res: Response) => {
   try {
@@ -1068,7 +1069,7 @@ router.post('/series/:id/fetch-phone-voiceover', async (req: Request, res: Respo
     const chapterIds = Array.isArray(requested)
       ? requested.filter((v): v is string => typeof v === 'string')
       : undefined
-    res.json(await fetchPhoneVoiceover(req.params.id, chapterIds, io))
+    res.json(await fetchPhoneVoiceover(req.params.id, chapterIds, io, requestLanguage(req)))
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     console.error('[voiceover] fetching phone voiceover failed:', message)

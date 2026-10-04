@@ -76,6 +76,19 @@ export interface ScriptFromBeatsInput {
   previousClosingParagraph?: string
 }
 
+/** One turn of a text-only conversation (see AIProvider.chat). */
+export interface ChatTurn {
+  role: 'user' | 'model'
+  text: string
+}
+
+export interface ChatInput {
+  /** The conversation so far, oldest first, ending with the user turn to answer. */
+  turns: ChatTurn[]
+  /** Output budget; defaults to the provider's own. */
+  maxOutputTokens?: number
+}
+
 export interface AIProvider {
   readonly name: string
   readonly model: string
@@ -104,6 +117,11 @@ export interface AIProvider {
    * Combine beats into final script (for map-reduce)
    */
   generateScriptFromBeats(input: ScriptFromBeatsInput): Promise<ScriptGenerationResult>
+  
+  /**
+   * Text-only, multi-turn call (the Hinglish convert step and its one retry)
+   */
+  chat(input: ChatInput): Promise<ScriptGenerationResult>
   
   /**
    * Check if the provider is properly configured

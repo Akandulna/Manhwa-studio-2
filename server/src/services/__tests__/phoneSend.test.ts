@@ -53,7 +53,10 @@ vi.mock('../../index.js', () => ({
         return { key: where.key, value: create.value }
       }
     },
-    chapterScript: { findMany: async () => [{ chapterId: 'c1' }] }
+    chapterScript: {
+      findMany: async ({ where }: { where: { language: string } }) =>
+        where.language === 'hi' ? [{ chapterId: 'c3' }] : [{ chapterId: 'c1' }]
+    }
   }
 }))
 vi.mock('../storageService.js', () => ({
@@ -293,6 +296,13 @@ describe('startPhoneSend', () => {
       ['Chapter 005', null, false, true],
       ['Chapter 006', null, false, false]
     ])
+    // Each entry says which scripts the desktop has; done still needs only the English one.
+    expect(body.chapters.slice(0, 3).map((c: { script: boolean; scriptHi: boolean }) => [c.script, c.scriptHi])).toEqual([
+      [true, false],
+      [false, false],
+      [false, true]
+    ])
+    expect(body.schema).toBe('manhwa-studio-phone-index/1')
     expect(requestPhoneUpdate).toHaveBeenCalledWith('sync')
     expect(job.phone).toMatchObject({ via: 'relay' })
   })

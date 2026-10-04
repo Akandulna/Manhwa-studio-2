@@ -13,9 +13,25 @@ import {
   aiProviderFactory, 
   buildManualModePrompt,
   parseDelimitedResponse,
-  getLanguageDirective,
   DEFAULT_BASE_STYLE_PROMPT
 } from '../services/ai/index.js'
+import {
+  assembleConversion,
+  buildConvertPrompt,
+  buildFollowUp,
+  checkConversion,
+  englishParagraphs,
+  hasUsableScript,
+  parseConversionReply
+} from '../services/hinglishConvert.js'
+import {
+  getConvertibleChapters,
+  getHinglishRules,
+  getSeriesHinglish,
+  hinglishInfo,
+  readEnglishSource,
+  saveHinglishScript
+} from '../services/hinglishService.js'
 import { Server } from 'socket.io'
 import { cachedProbe } from '../utils/cachedProbe.js'
 import {
@@ -121,6 +137,12 @@ router.get('/series/:id', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Series not found' })
     }
     
+    // Both tabs show where each chapter's Hinglish stands: the English tab
+    // offers converting what's missing or stale, the Hindi tab shows the status.
+    const hinglish = await getSeriesHinglish(series.id)
+    const convertible = await getConvertibleChapters(series.id, hinglish)
+    const queue = scriptGenerator?.hinglish.status(series.id) ?? { running: null, queued: [] }
+    
     // Calculate part numbers for chapters
     let currentPart = 1
     const chaptersWithParts = series.chapters.map(chapter => {
@@ -155,6 +177,11 @@ router.get('/series/:id', async (req: Request, res: Response) => {
           error: script.error,
           updatedAt: script.updatedAt
         } : null,
+        hinglish: hinglish.get(chapter.id) ? {
+          state: hinglish.get(chapter.id)!.state,
+          review: hinglish.get(chapter.id)!.review,
+          error: hinglish.get(chapter.id)!.error
+        } : null,
         partNumber: partNum
       }
     })
@@ -168,7 +195,12 @@ router.get('/series/:id', async (req: Request, res: Response) => {
       aboutSummary: series.aboutSummary,
       createdAt: series.createdAt,
       language,
-      chapters: chaptersWithParts
+      chapters: chaptersWithParts,
+      hinglish: {
+        /** Chapters "Convert to Hinglish" would queue: English written, Hinglish missing, failed or stale. */
+        convertible,
+        queue
+      }
     })
   } catch (error) {
     console.error('Error fetching series:', error)
@@ -223,6 +255,15 @@ router.get('/chapters/:id', async (req: Request, res: Response) => {
     }
     
     const script = chapter.scripts[0]
+
+    // Where the chapter's Hinglish stands, whichever tab asks: the English tab
+    // offers converting it, the Hindi tab shows stale / needs review.
+    const bothScripts = await prisma.chapterScript.findMany({ where: { chapterId: chapter.id } })
+    const englishSource = await readEnglishSource(bothScripts.find(s => s.language === 'en'))
+    const hinglish = {
+      ...hinglishInfo(englishSource?.sha256 ?? null, bothScripts.find(s => s.language === 'hi')),
+      queued: scriptGenerator?.hinglish.isQueued(chapter.id) ?? false
+    }
 
     // Read script content if exists
     let scriptContent = null
@@ -284,6 +325,7 @@ router.get('/chapters/:id', async (req: Request, res: Response) => {
         content: scriptContent,
         outroContent
       } : null,
+      hinglish,
       previousContext,
       prevChapterId: prevChapterNav?.id || null,
       prevChapterNumber: prevChapterNav?.number || null,
@@ -333,6 +375,9 @@ router.post('/chapters/:id/generate', async (req: Request, res: Response) => {
 router.get('/chapters/:id/manual-prompt', async (req: Request, res: Response) => {
   try {
     const language = requestLanguage(req)
+    if (language === 'hi') {
+      return res.status(400).json({ error: HINDI_FROM_ENGLISH })
+    }
     const chapter = await prisma.chapter.findUnique({
       where: { id: req.params.id },
       include: {
@@ -348,7 +393,7 @@ router.get('/chapters/:id/manual-prompt', async (req: Request, res: Response) =>
     const styleSetting = await prisma.setting.findUnique({
       where: { key: 'narrationBasePrompt' }
     })
-    const baseStylePrompt = (styleSetting?.value || DEFAULT_BASE_STYLE_PROMPT) + getLanguageDirective(language)
+    const baseStylePrompt = styleSetting?.value || DEFAULT_BASE_STYLE_PROMPT
     
     // Get continuity context
     let previousSummary: string | undefined
@@ -403,6 +448,9 @@ router.post('/chapters/:id/manual-submit', async (req: Request, res: Response) =
     
     if (!response) {
       return res.status(400).json({ error: 'Response text required' })
+    }
+    if (language === 'hi') {
+      return res.status(400).json({ error: HINDI_FROM_ENGLISH })
     }
     
     const chapter = await prisma.chapter.findUnique({
@@ -505,12 +553,16 @@ router.put('/chapters/:id/script', async (req: Request, res: Response) => {
     const scriptPath = path.join(getFullFolderPath(chapter.folderPath), scriptFileName(language))
     await fs.writeFile(scriptPath, content, 'utf-8')
     
+    // Editing English makes its Hinglish stale (its sourceSha256 no longer
+    // matches) without touching it. Editing Hinglish is the review: it clears
+    // the check's issues, and keeps the English it was converted from.
     if (chapter.scripts[0]) {
       await prisma.chapterScript.update({
         where: { id: chapter.scripts[0].id },
         data: {
           scriptPath,
-          status: 'edited'
+          status: 'edited',
+          ...(language === 'hi' ? { review: null, error: null } : {})
         }
       })
     } else {
@@ -615,6 +667,113 @@ router.post('/chapters/:id/generate-outro', async (req: Request, res: Response) 
   } catch (error) {
     console.error('Error generating outro:', error)
     res.status(500).json({ error: 'Failed to generate outro' })
+  }
+})
+
+// ============ Hinglish (converted from English) ============
+
+/**
+ * The convert prompt for a chapter's saved English script, for pasting into a
+ * chat by hand (the English tab's "Copy Hinglish prompt").
+ */
+router.get('/chapters/:id/hinglish-prompt', async (req: Request, res: Response) => {
+  try {
+    const english = await prisma.chapterScript.findUnique({
+      where: { chapterId_language: { chapterId: req.params.id, language: 'en' } }
+    })
+    const source = await readEnglishSource(english)
+    if (!source) {
+      return res.status(400).json({ error: 'Save the English script first; Hindi is converted from it' })
+    }
+    res.json({
+      prompt: buildConvertPrompt(await getHinglishRules(), source.text, source.summary),
+      paragraphs: englishParagraphs(source.text).length,
+      sourceSha256: source.sha256
+    })
+  } catch (error) {
+    console.error('Error building Hinglish prompt:', error)
+    res.status(500).json({ error: 'Failed to build the Hinglish prompt' })
+  }
+})
+
+/**
+ * A pasted Hinglish reply. Runs the check: a pass is saved; a fail returns the
+ * issues and the follow-up prompt, unless `force` ("Save anyway"), which saves
+ * it marked for review. Body: { response, force? }.
+ */
+router.post('/chapters/:id/hinglish-submit', async (req: Request, res: Response) => {
+  try {
+    const { response, force } = req.body ?? {}
+    if (typeof response !== 'string' || !response.trim()) {
+      return res.status(400).json({ error: 'Response text required' })
+    }
+    const english = await prisma.chapterScript.findUnique({
+      where: { chapterId_language: { chapterId: req.params.id, language: 'en' } }
+    })
+    const source = await readEnglishSource(english)
+    if (!source) {
+      return res.status(400).json({ error: 'Save the English script first; Hindi is converted from it' })
+    }
+    
+    const paragraphs = englishParagraphs(source.text)
+    const parsed = parseConversionReply(response)
+    const issues = checkConversion(paragraphs, source.summary, parsed)
+    if (issues.length > 0 && !force) {
+      return res.json({ saved: false, issues, followUp: buildFollowUp(issues, paragraphs.length) })
+    }
+    if (!hasUsableScript(parsed)) {
+      return res.status(400).json({
+        error: `Nothing to save: the reply has no ===SCRIPT=== section with [P1]..[P${paragraphs.length}] paragraphs`
+      })
+    }
+    
+    await saveHinglishScript(req.params.id, assembleConversion(parsed, paragraphs.length), {
+      sourceSha256: source.sha256,
+      issues,
+      mode: 'manual'
+    })
+    res.json({ saved: true, issues })
+  } catch (error) {
+    console.error('Error saving Hinglish reply:', error)
+    res.status(500).json({ error: 'Failed to save the Hinglish script' })
+  }
+})
+
+/** Queues one chapter's conversion (API mode), whatever its Hinglish status. */
+router.post('/chapters/:id/convert-hinglish', async (req: Request, res: Response) => {
+  if (!scriptGenerator) {
+    return res.status(500).json({ error: 'Script generator not initialized' })
+  }
+  
+  try {
+    const result = await scriptGenerator.generateChapterScript(req.params.id, 'api', {}, 'hi')
+    if (result.success) {
+      res.json({ queued: true })
+    } else {
+      res.status(400).json({ error: result.error })
+    }
+  } catch (error) {
+    console.error('Error queueing Hinglish conversion:', error)
+    res.status(500).json({ error: 'Failed to queue the conversion' })
+  }
+})
+
+/**
+ * Queues every chapter of the series whose English is written and whose
+ * Hinglish is missing, failed or stale ("Convert to Hinglish (N)").
+ */
+router.post('/series/:id/convert-hinglish', async (req: Request, res: Response) => {
+  if (!scriptGenerator) {
+    return res.status(500).json({ error: 'Script generator not initialized' })
+  }
+  
+  try {
+    const ids = await getConvertibleChapters(req.params.id)
+    const queued = await scriptGenerator.hinglish.enqueue(ids)
+    res.json({ queued, chapters: ids.length })
+  } catch (error) {
+    console.error('Error queueing Hinglish conversions:', error)
+    res.status(500).json({ error: 'Failed to queue the conversions' })
   }
 })
 
@@ -859,6 +1018,10 @@ router.post('/ai/models', async (req: Request, res: Response) => {
 })
 
 // ============ Helpers ============
+
+const HINDI_FROM_ENGLISH =
+  'Hindi scripts are converted from the English script, not written from the images. ' +
+  'Use Convert to Hinglish or Copy Hinglish prompt on the English tab.'
 
 async function getImageFileList(folderPath: string): Promise<string[]> {
   try {

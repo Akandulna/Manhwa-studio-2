@@ -290,6 +290,11 @@ export async function deleteR2Object(key: string): Promise<void> {
  * series: { <series folder>: { total, done, chapters: { <chapter folder>:
  * { status, savedAt? } } } } }`, leaving out chapters with no script. Keep the
  * name in step with RECEIPT_NAME in its ScriptReceipt.kt.
+ *
+ * Each series may also carry its Hinglish progress: `"hi": { total, done,
+ * uploadedAt, chapters: { <chapter folder>: { status: done|review|stale,
+ * savedAt } } }`, where `done` counts done + review and chapters not converted
+ * yet are left out.
  */
 const SCRIPTS_RECEIPT_NAME = '_sleeper-cell-scripts.json'
 
@@ -312,6 +317,13 @@ export interface PhoneScriptsStatus {
   series: Record<string, { done: number; total: number }>
   /** By chapter id, for the series asked for; chapters with no script are left out. */
   chapters: Record<string, PhoneChapterScript>
+  /** The same for the phone's Hinglish scripts, from each series' optional `hi` block. */
+  hi: {
+    /** By series id: chapters converted (done or review) out of those on the phone. */
+    series: Record<string, { done: number; total: number; uploadedAt: string | null }>
+    /** By chapter id, for the series asked for; chapters not converted yet are left out. */
+    chapters: Record<string, PhoneChapterHinglish>
+  }
 }
 
 interface ScriptsReceipt {
@@ -322,10 +334,30 @@ interface ScriptsReceipt {
     total?: number
     done?: number
     chapters?: Record<string, { status?: string; savedAt?: string }>
+    hi?: {
+      total?: number
+      done?: number
+      uploadedAt?: string
+      chapters?: Record<string, { status?: string; savedAt?: string }>
+    }
   }>
 }
 
 const PHONE_SCRIPT_STATES = new Set<string>(['done', 'needs_summary', 'stale'])
+
+/**
+ * A chapter's Hinglish script on the phone: converted and passing the check,
+ * saved despite failing it, or converted from an English script the phone has
+ * since changed.
+ */
+export type PhoneHinglishState = 'done' | 'review' | 'stale'
+
+const PHONE_HINGLISH_STATES = new Set<string>(['done', 'review', 'stale'])
+
+export interface PhoneChapterHinglish {
+  status: PhoneHinglishState
+  savedAt: string | null
+}
 
 /**
  * The last copy of each phone receipt, by receipt name. Pages are served from
@@ -388,7 +420,9 @@ export async function readPolledReceipt<T extends object>(client: S3Client, conf
 export async function getPhoneScripts(seriesId?: string, fresh = false): Promise<PhoneScriptsStatus> {
   const config = getR2Config()
   const relayed = relayReceipt<ScriptsReceipt>('scripts')
-  if (!config && !relayed) return { configured: false, reportedAt: null, device: null, answers: null, series: {}, chapters: {} }
+  if (!config && !relayed) {
+    return { configured: false, reportedAt: null, device: null, answers: null, series: {}, chapters: {}, hi: { series: {}, chapters: {} } }
+  }
 
   const receipt = relayed ?? await readPolledReceipt<ScriptsReceipt>(createClient(config!), config!, SCRIPTS_RECEIPT_NAME, fresh)
   const phoneSeries = receipt.series && typeof receipt.series === 'object' ? receipt.series : {}
@@ -396,20 +430,36 @@ export async function getPhoneScripts(seriesId?: string, fresh = false): Promise
   const rows = await prisma.series.findMany({ select: { id: true, rootFolder: true } })
   const series: PhoneScriptsStatus['series'] = {}
   const chapters: PhoneScriptsStatus['chapters'] = {}
+  const hi: PhoneScriptsStatus['hi'] = { series: {}, chapters: {} }
   for (const row of rows) {
     const entry = phoneSeries[path.basename(row.rootFolder)]
     if (!entry || typeof entry !== 'object') continue
     series[row.id] = { done: Number(entry.done) || 0, total: Number(entry.total) || 0 }
+    const hinglish = entry.hi && typeof entry.hi === 'object' ? entry.hi : null
+    if (hinglish) {
+      hi.series[row.id] = {
+        done: Number(hinglish.done) || 0,
+        total: Number(hinglish.total) || 0,
+        uploadedAt: typeof hinglish.uploadedAt === 'string' ? hinglish.uploadedAt : null
+      }
+    }
 
-    if (row.id !== seriesId || !entry.chapters || typeof entry.chapters !== 'object') continue
+    const englishChapters = entry.chapters && typeof entry.chapters === 'object' ? entry.chapters : null
+    const hinglishChapters = hinglish?.chapters && typeof hinglish.chapters === 'object' ? hinglish.chapters : null
+    if (row.id !== seriesId || (!englishChapters && !hinglishChapters)) continue
     const byFolder = new Map(
       (await prisma.chapter.findMany({ where: { seriesId: row.id }, select: { id: true, folderPath: true } }))
         .map(c => [path.basename(c.folderPath), c.id])
     )
-    for (const [folder, chapter] of Object.entries(entry.chapters)) {
+    for (const [folder, chapter] of Object.entries(englishChapters ?? {})) {
       const id = byFolder.get(folder)
       if (!id || !chapter || !PHONE_SCRIPT_STATES.has(chapter.status ?? '')) continue
       chapters[id] = { status: chapter.status as PhoneScriptState, savedAt: chapter.savedAt ?? null }
+    }
+    for (const [folder, chapter] of Object.entries(hinglishChapters ?? {})) {
+      const id = byFolder.get(folder)
+      if (!id || !chapter || !PHONE_HINGLISH_STATES.has(chapter.status ?? '')) continue
+      hi.chapters[id] = { status: chapter.status as PhoneHinglishState, savedAt: chapter.savedAt ?? null }
     }
   }
 
@@ -419,7 +469,8 @@ export async function getPhoneScripts(seriesId?: string, fresh = false): Promise
     device: receipt.device ?? null,
     answers: receipt.answers ?? null,
     series,
-    chapters
+    chapters,
+    hi
   }
 }
 

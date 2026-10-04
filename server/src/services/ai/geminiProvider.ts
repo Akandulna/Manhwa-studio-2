@@ -18,6 +18,7 @@ import {
   BeatExtractionInput,
   BeatExtractionResult,
   ScriptFromBeatsInput,
+  ChatInput,
   ImageInput
 } from './types.js'
 import {
@@ -280,6 +281,32 @@ export class GeminiProvider implements AIProvider {
       
       return {
         text: result.text || '',
+        tokensUsed: result.usageMetadata?.totalTokenCount,
+        finishReason: result.candidates?.[0]?.finishReason
+      }
+    })
+  }
+  
+  async chat(input: ChatInput): Promise<ScriptGenerationResult> {
+    if (!this.isConfigured()) {
+      throw new Error('Gemini API key not configured')
+    }
+    
+    return this.callWithRetry(async () => {
+      const result = await this.client!.models.generateContent({
+        model: this.model,
+        contents: input.turns.map(turn => ({ role: turn.role, parts: [{ text: turn.text }] })),
+        config: { maxOutputTokens: input.maxOutputTokens ?? this.maxTokens }
+      })
+      
+      const text = result.text || ''
+      
+      if (!text && result.candidates?.[0]?.finishReason === 'SAFETY') {
+        throw new Error('Content was blocked by AI safety filters.')
+      }
+      
+      return {
+        text,
         tokensUsed: result.usageMetadata?.totalTokenCount,
         finishReason: result.candidates?.[0]?.finishReason
       }
