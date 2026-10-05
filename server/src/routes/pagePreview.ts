@@ -3,7 +3,7 @@
  * the ones that should not be in it (see services/pageBin.ts). Live pages are
  * served by the stitch routes' thumb/image endpoints.
  *
- *   GET    /chapters/:id                       pages (measured), the bin, blockers
+ *   GET    /chapters/:id                       pages (measured), the bin, blockers, prev/next chapter
  *   POST   /chapters/:id/delete                body { filenames: string[] } → bin
  *   POST   /chapters/:id/restore               body { filenames: string[] } ← bin
  *   DELETE /chapters/:id/bin                   empty the bin for good
@@ -15,6 +15,7 @@ import fs from 'fs/promises'
 import sharp from 'sharp'
 import { prisma } from '../index.js'
 import { PageBinError, binFile, deletePages, emptyBin, getChapterPages, restorePages } from '../services/pageBin.js'
+import { doneNeighbours } from '../services/pageStitch.js'
 
 const THUMB_WIDTH = 320
 
@@ -52,7 +53,8 @@ export function initPagePreviewRoutes(): Router {
         title: chapter.title,
         seriesId: chapter.seriesId,
         seriesTitle: chapter.series.title,
-        ...(await getChapterPages(chapter))
+        ...(await getChapterPages(chapter)),
+        neighbours: await doneNeighbours(chapter.seriesId, chapter.number)
       })
     } catch (error) {
       sendError(res, error, 'read chapter pages')

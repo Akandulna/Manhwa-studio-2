@@ -2669,6 +2669,12 @@ export interface StitchRecord {
   outputs: { filename: string; sources: string[]; width: number; height: number; bytes: number }[]
 }
 
+/** The downloaded chapters either side of this one in its series. */
+export interface ChapterNeighbours {
+  prev: { id: string; number: number } | null
+  next: { id: string; number: number } | null
+}
+
 export interface StitchChapterState {
   chapterId: string
   number: number
@@ -2681,6 +2687,7 @@ export interface StitchChapterState {
   record: StitchRecord | null
   backupBytes: number
   blockers: string[]
+  neighbours: ChapterNeighbours
 }
 
 export const stitchApi = {
@@ -2727,6 +2734,7 @@ export interface ChapterPagesState {
   /** Pages in the chapter's bin, restorable until the bin is emptied. */
   deleted: DeletedPage[]
   blockers: string[]
+  neighbours: ChapterNeighbours
 }
 
 export const pagePreviewApi = {

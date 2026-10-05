@@ -20,6 +20,7 @@ import { Input } from '@/components/ui/input'
 import { Slider } from '@/components/ui/slider'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
+import ChapterSwitcher from '@/components/ChapterSwitcher'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -87,6 +88,13 @@ export default function StitchWorkspace() {
   const dropRef = useRef<DropTarget | null>(null)
 
   const { groups, excluded } = layout
+
+  // Switching chapter keeps this component mounted: drop the old chapter's state.
+  useEffect(() => {
+    setState(null)
+    setLoading(true)
+    setPreviewGroup(null)
+  }, [id])
 
   const load = useCallback(async () => {
     if (!id) return
@@ -410,6 +418,11 @@ export default function StitchWorkspace() {
             {state.title ? ` — ${state.title}` : ''}
           </p>
         </div>
+        <ChapterSwitcher
+          neighbours={state.neighbours}
+          to={chapterId => `/stitch/chapter/${chapterId}`}
+          canLeave={() => history.length === 0 || confirm('Leave this chapter? Your unstitched layout changes will be lost.')}
+        />
       </div>
 
       {state.blockers.length > 0 && (

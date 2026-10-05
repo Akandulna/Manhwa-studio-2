@@ -3,7 +3,7 @@
  * a few tall ones (see services/pageStitch.ts).
  *
  *   GET    /chapters                       downloaded chapters with page counts + stitch state
- *   GET    /chapters/:id                   the chapter's pages (measured), backup record, blockers
+ *   GET    /chapters/:id                   the chapter's pages (measured), backup record, blockers, prev/next chapter
  *   GET    /chapters/:id/thumb/:filename   a small preview of one page
  *   GET    /chapters/:id/image/:filename   one page at full size
  *   POST   /chapters/:id                   stitch, body { groups: string[][] }
@@ -21,6 +21,7 @@ import {
   STITCH_MAX_HEIGHT,
   StitchError,
   discardBackup,
+  doneNeighbours,
   getStitchState,
   readRecord,
   stitchChapter,
@@ -116,7 +117,8 @@ export function initStitchRoutes(): Router {
         seriesId: chapter.seriesId,
         seriesTitle: chapter.series.title,
         maxHeight: STITCH_MAX_HEIGHT,
-        ...state
+        ...state,
+        neighbours: await doneNeighbours(chapter.seriesId, chapter.number)
       })
     } catch (error) {
       sendError(res, error, 'read chapter pages')

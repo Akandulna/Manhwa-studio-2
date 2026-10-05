@@ -7,6 +7,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Slider } from '@/components/ui/slider'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
+import ChapterSwitcher from '@/components/ChapterSwitcher'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -34,6 +35,14 @@ export default function ChapterPreview() {
   const [columnWidth, setColumnWidth] = useState(160)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [viewing, setViewing] = useState<number | null>(null)
+
+  // Switching chapter keeps this component mounted: drop the old chapter's state.
+  useEffect(() => {
+    setState(null)
+    setLoading(true)
+    setSelected(new Set())
+    setViewing(null)
+  }, [id])
 
   const load = useCallback(async () => {
     if (!id) return
@@ -160,6 +169,7 @@ export default function ChapterPreview() {
             {state.title ? ` — ${state.title}` : ''}
           </p>
         </div>
+        <ChapterSwitcher neighbours={state.neighbours} to={chapterId => `/chapter/${chapterId}/preview`} />
       </div>
 
       {state.blockers.length > 0 && (
