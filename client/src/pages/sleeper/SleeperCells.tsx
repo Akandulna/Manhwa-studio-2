@@ -1,7 +1,8 @@
 /**
  * Sleeper Cells — the Sleeper-Cell phone app at a glance. The top row answers
  * the three questions that matter, in this order: is the phone active, how many
- * ChatGPT image uploads are left, and what the phone is doing right now. Under
+ * ChatGPT image uploads are left, and what the phone is doing right now (Image
+ * Clipper's Auto-run, and the Narration and Voiceover libraries' runs). Under
  * them, Start and Stop for Image Clipper on the phone (through the relay), then
  * today's pace, where every series stands, and the history.
  *
@@ -20,7 +21,9 @@ import {
   Gauge,
   ImageUp,
   Loader2,
+  Mic,
   Pause,
+  PenLine,
   Play,
   Smartphone,
   Square,
@@ -36,7 +39,16 @@ import { PhoneRefreshButton } from '@/components/PhoneRefreshButton'
 import { formatTook, PhoneSyncBadge } from '@/components/PhoneSyncBadge'
 import { usePhoneOverview } from '@/hooks/usePhoneOverview'
 import { usePhoneRelay } from '@/hooks/usePhoneRelay'
-import { r2Api, type PhoneAutomation, type PhoneOverview, type PhoneOverviewFinish, type PhoneOverviewWorking, type RelayStatus } from '@/lib/api'
+import {
+  r2Api,
+  type PhoneAutomation,
+  type PhoneOverview,
+  type PhoneOverviewFinish,
+  type PhoneOverviewRun,
+  type PhoneOverviewWorking,
+  type RelayStatus
+} from '@/lib/api'
+import { LANGUAGE_LABEL } from '@/lib/narrationLanguage'
 import { UPLOAD_LIMIT, uploadOverview, uploadUsage, type UploadUsage } from '@/lib/uploadUsage'
 import { cn } from '@/lib/utils'
 
@@ -184,13 +196,13 @@ function phoneState(relay: RelayStatus | null, overview: PhoneOverview | null, r
       return { tone: 'warn' as Tone, live: false, title: 'Can’t tell', detail: `Manhwa Studio can’t reach the relay right now. Last heard from the phone ${lastHeard}.` }
     }
     if (relay.phones > 0) {
-      if (running > 0) return { tone: 'good' as Tone, live: true, title: 'Active', detail: 'Sleeper-Cell is open and Auto-run is working.' }
-      if (paused > 0) return { tone: 'warn' as Tone, live: false, title: 'Open · paused', detail: 'Sleeper-Cell is open, but Auto-run is paused.' }
+      if (running > 0) return { tone: 'good' as Tone, live: true, title: 'Active', detail: 'Sleeper-Cell is open and a run is working.' }
+      if (paused > 0) return { tone: 'warn' as Tone, live: false, title: 'Open · paused', detail: 'Sleeper-Cell is open, but its run is paused.' }
       // With "Start from Manhwa Studio" on, the phone keeps its socket open with the app away and the screen off.
       if (overview?.automation?.remoteStart) {
         return { tone: 'good' as Tone, live: false, title: 'Ready', detail: 'Sleeper-Cell is listening: Start below reaches it, with its screen off too.' }
       }
-      return { tone: 'good' as Tone, live: false, title: 'Open · idle', detail: 'Sleeper-Cell is open, but nothing is being clipped.' }
+      return { tone: 'good' as Tone, live: false, title: 'Open · idle', detail: 'Sleeper-Cell is open, but nothing is running.' }
     }
     return { tone: 'bad' as Tone, live: false, title: 'Closed', detail: `Sleeper-Cell isn’t open on the phone. Last heard ${lastHeard}.` }
   }
@@ -341,10 +353,76 @@ function WorkingRow({ working, averageTook, now }: { working: PhoneOverviewWorki
   )
 }
 
+const RUN_KIND = {
+  narration: { icon: PenLine, name: 'Narration', unit: 'chapter' },
+  voiceover: { icon: Mic, name: 'Voiceover', unit: 'split' }
+} as const
+
+/** The run's headline: "Writing scripts", "Voicing 3 splits". */
+function runTitle(run: PhoneOverviewRun): string {
+  if (run.kind === 'narration') return run.tabs[0]?.language === 'hi' ? 'Converting to Hindi' : 'Writing scripts'
+  const tabs = run.tabs.length
+  return tabs > 1 ? `Voicing ${tabs} splits` : 'Voicing'
+}
+
+/** A narration or voiceover run: its progress, then one row per AI Studio tab with the time on it so far. */
+function RunSection({ run, now }: { run: PhoneOverviewRun; now: number }) {
+  const kind = RUN_KIND[run.kind]
+  const Icon = kind.icon
+  const percent = run.total ? (run.done / run.total) * 100 : 0
+  const language = run.tabs[0]?.language ?? 'en'
+  const lang = language === 'hi' ? '?lang=hi' : ''
+  const seriesLink = run.seriesId ? `/narration/series/${run.seriesId}${lang}` : null
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 text-sm">
+        <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+        <span className="font-medium">{kind.name}</span>
+        <span className="text-muted-foreground">·</span>
+        {seriesLink ? <Link to={seriesLink} className="truncate hover:underline">{run.series}</Link> : <span className="truncate">{run.series}</span>}
+        {run.kind === 'voiceover' && <span className="text-xs text-muted-foreground">{LANGUAGE_LABEL[language]}</span>}
+        {run.paused && <span className="text-xs text-amber-500">paused</span>}
+        {run.stopping && <span className="text-xs text-amber-500">stopping</span>}
+        <span className="ml-auto whitespace-nowrap text-xs tabular-nums text-muted-foreground">
+          {run.done}/{run.total} {kind.unit}{run.total === 1 ? '' : 's'}
+        </span>
+      </div>
+      <Bar percent={percent} tone={run.paused ? 'warn' : 'primary'} />
+      {run.tabs.map(tab => {
+        const since = tab.since ? Date.parse(tab.since) : NaN
+        const elapsed = Number.isNaN(since) ? null : Math.max(0, (now - since) / 1000)
+        const what = run.kind === 'voiceover'
+          ? (tab.split !== null ? `split ${tab.split}${tab.splits ? ` of ${tab.splits}` : ''}` : 'split')
+          : `${LANGUAGE_LABEL[tab.language]} script`
+        const where = <><span className="text-muted-foreground">{chapterLabel(tab)} · </span>{what}</>
+        const tabLang = tab.language === 'hi' ? '?lang=hi' : ''
+        const link = tab.chapterId
+          ? run.kind === 'voiceover' ? `/narration/voiceover/${tab.chapterId}${tabLang}` : `/narration/chapter/${tab.chapterId}${tabLang}`
+          : null
+        return (
+          <div key={`${tab.chapter}/${tab.language}/${tab.split ?? ''}`} className="flex items-center gap-2 pl-5 text-sm">
+            {run.paused ? <Pause className="h-3.5 w-3.5 text-amber-500" /> : <Light tone="good" live size="h-2 w-2" />}
+            {link ? <Link to={link} className="hover:underline">{where}</Link> : <span>{where}</span>}
+            <span className="ml-auto whitespace-nowrap text-xs tabular-nums text-muted-foreground">
+              {elapsed !== null ? formatTook(elapsed) : '—'}
+            </span>
+          </div>
+        )
+      })}
+      {run.tabs.length === 0 && (
+        <p className="pl-5 text-xs text-muted-foreground">Between {kind.unit}s{run.account ? ` · on ${run.account}` : ''}.</p>
+      )}
+      {run.account && run.tabs.length > 0 && <p className="pl-5 text-xs text-muted-foreground">on {run.account}</p>}
+    </div>
+  )
+}
+
 function DoingCard({ overview, running, paused, averageTook, phoneClosed, now }: {
   overview: PhoneOverview | null; running: number; paused: number; averageTook: number | null; phoneClosed: boolean; now: number
 }) {
   const working = overview?.working ?? []
+  const runs = overview?.runs ?? []
+  const activeRuns = runs.filter(r => !r.paused)
   const last = overview?.recent[0] ?? null
   // Which series and chapters the open pages are in: "Monarch of Supreme Beings · Ch. 15, 16".
   const places = new Map<string, Set<string>>()
@@ -358,11 +436,24 @@ function DoingCard({ overview, running, paused, averageTook, phoneClosed, now }:
 
   // Waiting for a ChatGPT limit to lift: the phone starts again by itself then.
   const resume = working.length ? null : overview?.automation?.resume ?? null
-  const tone: Tone = running > 0 ? 'good' : paused > 0 || resume ? 'warn' : 'idle'
-  const title = running > 0
-    ? `Clipping ${running} page${running === 1 ? '' : 's'}`
-    : paused > 0 ? 'Paused' : resume ? `Resumes ~${clock(resume.at)}` : 'Idle'
-  const detail = resume
+  // What is going, Image Clipper first: "Clipping 2 pages", "Writing scripts", "Voicing 3 splits".
+  const going = [
+    ...(running > 0 ? [`Clipping ${running} page${running === 1 ? '' : 's'}`] : []),
+    ...activeRuns.map(runTitle)
+  ]
+  const anyPaused = paused > 0 || runs.length > activeRuns.length
+  const tone: Tone = going.length > 0 ? 'good' : anyPaused || resume ? 'warn' : 'idle'
+  const title = going.length === 1
+    ? going[0]
+    : going.length > 1 ? `${going.length} runs going` : anyPaused ? 'Paused' : resume ? `Resumes ~${clock(resume.at)}` : 'Idle'
+  const runsDetail = runs.length
+    ? runs.map((r, i) => (
+        <span key={r.kind}>{i > 0 && '; '}{RUN_KIND[r.kind].name} · <span className="font-medium text-foreground">{r.series}</span></span>
+      ))
+    : null
+  const detail = working.length === 0 && runsDetail
+    ? <>{runsDetail}</>
+    : resume
     ? <><span className="font-medium text-foreground">{resume.series}</span> · waiting for the ChatGPT limit to lift, then it starts again by itself.</>
     : working.length
     ? <>
@@ -370,16 +461,21 @@ function DoingCard({ overview, running, paused, averageTook, phoneClosed, now }:
           <span key={series}>{i > 0 && '; '}<span className="font-medium text-foreground">{series}</span> · Ch. {[...chapters].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).join(', ')}</span>
         ))}
         {account && <> · on <span className="text-foreground">{account}</span></>}
+        {runsDetail && <>; {runsDetail}</>}
       </>
-    : 'Auto-run isn’t clipping anything right now.'
+    : 'Nothing is running: no clipping, scripts or voiceover.'
 
   return (
     <AnswerCard icon={Activity} question="What is it doing?" className="md:col-span-2 xl:col-span-1">
-      <Headline tone={tone} live={running > 0 && !phoneClosed} title={title} detail={detail} />
-      {phoneClosed && working.length > 0 && (
+      <Headline tone={tone} live={going.length > 0 && !phoneClosed} title={title} detail={detail} />
+      {phoneClosed && (working.length > 0 || runs.length > 0) && (
         <p className="flex items-center gap-1.5 text-xs text-amber-500">
           <AlertTriangle className="h-3.5 w-3.5" /> The app is closed, so this is from its last report ({ago(overview?.reportedAt ?? null, now)}).
         </p>
+      )}
+      {runs.map(run => <RunSection key={run.kind} run={run} now={now} />)}
+      {working.length > 0 && runs.length > 0 && (
+        <p className="flex items-center gap-2 pt-1 text-sm font-medium"><ImageUp className="h-3.5 w-3.5 text-muted-foreground" /> Image Clipper</p>
       )}
       {working.length > 0 && (
         <div className="space-y-3" title="One page per ChatGPT tab. A page still running after 45 minutes is taken as a dead run and dropped.">
@@ -549,10 +645,10 @@ export default function SleeperCells() {
 
   useEffect(() => {
     // Only the elapsed times move between receipts; tick every second while a page is running.
-    const ticking = (overview?.working.length ?? 0) > 0
+    const ticking = (overview?.working.length ?? 0) + (overview?.runs.length ?? 0) > 0
     const timer = setInterval(() => setNow(Date.now()), ticking ? 1000 : MINUTE)
     return () => clearInterval(timer)
-  }, [overview?.working.length])
+  }, [overview?.working.length, overview?.runs.length])
 
   const stats = useMemo(() => {
     if (!overview) return null
@@ -585,6 +681,9 @@ export default function SleeperCells() {
 
   const running = overview?.working.filter(w => !w.paused).length ?? 0
   const paused = (overview?.working.length ?? 0) - running
+  // Is the phone busy at all: Image Clipper's pages plus the narration and voiceover runs.
+  const runsActive = overview?.runs.filter(r => !r.paused).length ?? 0
+  const runsPaused = (overview?.runs.length ?? 0) - runsActive
   const phoneClosed = !!relay?.configured && relay.connected && relay.phones === 0
 
   return (
@@ -615,7 +714,7 @@ export default function SleeperCells() {
 
       {/* The three answers: active? · image limit · doing what? */}
       <div className="mb-6 grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-        <PhoneCard relay={relay} overview={overview} running={running} paused={paused} now={now} />
+        <PhoneCard relay={relay} overview={overview} running={running + runsActive} paused={paused + runsPaused} now={now} />
         <ImageLimitCard overview={overview} now={now} />
         <DoingCard
           overview={overview}
@@ -701,6 +800,12 @@ export default function SleeperCells() {
                               <Link to={`/clipper3/series/${s.id}`} className="font-medium hover:underline">{s.title}</Link>
                               {s.working > 0 && (
                                 <Badge className="ml-2 bg-sky-600 hover:bg-sky-600">{s.working} running</Badge>
+                              )}
+                              {s.runs.includes('narration') && (
+                                <Badge className="ml-2 bg-sky-600 hover:bg-sky-600">writing scripts</Badge>
+                              )}
+                              {s.runs.includes('voiceover') && (
+                                <Badge className="ml-2 bg-sky-600 hover:bg-sky-600">voicing</Badge>
                               )}
                             </td>
                             <td className="py-2 pr-4">

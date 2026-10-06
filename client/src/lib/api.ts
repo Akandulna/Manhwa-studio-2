@@ -2263,6 +2263,39 @@ export interface PhoneScriptsStatus {
     series: Record<string, { done: number; total: number; uploadedAt: string | null }>
     chapters: Record<string, PhoneChapterHinglish>
   }
+  /** Runs going now in the phone's Narration and Voiceover libraries (series and chapters by folder name). */
+  runs: PhoneScriptRun[]
+}
+
+/**
+ * A run going on the phone: Auto-run writing a series' scripts in AI Studio
+ * (narration), or voicing its splits (voiceover). `done` of `total` counts
+ * chapters for narration and the run's splits for voiceover.
+ */
+export interface PhoneScriptRun {
+  kind: 'narration' | 'voiceover'
+  series: string
+  done: number
+  total: number
+  paused: boolean
+  /** Ends once the chapter or splits it's on are saved. */
+  stopping: boolean
+  /** The browser profile the tabs are on, when the phone has more than one. */
+  account: string | null
+  since: string | null
+  /** When the run last changed. */
+  at: string | null
+  /** What each AI Studio tab is on; a tab between splits is left out. */
+  tabs: PhoneScriptRunTab[]
+}
+
+export interface PhoneScriptRunTab {
+  chapter: string
+  language: NarrationLanguage
+  /** 1-based, voiceover only. */
+  split: number | null
+  splits: number | null
+  since: string | null
 }
 
 /**
@@ -2421,6 +2454,17 @@ export interface PhoneOverviewSeries {
   chaptersUploaded: number
   /** Pages Auto-run is on in this series right now. */
   working: number
+  /** Narration and voiceover runs going in this series right now. */
+  runs: PhoneScriptRun['kind'][]
+}
+
+export interface PhoneOverviewRunTab extends PhoneOverviewPlace, Omit<PhoneScriptRunTab, 'chapter'> {}
+
+/** A narration or voiceover run on the phone, placed in the library. */
+export interface PhoneOverviewRun extends Omit<PhoneScriptRun, 'series' | 'tabs'> {
+  seriesId: string | null
+  series: string
+  tabs: PhoneOverviewRunTab[]
 }
 
 /** Sleeper-Cell's automation settings (Tools → Settings → Automation), and the run it will start by itself. */
@@ -2445,6 +2489,8 @@ export interface PhoneOverview {
   /** The id of the "Refresh from phone" request the crops receipt last answered. */
   answers: string | null
   working: PhoneOverviewWorking[]
+  /** Narration and voiceover runs going now. */
+  runs: PhoneOverviewRun[]
   series: PhoneOverviewSeries[]
   /** Done pages, newest first (the latest few hundred). */
   recent: PhoneOverviewFinish[]

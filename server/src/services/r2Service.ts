@@ -324,6 +324,39 @@ export interface PhoneScriptsStatus {
     /** By chapter id, for the series asked for; chapters not converted yet are left out. */
     chapters: Record<string, PhoneChapterHinglish>
   }
+  /** Runs going now in the phone's Narration and Voiceover libraries; empty from builds before they were reported. */
+  runs: PhoneScriptRun[]
+}
+
+/**
+ * A run going on the phone: Auto-run writing a series' scripts in AI Studio
+ * (narration), or voicing its splits (voiceover). `done` of `total` counts
+ * chapters for narration and the run's splits for voiceover. Each tab is the
+ * chapter (folder name) and, for voiceover, the 1-based split it's on; a tab
+ * between splits is left out. `at` is when the run last changed.
+ */
+export interface PhoneScriptRun {
+  kind: 'narration' | 'voiceover'
+  /** The series folder, as on the phone. */
+  series: string
+  done: number
+  total: number
+  paused: boolean
+  /** Ends once the chapter or splits it's on are saved. */
+  stopping: boolean
+  /** The browser profile the tabs are on, when the phone has more than one. */
+  account: string | null
+  since: string | null
+  at: string | null
+  tabs: PhoneScriptRunTab[]
+}
+
+export interface PhoneScriptRunTab {
+  chapter: string
+  language: 'en' | 'hi'
+  split: number | null
+  splits: number | null
+  since: string | null
 }
 
 interface ScriptsReceipt {
@@ -341,6 +374,7 @@ interface ScriptsReceipt {
       chapters?: Record<string, { status?: string; savedAt?: string }>
     }
   }>
+  runs?: unknown
 }
 
 const PHONE_SCRIPT_STATES = new Set<string>(['done', 'needs_summary', 'stale'])
@@ -421,7 +455,7 @@ export async function getPhoneScripts(seriesId?: string, fresh = false): Promise
   const config = getR2Config()
   const relayed = relayReceipt<ScriptsReceipt>('scripts')
   if (!config && !relayed) {
-    return { configured: false, reportedAt: null, device: null, answers: null, series: {}, chapters: {}, hi: { series: {}, chapters: {} } }
+    return { configured: false, reportedAt: null, device: null, answers: null, series: {}, chapters: {}, hi: { series: {}, chapters: {} }, runs: [] }
   }
 
   const receipt = relayed ?? await readPolledReceipt<ScriptsReceipt>(createClient(config!), config!, SCRIPTS_RECEIPT_NAME, fresh)
@@ -470,8 +504,47 @@ export async function getPhoneScripts(seriesId?: string, fresh = false): Promise
     answers: receipt.answers ?? null,
     series,
     chapters,
-    hi
+    hi,
+    runs: parseScriptRuns(receipt.runs)
   }
+}
+
+/**
+ * The receipt's `runs`, dropping anything malformed. The phone drops a run
+ * when it ends, but one killed with the app is never dropped, so a run that
+ * hasn't changed in WORKING_STALE_MS is taken as dead (a chapter's script, the
+ * longest step, takes well under that).
+ */
+export function parseScriptRuns(raw: unknown, now = Date.now()): PhoneScriptRun[] {
+  if (!Array.isArray(raw)) return []
+  const runs: PhoneScriptRun[] = []
+  for (const run of raw) {
+    if (!isObject(run) || (run.kind !== 'narration' && run.kind !== 'voiceover') || typeof run.series !== 'string' || !run.series) continue
+    const at = isTime(run.at) ? run.at : null
+    if (at && now - Date.parse(at) > WORKING_STALE_MS) continue
+    const tabs = (Array.isArray(run.tabs) ? run.tabs : [])
+      .filter((tab): tab is Record<string, unknown> => isObject(tab) && typeof tab.chapter === 'string' && !!tab.chapter)
+      .map(tab => ({
+        chapter: tab.chapter as string,
+        language: tab.language === 'hi' ? 'hi' as const : 'en' as const,
+        split: count(tab.split) || null,
+        splits: count(tab.splits) || null,
+        since: isTime(tab.since) ? tab.since : null
+      }))
+    runs.push({
+      kind: run.kind,
+      series: run.series,
+      done: count(run.done),
+      total: count(run.total),
+      paused: run.paused === true,
+      stopping: run.stopping === true,
+      account: typeof run.account === 'string' && run.account ? run.account : null,
+      since: isTime(run.since) ? run.since : null,
+      at,
+      tabs
+    })
+  }
+  return runs
 }
 
 /**
@@ -781,6 +854,17 @@ export interface PhoneOverviewSeries {
   chaptersUploaded: number
   /** Pages Auto-run is on in this series right now. */
   working: number
+  /** Narration and voiceover runs going in this series right now. */
+  runs: PhoneScriptRun['kind'][]
+}
+
+export interface PhoneOverviewRunTab extends PhoneOverviewPlace, Omit<PhoneScriptRunTab, 'chapter'> {}
+
+/** A narration or voiceover run on the phone, placed in the library (see PhoneScriptRun). */
+export interface PhoneOverviewRun extends Omit<PhoneScriptRun, 'series' | 'tabs'> {
+  seriesId: string | null
+  series: string
+  tabs: PhoneOverviewRunTab[]
 }
 
 /** Sleeper-Cell's automation settings, and the run it will start by itself (Automation.json on the phone). */
@@ -806,6 +890,8 @@ export interface PhoneOverview {
   answers: string | null
   /** Every page Auto-run is on, across series. */
   working: PhoneOverviewWorking[]
+  /** Narration and voiceover runs going now (from the scripts receipt). */
+  runs: PhoneOverviewRun[]
   series: PhoneOverviewSeries[]
   /** Done pages, newest first, at most OVERVIEW_RECENT. */
   recent: PhoneOverviewFinish[]
@@ -832,7 +918,7 @@ export async function getPhoneOverview(sync: PhoneSyncStatus | null, fresh = fal
   const relayedCrops = relayReceipt<CropsReceipt>('crops')
   const empty: PhoneOverview = {
     configured: false, device: null, reportedAt: null, reported: { sync: null, scripts: null, crops: null },
-    answers: null, working: [], series: [], recent: [], recentCapped: false, uploads: [], profiles: [], automation: null
+    answers: null, working: [], runs: [], series: [], recent: [], recentCapped: false, uploads: [], profiles: [], automation: null
   }
   if (!config && !relayedCrops) return empty
 
@@ -866,6 +952,12 @@ export async function getPhoneOverview(sync: PhoneSyncStatus | null, fresh = fal
     .filter((at): at is string => !!at)
     .sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null
   overview.device = crops.device ?? scripts?.device ?? sync?.device ?? null
+  overview.runs = (scripts?.runs ?? []).map(run => ({
+    ...run,
+    seriesId: byFolder.get(run.series)?.id ?? null,
+    series: byFolder.get(run.series)?.title ?? run.series,
+    tabs: run.tabs.map(({ chapter, ...tab }) => ({ ...place(run.series, chapter), ...tab }))
+  }))
 
   const cropsBySeries = new Map<string, { done: number; total: number; chaptersUploaded: number; working: number }>()
   for (const [seriesFolder, entry] of Object.entries(isObject(crops.series) ? crops.series : {})) {
@@ -911,11 +1003,13 @@ export async function getPhoneOverview(sync: PhoneSyncStatus | null, fresh = fal
       scripts: scripts?.series[row.id] ?? null,
       crops: cropped ? { done: cropped.done, total: cropped.total } : null,
       chaptersUploaded: cropped?.chaptersUploaded ?? 0,
-      working: cropped?.working ?? 0
+      working: cropped?.working ?? 0,
+      runs: overview.runs.filter(run => run.seriesId === row.id).map(run => run.kind)
     }
-    if (entry.sync || entry.scripts || entry.crops) overview.series.push(entry)
+    if (entry.sync || entry.scripts || entry.crops || entry.runs.length) overview.series.push(entry)
   }
-  overview.series.sort((a, b) => b.working - a.working || a.title.localeCompare(b.title))
+  const busy = (s: PhoneOverviewSeries) => s.working + s.runs.length
+  overview.series.sort((a, b) => busy(b) - busy(a) || a.title.localeCompare(b.title))
   return overview
 }
 
