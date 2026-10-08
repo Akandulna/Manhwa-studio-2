@@ -15,6 +15,7 @@ import { useTheme, type Theme } from '@/lib/theme'
 import { DocHistoryDialog, DocHistoryButton } from '@/components/settings/DocHistoryDialog'
 import { CloudflareTab } from '@/components/settings/CloudflareR2Card'
 import { archiveVersion, readHistory, type DocVersion } from '@/lib/docHistory'
+import { phoneEditorApi } from '@/pages/editor2/phoneEditor'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Save, RotateCcw, FolderOpen, Gauge, UserCircle, ImageIcon, Wand2, Sparkles, CheckCircle, XCircle, Key, ExternalLink, Volume2, Mic, FileText, Download, Crop, Locate, Upload, Clock, Film, Moon, Sun, Monitor, Palette, Cloud, Languages } from 'lucide-react'
 
@@ -1799,7 +1800,8 @@ function Crop3PromptCard() {
 }
 
 // localStorage key for the Editor 2.0 prompt — kept local to the browser,
-// same as the Crop 3.0 documents, not synced to the server.
+// same as the Crop 3.0 documents. Each save also puts it in R2 for the
+// Sleeper-Cell phone, which pastes it with every chapter (phoneEditor.ts).
 const EDITOR2_PROMPT_KEY = 'editor2.prompt'
 
 /**
@@ -1808,7 +1810,8 @@ const EDITOR2_PROMPT_KEY = 'editor2.prompt'
  * can't clobber the saved prompt by accident.
  *
  * Saved to the browser's localStorage (mirrors Crop3PromptCard) so it
- * survives a page refresh without needing a server round-trip.
+ * survives a page refresh without needing a server round-trip, and sent to
+ * R2 for the phone's Editor 2.0 run.
  */
 function Editor2PromptCard() {
   const { toast } = useToast()
@@ -1846,9 +1849,36 @@ function Editor2PromptCard() {
       setContent(draft)
       setSavedAt(savedAtIso)
       setEditing(false)
-      toast({ title: 'Prompt saved', description: 'Saved locally in this browser.' })
+      void sendToPhone(draft, 'Prompt saved')
     } catch (err) {
       toast({ title: 'Save failed', description: err instanceof Error ? err.message : 'Could not save to local storage', variant: 'destructive' })
+    }
+  }
+
+  /**
+   * Puts the prompt in R2 for the phone. The local save already stands, so a
+   * failure here only says the phone didn't get it; the next save or Send to
+   * phone sends it again.
+   */
+  const sendToPhone = async (text: string, title: string, note?: string) => {
+    const lead = note ? `${note} ` : ''
+    if (!text.trim()) {
+      toast({ title, description: `${lead}Saved locally in this browser.` })
+      return
+    }
+    try {
+      const { phoneNotified } = await phoneEditorApi.savePrompt(text)
+      toast({
+        title,
+        description: `${lead}Saved in this browser and sent to R2 for the phone` +
+          (phoneNotified ? ', which picks it up now if it is open.' : '; the phone gets it on its next check.')
+      })
+    } catch (err) {
+      toast({
+        title,
+        description: `${lead}Saved in this browser, but not sent to the phone: ${err instanceof Error ? err.message : 'R2 failed'}.`,
+        variant: 'destructive'
+      })
     }
   }
 
@@ -1862,7 +1892,7 @@ function Editor2PromptCard() {
       setSavedAt(savedAtIso)
       setEditing(false)
       setHistoryCount(readHistory(EDITOR2_PROMPT_KEY).length)
-      toast({ title: 'Prompt restored', description: `Restored the version saved ${new Date(version.savedAt).toLocaleString()}.` })
+      void sendToPhone(version.content, 'Prompt restored', `Restored the version saved ${new Date(version.savedAt).toLocaleString()}.`)
     } catch (err) {
       toast({ title: 'Restore failed', description: err instanceof Error ? err.message : 'Could not save to local storage', variant: 'destructive' })
     }
@@ -1876,7 +1906,7 @@ function Editor2PromptCard() {
           Prompt
         </CardTitle>
         <CardDescription>
-          The prompt used by Editor 2.0. Saved locally in this browser.
+          The prompt used by Editor 2.0. Saved locally in this browser, and sent to R2 for the phone’s Editor 2.0 run.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">

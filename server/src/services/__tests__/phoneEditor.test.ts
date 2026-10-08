@@ -71,7 +71,7 @@ vi.mock('../videoEditor2Service.js', () => ({
 
 vi.mock('../clipper3/perImageStore.js', () => ({ getOutputDir: () => '/nowhere/crops3' }))
 
-const { copyAllText, fetchPhoneTimelines, sendEditorPackages } = await import('../phoneEditor.js')
+const { copyAllText, fetchPhoneTimelines, saveEditorPrompt, sendEditorPackages } = await import('../phoneEditor.js')
 
 function timelineBody(chapter: string, timeline: string, madeAt: string, language = 'en') {
   return JSON.stringify({ schema: 'sleeper-cell-editor-timeline/1', series: 'Demo', chapter, language, madeAt, review: [], timeline })
@@ -83,25 +83,47 @@ beforeEach(() => {
 })
 
 describe('sendEditorPackages', () => {
-  it('writes the Copy All text and the sections to the phone folder, skipping chapters without a timeline', async () => {
+  it('writes the prompt, and each chapter\'s parts and sections, to the phone folder, skipping chapters without a timeline', async () => {
     const result = await sendEditorPackages('s1', 'en', ['c1', 'c3'], 'THE PROMPT')
     expect(result.sent.map(s => s.chapterId)).toEqual(['c1'])
     expect(result.skipped).toEqual([{ chapterId: 'c3', number: 3, reason: 'no script with timeline' }])
     const body = JSON.parse(bucket.get('Phone/editor/Demo/Chapter 001.package.json')!)
-    expect(body.schema).toBe('manhwa-studio-editor-package/1')
-    expect(body.text).toBe(copyAllText('THE PROMPT', '## Section 1\n\ntimeline of c1', '## page_001.webp\n\nmetadata of c1'))
-    expect(body.text.startsWith('# Prompt\n\nTHE PROMPT\n\n# Script with Timeline\n\n')).toBe(true)
+    expect(body.schema).toBe('manhwa-studio-editor-package/2')
+    expect(body.timeline).toBe('## Section 1\n\ntimeline of c1')
+    expect(body.metadata).toBe('## page_001.webp\n\nmetadata of c1')
+    expect(body.text).toBeUndefined()
+    const prompt = JSON.parse(bucket.get('Phone/editor/_prompt.json')!)
+    expect(prompt).toMatchObject({ schema: 'manhwa-studio-editor-prompt/1', content: 'THE PROMPT' })
     expect(body.sections).toEqual([{ number: 1, durationSec: 5.2 }, { number: 2, durationSec: 4.5 }])
     expect(result.phoneNotified).toBe(true)
   })
 
   it('puts Hinglish in its own file', async () => {
     await sendEditorPackages('s1', 'hi', ['c1'], 'P')
-    expect([...bucket.keys()]).toEqual(['Phone/editor/Demo/Chapter 001.hi.package.json'])
+    expect([...bucket.keys()].sort()).toEqual(['Phone/editor/Demo/Chapter 001.hi.package.json', 'Phone/editor/_prompt.json'])
   })
 
   it('needs the prompt', async () => {
     await expect(sendEditorPackages('s1', 'en', ['c1'], '  ')).rejects.toThrow(/prompt/)
+  })
+})
+
+describe('saveEditorPrompt', () => {
+  it('replaces the prompt in R2 and nudges the phone', async () => {
+    await saveEditorPrompt('first')
+    const result = await saveEditorPrompt('  second  ')
+    expect(JSON.parse(bucket.get('Phone/editor/_prompt.json')!).content).toBe('second')
+    expect(result.phoneNotified).toBe(true)
+  })
+
+  it('refuses an empty prompt', async () => {
+    await expect(saveEditorPrompt(' ')).rejects.toThrow(/empty/)
+  })
+})
+
+describe('copyAllText', () => {
+  it('is the Copy All text, which EditorPackage.copyAllText on the phone builds too', () => {
+    expect(copyAllText('P', 'T', 'M')).toBe('# Prompt\n\nP\n\n# Script with Timeline\n\nT\n\n# Crop Metadata\n\nM')
   })
 })
 

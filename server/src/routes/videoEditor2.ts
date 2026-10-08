@@ -29,7 +29,7 @@ import {
   type Export2Input
 } from '../services/editor2Export.js'
 import { NarrationLanguage, requestLanguage } from '../services/narrationLanguage.js'
-import { fetchPhoneTimelines, sendEditorPackages } from '../services/phoneEditor.js'
+import { fetchPhoneTimelines, saveEditorPrompt, sendEditorPackages } from '../services/phoneEditor.js'
 
 export function initVideoEditor2Routes(io: Server): Router {
   const router = Router()
@@ -283,6 +283,27 @@ export function initVideoEditor2Routes(io: Server): Router {
   })
 
   // ============ The phone (see phoneEditor.ts) ============
+
+  /**
+   * PUT /prompt { content }
+   *
+   * Puts the Editor 2.0 prompt in R2 for the phone, which pastes it with every
+   * chapter. Settings calls it on each save; the prompt itself stays in the
+   * browser as before.
+   */
+  router.put('/prompt', async (req: Request, res: Response) => {
+    try {
+      const { content } = req.body ?? {}
+      if (typeof content !== 'string' || !content.trim()) {
+        return res.status(400).json({ error: 'content (non-empty string) is required' })
+      }
+      res.json(await saveEditorPrompt(content))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to save the prompt to R2'
+      console.error('[videoEditor2] saving the prompt to R2 failed:', message)
+      res.status(500).json({ error: message })
+    }
+  })
 
   /**
    * POST /series/:seriesId/send-to-phone { chapterIds, prompt }

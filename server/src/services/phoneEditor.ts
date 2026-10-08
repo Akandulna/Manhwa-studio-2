@@ -7,24 +7,32 @@
  * Astra (EditorRun.kt), so this sends it the Copy All text and takes back the
  * JSON:
  *
+ *   <phone prefix>editor/_prompt.json                         this → phone
  *   <phone prefix>editor/<Series>/<Chapter>.package.json     this → phone
  *   <phone prefix>editor/<Series>/<Chapter>.timeline.json    phone → this
+ *
+ * The Editor 2.0 prompt goes up on its own whenever it's saved in Settings
+ * (and again with each send), so the phone always pastes the latest one; a
+ * package holds only the chapter's script with timeline and crop metadata.
  *
  * Hinglish uses `<Chapter>.hi.package.json` and `<Chapter>.hi.timeline.json`.
  * Series and chapter are the folder names, as for the manhwa zips.
  *
- * A package is the exact text copyAll() in EditorChapterList2 puts on the
- * clipboard, plus what the phone checks the reply against: each voice
- * section's audio length, and the crop files in crops3/, which are what the
- * timeline processor resolves image names against. Keep the schemas in step
- * with EditorPackage / EditorLibrary.save in the phone's editor/ folder.
+ * With the prompt, a package makes the exact text copyAll() in
+ * EditorChapterList2 puts on the clipboard (copyAllText; the phone's
+ * EditorPackage.copyAllText builds the same), plus what the phone checks the
+ * reply against: each voice section's audio length, and the crop files in
+ * crops3/, which are what the timeline processor resolves image names against.
+ * Keep the schemas in step with EditorPackage / EditorLibrary.save / EditorSync
+ * in the phone's editor/ folder.
  *
  * Fetching stores each timeline as the chapter's Editor 2.0 paste (the
  * Editor2Timeline row), unprocessed, so the chapter asks for Start Processing
  * as after a paste by hand. A paste made here after the phone made its
  * timeline is kept.
  *
- * R2 cost: a send is one PUT per chapter (Class A) plus the phone's nudge; a
+ * R2 cost: saving the prompt is one PUT (Class A) plus the phone's nudge; a
+ * send is one PUT per chapter plus the prompt's and the nudge; a
  * fetch is one LIST per folder tried, plus one GET (Class B) per timeline.
  * Nothing here runs on a timer.
  */
@@ -42,7 +50,10 @@ import type { NarrationLanguage } from './narrationLanguage.js'
 export const EDITOR_FOLDER = 'editor/'
 const PACKAGE_SUFFIX = '.package.json'
 const TIMELINE_SUFFIX = '.timeline.json'
-const PACKAGE_SCHEMA = 'manhwa-studio-editor-package/1'
+const PACKAGE_SCHEMA = 'manhwa-studio-editor-package/2'
+/** At the top of the editor folder. Keep in step with PROMPT_FILE in EditorLibrary.kt. */
+const PROMPT_NAME = '_prompt.json'
+const PROMPT_SCHEMA = 'manhwa-studio-editor-prompt/1'
 const TIMELINE_SCHEMA = /^sleeper-cell-editor-timeline\/1/
 const IMAGE_EXT = /\.(png|jpe?g|webp)$/i
 
@@ -77,6 +88,37 @@ function lastTimestamp(timelineScript: string): number | null {
   return last
 }
 
+// ============ The prompt ============
+
+/**
+ * Puts the Editor 2.0 prompt where the phone fetches it, replacing the last
+ * one. With `notify`, the phone is asked to check R2 straight away, so it has
+ * the prompt before its next run. Returns whether it was asked.
+ */
+export async function saveEditorPrompt(content: string, notify = true): Promise<{ phoneNotified: boolean }> {
+  if (!content.trim()) throw new Error('The prompt is empty')
+  const config = getR2Config()
+  if (!config) throw new Error('Cloudflare R2 is not set up')
+  const client = createClient(config)
+  const body = JSON.stringify({ schema: PROMPT_SCHEMA, content: content.trim(), savedAt: new Date().toISOString() })
+  for (const folder of await phoneFolders(client, config)) {
+    await client.send(new PutObjectCommand({
+      Bucket: config.bucket,
+      Key: `${folder}${EDITOR_FOLDER}${PROMPT_NAME}`,
+      Body: body,
+      ContentType: 'application/json'
+    }))
+  }
+  if (!notify) return { phoneNotified: false }
+  try {
+    await requestPhoneUpdate('sync')
+    return { phoneNotified: true }
+  } catch (error) {
+    console.warn('[phoneEditor] could not ask the phone to check R2:', errorMessage(error))
+    return { phoneNotified: false }
+  }
+}
+
 // ============ Send ============
 
 export interface EditorSendResult {
@@ -89,8 +131,9 @@ export interface EditorSendResult {
 /**
  * Sends each of `chapterIds` (in `language`) to the phone as a package,
  * replacing any sent before. `prompt` is the Editor 2.0 prompt, which lives in
- * the browser (Settings → Editor 2.0), so the client passes it. A chapter
- * without a script with timeline or crop metadata is skipped and reported.
+ * the browser (Settings → Editor 2.0), so the client passes it; it goes up
+ * first, so the phone has the one this browser holds. A chapter without a
+ * script with timeline or crop metadata is skipped and reported.
  */
 export async function sendEditorPackages(
   seriesId: string,
@@ -111,6 +154,7 @@ export async function sendEditorPackages(
   })
   if (!series) throw new Error('Series not found')
 
+  await saveEditorPrompt(prompt, false)
   const client = createClient(config)
   const folders = await phoneFolders(client, config)
   const seriesFolder = path.basename(series.rootFolder)
@@ -160,7 +204,8 @@ export async function sendEditorPackages(
         sentAt: new Date().toISOString(),
         sections,
         images,
-        text: copyAllText(prompt.trim(), timeline.text, metadata.text)
+        timeline: timeline.text,
+        metadata: metadata.text
       })
       for (const folder of folders) {
         await client.send(new PutObjectCommand({
