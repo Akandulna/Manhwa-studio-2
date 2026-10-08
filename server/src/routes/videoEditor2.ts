@@ -29,6 +29,7 @@ import {
   type Export2Input
 } from '../services/editor2Export.js'
 import { NarrationLanguage, requestLanguage } from '../services/narrationLanguage.js'
+import { fetchPhoneTimelines, sendEditorPackages } from '../services/phoneEditor.js'
 
 export function initVideoEditor2Routes(io: Server): Router {
   const router = Router()
@@ -277,6 +278,48 @@ export function initVideoEditor2Routes(io: Server): Router {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to check the image references'
       console.error('[videoEditor2] checking image refs failed:', message)
+      res.status(/not found/i.test(message) ? 404 : 500).json({ error: message })
+    }
+  })
+
+  // ============ The phone (see phoneEditor.ts) ============
+
+  /**
+   * POST /series/:seriesId/send-to-phone { chapterIds, prompt }
+   *
+   * Sends each chapter's Copy All text to the Sleeper-Cell phone, whose
+   * Editor 2.0 run makes the timeline JSON in ChatGPT. The prompt comes from
+   * the client because Editor 2.0 keeps it in the browser.
+   */
+  router.post('/series/:seriesId/send-to-phone', async (req: Request, res: Response) => {
+    try {
+      const { chapterIds, prompt } = req.body ?? {}
+      if (!Array.isArray(chapterIds) || chapterIds.length === 0 || !chapterIds.every(id => typeof id === 'string')) {
+        return res.status(400).json({ error: 'chapterIds (non-empty array of ids) is required' })
+      }
+      if (typeof prompt !== 'string') {
+        return res.status(400).json({ error: 'prompt (string) is required' })
+      }
+      res.json(await sendEditorPackages(req.params.seriesId, requestLanguage(req), chapterIds, prompt))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to send to the phone'
+      console.error('[videoEditor2] sending to the phone failed:', message)
+      res.status(/not found/i.test(message) ? 404 : 500).json({ error: message })
+    }
+  })
+
+  /**
+   * POST /series/:seriesId/fetch-phone-timelines
+   *
+   * Stores the timelines the phone made as each chapter's paste, unprocessed;
+   * the client then syncs them into its cache (syncSeriesTimelines).
+   */
+  router.post('/series/:seriesId/fetch-phone-timelines', async (req: Request, res: Response) => {
+    try {
+      res.json(await fetchPhoneTimelines(req.params.seriesId, requestLanguage(req)))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to fetch from the phone'
+      console.error('[videoEditor2] fetching phone timelines failed:', message)
       res.status(/not found/i.test(message) ? 404 : 500).json({ error: message })
     }
   })

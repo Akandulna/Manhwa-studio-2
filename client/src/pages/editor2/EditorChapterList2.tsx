@@ -57,11 +57,14 @@ import {
   ImageOff,
   Wrench,
   FileCheck2,
-  Bird
+  Bird,
+  Smartphone,
+  Download
 } from 'lucide-react'
 
 import { useWakeLock } from '@/hooks/useWakeLock'
 import { MurgaaDialog } from '@/components/narration/MurgaaDialog'
+import { chapterList, phoneEditorApi } from './phoneEditor'
 import { LanguageTabs } from '@/components/LanguageTabs'
 import { LANGUAGE_LABEL, useNarrationLanguage, withLang } from '@/lib/narrationLanguage'
 import {
@@ -173,6 +176,9 @@ export default function EditorChapterList2() {
   const [repairingNames, setRepairingNames] = useState(false)
 
   const [murgaaOpen, setMurgaaOpen] = useState(false)
+
+  // Send to phone / Fetch from phone, while one is in flight.
+  const [phoneBusy, setPhoneBusy] = useState<'send' | 'fetch' | null>(null)
 
   // Which chapter's detail is open. Only one at a time: the list is the view,
   // and the detail is what you drop into for the chapter you are working on.
@@ -292,6 +298,102 @@ export default function EditorChapterList2() {
       })
     } finally {
       setPasting(prev => (prev === ch.id ? null : prev))
+    }
+  }
+
+  /**
+   * Send to phone — hands the Copy All text of every ready chapter that has no
+   * timeline pasted yet to the Sleeper-Cell phone, whose Editor 2.0 run makes
+   * the timeline JSON in ChatGPT (GPT-6 Astra). Fetch from phone brings the
+   * results back as pastes.
+   */
+  async function sendToPhone() {
+    if (!seriesId) return
+    const prompt = readSavedPrompt()
+    if (!prompt) {
+      toast({
+        title: 'No Editor 2.0 prompt',
+        description: 'Save the prompt in Settings → Editor 2.0 first: the phone pastes it with each chapter.',
+        variant: 'destructive'
+      })
+      return
+    }
+    const ids = chapters.filter(ch => ch.ready && !getTimelineJson(ch.id, language)?.trim()).map(ch => ch.id)
+    if (ids.length === 0) {
+      toast({ title: 'Nothing to send', description: 'Every ready chapter already has a timeline pasted.' })
+      return
+    }
+    setPhoneBusy('send')
+    try {
+      const result = await phoneEditorApi.send(seriesId, language, ids, prompt)
+      const skipped = result.skipped.length > 0
+        ? ` Skipped ${result.skipped.map(s => `${s.number} (${s.reason})`).join(', ')}.`
+        : ''
+      toast({
+        title: result.sent.length > 0 ? `Sent ${result.sent.length} chapter${result.sent.length === 1 ? '' : 's'} to the phone` : 'Nothing sent',
+        description:
+          (result.sent.length > 0
+            ? `${chapterList(result.sent.map(s => s.number))} — ` +
+              (result.phoneNotified ? 'the phone picks them up now if it is open' : 'tap Check for new uploads on the phone') +
+              ', then run Auto-run in its Editor 2.0.'
+            : '') + skipped,
+        variant: result.sent.length === 0 ? 'destructive' : undefined
+      })
+    } catch (err) {
+      toast({
+        title: 'Could not send to the phone',
+        description: err instanceof Error ? err.message : 'The send failed',
+        variant: 'destructive'
+      })
+    } finally {
+      setPhoneBusy(null)
+    }
+  }
+
+  /** Fetch from phone — stores the phone's timelines as pastes, then pulls them into this list. */
+  async function fetchFromPhone() {
+    if (!seriesId) return
+    setPhoneBusy('fetch')
+    try {
+      const result = await phoneEditorApi.fetch(seriesId, language)
+      if (!result.configured) {
+        toast({ title: 'Cloudflare R2 is not set up', variant: 'destructive' })
+        return
+      }
+      await syncSeriesTimelines(seriesId, language, chapters.map(ch => ch.id))
+      const restored: Record<string, string> = {}
+      for (const ch of chapters) {
+        const json = getTimelineJson(ch.id, language)
+        if (json) restored[ch.id] = json
+      }
+      setPasted(restored)
+      setProcessedTick(t => t + 1)
+
+      const parts: string[] = []
+      if (result.imported.length > 0) {
+        const review = result.imported.filter(i => i.review > 0)
+        parts.push(`${chapterList(result.imported.map(i => i.number))} pasted — Start Processing to preview.`)
+        if (review.length > 0) parts.push(`${chapterList(review.map(i => i.number))} still had issues on the phone; check the preview.`)
+      }
+      if (result.upToDate > 0) parts.push(`${result.upToDate} already up to date.`)
+      if (result.kept.length > 0) parts.push(`${chapterList(result.kept.map(k => k.number))} kept: pasted here after the phone made it.`)
+      if (result.unmatched.length > 0) parts.push(`No chapter here for ${result.unmatched.join(', ')}.`)
+      if (result.failed.length > 0) parts.push(`${result.failed.length} could not be read: ${result.failed[0].error}.`)
+      toast({
+        title: result.found === 0
+          ? 'No timelines from the phone yet'
+          : `Fetched ${result.imported.length} timeline${result.imported.length === 1 ? '' : 's'}`,
+        description: parts.join(' ') || 'Send chapters to the phone and run Editor 2.0 there first.',
+        variant: result.failed.length > 0 ? 'destructive' : undefined
+      })
+    } catch (err) {
+      toast({
+        title: 'Could not fetch from the phone',
+        description: err instanceof Error ? err.message : 'The fetch failed',
+        variant: 'destructive'
+      })
+    } finally {
+      setPhoneBusy(null)
     }
   }
 
@@ -721,6 +823,31 @@ export default function EditorChapterList2() {
         >
           <Bird className="h-3 w-3 mr-1" />
           Murgaa
+        </Button>
+
+        {/* The phone makes timelines in ChatGPT: send it the chapters still
+            without one, then fetch what it made. */}
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 flex-shrink-0"
+          onClick={sendToPhone}
+          disabled={phoneBusy !== null}
+          title="Send every ready chapter without a timeline to the Sleeper-Cell phone, which makes the timeline JSON in ChatGPT"
+        >
+          {phoneBusy === 'send' ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Smartphone className="h-3 w-3 mr-1" />}
+          Send to phone
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 flex-shrink-0"
+          onClick={fetchFromPhone}
+          disabled={phoneBusy !== null}
+          title="Paste the timelines the phone made into their chapters"
+        >
+          {phoneBusy === 'fetch' ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Download className="h-3 w-3 mr-1" />}
+          Fetch from phone
         </Button>
 
         {/* Export All — every processed chapter in one action. It does not
