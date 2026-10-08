@@ -105,6 +105,8 @@ interface Clipper3CropComplete {
   chapterId: string
   images?: number
   exported?: number
+  /** Old outputs the cut deleted because this run did not write them. */
+  removed?: number
   failed?: number
   exportDir?: string
   warnings?: string[]

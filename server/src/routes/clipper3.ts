@@ -10,14 +10,14 @@
  *   GET    /series                                 series with downloaded chapters
  *   GET    /chapters                               every downloaded chapter
  *   GET    /chapters/:id/image/:filename           one source page image
- *   GET    /chapters/:id/images                    every image + its own status
+ *   GET    /chapters/:id/images                    every image + its own status, prev/next chapter
  *   GET    /chapters/:id/images/:filename/points   that image's crop artifact
  *   PUT    /chapters/:id/images/:filename/points   store that image's crop artifact
  *   DELETE /chapters/:id/images/:filename/points   drop it
  *   GET    /chapters/:id/images/:filename/metadata that image's metadata document
  *   PUT    /chapters/:id/images/:filename/metadata store that image's metadata
  *   DELETE /chapters/:id/images/:filename/metadata drop it
- *   POST   /chapters/:id/crop                      cut every done image
+ *   POST   /chapters/:id/crop                      cut every done image, replacing the previous cut
  *   GET    /chapters/:id/outputs                   what was cut
  *   GET    /chapters/:id/output/:filename          one cut image
  *   POST   /chapters/:id/images/:filename/slices      cut that page into parts
@@ -76,6 +76,8 @@ import {
   expectedExportedFilenames,
   canonicalizeExportedFilenames,
   findUnresolvedMetadataNames,
+  chapterCropOutputs,
+  removeStaleOutputs,
   writeImageMetadata,
   writeImagePoints,
   type Clipper3CropEntry,
@@ -109,6 +111,7 @@ import {
 } from '../services/clipper3/openaiAuto.js'
 import { fetchPhoneCrops } from '../services/phoneCropImport.js'
 import { reconcileQuietly } from '../services/diskReconcile.js'
+import { doneNeighbours } from '../services/pageStitch.js'
 import {
   syncChapterProcessed,
   unsyncChapterProcessed,
@@ -263,7 +266,8 @@ export function initClipper3Routes(io: Server): Router {
           coverPath: true,
           _count: { select: { chapters: { where: { status: 'done' } } } }
         },
-        orderBy: { title: 'asc' }
+        // Newest series first, so a just-added series is at the top of the library.
+        orderBy: { createdAt: 'desc' }
       })
       res.json(
         series
@@ -365,6 +369,7 @@ export function initClipper3Routes(io: Server): Router {
       const pointed = await listPointedImageStems(chapter.folderPath)
       const described = await listMetadataImageStems(chapter.folderPath)
 
+      const expectedOutputs: string[] = []
       const images = await Promise.all(
         manifest.images.map(async img => {
           const stem = stemOf(img.filename)
@@ -374,6 +379,7 @@ export function initClipper3Routes(io: Server): Router {
           let parseable = false
           let metadataValid = false
           let metadataErrors: string[] = []
+          let exportedNames: string[] = []
 
           if (hasArtifact) {
             const stored = await readImagePoints(chapter.folderPath, img.filename)
@@ -386,10 +392,11 @@ export function initClipper3Routes(io: Server): Router {
             if (parseable && hasMetadata) {
               const metadataText = await readImageMetadata(chapter.folderPath, img.filename)
               if (metadataText != null) {
+                exportedNames = expectedExportedFilenames(seriesSlug(chapter.series.title), img.filename, crops)
                 const validation = validateMetadata(
                   metadataText,
                   crops.map(c => c.id),
-                  expectedExportedFilenames(seriesSlug(chapter.series.title), img.filename, crops),
+                  exportedNames,
                   seriesSlug(chapter.series.title)
                 )
                 metadataValid = validation.isValid
@@ -397,6 +404,12 @@ export function initClipper3Routes(io: Server): Router {
               }
             }
           }
+
+          // Both halves required: crops say where to cut, metadata describes
+          // the result, and an image is only finished once it has both AND
+          // the metadata actually still matches those crops.
+          const status: 'done' | 'pending' = parseable && hasMetadata && metadataValid ? 'done' : 'pending'
+          if (status === 'done') expectedOutputs.push(...exportedNames)
 
           return {
             filename: img.filename,
@@ -410,10 +423,7 @@ export function initClipper3Routes(io: Server): Router {
             // this whole check exists to surface.
             metadataErrors,
             cropCount,
-            // Both halves required: crops say where to cut, metadata describes
-            // the result, and an image is only finished once it has both AND
-            // the metadata actually still matches those crops.
-            status: parseable && hasMetadata && metadataValid ? 'done' : 'pending'
+            status
           }
         })
       )
@@ -424,7 +434,13 @@ export function initClipper3Routes(io: Server): Router {
         title: chapter.title,
         seriesId: chapter.seriesId,
         seriesTitle: chapter.series.title,
-        images
+        images,
+        cropOutputs: await chapterCropOutputs(
+          chapter.folderPath,
+          expectedOutputs,
+          images.length > 0 && images.every(img => img.status === 'done')
+        ),
+        neighbours: await doneNeighbours(chapter.seriesId, chapter.number)
       })
     } catch (error) {
       console.error('[clipper3] listing images failed:', error)
@@ -782,6 +798,7 @@ export function initClipper3Routes(io: Server): Router {
         const allFiles = []
         let failed = 0
         const warnings: string[] = []
+        const unreadable: string[] = []
 
         try {
           for (let i = 0; i < targets.length; i++) {
@@ -806,11 +823,22 @@ export function initClipper3Routes(io: Server): Router {
             } catch (err) {
               // One unreadable image must not abandon the rest of the chapter.
               failed += target.crops.length
+              unreadable.push(stemOf(target.filename))
               const message = err instanceof Error ? err.message : String(err)
               warnings.push(`${target.filename}: ${message}`)
               console.error(`[clipper3] cutting ${target.filename} failed:`, message)
             }
           }
+
+          // This run's files are now the chapter's crops: anything else in
+          // crops3/ is from older pointers (or pages no longer done) and would
+          // otherwise sit beside the new cut as duplicates.
+          const removed = await removeStaleOutputs(
+            chapter.folderPath,
+            new Set(allFiles.map(f => f.filename)),
+            slug,
+            unreadable
+          )
 
           // The whole chapter has now been cut, so crops3/ is complete and a
           // metadata name with no file behind it can only be a real mismatch.
@@ -828,6 +856,7 @@ export function initClipper3Routes(io: Server): Router {
             chapterId,
             images: targets.length,
             exported: allFiles.length,
+            removed: removed.length,
             failed,
             warnings,
             unresolved,
@@ -889,6 +918,7 @@ export function initClipper3Routes(io: Server): Router {
 
           const totalImages = manifest.images.length
           let attachedImages = 0
+          const expectedOutputs: string[] = []
           for (const img of manifest.images) {
             const stem = stemOf(img.filename)
             if (!pointed.has(stem) || !described.has(stem)) continue
@@ -899,16 +929,18 @@ export function initClipper3Routes(io: Server): Router {
             const crops = extractCrops(stored?.file ?? null)
             if (crops.length === 0) continue
             const metadataText = await readImageMetadata(chapter.folderPath, img.filename)
+            const exportedNames = expectedExportedFilenames(seriesSlug(chapter.series.title), img.filename, crops)
             if (
               metadataText != null &&
               validateMetadata(
                 metadataText,
                 crops.map(c => c.id),
-                expectedExportedFilenames(seriesSlug(chapter.series.title), img.filename, crops),
+                exportedNames,
                 seriesSlug(chapter.series.title)
               ).isValid
             ) {
               attachedImages++
+              expectedOutputs.push(...exportedNames)
             }
           }
 
@@ -917,7 +949,14 @@ export function initClipper3Routes(io: Server): Router {
             totalImages,
             attachedImages,
             fullyAttached: totalImages > 0 && attachedImages === totalImages,
-            chopped: outputs.length > 0
+            chopped: outputs.length > 0,
+            cropComplete: (
+              await chapterCropOutputs(
+                chapter.folderPath,
+                expectedOutputs,
+                totalImages > 0 && attachedImages === totalImages
+              )
+            ).complete
           }
         })
       )

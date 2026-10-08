@@ -28,7 +28,7 @@ vi.mock('../../index.js', () => ({
 }))
 
 Object.assign(process.env, { R2_ACCOUNT_ID: 'a', R2_ACCESS_KEY_ID: 'k', R2_SECRET_ACCESS_KEY: 's', R2_BUCKET: 'b', R2_PREFIX: 'Manhwa' })
-const { getPhoneCrops, requestPhoneUpdate } = await import('../r2Service.js')
+const { getPhoneCrops, parseGeminiUsage, requestPhoneUpdate } = await import('../r2Service.js')
 
 /** A "Refresh from phone" read, which goes to R2. */
 const read = (seriesId?: string, chapterId?: string) => getPhoneCrops(seriesId, chapterId, true)
@@ -184,5 +184,31 @@ describe('getPhoneCrops', () => {
     // Older phone builds send no profiles.
     receipt = { series: {} }
     expect((await read()).profiles).toEqual([])
+  })
+})
+
+describe('parseGeminiUsage', () => {
+  it('reads each profile\'s Gemini requests and limit, dropping malformed parts', () => {
+    expect(parseGeminiUsage({
+      resetsAt: '2026-10-10T07:00:00Z',
+      profiles: [
+        { id: 'Default', name: 'Main', selected: true, today: 12, limit: 15, limitedUntil: null },
+        { id: 'profile-1', name: '', today: 4.7, limit: null, limitedUntil: '2026-10-10T07:00:00Z' },
+        { id: 'profile-2', today: -3, limit: 0, limitedUntil: 'soon' },
+        { name: 'no id', today: 9 }
+      ]
+    })).toEqual({
+      resetsAt: '2026-10-10T07:00:00Z',
+      profiles: [
+        { id: 'Default', name: 'Main', selected: true, today: 12, limit: 15, limitedUntil: null },
+        { id: 'profile-1', name: 'profile-1', selected: false, today: 4, limit: null, limitedUntil: '2026-10-10T07:00:00Z' },
+        { id: 'profile-2', name: 'profile-2', selected: false, today: 0, limit: null, limitedUntil: null }
+      ]
+    })
+  })
+
+  it('is null from phone builds before it was sent', () => {
+    expect(parseGeminiUsage(undefined)).toBeNull()
+    expect(parseGeminiUsage({ profiles: [] })).toBeNull()
   })
 })

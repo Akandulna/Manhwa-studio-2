@@ -2,7 +2,8 @@
  * Sleeper Cells — the Sleeper-Cell phone app at a glance. The top row answers
  * the three questions that matter, in this order: is the phone active, how many
  * ChatGPT image uploads are left, and what the phone is doing right now (Image
- * Clipper's Auto-run, and the Narration and Voiceover libraries' runs). Under
+ * Clipper's Auto-run, and the Narration and Voiceover libraries' runs), then
+ * how much of Gemini's daily limits each profile has used. Under
  * them, Start and Stop for Image Clipper on the phone (through the relay), then
  * today's pace, where every series stands, and the history.
  *
@@ -26,6 +27,7 @@ import {
   PenLine,
   Play,
   Smartphone,
+  Sparkles,
   Square,
   Upload
 } from 'lucide-react'
@@ -46,6 +48,8 @@ import {
   type PhoneOverviewFinish,
   type PhoneOverviewRun,
   type PhoneOverviewWorking,
+  type PhoneGeminiProfile,
+  type PhoneGeminiUsage,
   type RelayStatus
 } from '@/lib/api'
 import { LANGUAGE_LABEL } from '@/lib/narrationLanguage'
@@ -466,7 +470,7 @@ function DoingCard({ overview, running, paused, averageTook, phoneClosed, now }:
     : 'Nothing is running: no clipping, scripts or voiceover.'
 
   return (
-    <AnswerCard icon={Activity} question="What is it doing?" className="md:col-span-2 xl:col-span-1">
+    <AnswerCard icon={Activity} question="What is it doing?">
       <Headline tone={tone} live={going.length > 0 && !phoneClosed} title={title} detail={detail} />
       {phoneClosed && (working.length > 0 || runs.length > 0) && (
         <p className="flex items-center gap-1.5 text-xs text-amber-500">
@@ -492,6 +496,120 @@ function DoingCard({ overview, running, paused, averageTook, phoneClosed, now }:
           ['Usual time per page', averageTook !== null ? `~${formatTook(averageTook)}` : '—']
         ]}
       />
+    </AnswerCard>
+  )
+}
+
+// ─── 4. How much Gemini is left? ────────────────────────────────────────────
+
+function geminiState(profile: PhoneGeminiProfile): { tone: Tone; text: string } {
+  if (profile.limitedUntil) return { tone: 'bad', text: `Limit hit · back ~${clock(profile.limitedUntil)}` }
+  if (profile.limit === null) return { tone: 'good', text: 'limit not seen yet' }
+  const left = Math.max(0, profile.limit - profile.today)
+  return { tone: left === 0 ? 'bad' : left <= profile.limit * 0.2 ? 'warn' : 'good', text: `${left} left` }
+}
+
+function GeminiRow({ profile, inUse }: { profile: PhoneGeminiProfile; inUse: boolean }) {
+  const state = geminiState(profile)
+  const percent = profile.limitedUntil ? 100 : profile.limit ? (profile.today / profile.limit) * 100 : 0
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-2 text-sm">
+        <span className="truncate font-medium">{profile.name}</span>
+        {inUse
+          ? <Badge className="bg-sky-600 px-1.5 py-0 text-[10px] hover:bg-sky-600">in use</Badge>
+          : profile.selected && <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">next up</Badge>}
+        <span className={cn('ml-auto whitespace-nowrap text-xs font-medium tabular-nums', TONE[state.tone].text)}>{state.text}</span>
+      </div>
+      <Bar percent={percent} tone={state.tone === 'good' ? 'primary' : state.tone} />
+      <div className="text-[11px] text-muted-foreground tabular-nums">
+        {profile.today} / {profile.limit ?? '?'} requests today
+      </div>
+    </div>
+  )
+}
+
+/** One Gemini limit summed over the profiles: what's left where the limit is known, and how many are used up. */
+function geminiTotals(usage: PhoneGeminiUsage) {
+  const profiles = usage.profiles
+  const limited = profiles.filter(p => p.limitedUntil).length
+  const known = profiles.filter(p => p.limit !== null || p.limitedUntil)
+  return {
+    today: profiles.reduce((sum, p) => sum + p.today, 0),
+    limited,
+    allLimited: limited === profiles.length,
+    allKnown: known.length === profiles.length,
+    left: known.reduce((sum, p) => sum + (p.limitedUntil || p.limit === null ? 0 : Math.max(0, p.limit - p.today)), 0),
+    capacity: known.reduce((sum, p) => sum + (p.limit ?? 0), 0)
+  }
+}
+
+/** A Gemini limit's section: its totals in a line, then a row per profile. */
+function GeminiSection({ label, usage, inUse }: { label: string; usage: PhoneGeminiUsage; inUse: string | null }) {
+  const totals = geminiTotals(usage)
+  const tone: Tone = totals.allLimited || (totals.allKnown && totals.left === 0) ? 'bad' : totals.limited > 0 ? 'warn' : 'good'
+  return (
+    <div className="space-y-2">
+      <div className="flex items-baseline gap-2 text-sm">
+        <span className="font-medium">{label}</span>
+        <span className={cn('ml-auto whitespace-nowrap text-xs font-medium tabular-nums', TONE[tone].text)}>
+          {totals.allLimited
+            ? 'all at the limit'
+            : totals.allKnown ? `${totals.left} / ${totals.capacity} left` : `${totals.today} used`}
+        </span>
+      </div>
+      {/* With one profile, the run reports no account name: the selected profile is the one in use. */}
+      {usage.profiles.map(p => (
+        <GeminiRow key={p.id} profile={p} inUse={inUse !== null && (inUse === p.name || (inUse === '' && p.selected))} />
+      ))}
+    </div>
+  )
+}
+
+/** Gemini requests per phone profile today, for the voiceover and narration runs, against the daily limit each last ran into. */
+function GeminiLimitCard({ overview, now }: { overview: PhoneOverview | null; now: number }) {
+  const speech = overview?.gemini?.speech?.profiles.length ? overview.gemini.speech : null
+  const narration = overview?.gemini?.narration?.profiles.length ? overview.gemini.narration : null
+  if (!speech && !narration) {
+    return (
+      <AnswerCard icon={Sparkles} question="Gemini limit">
+        <Headline tone="idle" title="No data" detail="The phone hasn’t reported its AI Studio requests yet (older Sleeper-Cell builds don’t)." />
+      </AnswerCard>
+    )
+  }
+  // The profile each run is on: its name, '' when the phone has one profile (and names none), null when not running.
+  const onRun = (kind: PhoneOverviewRun['kind']) => {
+    const run = overview?.runs.find(r => r.kind === kind)
+    return run ? run.account ?? '' : null
+  }
+  const sections = [
+    speech && { label: 'Voiceover · speech', usage: speech, totals: geminiTotals(speech), inUse: onRun('voiceover') },
+    narration && { label: 'Narration · scripts', usage: narration, totals: geminiTotals(narration), inUse: onRun('narration') }
+  ].filter((x): x is NonNullable<typeof x> => !!x)
+  const today = sections.reduce((sum, x) => sum + x.totals.today, 0)
+  const resetsAt = Date.parse((speech ?? narration)!.resetsAt)
+  const used = sections.filter(x => x.totals.allLimited)
+  const unknown = sections.some(x => !x.totals.allKnown)
+
+  const tone: Tone = used.length === sections.length ? 'bad' : used.length || sections.some(x => x.totals.limited) ? 'warn' : 'good'
+  const detail = used.length
+    ? <>{used.map(x => x.label.split(' ·')[0]).join(' and ')} {used.length === 1 ? 'is' : 'are'} at the limit on every profile until the reset ~{clock(resetsAt)}.</>
+    : unknown
+    ? 'A profile’s limit is learned the first time Gemini cuts it off; until then only its count shows.'
+    : 'Every profile can still make requests.'
+
+  return (
+    <AnswerCard icon={Sparkles} question="Gemini limit">
+      <Headline
+        tone={tone}
+        title={<>{today}<span className="text-lg font-semibold text-muted-foreground"> request{today === 1 ? '' : 's'} today</span></>}
+        detail={detail}
+      />
+      {sections.map(x => <GeminiSection key={x.label} label={x.label} usage={x.usage} inUse={x.inUse} />)}
+      <p className="mt-auto border-t pt-3 text-[11px] text-muted-foreground">
+        AI Studio Run taps per profile; each limit is the count it reached before Gemini last stopped it. Speech and scripts are limited apart.
+        Resets at midnight Pacific: ~{clock(resetsAt)} here{resetsAt > now && <>, in {span(resetsAt - now)}</>}.
+      </p>
     </AnswerCard>
   )
 }
@@ -712,8 +830,8 @@ export default function SleeperCells() {
         </Card>
       )}
 
-      {/* The three answers: active? · image limit · doing what? */}
-      <div className="mb-6 grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+      {/* The answers: active? · image limit · doing what? · Gemini limit */}
+      <div className="mb-6 grid gap-6 md:grid-cols-2 2xl:grid-cols-4">
         <PhoneCard relay={relay} overview={overview} running={running + runsActive} paused={paused + runsPaused} now={now} />
         <ImageLimitCard overview={overview} now={now} />
         <DoingCard
@@ -724,6 +842,7 @@ export default function SleeperCells() {
           phoneClosed={phoneClosed}
           now={now}
         />
+        <GeminiLimitCard overview={overview} now={now} />
       </div>
 
       {overview?.configured && <RemoteCard relay={relay} overview={overview} busy={running + paused > 0} now={now} />}

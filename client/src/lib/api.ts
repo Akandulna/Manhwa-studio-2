@@ -1126,6 +1126,17 @@ export interface Clipper3ChapterImages {
   seriesId: string
   seriesTitle: string
   images: Clipper3Image[]
+  /** How crops3/ compares with what the done pages should cut to. */
+  cropOutputs: {
+    /** Every page is done and crops3/ holds exactly the files those pages cut to. */
+    complete: boolean
+    files: number
+    /** Expected files not on disk — cut again to add them. */
+    missing: number
+    /** Files no done page accounts for — the next cut removes them. */
+    extra: number
+  }
+  neighbours: ChapterNeighbours
 }
 
 export interface Clipper3Point {
@@ -1546,6 +1557,8 @@ export interface Clipper3ChapterSummary {
   fullyAttached: boolean
   /** The chapter has been cut — crops3/ has at least one output file. */
   chopped: boolean
+  /** Every page is done and crops3/ holds exactly the files they cut to. */
+  cropComplete: boolean
 }
 
 /** Crop rules document state (Settings → Crop Pointers). */
@@ -2399,6 +2412,26 @@ export interface PhoneUploadProfile {
   limits: PhoneUploadLimit[]
 }
 
+/** One phone profile's Gemini requests in AI Studio today, for one kind of run. */
+export interface PhoneGeminiProfile {
+  id: string
+  name: string
+  selected: boolean
+  /** Requests since the last daily reset. */
+  today: number
+  /** How many requests it got to before its last limit; null until it has hit one. */
+  limit: number | null
+  /** While its speech limit is noted as used up; null otherwise. */
+  limitedUntil: string | null
+}
+
+/** Gemini's limit for one kind of run on the phone's profiles. */
+export interface PhoneGeminiUsage {
+  /** Gemini's next daily reset, midnight Pacific. */
+  resetsAt: string
+  profiles: PhoneGeminiProfile[]
+}
+
 /** How a done page was finished on the phone. */
 export interface PhonePageFinish {
   /** When its JSON files were exported. */
@@ -2499,6 +2532,8 @@ export interface PhoneOverview {
   /** Chapter zips the phone uploaded, newest first. */
   uploads: PhoneOverviewChapterZip[]
   profiles: PhoneUploadProfile[]
+  /** Gemini requests per profile today: the voiceover run's speech and the narration run's scripts; null from builds before each was sent. */
+  gemini: { speech: PhoneGeminiUsage | null; narration: PhoneGeminiUsage | null }
   /** Null from Sleeper-Cell builds before automation. */
   automation: PhoneAutomation | null
 }

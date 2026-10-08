@@ -85,8 +85,16 @@ import { seriesSlug, stemOf, exportedFilenameFor } from '@/lib/clipper3Naming'
 import { formatTook, PhonePageBadge, PhoneWorkingBadge } from '@/components/PhoneSyncBadge'
 import { usePhoneCrops } from '@/hooks/usePhoneCrops'
 import { PhoneRefreshButton } from '@/components/PhoneRefreshButton'
+import ChapterSwitcher from '@/components/ChapterSwitcher'
 
+// Keyed by chapter so Previous/Next remounts the page: its per-file caches are
+// keyed by filename, and filenames repeat from chapter to chapter.
 export default function Clipper3ImageList() {
+  const { id } = useParams<{ id: string }>()
+  return <Clipper3ChapterImageList key={id} />
+}
+
+function Clipper3ChapterImageList() {
   const { id: chapterId } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -291,6 +299,8 @@ export default function Clipper3ImageList() {
     if (event.chapterId !== chapterId) return
 
     setIsCropping(false)
+    // The header's Cropped marker is read from disk with the image list.
+    clipper3Api.getImages(event.chapterId).then(setData).catch(() => { /* the old list stays */ })
 
     if (event.error) {
       toast({ title: 'Crop sections failed', description: event.error, variant: 'destructive' })
@@ -308,6 +318,7 @@ export default function Clipper3ImageList() {
         `${event.exported ?? 0} section${event.exported === 1 ? '' : 's'} from ` +
         `${event.images ?? 0} image${event.images === 1 ? '' : 's'}` +
         `${failed > 0 ? `, ${failed} failed` : ''}.` +
+        (event.removed ? ` Replaced the previous cut (${event.removed} old file${event.removed === 1 ? '' : 's'} removed).` : '') +
         // Named in the toast as well as the banner, so a run left unattended
         // still says something was wrong when the user comes back to it.
         (unresolvedCount > 0
@@ -1261,6 +1272,9 @@ export default function Clipper3ImageList() {
         <span className="text-xs text-muted-foreground ml-auto">
           {doneCount}/{images.length} done
         </span>
+        <CropOutputsBadge outputs={data.cropOutputs} />
+
+        <ChapterSwitcher neighbours={data.neighbours} to={id => `/clipper3/chapter/${id}`} />
 
         <Button
           variant="outline"
@@ -2233,5 +2247,33 @@ export default function Clipper3ImageList() {
         </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+/** Whether the chapter's cut in crops3/ is finished and matches every page. */
+function CropOutputsBadge({ outputs }: { outputs: Clipper3ChapterImages['cropOutputs'] }) {
+  if (outputs.complete) {
+    return (
+      <Badge variant="success" className="flex items-center gap-1 flex-shrink-0" title={`${outputs.files} crops in crops3/`}>
+        <CheckCircle2 className="h-3 w-3" />
+        Cropped
+      </Badge>
+    )
+  }
+  if (outputs.files === 0) return null
+
+  const reasons = [
+    outputs.missing > 0 && `${outputs.missing} crop${outputs.missing === 1 ? '' : 's'} not cut yet`,
+    outputs.extra > 0 && `${outputs.extra} old file${outputs.extra === 1 ? '' : 's'} the next cut will remove`
+  ].filter(Boolean)
+  return (
+    <Badge
+      variant="outline"
+      className="flex items-center gap-1 flex-shrink-0 text-amber-500 border-amber-500/50"
+      title={reasons.length > 0 ? `Crop Sections again: ${reasons.join(', ')}.` : 'Some pages are not done yet.'}
+    >
+      <Scissors className="h-3 w-3" />
+      Crops out of date
+    </Badge>
   )
 }

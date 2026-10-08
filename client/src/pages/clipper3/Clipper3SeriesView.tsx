@@ -116,11 +116,23 @@ function R2FetchSummary({ result }: { result: Clipper3PhoneCropsFetch }) {
 /** Whether the chapter's crop/cut step has been run and produced output. */
 function ChoppedStatusBadge({ summary }: { summary: Clipper3ChapterSummary | undefined }) {
   if (!summary) return null
+  if (summary.cropComplete) {
+    return (
+      <Badge variant="success" className="flex items-center gap-1" title="Every page is cut and crops3/ matches them">
+        <Scissors className="h-3 w-3" />
+        Cropped
+      </Badge>
+    )
+  }
   if (summary.chopped) {
     return (
-      <Badge variant="success" className="flex items-center gap-1">
+      <Badge
+        variant="outline"
+        className="flex items-center gap-1 text-amber-500 border-amber-500/50"
+        title="crops3/ no longer matches the pages — run Crop Sections again"
+      >
         <Scissors className="h-3 w-3" />
-        Chopped
+        Crops out of date
       </Badge>
     )
   }

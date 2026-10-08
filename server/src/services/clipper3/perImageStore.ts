@@ -621,3 +621,65 @@ export async function listOutputs(folderPath: string): Promise<{ filename: strin
   }
   return files
 }
+
+/** How the chapter's crops3/ compares with what its pages say should be cut. */
+export interface ChapterCropOutputs {
+  /** Every page is done and crops3/ holds exactly the files those pages cut to. */
+  complete: boolean
+  files: number
+  /** Expected files not on disk — a page done after the last cut, or a failed crop. */
+  missing: number
+  /** Files no done page accounts for — left over from older pointers. */
+  extra: number
+}
+
+/**
+ * `expected` is every exported name of the chapter's done pages. Read from disk
+ * each time rather than remembered from the last run, so re-pasting a page
+ * after cropping shows the chapter as needing another cut.
+ */
+export async function chapterCropOutputs(
+  folderPath: string,
+  expected: string[],
+  allPagesDone: boolean
+): Promise<ChapterCropOutputs> {
+  const onDisk = new Set((await listOutputs(folderPath)).map(f => f.filename))
+  const wanted = new Set(expected)
+  const missing = [...wanted].filter(name => !onDisk.has(name)).length
+  const extra = [...onDisk].filter(name => !wanted.has(name)).length
+  return {
+    complete: allPagesDone && wanted.size > 0 && missing === 0 && extra === 0,
+    files: onDisk.size,
+    missing,
+    extra
+  }
+}
+
+/**
+ * After a cut: delete every output the run did not write, so cropping again
+ * replaces the chapter's crops instead of piling new names beside old ones
+ * (a renamed reason or a dropped crop changes the filename). `keepStems` are
+ * pages whose cut failed outright — their previous files stay rather than
+ * leaving the page with nothing.
+ */
+export async function removeStaleOutputs(
+  folderPath: string,
+  written: Set<string>,
+  slug: string,
+  keepStems: string[]
+): Promise<string[]> {
+  const dir = getOutputDir(folderPath)
+  const keepPrefixes = keepStems.map(stem => `${slug}_${stem}_`)
+  const removed: string[] = []
+  for (const { filename } of await listOutputs(folderPath)) {
+    if (written.has(filename)) continue
+    if (keepPrefixes.some(prefix => filename.startsWith(prefix))) continue
+    try {
+      await fs.unlink(path.join(dir, filename))
+      removed.push(filename)
+    } catch {
+      // Already gone — nothing to replace.
+    }
+  }
+  return removed
+}

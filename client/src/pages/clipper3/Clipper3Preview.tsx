@@ -24,6 +24,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { ArrowLeft, Loader2, AlertTriangle, ZoomIn, ZoomOut, Pencil, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { clipper3Api, type Clipper3ChapterImages, type Clipper3ImageCropFile } from '@/lib/api'
 import { CropPointerEditor, type CropMetadataEntry } from '@/components/clipper3/CropPointerEditor'
+import ChapterSwitcher from '@/components/ChapterSwitcher'
 
 /**
  * Reads one image's metadata document into a crop-id -> entry map for the rail.
@@ -55,7 +56,13 @@ function parseMetadataByCropId(content: string): Record<string, CropMetadataEntr
   return out
 }
 
+// Keyed by chapter so Previous/Next remounts the page with fresh per-file state.
 export default function Clipper3Preview() {
+  const { id } = useParams<{ id: string }>()
+  return <Clipper3ChapterPreview key={id} />
+}
+
+function Clipper3ChapterPreview() {
   const { id: chapterId } = useParams<{ id: string }>()
   const navigate = useNavigate()
 
@@ -244,6 +251,14 @@ export default function Clipper3Preview() {
             </Button>
           </div>
         )}
+
+        <div className={editingFile ? 'ml-auto' : undefined}>
+          <ChapterSwitcher
+            neighbours={data.neighbours}
+            to={id => `/clipper3/chapter/${id}/preview`}
+            canLeave={() => !editingFile || confirm(`Leave this chapter? Unsaved pointer edits on ${editingFile} will be lost.`)}
+          />
+        </div>
       </div>
 
       <div className="flex flex-1 min-h-0">

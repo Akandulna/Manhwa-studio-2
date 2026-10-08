@@ -571,6 +571,12 @@ export function parseScriptRuns(raw: unknown, now = Date.now()): PhoneScriptRun[
  * (`limits: [{ at, until, used, countedSince, complete, flagged, reason }]`):
  * `used` is how many images it took, counted from the limit before, and
  * `counting: { since, images }` is the count so far towards the next one.
+ *
+ * `speech` and `narration` (AiStudioLedger.kt) are each profile's Gemini
+ * requests in AI Studio since the daily reset (`resetsAt`, midnight Pacific),
+ * for the voiceover and narration runs, which have separate limits:
+ * `{ resetsAt, profiles: [{ id, name, selected, today, limit, limitedUntil }] }`.
+ * `limit` is the count the profile got to before its last limit, if known.
  */
 const CROPS_RECEIPT_NAME = '_sleeper-cell-crops.json'
 
@@ -633,6 +639,26 @@ export interface PhoneUploadProfile {
   limits: PhoneUploadLimit[]
 }
 
+/** One phone profile's Gemini requests in AI Studio today, for one kind of run. */
+export interface PhoneGeminiProfile {
+  id: string
+  name: string
+  selected: boolean
+  /** Requests since the last daily reset. */
+  today: number
+  /** How many requests it got to before its last limit; null until it has hit one. */
+  limit: number | null
+  /** While its speech limit is noted as used up; null otherwise. */
+  limitedUntil: string | null
+}
+
+/** Gemini's limit for one kind of run on the phone's profiles. */
+export interface PhoneGeminiUsage {
+  /** Gemini's next daily reset, midnight Pacific. */
+  resetsAt: string
+  profiles: PhoneGeminiProfile[]
+}
+
 export interface PhoneCropsStatus {
   configured: boolean
   /** When the phone last wrote the receipt; null if it never has. */
@@ -661,6 +687,8 @@ interface CropsReceipt {
   updatedAt?: string
   answers?: string
   profiles?: unknown
+  speech?: unknown
+  narration?: unknown
   automation?: unknown
   series?: Record<string, {
     total?: number
@@ -729,6 +757,24 @@ export function parseUploadProfiles(raw: unknown): PhoneUploadProfile[] {
     })
   }
   return profiles
+}
+
+/** The receipt's `speech` or `narration`; null from Sleeper-Cell builds before it was sent. */
+export function parseGeminiUsage(raw: unknown): PhoneGeminiUsage | null {
+  if (!isObject(raw) || !isTime(raw.resetsAt) || !Array.isArray(raw.profiles)) return null
+  const profiles: PhoneGeminiProfile[] = []
+  for (const entry of raw.profiles) {
+    if (!isObject(entry) || typeof entry.id !== 'string' || !entry.id) continue
+    profiles.push({
+      id: entry.id,
+      name: typeof entry.name === 'string' && entry.name ? entry.name : entry.id,
+      selected: entry.selected === true,
+      today: count(entry.today),
+      limit: count(entry.limit) || null,
+      limitedUntil: isTime(entry.limitedUntil) ? entry.limitedUntil : null
+    })
+  }
+  return { resetsAt: raw.resetsAt, profiles }
 }
 
 /**
@@ -900,6 +946,8 @@ export interface PhoneOverview {
   /** Chapter zips the phone uploaded, newest first. */
   uploads: PhoneOverviewChapterZip[]
   profiles: PhoneUploadProfile[]
+  /** Gemini requests per profile today: the voiceover run's speech and the narration run's scripts; null from builds before each was sent. */
+  gemini: { speech: PhoneGeminiUsage | null; narration: PhoneGeminiUsage | null }
   /** Null from Sleeper-Cell builds before automation. */
   automation: PhoneAutomation | null
 }
@@ -918,7 +966,7 @@ export async function getPhoneOverview(sync: PhoneSyncStatus | null, fresh = fal
   const relayedCrops = relayReceipt<CropsReceipt>('crops')
   const empty: PhoneOverview = {
     configured: false, device: null, reportedAt: null, reported: { sync: null, scripts: null, crops: null },
-    answers: null, working: [], runs: [], series: [], recent: [], recentCapped: false, uploads: [], profiles: [], automation: null
+    answers: null, working: [], runs: [], series: [], recent: [], recentCapped: false, uploads: [], profiles: [], gemini: { speech: null, narration: null }, automation: null
   }
   if (!config && !relayedCrops) return empty
 
@@ -946,6 +994,7 @@ export async function getPhoneOverview(sync: PhoneSyncStatus | null, fresh = fal
   const overview: PhoneOverview = { ...empty, configured: true }
   overview.answers = crops.answers ?? null
   overview.profiles = parseUploadProfiles(crops.profiles)
+  overview.gemini = { speech: parseGeminiUsage(crops.speech), narration: parseGeminiUsage(crops.narration) }
   overview.automation = parseAutomation(crops.automation, folder => byFolder.get(folder) ?? null)
   overview.reported = { sync: sync?.reportedAt ?? null, scripts: scripts?.reportedAt ?? null, crops: crops.updatedAt ?? null }
   overview.reportedAt = Object.values(overview.reported)
