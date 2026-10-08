@@ -28,7 +28,9 @@ const HINGLISH_RULES_DEFAULT = `LANGUAGE: HINGLISH (Hindi + English mix, written
 - Keep it natural, not forced: roughly 25-40% English words, never whole English sentences. Hindi words that are already common and simple (लेकिन, फिर, अचानक, सब, डर, गुस्सा, ताकत, दुश्मन) stay Hindi
 - Write EVERYTHING in Devanagari script, including the English words, spelled the way they are spoken: "उसका लेवल अचानक बहुत हाई हो गया।", "सिस्टम ने उसे एक नया क्वेस्ट दिया।" Never use Roman/Latin letters - the voiceover and alignment can only read Devanagari
 - Character names, places and techniques also go in Devanagari as they are pronounced; do not add English translations or Roman-script words in brackets
-- Narration voice: an engaging storyteller talking to the viewer, like explaining the story to a friend - but keep the calm, measured tone of the English script (no exaggerated hype, no stage directions like [excited] or *sighs*)
+- Narration voice: an engaging storyteller talking to the viewer, like explaining the story to a friend - calm and measured with a dry wit (no exaggerated hype, no stage directions like [excited] or *sighs*)
+- Use Hindi muhavare and desi comparisons where they fit the moment, the way a Hindi storyteller naturally would: "आ बैल मुझे मार", "ऊंट के मुंह में जीरा", "उल्टा चोर कोतवाल को डांटे", "अपने पैरों पर कुल्हाड़ी मारना", "नाच न जाने आंगन टेढ़ा", "जले पर नमक छिड़कना", "दाल में कुछ काला है". About one every few paragraphs, never forced, never the same one twice in a script
+- Drop in a short sarcastic narrator comment here and there - a dry one-line aside about a character's bad decision, a villain's overconfidence or an obvious trap: "वाह, क्या ज़बरदस्त प्लान था।", "और हमारे हीरो साहब को लगा कि सब ठीक है।", "जैसे ये पहली बार हो रहा हो।" About one every few paragraphs, as an extra sentence beside the story, never replacing it. No sarcasm in sad, emotional or death scenes, and it must never change what actually happened
 - End sentences with the Hindi full stop (।)`
 
 // Extended settings type for Module 2 & 3
