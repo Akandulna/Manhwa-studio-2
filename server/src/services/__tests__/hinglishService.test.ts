@@ -53,7 +53,7 @@ vi.mock('../ai/index.js', () => ({
 }))
 
 const { HinglishConversionService } = await import('../hinglishService.js')
-const { buildFollowUp, sourceSha256 } = await import('../hinglishConvert.js')
+const { buildFollowUp, buildWritePrompt, sourceSha256 } = await import('../hinglishConvert.js')
 
 const ENGLISH = 'Jin walks into the gate and slowly looks around the dark hall.\n\nThe boss wakes up.'
 const words = (n: number) => Array.from({ length: n }, () => 'शब्द').join(' ')
@@ -74,13 +74,19 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true })
 })
 
+const NOTES = '===SCENES===\n[SCENE 1: P1-P2]\n- जिन गेट में जाता है, बॉस जागता है'
+
 describe('HinglishConversionService.convertChapter', () => {
-  it('saves a reply that passes, with closing, summary and the English source hash', async () => {
-    replies = [`===SCRIPT===\n[P1] ${words(12)}\n\n[P2] बॉस जाग गया।\n\n===SUMMARY===\nअब तक की कहानी।`]
+  it('asks for scene notes, then the narration in the same conversation, and saves a reply that passes', async () => {
+    replies = [NOTES, `===SCRIPT===\n[SCENE 1: P1-P2]\n${words(12)}\n\nबॉस जाग गया।\n\n===SUMMARY===\nअब तक की कहानी।`]
     const result = await new HinglishConversionService(io).convertChapter('c1')
     expect(result).toEqual({ success: true, state: 'done', issues: [] })
-    expect(calls).toHaveLength(1)
+    expect(calls).toHaveLength(2)
+    expect(calls[0]).toHaveLength(1)
     expect(calls[0][0].text).toContain('ENGLISH SCRIPT (2 paragraphs):\n[P1] Jin walks')
+    expect(calls[1].map(t => t.role)).toEqual(['user', 'model', 'user'])
+    expect(calls[1][1].text).toBe(NOTES)
+    expect(calls[1][2].text).toBe(buildWritePrompt(2, true))
 
     const saved = await fs.readFile(path.join(root, 'Solo Hero/Chapter 003/script.hi.md'), 'utf-8')
     expect(saved).toBe(`${words(12)}\n\nबॉस जाग गया।`)
@@ -97,28 +103,35 @@ describe('HinglishConversionService.convertChapter', () => {
   })
 
   it('retries once in the same conversation, then saves for review when it still fails', async () => {
-    const first = `===SCRIPT===\n[P1] ${words(3)}\n===SUMMARY===\nस।`
-    replies = [first, `===SCRIPT===\n[P1] ${words(12)}\n===SUMMARY===\nस।`]
+    const first = `===SCRIPT===\n[SCENE 1: P1]\n${words(3)}\n===SUMMARY===\nस।`
+    replies = [NOTES, first, `===SCRIPT===\n[SCENE 1: P1]\n${words(12)}\n===SUMMARY===\nस।`]
     const result = await new HinglishConversionService(io).convertChapter('c1')
 
     const firstIssues = ['Missing paragraphs: P2', 'Too short: P1 (3 words, the English has 12)', 'Too short overall: 3 words, it needs at least 14 (the English has 16)']
-    expect(calls).toHaveLength(2)
-    expect(calls[1].map(t => t.role)).toEqual(['user', 'model', 'user'])
-    expect(calls[1][1].text).toBe(first)
-    expect(calls[1][2].text).toBe(buildFollowUp(firstIssues, 2))
+    expect(calls).toHaveLength(3)
+    expect(calls[2].map(t => t.role)).toEqual(['user', 'model', 'user', 'model', 'user'])
+    expect(calls[2][3].text).toBe(first)
+    expect(calls[2][4].text).toBe(buildFollowUp(firstIssues, 2, true))
 
     const secondIssues = ['Missing paragraphs: P2', 'Too short overall: 12 words, it needs at least 14 (the English has 16)']
     expect(result).toEqual({ success: true, state: 'review', issues: secondIssues })
     expect(hindiRow).toMatchObject({ status: 'done', review: JSON.stringify(secondIssues), closingParagraph: words(12) })
   })
 
-  it('fails without touching an earlier Hindi script when no reply has paragraphs', async () => {
+  it('fails without touching an earlier Hindi script when no reply has scenes', async () => {
     hindiRow = { language: 'hi', status: 'done', scriptPath: '/old/script.hi.md', sourceSha256: 'old' }
-    replies = ['Sorry, I cannot help with that.', 'Still no.']
+    replies = [NOTES, 'Sorry, I cannot help with that.', 'Still no.']
     const result = await new HinglishConversionService(io).convertChapter('c1')
-    expect(result).toEqual({ success: false, error: 'The Hinglish reply had no [P1]..[P2] paragraphs to save' })
+    expect(result).toEqual({ success: false, error: 'The Hinglish reply had no [SCENE n: Px-Py] scenes to save' })
     expect(hindiRow).toMatchObject({ status: 'done', scriptPath: '/old/script.hi.md', sourceSha256: 'old' })
-    expect(hindiRow.error).toMatch(/no \[P1\]/)
+    expect(hindiRow.error).toMatch(/no \[SCENE/)
     await expect(fs.access(path.join(root, 'Solo Hero/Chapter 003/script.hi.md'))).rejects.toThrow()
+  })
+
+  it('stops at step 1 when the scene notes come back empty', async () => {
+    replies = ['  ']
+    const result = await new HinglishConversionService(io).convertChapter('c1')
+    expect(result).toEqual({ success: false, error: 'The scene notes reply (step 1) was empty' })
+    expect(calls).toHaveLength(1)
   })
 })

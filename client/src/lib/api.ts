@@ -473,9 +473,9 @@ export const narrationApi = {
       method: 'POST'
     }),
   
-  // Hinglish: converted from the English script (API mode queues, manual mode copies the prompt)
+  // Hinglish: retold from the English script (API mode queues, manual mode copies step 1 and step 2)
   getHinglishPrompt: (chapterId: string) =>
-    fetchApi<{ prompt: string; paragraphs: number; sourceSha256: string }>(`/narration/chapters/${chapterId}/hinglish-prompt`),
+    fetchApi<{ prompt: string; writePrompt: string; paragraphs: number; sourceSha256: string }>(`/narration/chapters/${chapterId}/hinglish-prompt`),
   
   /** Runs the check on a pasted reply: saved when it passes, or with `force` (marked for review). */
   submitHinglish: (chapterId: string, response: string, force = false) =>

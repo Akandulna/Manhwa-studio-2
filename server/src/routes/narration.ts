@@ -19,6 +19,7 @@ import {
   assembleConversion,
   buildConvertPrompt,
   buildFollowUp,
+  buildWritePrompt,
   checkConversion,
   englishParagraphs,
   hasUsableScript,
@@ -673,8 +674,8 @@ router.post('/chapters/:id/generate-outro', async (req: Request, res: Response) 
 // ============ Hinglish (converted from English) ============
 
 /**
- * The convert prompt for a chapter's saved English script, for pasting into a
- * chat by hand (the English tab's "Copy Hinglish prompt").
+ * The two convert prompts for a chapter's saved English script, for pasting
+ * into one chat by hand (the English tab's Hinglish step 1 and step 2).
  */
 router.get('/chapters/:id/hinglish-prompt', async (req: Request, res: Response) => {
   try {
@@ -685,9 +686,11 @@ router.get('/chapters/:id/hinglish-prompt', async (req: Request, res: Response) 
     if (!source) {
       return res.status(400).json({ error: 'Save the English script first; Hindi is converted from it' })
     }
+    const paragraphs = englishParagraphs(source.text).length
     res.json({
       prompt: buildConvertPrompt(await getHinglishRules(), source.text, source.summary),
-      paragraphs: englishParagraphs(source.text).length,
+      writePrompt: buildWritePrompt(paragraphs, !!source.summary),
+      paragraphs,
       sourceSha256: source.sha256
     })
   } catch (error) {
@@ -719,15 +722,15 @@ router.post('/chapters/:id/hinglish-submit', async (req: Request, res: Response)
     const parsed = parseConversionReply(response)
     const issues = checkConversion(paragraphs, source.summary, parsed)
     if (issues.length > 0 && !force) {
-      return res.json({ saved: false, issues, followUp: buildFollowUp(issues, paragraphs.length) })
+      return res.json({ saved: false, issues, followUp: buildFollowUp(issues, paragraphs.length, !!source.summary) })
     }
     if (!hasUsableScript(parsed)) {
       return res.status(400).json({
-        error: `Nothing to save: the reply has no ===SCRIPT=== section with [P1]..[P${paragraphs.length}] paragraphs`
+        error: 'Nothing to save: the reply has no ===SCRIPT=== section with [SCENE n: Px-Py] scenes'
       })
     }
     
-    await saveHinglishScript(req.params.id, assembleConversion(parsed, paragraphs.length), {
+    await saveHinglishScript(req.params.id, assembleConversion(parsed), {
       sourceSha256: source.sha256,
       issues,
       mode: 'manual'
@@ -1021,7 +1024,7 @@ router.post('/ai/models', async (req: Request, res: Response) => {
 
 const HINDI_FROM_ENGLISH =
   'Hindi scripts are converted from the English script, not written from the images. ' +
-  'Use Convert to Hinglish or Copy Hinglish prompt on the English tab.'
+  'Use Convert to Hinglish, or the Hinglish step 1 and step 2 prompts on the English tab.'
 
 async function getImageFileList(folderPath: string): Promise<string[]> {
   try {

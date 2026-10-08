@@ -31,7 +31,25 @@ const HINGLISH_RULES_DEFAULT = `LANGUAGE: HINGLISH (Hindi + English mix, written
 - Narration voice: an engaging storyteller talking to the viewer, like explaining the story to a friend - calm and measured with a dry wit (no exaggerated hype, no stage directions like [excited] or *sighs*)
 - Use Hindi muhavare and desi comparisons where they fit the moment, the way a Hindi storyteller naturally would: "आ बैल मुझे मार", "ऊंट के मुंह में जीरा", "उल्टा चोर कोतवाल को डांटे", "अपने पैरों पर कुल्हाड़ी मारना", "नाच न जाने आंगन टेढ़ा", "जले पर नमक छिड़कना", "दाल में कुछ काला है". About one every few paragraphs, never forced, never the same one twice in a script
 - Drop in a short sarcastic narrator comment here and there - a dry one-line aside about a character's bad decision, a villain's overconfidence or an obvious trap: "वाह, क्या ज़बरदस्त प्लान था।", "और हमारे हीरो साहब को लगा कि सब ठीक है।", "जैसे ये पहली बार हो रहा हो।" About one every few paragraphs, as an extra sentence beside the story, never replacing it. No sarcasm in sad, emotional or death scenes, and it must never change what actually happened
-- End sentences with the Hindi full stop (।)`
+- End sentences with the Hindi full stop (।)
+
+SPOKEN HINDI, NOT TRANSLATED HINDI
+- Tell it the way you would tell this story to a friend out loud, not the way a translator writes. Never keep an English sentence's shape and just swap in Hindi words
+- Use spoken forms: वो, ये, उसे, अगर, असल में - not वह, यह, यदि, वास्तव में, अतः, किंतु, परंतु, मृत्यु
+- Link sentences with the connectors people use while talking - लेकिन, और, तो, पर, अब, फिर, यानी, बस, तभी, उधर - where a speaker naturally would, not on every line
+- Turn English "only when", "if", "which" and "because" clauses into the way Hindi speakers say it: "उसे ... करना पड़ेगा", "... के लिए", "जैसे ही", or two short sentences
+- Put the twist or the important part at the end of the sentence, where the Hindi verb lands
+- Tell the action in the present tense, like recap channels do ("वो दरवाज़ा खोलता है", "तभी उसे समझ आता है"), and backstory in the past tense
+- Prefer short, punchy sentences to long ones strung together with commas
+Examples (✗ translated, ✓ spoken):
+✗ ये स्किल सिर्फ़ तभी ऐक्टिवेट होगी, जब वह मर जाएगा।
+✓ लेकिन ये स्किल ऐक्टिवेट करने के लिए उसे मरना पड़ेगा।
+✗ यदि वह यह क्वेस्ट पूरा नहीं करता है, तो उसकी मृत्यु हो जाएगी।
+✓ और अगर ये क्वेस्ट पूरा नहीं हुआ, तो सीधा मौत।
+✗ उसे यह एहसास हुआ कि वह अकेला नहीं था।
+✓ तभी उसे समझ आता है कि वो अकेला नहीं है।
+✗ वह आदमी, जिससे वह पहले मिला था, वास्तव में गिल्ड का मास्टर था।
+✓ और जिस आदमी से वो पहले मिला था? वो असल में गिल्ड मास्टर निकला।`
 
 // Extended settings type for Module 2 & 3
 interface ExtendedSettings extends SettingsType {

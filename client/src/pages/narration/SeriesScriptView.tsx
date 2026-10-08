@@ -331,7 +331,7 @@ export default function SeriesScriptView() {
     if (!aiStatus?.configured) {
       toast({
         title: 'AI Not Configured',
-        description: 'Set GEMINI_API_KEY in .env, or use Copy Hinglish prompt in each chapter\'s Manual mode',
+        description: 'Set GEMINI_API_KEY in .env, or use the Hinglish step 1 and step 2 prompts in each chapter\'s Manual mode',
         variant: 'destructive'
       })
       return

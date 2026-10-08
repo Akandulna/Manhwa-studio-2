@@ -7,7 +7,7 @@
  * Scripts are generated on the English tab only. The Hindi tab edits the
  * chapter's Hinglish script, which is converted from the English one: in API
  * mode by itself once the English script is saved (or with "Convert to
- * Hinglish"), in Manual mode with "Copy Hinglish prompt" and a pasted reply
+ * Hinglish"), in Manual mode with the step 1 and step 2 prompts and a pasted reply
  * that is checked before it is saved.
  */
 
@@ -93,7 +93,7 @@ export default function ScriptEditor() {
   const [hinglishReply, setHinglishReply] = useState('')
   const [hinglishIssues, setHinglishIssues] = useState<{ issues: string[]; followUp: string } | null>(null)
   const [submittingHinglish, setSubmittingHinglish] = useState(false)
-  const [copiedHinglish, setCopiedHinglish] = useState<'prompt' | 'fix' | null>(null)
+  const [copiedHinglish, setCopiedHinglish] = useState<'prompt' | 'write' | 'fix' | null>(null)
 
   const manualStepsRef = useRef<HTMLDivElement>(null)
 
@@ -391,17 +391,23 @@ export default function ScriptEditor() {
     }
   }
 
-  const copyText = async (text: string, which: 'prompt' | 'fix') => {
+  const copyText = async (text: string, which: 'prompt' | 'write' | 'fix') => {
     await navigator.clipboard.writeText(text)
     setCopiedHinglish(which)
     setTimeout(() => setCopiedHinglish(null), 2000)
-    toast({ title: 'Copied!', description: which === 'prompt' ? 'Hinglish prompt copied' : 'Fix prompt copied' })
+    const description = {
+      prompt: 'Step 1 copied - paste it into a new chat',
+      write: 'Step 2 copied - paste it into the same chat',
+      fix: 'Fix prompt copied'
+    }[which]
+    toast({ title: 'Copied!', description })
   }
 
-  const handleCopyHinglishPrompt = async () => {
+  /** Step 1 (scene notes) opens the chat; step 2 (write) follows in the same chat. */
+  const handleCopyHinglishPrompt = async (step: 'prompt' | 'write') => {
     try {
-      const { prompt } = await narrationApi.getHinglishPrompt(id!)
-      await copyText(prompt, 'prompt')
+      const prompts = await narrationApi.getHinglishPrompt(id!)
+      await copyText(step === 'prompt' ? prompts.prompt : prompts.writePrompt, step)
     } catch (error) {
       toast({
         title: 'Error',
@@ -811,15 +817,20 @@ export default function ScriptEditor() {
                   <CardHeader className="pb-3">
                     <CardTitle className="text-lg">Step 3: Hinglish</CardTitle>
                     <CardDescription>
-                      Copy the Hinglish prompt (it holds the saved English script) into your AI chat, then paste its
-                      reply here. It is checked before it is saved to the Hindi tab.
+                      Two steps in one AI chat: step 1 (it holds the saved English script) gets scene notes, step 2
+                      gets the narration written from them in its own words. Paste the step 2 reply here; it is checked
+                      before it is saved to the Hindi tab.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="flex flex-col gap-3">
                     <div className="flex flex-wrap items-center gap-3">
-                      <Button variant="outline" onClick={handleCopyHinglishPrompt} disabled={hasChanges}>
+                      <Button variant="outline" onClick={() => handleCopyHinglishPrompt('prompt')} disabled={hasChanges}>
                         {copiedHinglish === 'prompt' ? <Check className="h-4 w-4 mr-2" /> : <Copy className="h-4 w-4 mr-2" />}
-                        Copy Hinglish prompt
+                        Copy step 1 (scene notes)
+                      </Button>
+                      <Button variant="outline" onClick={() => handleCopyHinglishPrompt('write')} disabled={hasChanges}>
+                        {copiedHinglish === 'write' ? <Check className="h-4 w-4 mr-2" /> : <Copy className="h-4 w-4 mr-2" />}
+                        Copy step 2 (write)
                       </Button>
                       <span className="text-sm text-muted-foreground">
                         {hasChanges ? 'Save the English script first' : `Hindi: ${hinglishLabel[hinglish.state]}`}
@@ -831,7 +842,7 @@ export default function ScriptEditor() {
                         setHinglishReply(e.target.value)
                         setHinglishIssues(null)
                       }}
-                      placeholder="Paste the Hinglish reply here (===SCRIPT=== with [P1], [P2], ... then ===SUMMARY===)..."
+                      placeholder="Paste the step 2 reply here (===SCRIPT=== with [SCENE 1: P1-P4], [SCENE 2: ...] ... then ===SUMMARY===)..."
                       className="min-h-[160px] font-mono text-sm"
                       lang="hi"
                     />
@@ -915,7 +926,7 @@ export default function ScriptEditor() {
                   {hinglish.state === 'pending' || hinglish.state === 'failed' ? 'Convert to Hinglish' : 'Convert again'}
                 </Button>
                 <p className="text-xs text-muted-foreground">
-                  New English scripts convert by themselves. Manual mode has Copy Hinglish prompt.
+                  New English scripts convert by themselves. Manual mode has the Hinglish step 1 and step 2 prompts.
                 </p>
               </CardContent>
             </Card>

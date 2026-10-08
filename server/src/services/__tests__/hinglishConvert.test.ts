@@ -5,6 +5,7 @@ import {
   assembleConversion,
   buildConvertPrompt,
   buildFollowUp,
+  buildWritePrompt,
   checkConversion,
   countWords,
   decodeReview,
@@ -38,89 +39,93 @@ describe('sourceSha256', () => {
 })
 
 describe('buildConvertPrompt', () => {
-  it('numbers the paragraphs and asks for the summary when there is one', () => {
+  it('asks for scene notes on the numbered paragraphs, with the summary when there is one', () => {
     const prompt = buildConvertPrompt('RULES', 'First line.\n\nSecond line.', '  The story so far.  ')
-    expect(prompt).toBe(`RULES
-
----
-
-TASK: Convert the English manhwa recap narration script below into Hinglish, following the language rules above.
-
-This is a full adaptation, not a summary:
-- The English script is split into numbered paragraphs, [P1] to [P2]. Write exactly one Hinglish paragraph for each, in the same order, starting with the same mark: [P1], [P2], ... [P2]
-- Keep every event, action, description, line of dialogue, name, number and inner thought of each paragraph. Do not merge, skip, shorten or summarize paragraphs, and do not add new events
-- Each Hinglish paragraph should be about as long as its English paragraph or longer - Hinglish usually needs more words than English, never fewer
-- Keep dialogue as dialogue, in the same tone
-- Also convert the story summary into the same Hinglish style, keeping all of its details
-
-Format your response EXACTLY like this:
-===SCRIPT===
-[P1] <Hinglish paragraph 1>
-
-[P2] <Hinglish paragraph 2>
-
-...
-
-===SUMMARY===
-<Hinglish story summary>
-
-ENGLISH SCRIPT (2 paragraphs):
+    expect(prompt.startsWith('RULES\n\n---\n\nTASK: Retell the English manhwa recap narration script below in Hinglish')).toBe(true)
+    expect(prompt).toContain('STEP 1 - SCENE NOTES (do not write the narration yet):')
+    expect(prompt).toContain('Every paragraph from [P1] to [P2] belongs to exactly one scene')
+    expect(prompt).toContain('===SCENES===\n[SCENE 1: P1-P4]\n- <note>')
+    expect(prompt).not.toContain('===SCRIPT===')
+    expect(prompt.endsWith(`ENGLISH SCRIPT (2 paragraphs):
 [P1] First line.
 
 [P2] Second line.
 
 ENGLISH STORY SUMMARY:
-The story so far.`)
+The story so far.`)).toBe(true)
   })
 
-  it('leaves every summary part out when the English summary is empty', () => {
+  it('leaves the summary out when the English summary is empty', () => {
     const prompt = buildConvertPrompt(DEFAULT_HINGLISH_RULES, 'Only.', '   ')
     expect(prompt.startsWith(DEFAULT_HINGLISH_RULES + '\n\n---\n\n')).toBe(true)
     expect(prompt).not.toContain('SUMMARY')
-    expect(prompt).not.toContain('story summary')
-    expect(prompt).toContain('- Keep dialogue as dialogue, in the same tone\n\nFormat your response EXACTLY like this:')
     expect(prompt.endsWith('...\n\nENGLISH SCRIPT (1 paragraphs):\n[P1] Only.')).toBe(true)
   })
 })
 
+describe('buildWritePrompt', () => {
+  it('asks for the narration scene by scene, and the summary only when there is one', () => {
+    const prompt = buildWritePrompt(12, true)
+    expect(prompt.startsWith('STEP 2 - WRITE: Now write the full Hinglish narration from your scene notes')).toBe(true)
+    expect(prompt).toContain('Between them the scenes must cover [P1] to [P12]')
+    expect(prompt).toContain('- Then retell the English story summary in the same Hinglish style')
+    expect(prompt.endsWith('[SCENE 2: P5-P7]\n<Hinglish paragraph>\n\n...\n\n===SUMMARY===\n<Hinglish story summary>')).toBe(true)
+
+    const bare = buildWritePrompt(3, false)
+    expect(bare).not.toContain('SUMMARY')
+    expect(bare).not.toContain('story summary')
+    expect(bare.endsWith('[SCENE 2: P5-P7]\n<Hinglish paragraph>\n\n...')).toBe(true)
+  })
+})
+
 describe('parseConversionReply', () => {
-  it('reads marks dressed as bold, headings or quotes, joining each paragraph\'s lines', () => {
+  it('reads scene marks dressed as bold, headings or quotes, one paragraph per line', () => {
     const parsed = parseConversionReply(`Sure, here it is.
 ===SCRIPT===
 Intro text before any mark is ignored.
-**[P1]** पहला
-पैराग्राफ।
+**[SCENE 1: P1-P2]**
+पहला पैराग्राफ।
 
-## [P2]: दूसरा।
-> [ p 3 ] - तीसरा।
-__[P4].__ चौथा।
+दूसरा पैराग्राफ।
+## [Scene 2 – P3 to P4]: तीसरा।
+> [ scene 3 : p 5 ] - चौथा।
 ===SUMMARY===
   सारांश।  `)
-    expect([...parsed.paragraphs]).toEqual([
-      [1, 'पहला पैराग्राफ।'],
-      [2, 'दूसरा।'],
-      [3, 'तीसरा।'],
-      [4, 'चौथा।']
+    expect(parsed.scenes).toEqual([
+      { start: 1, end: 2, paragraphs: ['पहला पैराग्राफ।', 'दूसरा पैराग्राफ।'] },
+      { start: 3, end: 4, paragraphs: ['तीसरा।'] },
+      { start: 5, end: 5, paragraphs: ['चौथा।'] }
     ])
     expect(parsed.summary).toBe('सारांश।')
+    expect(parsed.notesOnly).toBe(false)
   })
 
-  it('keeps the first of a repeated mark, and marks above N', () => {
-    const parsed = parseConversionReply('===SCRIPT===\n[P1] एक।\n[P2] दो।\n[P1] फिर से एक।\n[P5] पाँच।')
-    expect(parsed.paragraphs.get(1)).toBe('एक।')
-    expect(parsed.paragraphs.get(5)).toBe('पाँच।')
-    expect(parsed.summary).toBe('')
+  it('drops an exact repeat of a range, and turns a reversed range around', () => {
+    const parsed = parseConversionReply('===SCRIPT===\n[SCENE 1: P1-P2]\nएक।\n[SCENE 1: P1-P2]\nफिर से।\n[SCENE 2: P4-P3]\nदो।')
+    expect(parsed.scenes).toEqual([
+      { start: 1, end: 2, paragraphs: ['एक।'] },
+      { start: 3, end: 4, paragraphs: ['दो।'] }
+    ])
   })
 
   it('only counts a mark at a line start', () => {
-    const parsed = parseConversionReply('===SCRIPT===\n[P1] एक, जैसा [P2] में लिखा।')
-    expect([...parsed.paragraphs]).toEqual([[1, 'एक, जैसा [P2] में लिखा।']])
+    const parsed = parseConversionReply('===SCRIPT===\n[SCENE 1: P1]\nएक, जैसा [SCENE 2: P2] में लिखा।')
+    expect(parsed.scenes).toEqual([{ start: 1, end: 1, paragraphs: ['एक, जैसा [SCENE 2: P2] में लिखा।'] }])
   })
 
   it('finds nothing without a SCRIPT section', () => {
-    const parsed = parseConversionReply('[P1] एक।\n[P2] दो।')
-    expect(parsed.paragraphs.size).toBe(0)
+    const parsed = parseConversionReply('[SCENE 1: P1]\nएक।')
+    expect(parsed.scenes).toEqual([])
     expect(hasUsableScript(parsed)).toBe(false)
+  })
+
+  it('recognises step 1 notes pasted instead of the narration', () => {
+    const parsed = parseConversionReply('**===SCENES===**\n[SCENE 1: P1-P2]\n- जिन गेट में जाता है')
+    expect(parsed.notesOnly).toBe(true)
+    expect(parsed.scenes).toEqual([])
+    expect(checkConversion(['a'], '', parsed)).toEqual([
+      'This is the step 1 reply (the scene notes), not the narration - send the step 2 prompt in the same chat and use its reply'
+    ])
   })
 })
 
@@ -132,82 +137,95 @@ describe('countWords', () => {
 })
 
 describe('checkConversion', () => {
+  // P1+P2 = 46 English words, P3+P4 = 40; 86 in all.
   const en = [english(41), english(5), english(30), english(10)]
-  const reply = (paragraphs: string[], summary = 'सारांश।') =>
-    parseConversionReply(`===SCRIPT===\n${paragraphs.map((p, i) => `[P${i + 1}] ${p}`).join('\n\n')}\n===SUMMARY===\n${summary}`)
+  const reply = (scenes: [string, string[]][], summary = 'सारांश।') =>
+    parseConversionReply(`===SCRIPT===\n${scenes.map(([mark, ps]) => `${mark}\n${ps.join('\n\n')}`).join('\n\n')}\n===SUMMARY===\n${summary}`)
 
-  it('passes a full conversion', () => {
-    expect(checkConversion(en, 'Summary.', reply([hindi(45), hindi(5), hindi(30), hindi(10)]))).toEqual([])
+  it('passes a full retelling, however the scenes are split into paragraphs', () => {
+    const parsed = reply([['[SCENE 1: P1-P2]', [hindi(20), hindi(30)]], ['[SCENE 2: P3-P4]', [hindi(40)]]])
+    expect(checkConversion(en, 'Summary.', parsed)).toEqual([])
   })
 
-  it('reports missing paragraphs, including empty ones', () => {
-    const parsed = parseConversionReply(`===SCRIPT===\n[P1] ${hindi(45)}\n[P2]\n[P4] ${hindi(40)}\n===SUMMARY===\nस।`)
-    expect(checkConversion(en, 'Summary.', parsed)).toEqual(['Missing paragraphs: P2, P3'])
+  it('reports paragraphs no scene covers, including empty scenes, as runs', () => {
+    const parsed = reply([['[SCENE 1: P1]', [hindi(45)]], ['[SCENE 2: P2-P3]', []], ['[SCENE 3: P4]', [hindi(45)]]])
+    expect(checkConversion(en, 'Summary.', parsed)).toEqual(['Missing paragraphs: P2-P3'])
   })
 
-  it('reports paragraphs under 0.6 of an English paragraph of 12+ words', () => {
-    // P1: 24 < 24.6; P2 has 5 English words, so is never too short; P3: 18 = 0.6 × 30 passes.
-    const parsed = reply([hindi(24), hindi(1), hindi(18), hindi(60)])
-    expect(checkConversion(en, 'Summary.', parsed)).toEqual(['Too short: P1 (24 words, the English has 41)'])
+  it('reports paragraphs in more than one scene', () => {
+    const parsed = reply([['[SCENE 1: P1-P3]', [hindi(80)]], ['[SCENE 2: P3-P4]', [hindi(40)]]])
+    expect(checkConversion(en, 'Summary.', parsed)).toEqual(['Paragraphs in more than one scene: P3'])
+  })
+
+  it('reports scenes under 0.6 of the English they cover, when that is 12+ words', () => {
+    // P1-P2: 27 < 27.6; P3-P4: 24 = 0.6 × 40 passes; the whole is 51 + 30 extra words.
+    const parsed = reply([['[SCENE 1: P1-P2]', [hindi(27)]], ['[SCENE 2: P3-P4]', [hindi(24), hindi(30)]]])
+    expect(checkConversion(en, 'Summary.', parsed)).toEqual(['Too short: P1-P2 (27 words, the English has 46)'])
   })
 
   it('reports the whole script under 0.85 of the English', () => {
-    // English 86 words; 73 < 73.1, and no single paragraph is under 0.6.
-    const parsed = reply([hindi(28), hindi(5), hindi(30), hindi(10)])
+    // 73 < 73.1, and no scene is under 0.6.
+    const parsed = reply([['[SCENE 1: P1-P2]', [hindi(40)]], ['[SCENE 2: P3-P4]', [hindi(33)]]])
     expect(checkConversion(en, 'Summary.', parsed)).toEqual([
       'Too short overall: 73 words, it needs at least 74 (the English has 86)'
     ])
   })
 
-  it('reports Latin letters in paragraphs but not in the summary', () => {
-    const parsed = reply([hindi(44) + ' level', hindi(5), hindi(30), 'System ' + hindi(10)], 'Summary in English')
+  it('reports Latin letters in scenes but not in the marks or the summary', () => {
+    const parsed = reply([['[SCENE 1: P1-P2]', [hindi(50) + ' level']], ['[SCENE 2: P3-P4]', [hindi(40)]]], 'Summary in English')
     expect(checkConversion(en, 'Summary.', parsed)).toEqual([
-      'Roman/Latin letters in: P1, P4 - write those words in Devanagari'
+      'Roman/Latin letters in: P1-P2 - write those words in Devanagari'
     ])
   })
 
   it('reports a missing summary only when the English has one', () => {
-    const parsed = reply([hindi(45), hindi(5), hindi(30), hindi(10)], '')
+    const parsed = reply([['[SCENE 1: P1-P4]', [hindi(90)]]], '')
     expect(checkConversion(en, 'Summary.', parsed)).toEqual(['The ===SUMMARY=== section is missing'])
     expect(checkConversion(en, '', parsed)).toEqual([])
   })
 
-  it('lists every issue in the follow-up order', () => {
-    const parsed = parseConversionReply(`===SCRIPT===\n[P1] ${hindi(10)}\n[P3] ${hindi(5)} abc`)
+  it('reports a reply without scene marks once, not every paragraph as missing', () => {
+    const parsed = parseConversionReply(`===SCRIPT===\n${hindi(90)}`)
     expect(checkConversion(en, 'Summary.', parsed)).toEqual([
-      'Missing paragraphs: P2, P4',
-      'Too short: P1 (10 words, the English has 41), P3 (6 words, the English has 30)',
+      'No scenes found - start each scene with its mark on a line of its own, like [SCENE 1: P1-P4]',
+      'The ===SUMMARY=== section is missing'
+    ])
+  })
+
+  it('lists every issue in the follow-up order', () => {
+    const parsed = parseConversionReply(`===SCRIPT===\n[SCENE 1: P1-P2]\n${hindi(10)}\n[SCENE 2: P2]\n${hindi(5)} abc`)
+    expect(checkConversion(en, 'Summary.', parsed)).toEqual([
+      'Missing paragraphs: P3-P4',
+      'Paragraphs in more than one scene: P2',
+      'Too short: P1-P2 (10 words, the English has 46)',
       'Too short overall: 16 words, it needs at least 74 (the English has 86)',
-      'Roman/Latin letters in: P3 - write those words in Devanagari',
+      'Roman/Latin letters in: P2 - write those words in Devanagari',
       'The ===SUMMARY=== section is missing'
     ])
   })
 })
 
 describe('buildFollowUp', () => {
-  it('lists the issues and asks for the whole reply again', () => {
-    expect(buildFollowUp(['Missing paragraphs: P7, P12, P13', 'The ===SUMMARY=== section is missing'], 20)).toBe(
+  it('lists the issues and asks for the whole narration again', () => {
+    expect(buildFollowUp(['Missing paragraphs: P7, P12-P13', 'The ===SUMMARY=== section is missing'], 20, true)).toBe(
       `Your reply did not pass the check:
-- Missing paragraphs: P7, P12, P13
+- Missing paragraphs: P7, P12-P13
 - The ===SUMMARY=== section is missing
-Send the complete reply again in the same format: every paragraph from [P1] to [P20], fully converted, then ===SUMMARY===.`
+Send the complete narration again in the same format: every scene with its [SCENE n: Px-Py] mark, covering [P1] to [P20] between them, fully written, then ===SUMMARY===.`
     )
+    expect(buildFollowUp(['x'], 3, false).endsWith('covering [P1] to [P3] between them, fully written.')).toBe(true)
   })
 })
 
 describe('assembleConversion', () => {
-  it('saves 1..N in order, then marks above N, without the marks', () => {
-    const parsed = parseConversionReply('===SCRIPT===\n[P9] नौ।\n[P2] दो।\n[P1] एक।\n[P4]\n[P7] सात।\n===SUMMARY===\nसारांश।')
-    expect(assembleConversion(parsed, 4)).toEqual({
-      script: 'एक।\n\nदो।\n\nसात।\n\nनौ।',
-      closing: 'नौ।',
-      summary: 'सारांश।'
-    })
+  it('saves every scene\'s paragraphs in reply order, without the marks', () => {
+    const parsed = parseConversionReply('===SCRIPT===\n[SCENE 1: P1-P2]\nएक।\n\nदो।\n[SCENE 2: P3]\n[SCENE 3: P4]\nचार।\n===SUMMARY===\nसारांश।')
+    expect(assembleConversion(parsed)).toEqual({ script: 'एक।\n\nदो।\n\nचार।', closing: 'चार।', summary: 'सारांश।' })
   })
 
   it('closes on the last paragraph, with an empty summary when there is none', () => {
-    const parsed = parseConversionReply('===SCRIPT===\n[P1] एक।\n[P2] दो।')
-    expect(assembleConversion(parsed, 2)).toEqual({ script: 'एक।\n\nदो।', closing: 'दो।', summary: '' })
+    const parsed = parseConversionReply('===SCRIPT===\n[SCENE 1: P1-P2]\nएक।\nदो।')
+    expect(assembleConversion(parsed)).toEqual({ script: 'एक।\n\nदो।', closing: 'दो।', summary: '' })
   })
 })
 

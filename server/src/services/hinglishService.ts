@@ -9,11 +9,12 @@
  * English changed since). Conversions run one at a time beside English
  * generation, so a long batch never waits on them.
  *
- * One conversion is one conversation with the English script model: the
- * convert prompt; if the reply fails the check, one follow-up listing the
- * issues; if that still fails but has paragraphs, it is saved with `review`
- * set to the issues. A reply with no usable paragraphs at all is a failed
- * attempt and leaves any earlier Hindi script as it was.
+ * One conversion is one conversation with the English script model: step 1
+ * asks for scene notes on the English script, step 2 for the narration
+ * written from them; if that reply fails the check, one follow-up listing the
+ * issues; if that still fails but has scenes, it is saved with `review` set
+ * to the issues. A reply with no usable scenes at all is a failed attempt and
+ * leaves any earlier Hindi script as it was.
  *
  * Progress goes out on `narration:hinglish` (see HinglishEvent), not on
  * `narration:progress`, so it never hides the English chapter's progress.
@@ -34,6 +35,7 @@ import {
   assembleConversion,
   buildConvertPrompt,
   buildFollowUp,
+  buildWritePrompt,
   checkConversion,
   decodeReview,
   encodeReview,
@@ -310,7 +312,7 @@ export class HinglishConversionService {
   async convertChapter(chapterId: string): Promise<ConvertResult> {
     try {
       const provider = aiProviderFactory.getDefaultProvider()
-      if (!provider) throw new Error('No AI provider configured. Set GEMINI_API_KEY in .env, or use Copy Hinglish prompt on the English tab.')
+      if (!provider) throw new Error('No AI provider configured. Set GEMINI_API_KEY in .env, or use the Hinglish step 1 and step 2 prompts on the English tab.')
 
       const chapter = await prisma.chapter.findUniqueOrThrow({
         where: { id: chapterId },
@@ -320,36 +322,48 @@ export class HinglishConversionService {
       if (!source) throw new Error(`Chapter ${chapter.number} has no English script to convert yet`)
       const english = englishParagraphs(source.text)
 
-      const prompt = buildConvertPrompt(await getHinglishRules(), source.text, source.summary)
+      const withSummary = !!source.summary
       this.emit(chapterId, 'converting')
-      const first = await provider.chat({
-        turns: [{ role: 'user', text: prompt }],
+
+      // Step 1: scene notes. Step 2, in the same conversation: the narration written from them.
+      const notesPrompt = buildConvertPrompt(await getHinglishRules(), source.text, source.summary)
+      const notes = await provider.chat({
+        turns: [{ role: 'user', text: notesPrompt }],
         maxOutputTokens: CONVERT_MAX_OUTPUT_TOKENS
       })
-      let tokensUsed = first.tokensUsed ?? 0
+      let tokensUsed = notes.tokensUsed ?? 0
+      if (!notes.text.trim()) throw new Error('The scene notes reply (step 1) was empty')
+
+      const turns = [
+        { role: 'user' as const, text: notesPrompt },
+        { role: 'model' as const, text: notes.text },
+        { role: 'user' as const, text: buildWritePrompt(english.length, withSummary) }
+      ]
+      const first = await provider.chat({ turns, maxOutputTokens: CONVERT_MAX_OUTPUT_TOKENS })
+      tokensUsed += first.tokensUsed ?? 0
       let parsed = parseConversionReply(first.text)
       let issues = checkConversion(english, source.summary, parsed)
 
       if (issues.length > 0) {
         this.emit(chapterId, 'retrying', { issues })
-        // An empty first reply leaves nothing to answer, so the prompt is simply asked again.
-        const turns = first.text.trim()
+        // An empty reply leaves nothing to answer, so step 2 is simply asked again.
+        const retry = first.text.trim()
           ? [
-              { role: 'user' as const, text: prompt },
+              ...turns,
               { role: 'model' as const, text: first.text },
-              { role: 'user' as const, text: buildFollowUp(issues, english.length) }
+              { role: 'user' as const, text: buildFollowUp(issues, english.length, withSummary) }
             ]
-          : [{ role: 'user' as const, text: prompt }]
-        const second = await provider.chat({ turns, maxOutputTokens: CONVERT_MAX_OUTPUT_TOKENS })
+          : turns
+        const second = await provider.chat({ turns: retry, maxOutputTokens: CONVERT_MAX_OUTPUT_TOKENS })
         tokensUsed += second.tokensUsed ?? 0
         parsed = parseConversionReply(second.text)
         issues = checkConversion(english, source.summary, parsed)
         if (issues.length > 0 && !hasUsableScript(parsed)) {
-          throw new Error(`The Hinglish reply had no [P1]..[P${english.length}] paragraphs to save`)
+          throw new Error('The Hinglish reply had no [SCENE n: Px-Py] scenes to save')
         }
       }
 
-      await saveHinglishScript(chapterId, assembleConversion(parsed, english.length), {
+      await saveHinglishScript(chapterId, assembleConversion(parsed), {
         sourceSha256: source.sha256,
         issues,
         mode: 'api',
