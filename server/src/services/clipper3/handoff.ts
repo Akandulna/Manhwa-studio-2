@@ -260,6 +260,8 @@ export function buildHandoffPrompt(manifest: HandoffManifest): string {
     '- Identify every independently readable illustrated moment: framed panels, distinct shots inside continuous artwork, small inserts, grayscale scenes, objects, landscapes and effects shots.',
     '- Do not split continuous action just because it is tall. Do not merge different shots just because their backgrounds match.',
     '- Speech bubbles, narration boxes and SFX never start or split a crop.',
+    '- Edges follow the artwork: a crop starts where its artwork starts and ends where it ends. A bubble, narration box or caption/system text window above or below the art stays outside the crop; keep only what overlaps the art.',
+    '- Between two unframed shots, end each crop at its own artwork. The plain, dark or textured background between them belongs to neither crop — do not share it out between them.',
     '- A stretch holding only speech/thought/narration bubbles, caption boxes or SFX is NOT a crop. A plain, gradient, sky, sparkle, particle, glow or speed-line background behind them does not count as artwork — leave that stretch uncovered.',
     '- Self-check every crop: if its honest description would be mainly bubbles, narration or lettering over a background (not a person, creature, object, place or action), drop it.',
     '- Keep people, faces, hands, clothing, weapons and important effects whole.',

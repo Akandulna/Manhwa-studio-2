@@ -1366,7 +1366,7 @@ export interface Clipper3ReviewView {
   state: Clipper3ReviewState | null
   audit: {
     findings: { code: string; key: string; otherKey?: string; edge?: string; message: string }[]
-    gaps: { y0: number; y1: number; nonBlankShare: number | null }[]
+    gaps: { y0: number; y1: number; inkShare: number | null }[]
   } | null
   items: Clipper3ReviewItem[]
   readiness: { ready: boolean; blockers: { code: string; key?: string; message: string }[] }

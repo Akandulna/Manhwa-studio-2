@@ -5,12 +5,13 @@
  * split or moved because of it (PRD FR-032/033, §8.1). Two kinds:
  *
  *  - Geometry (pure): tall aspect, share of page height, height outlier against
- *    the other crops, duplicates, heavy overlap, tiny or sliver boxes.
- *  - Pixels (deterministic, not semantic): whether the rows/columns just past a
- *    box edge are blank, and how much of each uncovered stretch of the page is
- *    non-blank. "Non-blank" only means "not a flat colour" — speech bubbles,
- *    SFX and artwork all count — so these are pointers for the eye, never a
- *    claim that artwork was missed or clipped.
+ *    the other crops, duplicates, heavy overlap, tiny or sliver boxes, and a
+ *    crop whose own reason names filler (a transition, narration, lettering).
+ *  - Pixels (deterministic, not semantic): whether the artwork seems to run on
+ *    past a box edge, how much of a box is flat colour, and how much ink each
+ *    uncovered stretch of the page holds. Ink counts speech bubbles and SFX as
+ *    much as artwork, so these are pointers for the eye, never a claim that
+ *    artwork was missed or clipped.
  *
  * Findings are derived on every read and never stored, so they can't go stale
  * against the crops they describe.
@@ -28,6 +29,8 @@ export interface Box {
 export interface AuditCrop {
   key: string
   bounds: Box
+  /** The crop's snake_case reason, for FILLER_REASON. */
+  reason?: string
 }
 
 export type FindingCode =
@@ -39,6 +42,8 @@ export type FindingCode =
   | 'TINY'
   | 'SLIVER'
   | 'EDGE_ON_CONTENT'
+  | 'MOSTLY_BLANK'
+  | 'FILLER_REASON'
 
 export interface AuditFinding {
   code: FindingCode
@@ -54,8 +59,8 @@ export interface AuditFinding {
 export interface UncoveredGap {
   y0: number
   y1: number
-  /** Share of the gap's rows that are not a flat colour, 0–1; null when pixels were not checked. */
-  nonBlankShare: number | null
+  /** Mean share of ink pixels across the gap's rows, 0–1; null when pixels were not checked. */
+  inkShare: number | null
 }
 
 export interface AuditReport {
@@ -80,11 +85,38 @@ export const MIN_GAP_PX = 200
 /** Rows/columns sampled just past an edge. */
 export const EDGE_BAND_PX = 6
 /**
- * Share of "ink" pixels in that band at which the edge is flagged. Calibrated
- * on real pages: correct panel edges sit under ~0.2 even with a bubble outline
- * or SFX stroke crossing them, edges cut through artwork score 0.55+.
+ * Share of "ink" pixels in that band at which the edge is looked at further.
+ * Calibrated on real pages: correct panel edges sit under ~0.2 even with a
+ * bubble outline or SFX stroke crossing them, edges cut through artwork score 0.55+.
  */
 export const EDGE_INK_SHARE = 0.35
+/** Lines on each side of an inked edge whose luminance histograms are compared. */
+export const EDGE_COMPARE_PX = 24
+/**
+ * An inked edge is flagged only when the strip outside looks like the strip
+ * inside (histogram distance 0–1 below this): the same artwork running on.
+ * Ink alone flagged 5–25% of hand-corrected edges (25% on frameless pages over
+ * dark textured backgrounds, where the background past a correct edge is inked
+ * too); with this test it is 1–18%, and it still flags every real too-tight
+ * edge ink did. Calibrated 2026-10 on 237 pages of four series.
+ */
+export const EDGE_SAME_ART_DISTANCE = 0.35
+/** Share of a crop's rows that are flat colour at which it is flagged MOSTLY_BLANK. */
+export const MOSTLY_BLANK_SHARE = 0.4
+/**
+ * Mean row ink share at which an uncovered stretch may hold artwork. Hand-made
+ * gaps sit at ~0.03 (0.09 on dark textured pages), artwork at ~0.44.
+ */
+export const GAP_ARTWORK_INK = 0.2
+/**
+ * Words in a crop's reason that name filler rather than a shot. Of the reasons
+ * on crops people deleted, these matched a fifth, while matching 0.2% of the
+ * crops they kept. "effects" is left out on purpose: it is in most effect shots.
+ */
+export const FILLER_REASON_WORDS = [
+  'transition', 'transitions', 'narration', 'caption', 'captions', 'credit', 'credits', 'lettering',
+  'sfx', 'onomatopoeia', 'bubble', 'bubbles', 'speech', 'dialogue', 'text', 'particle', 'particles'
+]
 /** A pixel is ink when it differs from its run's median by more than this (0–255). */
 export const INK_DELTA = 32
 
@@ -167,6 +199,14 @@ export function auditGeometry(pageWidth: number, pageHeight: number, crops: Audi
     }
   }
 
+  for (const crop of crops) {
+    const words = (crop.reason ?? '').toLowerCase().split('_').filter(Boolean)
+    const filler = FILLER_REASON_WORDS.find(w => words.includes(w))
+    if (filler) {
+      findings.push({ code: 'FILLER_REASON', key: crop.key, message: `Its reason "${crop.reason}" names ${filler} — keep it only if a person, creature, object or place is its subject, not background, bubbles or lettering` })
+    }
+  }
+
   return findings
 }
 
@@ -244,44 +284,103 @@ export function columnInkShare(page: LumaPage, x: number, y0: number, y1: number
   return inkShare(i => page.data[(y0 + i) * page.width + x], y1 - y0)
 }
 
+const HISTOGRAM_BINS = 32
+
+/** The luminance histogram of a rectangle, as shares of its pixels. */
+function lumaHistogram(page: LumaPage, b: Box): Float64Array {
+  const hist = new Float64Array(HISTOGRAM_BINS)
+  let count = 0
+  for (let y = b.y0; y < b.y1; y++) {
+    const offset = y * page.width
+    for (let x = b.x0; x < b.x1; x++) {
+      hist[page.data[offset + x] >> 3]++
+      count++
+    }
+  }
+  if (count > 0) for (let i = 0; i < HISTOGRAM_BINS; i++) hist[i] /= count
+  return hist
+}
+
+/** How different two rectangles' luminance is, 0 (same) to 1 (nothing shared). */
+export function histogramDistance(page: LumaPage, a: Box, b: Box): number {
+  const ha = lumaHistogram(page, a)
+  const hb = lumaHistogram(page, b)
+  let sum = 0
+  for (let i = 0; i < HISTOGRAM_BINS; i++) sum += Math.abs(ha[i] - hb[i])
+  return sum / 2
+}
+
 /**
- * Flags box edges where the band just outside is heavily inked: the artwork
- * seems to continue past the edge, so a subject may be cut. Edges on the page
- * border are skipped. A dense bubble or SFX right against an edge can trip it
- * too, which is why it is a check to tick off, not a verdict.
+ * Flags box edges where the artwork seems to continue past the edge, so a
+ * subject may be cut: the band just outside is heavily inked AND looks like the
+ * strip just inside. Edges on the page border are skipped. Background texture,
+ * a bubble or SFX past a correct edge is inked too, but rarely looks like the
+ * artwork the box holds; when it does, it is a check to tick off, not a verdict.
  */
 export function auditEdges(page: LumaPage, crops: AuditCrop[]): AuditFinding[] {
   const findings: AuditFinding[] = []
   const band = EDGE_BAND_PX
+  const near = EDGE_COMPARE_PX
 
   for (const { key, bounds: b } of crops) {
-    const check = (edge: 'top' | 'bottom' | 'left' | 'right', lines: number[], share: (line: number) => number) => {
+    const check = (edge: 'top' | 'bottom' | 'left' | 'right', lines: number[], share: (line: number) => number, outside: Box, inside: Box) => {
       if (lines.length === 0) return
       const mean = lines.reduce((sum, line) => sum + share(line), 0) / lines.length
-      if (mean >= EDGE_INK_SHARE) {
-        findings.push({
-          code: 'EDGE_ON_CONTENT',
-          key,
-          edge,
-          message: `The strip just past the ${edge} edge is ${pct(mean)} ink — artwork may continue past it (a dense bubble or SFX there also trips this)`
-        })
-      }
+      if (mean < EDGE_INK_SHARE) return
+      if (histogramDistance(page, outside, inside) >= EDGE_SAME_ART_DISTANCE) return
+      findings.push({
+        code: 'EDGE_ON_CONTENT',
+        key,
+        edge,
+        message: `The strip just past the ${edge} edge is ${pct(mean)} ink and looks like the artwork inside — the shot may continue past it`
+      })
     }
     const range = (from: number, to: number) => Array.from({ length: Math.max(0, to - from) }, (_, i) => from + i)
 
-    if (b.y0 > 0) check('top', range(Math.max(0, b.y0 - band), b.y0), y => rowInkShare(page, y, b.x0, b.x1))
-    if (b.y1 < page.height) check('bottom', range(b.y1, Math.min(page.height, b.y1 + band)), y => rowInkShare(page, y, b.x0, b.x1))
-    if (b.x0 > 0) check('left', range(Math.max(0, b.x0 - band), b.x0), x => columnInkShare(page, x, b.y0, b.y1))
-    if (b.x1 < page.width) check('right', range(b.x1, Math.min(page.width, b.x1 + band)), x => columnInkShare(page, x, b.y0, b.y1))
+    if (b.y0 > 0) {
+      check('top', range(Math.max(0, b.y0 - band), b.y0), y => rowInkShare(page, y, b.x0, b.x1),
+        { ...b, y0: Math.max(0, b.y0 - near), y1: b.y0 }, { ...b, y1: Math.min(b.y1, b.y0 + near) })
+    }
+    if (b.y1 < page.height) {
+      check('bottom', range(b.y1, Math.min(page.height, b.y1 + band)), y => rowInkShare(page, y, b.x0, b.x1),
+        { ...b, y0: b.y1, y1: Math.min(page.height, b.y1 + near) }, { ...b, y0: Math.max(b.y0, b.y1 - near) })
+    }
+    if (b.x0 > 0) {
+      check('left', range(Math.max(0, b.x0 - band), b.x0), x => columnInkShare(page, x, b.y0, b.y1),
+        { ...b, x0: Math.max(0, b.x0 - near), x1: b.x0 }, { ...b, x1: Math.min(b.x1, b.x0 + near) })
+    }
+    if (b.x1 < page.width) {
+      check('right', range(b.x1, Math.min(page.width, b.x1 + band)), x => columnInkShare(page, x, b.y0, b.y1),
+        { ...b, x0: b.x1, x1: Math.min(page.width, b.x1 + near) }, { ...b, x0: Math.max(b.x0, b.x1 - near) })
+    }
+  }
+  return findings
+}
+
+/**
+ * Flags crops that are largely flat colour: an empty transition, a black or
+ * white stretch, a plain background behind lettering. A quiet establishing shot
+ * can trip it too, so it asks for a look rather than removal.
+ */
+export function auditBlank(page: LumaPage, crops: AuditCrop[]): AuditFinding[] {
+  const findings: AuditFinding[] = []
+  for (const { key, bounds: b } of crops) {
+    if (b.y1 <= b.y0 || b.x1 <= b.x0) continue
+    let blank = 0
+    for (let y = b.y0; y < b.y1; y++) if (rowIsBlank(page, y, b.x0, b.x1)) blank++
+    const share = blank / (b.y1 - b.y0)
+    if (share >= MOSTLY_BLANK_SHARE) {
+      findings.push({ code: 'MOSTLY_BLANK', key, message: `${pct(share)} of its rows are a flat colour — check it holds a real shot, not an empty transition or a plain background behind lettering` })
+    }
   }
   return findings
 }
 
 export function gapsWithContent(page: LumaPage, gaps: { y0: number; y1: number }[]): UncoveredGap[] {
   return gaps.map(gap => {
-    let busy = 0
-    for (let y = gap.y0; y < gap.y1; y++) if (!rowIsBlank(page, y)) busy++
-    return { ...gap, nonBlankShare: gap.y1 > gap.y0 ? busy / (gap.y1 - gap.y0) : 0 }
+    let ink = 0
+    for (let y = gap.y0; y < gap.y1; y++) ink += rowInkShare(page, y)
+    return { ...gap, inkShare: gap.y1 > gap.y0 ? ink / (gap.y1 - gap.y0) : 0 }
   })
 }
 
@@ -313,9 +412,9 @@ export async function loadLuma(sourcePath: string, sha256: string): Promise<Luma
 export function auditPage(pageWidth: number, pageHeight: number, crops: AuditCrop[], luma?: LumaPage): AuditReport {
   const findings = auditGeometry(pageWidth, pageHeight, crops)
   const intervals = uncoveredIntervals(pageHeight, crops)
-  if (!luma) return { findings, gaps: intervals.map(g => ({ ...g, nonBlankShare: null })) }
+  if (!luma) return { findings, gaps: intervals.map(g => ({ ...g, inkShare: null })) }
   return {
-    findings: [...findings, ...auditEdges(luma, crops)],
+    findings: [...findings, ...auditEdges(luma, crops), ...auditBlank(luma, crops)],
     gaps: gapsWithContent(luma, intervals)
   }
 }

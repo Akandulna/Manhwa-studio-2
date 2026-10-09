@@ -564,7 +564,7 @@ export function ReviewWorkspace({ chapterId, filename, view, onView, onRestart, 
         {/* Uncovered stretches: pointers for the sweep, never verdicts. */}
         {audit && audit.gaps.length > 0 && (
           <div className="text-xs space-y-1">
-            <p className="text-muted-foreground">Stretches no crop covers (non-blank rows can be art, bubbles or SFX):</p>
+            <p className="text-muted-foreground">Stretches no crop covers (ink can be art, bubbles or SFX):</p>
             {audit.gaps.map(gap => (
               <button
                 key={gap.y0}
@@ -573,7 +573,7 @@ export function ReviewWorkspace({ chapterId, filename, view, onView, onRestart, 
                 className="block font-mono text-[11px] hover:underline"
               >
                 y {gap.y0}–{gap.y1} ({gap.y1 - gap.y0} px)
-                {gap.nonBlankShare !== null && ` · ${Math.round(gap.nonBlankShare * 100)}% non-blank`}
+                {gap.inkShare !== null && ` · ${Math.round(gap.inkShare * 100)}% ink`}
               </button>
             ))}
           </div>

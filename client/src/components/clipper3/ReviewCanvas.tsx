@@ -35,8 +35,8 @@ export const BOX_COLORS = {
   selected: '#facc15'
 } as const
 
-/** Uncovered stretches with at least this share of non-blank rows are striped. */
-const GAP_CONTENT_SHARE = 0.05
+/** Uncovered stretches inked at least this much may hold artwork and are striped. Keep in step with GAP_ARTWORK_INK in the server's auditRules.ts. */
+const GAP_ARTWORK_INK = 0.2
 const HANDLE_PX = 10
 /** How close to the viewer's top/bottom a drag starts auto-scrolling. */
 const AUTOSCROLL_ZONE = 48
@@ -47,7 +47,7 @@ interface ReviewCanvasProps {
   W: number
   H: number
   crops: Clipper3ReviewCrop[]
-  gaps: { y0: number; y1: number; nonBlankShare: number | null }[]
+  gaps: { y0: number; y1: number; inkShare: number | null }[]
   colorFor: (crop: Clipper3ReviewCrop) => string
   selected: string[]
   onSelect: (keys: string[]) => void
@@ -233,7 +233,7 @@ export function ReviewCanvas(props: ReviewCanvasProps) {
         />
 
         {showOverlay && gaps.map(gap => {
-          const busy = gap.nonBlankShare === null || gap.nonBlankShare >= GAP_CONTENT_SHARE
+          const busy = gap.inkShare === null || gap.inkShare >= GAP_ARTWORK_INK
           return (
             <div
               key={`gap-${gap.y0}`}

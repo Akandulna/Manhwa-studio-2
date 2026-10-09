@@ -2,7 +2,7 @@
  * Tests for the Crop Studio review stage:
  * - geometric audit rules (tall, page share, median outlier, duplicates,
  *   overlap, tiny/sliver) and uncovered intervals
- * - pixel rules on synthetic pages (edge on content, non-blank share of gaps)
+ * - pixel rules on synthetic pages (edge on content, mostly blank crops, ink share of gaps)
  * - review save rules (provenance, stale descriptions, cleared acks, validation)
  * - readiness blockers
  * - seeding from an import and from existing pointers, revision conflicts, staleness
@@ -14,9 +14,11 @@ import os from 'os'
 import path from 'path'
 import sharp from 'sharp'
 import {
+  auditBlank,
   auditEdges,
   auditGeometry,
   gapsWithContent,
+  GAP_ARTWORK_INK,
   iou,
   uncoveredIntervals,
   type AuditCrop,
@@ -74,6 +76,19 @@ describe('auditGeometry', () => {
     expect(codesFor(findings, 'sliver')).toEqual(['SLIVER'])
   })
 
+  it('flags a crop whose reason names filler, matching whole words only', () => {
+    const findings = auditGeometry(800, 10000, [
+      { ...box('t', 0, 0, 800, 600), reason: 'dark_summoning_transition' },
+      { ...box('n', 0, 700, 800, 1300), reason: 'narration_environment' },
+      { ...box('fx', 0, 1400, 800, 2000), reason: 'action_effects' },
+      { ...box('wall', 0, 2100, 800, 2700), reason: 'textured_wall' }
+    ])
+    expect(codesFor(findings, 't')).toEqual(['FILLER_REASON'])
+    expect(codesFor(findings, 'n')).toEqual(['FILLER_REASON'])
+    expect(codesFor(findings, 'fx')).toEqual([])
+    expect(codesFor(findings, 'wall')).toEqual([])
+  })
+
   it('computes IoU', () => {
     expect(iou({ x0: 0, y0: 0, x1: 10, y1: 10 }, { x0: 5, y0: 0, x1: 15, y1: 10 })).toBeCloseTo(50 / 150)
   })
@@ -111,10 +126,31 @@ describe('pixel rules', () => {
     expect(auditEdges(page, [box('panel', 20, 200, 380, 600)])).toEqual([])
   })
 
-  it('reports how much of an uncovered stretch is non-blank', () => {
+  it('does not flag a correct edge on a frameless page whose background is inked texture', () => {
+    // Striped dark background everywhere (about half its pixels are ink), bright artwork at y 200–600.
+    const width = 400
+    const height = 1000
+    const data = Buffer.alloc(width * height)
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        data[y * width + x] = y >= 200 && y < 600 ? 55 + (x * 7 + y * 13) % 200 : (x % 2 ? 90 : 0)
+      }
+    }
+    const page = { data, width, height }
+    const findings = auditEdges(page, [box('shot', 0, 200, 400, 600), box('cut', 0, 200, 400, 400)])
+    expect(findings.filter(f => f.key === 'shot')).toEqual([])
+    expect(findings).toContainEqual(expect.objectContaining({ key: 'cut', code: 'EDGE_ON_CONTENT', edge: 'bottom' }))
+  })
+
+  it('flags a crop that is mostly flat colour', () => {
+    const findings = auditBlank(syntheticPage(), [box('empty', 0, 500, 400, 1000), box('panel', 20, 200, 380, 600)])
+    expect(findings).toEqual([expect.objectContaining({ key: 'empty', code: 'MOSTLY_BLANK' })])
+  })
+
+  it('reports how much ink an uncovered stretch holds', () => {
     const [blank, busy] = gapsWithContent(syntheticPage(), [{ y0: 700, y1: 1000 }, { y0: 100, y1: 600 }])
-    expect(blank.nonBlankShare).toBe(0)
-    expect(busy.nonBlankShare).toBeCloseTo(400 / 500)
+    expect(blank.inkShare).toBe(0)
+    expect(busy.inkShare).toBeGreaterThan(GAP_ARTWORK_INK)
   })
 })
 
@@ -312,8 +348,9 @@ describe('review lifecycle', () => {
     const view = await startReview(folderPath, 'page_008.png', 'import', false)
     expect(view.state?.review_revision).toBe(1)
     expect(view.state?.crops[0]).toMatchObject({ key: 'candidate-01', description_status: 'unreviewed', disposition: 'unreviewed' })
-    expect(view.items.map(i => i.token)).toEqual(['TALL_ASPECT', 'PAGE_FRACTION', 'gpt:boundary_uncertain'])
-    expect(view.audit?.gaps).toEqual([{ y0: 2500, y1: 5000, nonBlankShare: 0 }])
+    // The test page is plain white, so the crop is also flagged as mostly flat colour.
+    expect(view.items.map(i => i.token)).toEqual(['TALL_ASPECT', 'PAGE_FRACTION', 'MOSTLY_BLANK', 'gpt:boundary_uncertain'])
+    expect(view.audit?.gaps).toEqual([{ y0: 2500, y1: 5000, inkShare: 0 }])
     expect(view.readiness.ready).toBe(false)
 
     const decided = {

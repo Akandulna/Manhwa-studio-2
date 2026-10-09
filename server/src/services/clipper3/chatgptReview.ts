@@ -33,6 +33,7 @@ import {
   type ImportIssueCode,
   type PixelBounds
 } from './analysisImport.js'
+import { GAP_ARTWORK_INK } from './auditRules.js'
 import {
   applyReviewSave,
   getReview,
@@ -79,11 +80,15 @@ export function buildReviewPrompt(view: ReviewView & { state: ReviewState }, man
     checks: items.filter(i => i.key === crop.key).map(i => ({ token: i.token, what: i.message }))
   }))
 
-  const gaps = (audit?.gaps ?? []).map(g => {
+  // Only stretches inked like artwork are pointed at; the rest are counted, so
+  // background, bubbles and lettering between shots aren't presented as misses.
+  const allGaps = audit?.gaps ?? []
+  const quietGaps = allGaps.filter(g => g.inkShare !== null && g.inkShare < GAP_ARTWORK_INK).length
+  const gaps = allGaps.filter(g => g.inkShare === null || g.inkShare >= GAP_ARTWORK_INK).map(g => {
     const from = toSliceLocal(g.y0, slices, false)
     const to = toSliceLocal(g.y1, slices, true)
     return `  ${from.slice.id} y ${from.y} → ${to.slice.id} y ${to.y}` +
-      (g.nonBlankShare === null ? '' : ` (${Math.round(g.nonBlankShare * 100)}% non-blank rows)`)
+      (g.inkShare === null ? '' : ` (${Math.round(g.inkShare * 100)}% ink)`)
   })
 
   const example = {
@@ -122,7 +127,7 @@ export function buildReviewPrompt(view: ReviewView & { state: ReviewState }, man
     '',
     'Below are the crops currently proposed for this page. Act as the reviewer. Look at every crop again in the slices and decide its FINAL form:',
     '- keep it exactly (same corners),',
-    '- adjust its corners so it holds the complete shot — whole faces, hands, weapons, effects — and nothing from the neighbouring shot,',
+    '- adjust its corners so it holds the complete shot — whole faces, hands, weapons, effects — and nothing from the neighbouring shot; trim any top or bottom stretch that is only bubbles, narration, a caption/system text window or empty background (the edge goes where the artwork starts and ends),',
     '- split it when it actually contains separate shots (return each part as a new crop with "from_keys": [its key]),',
     '- merge crops that are really one continuous shot (return one crop with "key" = one of them and "from_keys" = the others),',
     '- remove it (list its key in "removed_keys") when it is not an independently readable illustrated moment.',
@@ -131,9 +136,10 @@ export function buildReviewPrompt(view: ReviewView & { state: ReviewState }, man
     '',
     'CHECKS: each crop lists automatic checks with a token. Look at what each one points to. If the crop is fine despite it (or after your fix), put its token in "checks_reviewed". Leave a token out if you could not verify it.',
     '',
-    'SWEEP: go through the whole page top to bottom for artwork no crop holds — small inserts, grayscale panels, objects, landscapes, effects shots. These stretches have no crop at all:',
+    'SWEEP: go through the whole page top to bottom for artwork no crop holds — small inserts, grayscale panels, objects, landscapes, effects shots. These uncovered stretches are inked enough to hold artwork:',
     ...(gaps.length > 0 ? gaps : ['  (none)']),
-    'Add a crop (key null, no from_keys) for any real artwork there. "Non-blank" includes bubbles and lettering: a stretch holding only bubbles, narration or SFX over background stays uncovered. Set "sweep_done": true only after you have actually swept the page.',
+    ...(quietGaps > 0 ? [`${quietGaps} other uncovered stretch${quietGaps === 1 ? '' : 'es'} look${quietGaps === 1 ? 's' : ''} like plain background, bubbles or lettering — leave ${quietGaps === 1 ? 'it' : 'them'} uncovered unless you see a real subject there.`] : []),
+    'Add a crop (key null, no from_keys) for any real artwork there. Ink includes bubbles and lettering: a stretch holding only bubbles, narration or SFX over background stays uncovered. Set "sweep_done": true only after you have actually swept the page.',
     '',
     'DESCRIPTIONS: every crop in your reply needs its final description — one plain sentence, 12–35 words, ending in a period, only what is visible, no names, no plot, no dialogue. Keep a current one only if it still fits the final box.',
     '',

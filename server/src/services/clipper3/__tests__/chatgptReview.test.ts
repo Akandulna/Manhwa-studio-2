@@ -13,7 +13,7 @@ import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import sharp from 'sharp'
-import { applyChatGptReview, cornersFor, getReviewPrompt, REVIEW_REPLY_SCHEMA } from '../chatgptReview.js'
+import { applyChatGptReview, buildReviewPrompt, cornersFor, getReviewPrompt, REVIEW_REPLY_SCHEMA } from '../chatgptReview.js'
 import { buildHandoff, type HandoffManifest } from '../handoff.js'
 import { importAnalysis } from '../analysisImport.js'
 import { getReview, startReview } from '../reviewState.js'
@@ -106,7 +106,19 @@ describe('getReviewPrompt', () => {
     expect(prompt).toContain(`${manifest.job_id} / ${manifest.source.sha256} / 1`)
     for (const key of ['"a"', '"b"', '"c"']) expect(prompt).toContain(`"key": ${key}`)
     expect(prompt).toContain('gpt:seam_crossing')
-    expect(prompt).toContain('slice-03 y 904') // the uncovered stretch after the last crop
+    // A white page: every uncovered stretch is quiet, so none is pointed at as possible artwork.
+    expect(prompt).not.toContain('slice-03 y 904')
+    expect(prompt).toContain('3 other uncovered stretches look like plain background, bubbles or lettering')
+  })
+
+  it('points at uncovered stretches inked like artwork and only counts the quiet ones', async () => {
+    await reviewedPage()
+    const view = await getReview(folderPath, FILE)
+    const audit = { findings: [], gaps: [{ y0: 900, y1: 1900, inkShare: 0.03 }, { y0: 3600, y1: 5000, inkShare: 0.45 }] }
+    const prompt = buildReviewPrompt({ ...view, audit, state: view.state! }, manifest)
+    expect(prompt).toContain('slice-02 y 1552 → slice-03 y 904 (45% ink)')
+    expect(prompt).not.toContain('slice-01 y 900')
+    expect(prompt).toContain('1 other uncovered stretch looks like plain background, bubbles or lettering — leave it uncovered')
   })
 })
 

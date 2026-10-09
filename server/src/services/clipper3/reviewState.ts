@@ -551,7 +551,7 @@ export async function getReview(folderPath: string, imageFilename: string): Prom
   }
   const stale = staleReasons.length > 0
 
-  const crops = state.crops.map(c => ({ key: c.key, bounds: c.bounds }))
+  const crops = state.crops.map(c => ({ key: c.key, bounds: c.bounds, reason: c.reason }))
   // Pixel rules only against the very pixels the review is about.
   const audit = stale
     ? auditPage(state.source_width, state.source_height, crops)

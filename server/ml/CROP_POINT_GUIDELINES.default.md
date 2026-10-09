@@ -37,9 +37,12 @@
 9. Keep meaningful grayscale artwork, small illustrated inserts, establishing
    shots, landscapes, and object shots. Lack of color or people is not a
    rejection rule. Do not invent a minimum crop count or target aspect ratio.
-10. Exclude blank gutters, standalone credits/logos, and text-only regions
-    with no meaningful artwork. Do not crop more tightly merely to force an
-    image into 16:9; later video composition handles aspect ratio.
+10. Exclude blank gutters, standalone credits/logos, text-only regions with
+    no meaningful artwork, and transition strips: a plain, dark, gradient or
+    textured background, glow, particles, or speed lines with no person,
+    creature, object, or place as the subject (an effect that is itself the
+    shot's subject still counts, see 15). Do not crop more tightly merely to
+    force an image into 16:9; later video composition handles aspect ratio.
 
 ## C. Resolve each rectangle independently
 
@@ -54,9 +57,12 @@
     rectangle necessarily includes a neighbor, retain the safe rectangle and
     flag the limitation instead of clipping important artwork to hide it.
 14. Speech bubbles, narration boxes, and SFX do not seed crops, connect two
-    crops, determine the crop's outer extent, or justify a split. Retain their
-    pixels when they lie inside the chosen rectangle. Do not erase, inpaint,
-    or extend a rectangle solely to preserve an overlay beyond the artwork.
+    crops, determine the crop's outer extent, or justify a split. A crop's top
+    and bottom follow its artwork: a bubble, narration box, or caption/system
+    text window sitting above or below the art stays outside the crop. Retain
+    their pixels when they lie inside the chosen rectangle. Do not erase,
+    inpaint, or extend a rectangle solely to preserve an overlay beyond the
+    artwork.
 15. An SFX-only strip is not a separate crop. Associate it with a neighboring
     scene only when that scene's artwork continues into the strip. Background
     magic, smoke, impact effects, and motion fields can be genuine artwork;
@@ -74,8 +80,10 @@
     meaningful comparison exists. These are review triggers, not split rules.
 18. Locate visual anchors: people, faces, hands, objects, environment details,
     and action focal points. Group them by shot, then place boundaries in
-    safe intervening space. For an unframed transition with a real neutral
-    gap, use the middle of that gap and inspect it at higher detail.
+    safe intervening space. For an unframed transition, end each crop where
+    its own artwork ends: the neutral gap between two shots belongs to
+    neither crop, so do not split it down the middle. Inspect the gap at
+    higher detail.
 19. Confirm each proposed split with another visual cue, such as a shot-scale
     change, setting change, or an actual discontinuity in the artwork. Empty
     skin/hair-color masks, similar-colored backgrounds, speech, and SFX alone
