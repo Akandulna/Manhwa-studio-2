@@ -203,8 +203,8 @@ async function measureDir(dir: string): Promise<{ bytes: number; files: number }
  * The chapter numbers this series has a rendered MP4 for.
  *
  * Editor 2.0 owns no database rows — the `_video2` folder IS its record — so
- * the filename's `_ch007_` segment is read back here, exactly as
- * editor2Export writes it. Files that don't carry that segment (a hand-renamed
+ * the filename's leading `ch007_` (or the older `_ch007_` segment) is read
+ * back here, exactly as editor2Export writes it. Files that don't carry that segment (a hand-renamed
  * render like `PMU2.mp4`, a manual concatenation) can't be attributed to a
  * chapter and are counted as series-level video instead of marking anything
  * exported; guessing would be the one error that costs source material.
@@ -225,7 +225,7 @@ async function scanExportedChapterNumbers(
     }
     for (const name of entries) {
       if (!name.toLowerCase().endsWith('.mp4')) continue
-      const m = /_ch(\d{3,})_/.exec(name)
+      const m = /(?:^|_)ch(\d{3,})_/.exec(name)
       if (!m) continue
       const n = parseInt(m[1], 10)
       if (Number.isFinite(n)) found.add(n)
@@ -677,7 +677,7 @@ export async function listSeriesVideos(seriesId: string): Promise<VideoFileInfo[
       if (!name.toLowerCase().endsWith('.mp4')) continue
       try {
         const stat = await fs.stat(path.join(dir, name))
-        const m = /_ch(\d{3,})_/.exec(name)
+        const m = /(?:^|_)ch(\d{3,})_/.exec(name)
         out.push({
           seriesId: series.id,
           dir: dirName,

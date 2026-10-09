@@ -113,12 +113,12 @@ function exportDirFor(rootFolder: string, language: NarrationLanguage = 'en'): s
  * The chapter number encoded in an export filename, or null if the name did
  * not come from this exporter.
  *
- * Matches the `_ch007_` segment written by `startBatchExport`. Anything else
- * in the folder — a hand-dropped file, a render from another tool — is ignored
- * rather than guessed at.
+ * Matches the leading `ch007_` written by `startBatchExport` (and the older
+ * `<series>_ch007_` layout). Anything else in the folder — a hand-dropped
+ * file, a render from another tool — is ignored rather than guessed at.
  */
 function chapterNumberFromFilename(name: string): number | null {
-  const m = /_ch(\d{3,})_/.exec(name)
+  const m = /(?:^|_)ch(\d{3,})_/.exec(name)
   if (!m) return null
   const n = parseInt(m[1], 10)
   return Number.isFinite(n) ? n : null
@@ -678,10 +678,11 @@ export async function startBatchExport(
           state.chapterTitle = plan.chapterTitle
 
           const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-          // The `_ch007_` segment is what listExistingExports reads back; the
-          // language tag after it only makes a Hindi file recognisable by name.
+          // The chapter number leads so the folder sorts by chapter; the
+          // `ch007_` prefix is what listExistingExports reads back, and the
+          // language tag only makes a Hindi file recognisable by name.
           const langTag = language === 'en' ? '' : `_${language}`
-          const name = `${slugify(series.title)}_ch${String(plan.chapterNumber).padStart(3, '0')}${langTag}_${options.resolution}_${stamp}.mp4`
+          const name = `ch${String(plan.chapterNumber).padStart(3, '0')}_${slugify(series.title)}${langTag}_${options.resolution}_${stamp}.mp4`
           const outputPath = path.join(outputDir, name)
 
           await renderChapter(rt, plan, outputPath, opts, percent => {
