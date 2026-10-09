@@ -68,14 +68,14 @@ export default function Layout({ children }: LayoutProps) {
   // Library & Downloader module items
   const libraryModuleItems: NavItem[] = [
     {
-      icon: <Library className="h-5 w-5" />,
-      label: 'Library',
-      href: '/'
-    },
-    {
       icon: <Plus className="h-5 w-5" />,
       label: 'Add Series',
       href: '/add'
+    },
+    {
+      icon: <Library className="h-5 w-5" />,
+      label: 'Library',
+      href: '/'
     },
     {
       icon: <Download className="h-5 w-5" />,

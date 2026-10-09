@@ -7,7 +7,7 @@ import { useSocket } from '@/lib/socket'
 import { PhoneSendStatusBar } from '@/components/PhoneSendStatusBar'
 import { PhoneSendDialog } from '@/components/PhoneSendDialog'
 import { PhoneSyncBadge } from '@/components/PhoneSyncBadge'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
@@ -464,7 +464,7 @@ export default function Library() {
           </Link>
         </Card>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        <Card className="overflow-hidden divide-y">
           {series.map((s) => {
             const status = getStatusInfo(s.statusCounts)
             // null until the lookup resolves, or when nothing is published yet.
@@ -473,63 +473,59 @@ export default function Library() {
             const onPhone = phoneSync?.series[s.id]
 
             return (
-              <Link to={`/series/${s.id}`} key={s.id}>
-                <Card className={`h-full hover:shadow-lg transition-shadow cursor-pointer overflow-hidden ${
+              <Link
+                to={`/series/${s.id}`}
+                key={s.id}
+                className={`flex items-center gap-4 px-4 py-3 hover:bg-accent/50 transition-colors ${
                   published ? publishedRowClass : ''
-                }`}>
-                  {/* Cover image placeholder */}
-                  <div className="aspect-[3/4] bg-gradient-to-br from-primary/20 to-primary/5 relative">
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <BookOpen className="h-16 w-16 text-primary/30" />
-                    </div>
-                    <div className="absolute top-2 right-2 flex flex-col items-end gap-1.5">
-                      {onPhone && <PhoneSyncBadge sync={onPhone} device={phoneSync?.device ?? null} />}
-                    </div>
-                    <div className="absolute bottom-2 right-2">
-                      <Badge variant={status.variant}>
-                        {status.label}
-                      </Badge>
-                    </div>
-                    {published && (
-                      <div className="absolute top-2 left-2">
-                        <Badge
-                          className={
-                            published.published === published.total
-                              ? 'border-transparent bg-fuchsia-600 text-white hover:bg-fuchsia-600/80'
-                              : 'border-transparent bg-fuchsia-600/80 text-white hover:bg-fuchsia-600/60'
-                          }
-                          title={`${published.published} of ${published.total} chapters rendered to video`}
-                        >
-                          🎬 {published.published === published.total
-                            ? 'Published'
-                            : `Published ${published.published}/${published.total}`}
-                        </Badge>
-                      </div>
-                    )}
+                }`}
+              >
+                <div className="h-10 w-10 shrink-0 rounded-md bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center">
+                  <BookOpen className="h-5 w-5 text-primary/40" />
+                </div>
+
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-semibold truncate">{s.title}</h3>
+                  <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <Globe className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{s.sourceSite}</span>
                   </div>
-                  
-                  <CardContent className="p-4">
-                    <h3 className="font-semibold text-lg truncate mb-1">
-                      {s.title}
-                    </h3>
-                    
-                    <div className="flex items-center gap-1 text-sm text-muted-foreground mb-3">
-                      <Globe className="h-3 w-3" />
-                      <span className="truncate">{s.sourceSite}</span>
-                    </div>
-                    
-                    <div className="flex items-center justify-between text-sm mb-2">
-                      <span>{s.chapterCount} chapters</span>
-                      <span>{status.progress}%</span>
-                    </div>
-                    
-                    <Progress value={status.progress} className="h-1" />
-                  </CardContent>
-                </Card>
+                </div>
+
+                <div className="hidden md:flex items-center gap-1.5 shrink-0">
+                  {published && (
+                    <Badge
+                      className={
+                        published.published === published.total
+                          ? 'border-transparent bg-fuchsia-600 text-white hover:bg-fuchsia-600/80'
+                          : 'border-transparent bg-fuchsia-600/80 text-white hover:bg-fuchsia-600/60'
+                      }
+                      title={`${published.published} of ${published.total} chapters rendered to video`}
+                    >
+                      🎬 {published.published === published.total
+                        ? 'Published'
+                        : `Published ${published.published}/${published.total}`}
+                    </Badge>
+                  )}
+                  {onPhone && <PhoneSyncBadge sync={onPhone} device={phoneSync?.device ?? null} />}
+                </div>
+
+                <span className="w-24 shrink-0 text-sm text-muted-foreground text-right">
+                  {s.chapterCount} chapters
+                </span>
+
+                <div className="hidden sm:flex w-36 shrink-0 items-center gap-2">
+                  <Progress value={status.progress} className="h-1 flex-1" />
+                  <span className="w-9 text-xs text-muted-foreground text-right">{status.progress}%</span>
+                </div>
+
+                <div className="w-32 shrink-0 flex justify-end">
+                  <Badge variant={status.variant}>{status.label}</Badge>
+                </div>
               </Link>
             )
           })}
-        </div>
+        </Card>
       )}
     </div>
 

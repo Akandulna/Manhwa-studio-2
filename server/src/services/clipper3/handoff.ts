@@ -260,6 +260,8 @@ export function buildHandoffPrompt(manifest: HandoffManifest): string {
     '- Identify every independently readable illustrated moment: framed panels, distinct shots inside continuous artwork, small inserts, grayscale scenes, objects, landscapes and effects shots.',
     '- Do not split continuous action just because it is tall. Do not merge different shots just because their backgrounds match.',
     '- Speech bubbles, narration boxes and SFX never start or split a crop.',
+    '- A stretch holding only speech/thought/narration bubbles, caption boxes or SFX is NOT a crop. A plain, gradient, sky, sparkle, particle, glow or speed-line background behind them does not count as artwork — leave that stretch uncovered.',
+    '- Self-check every crop: if its honest description would be mainly bubbles, narration or lettering over a background (not a person, creature, object, place or action), drop it.',
     '- Keep people, faces, hands, clothing, weapons and important effects whole.',
     '- If crop rules were shared earlier in this conversation, apply them to decide WHAT to crop. The JSON contract below overrides any output format they describe.',
     '',
