@@ -7,10 +7,12 @@
  * for the normal shape. Stitching rewrites such a chapter into that shape:
  *
  *  - The client sends the grouping it previewed: `groups`, each an ordered
- *    list of page filenames. Pages left out of every group are dropped from
- *    the chapter (credit/ad pages).
- *  - Each group becomes one `page_NNN` file. A single-page group is copied
- *    byte-for-byte; a multi-page group is stacked top to bottom at the
+ *    list of pieces. A piece is a page filename (the whole page) or
+ *    `{ file, top, bottom }`, a band of source rows — Auto stitch cuts pages
+ *    at blank rows, so one page can feed two outputs. Pages left out of every
+ *    group are dropped from the chapter (credit/ad pages).
+ *  - Each group becomes one `page_NNN` file. A group of one whole page is
+ *    copied byte-for-byte; a multi-page group is stacked top to bottom at the
  *    group's widest width (narrower pages scaled up, as the chapter canvas
  *    does — see chapterManifest).
  *  - The originals move to `<chapter>/.stitch-originals/` with a record of
@@ -56,13 +58,29 @@ export interface StitchPage {
   bytes: number
 }
 
+/** A band of one page's source rows, [top, bottom). A whole page is 0..height. */
+export interface StitchSource extends StitchPage {
+  top: number
+  bottom: number
+}
+
+export interface StitchPiece {
+  file: string
+  top: number
+  bottom: number
+}
+
 export interface PlannedOutput {
   filename: string
-  sources: StitchPage[]
+  sources: StitchSource[]
   width: number
   height: number
-  /** True when the single source is kept byte-for-byte. */
+  /** True when the single source is a whole page, kept byte-for-byte. */
   copied: boolean
+}
+
+function isWhole(source: StitchSource): boolean {
+  return source.top === 0 && source.bottom === source.height
 }
 
 interface OriginalPageRow {
@@ -79,7 +97,15 @@ export interface StitchRecord {
   /** Every image file that was in the chapter folder, now in the backup. */
   originals: string[]
   excluded: string[]
-  outputs: { filename: string; sources: string[]; width: number; height: number; bytes: number }[]
+  outputs: {
+    filename: string
+    sources: string[]
+    /** Set when a page was cut: the source rows of each piece, in stacking order. */
+    pieces?: StitchPiece[]
+    width: number
+    height: number
+    bytes: number
+  }[]
   chapter: { pageCount: number | null; downloadedCount: number }
   pages: OriginalPageRow[]
 }
@@ -221,9 +247,9 @@ export async function getStitchState(chapter: ChapterRef): Promise<StitchState> 
 
 /**
  * Check the client's grouping against the folder and lay out each output.
- * Groups list existing pages, each at most once, in the order they are
- * stacked — usually reading order, but the user may rearrange them by hand.
- * Pages in no group are dropped.
+ * Groups list pieces of existing pages in the order they are stacked —
+ * usually reading order, but the user may rearrange them by hand. No two
+ * pieces may share a source row. Pages in no group are dropped.
  */
 export function planOutputs(pages: StitchPage[], groups: unknown): PlannedOutput[] {
   if (!Array.isArray(groups) || groups.length === 0) {
@@ -231,28 +257,38 @@ export function planOutputs(pages: StitchPage[], groups: unknown): PlannedOutput
   }
 
   const position = new Map(pages.map((p, i) => [p.filename, i]))
-  const used = new Set<number>()
+  const used = new Map<number, [number, number][]>()
   const outputs: PlannedOutput[] = []
 
   for (const group of groups) {
     if (!Array.isArray(group) || group.length === 0) {
       throw new StitchError('Every group needs at least one page')
     }
-    const sources: StitchPage[] = []
-    for (const name of group) {
-      const at = typeof name === 'string' ? position.get(name) : undefined
-      if (at === undefined) {
-        throw new StitchError(`${String(name)} is not a page of this chapter — reload and try again`)
+    const sources: StitchSource[] = []
+    for (const item of group) {
+      const piece = parsePiece(item)
+      const at = piece ? position.get(piece.file) : undefined
+      if (!piece || at === undefined) {
+        throw new StitchError(`${JSON.stringify(item)} is not a page of this chapter — reload and try again`)
       }
-      if (used.has(at)) throw new StitchError(`${name} is used twice`)
-      used.add(at)
-      sources.push(pages[at])
+      const page = pages[at]
+      const top = piece.top ?? 0
+      const bottom = piece.bottom ?? page.height
+      if (!Number.isInteger(top) || !Number.isInteger(bottom) || top < 0 || bottom > page.height || top >= bottom) {
+        throw new StitchError(`${page.filename}: rows ${top}–${bottom} are outside the page (0–${page.height})`)
+      }
+      const ranges = used.get(at) ?? []
+      if (ranges.some(([a, b]) => top < b && bottom > a)) {
+        throw new StitchError(`${page.filename} rows ${top}–${bottom} are used twice`)
+      }
+      used.set(at, [...ranges, [top, bottom]])
+      sources.push({ ...page, top, bottom })
     }
 
     const width = Math.max(...sources.map(s => s.width))
     const height = sources.reduce((sum, s) => sum + scaledHeight(s, width), 0)
     const filename = `page_${zeroPad(outputs.length + 1)}`
-    const copied = sources.length === 1
+    const copied = sources.length === 1 && isWhole(sources[0])
 
     if (!copied && height > STITCH_MAX_HEIGHT) {
       throw new StitchError(
@@ -264,8 +300,18 @@ export function planOutputs(pages: StitchPage[], groups: unknown): PlannedOutput
   return outputs
 }
 
-function scaledHeight(page: StitchPage, width: number): number {
-  return Math.round((page.height * width) / page.width)
+function parsePiece(item: unknown): { file: string; top?: number; bottom?: number } | null {
+  if (typeof item === 'string') return { file: item }
+  if (item && typeof item === 'object' && typeof (item as StitchPiece).file === 'string') {
+    const { file, top, bottom } = item as StitchPiece
+    return { file, top, bottom }
+  }
+  return null
+}
+
+/** Height of a source's rows once scaled to `width`. */
+function scaledHeight(source: StitchSource, width: number): number {
+  return Math.round(((source.bottom - source.top) * width) / source.width)
 }
 
 function outputExtension(output: PlannedOutput): string {
@@ -291,7 +337,10 @@ export async function renderOutput(srcDir: string, output: PlannedOutput, destDi
     const height = scaledHeight(source, output.width)
     // Read into memory: libvips caches by filename, and these names get reused.
     let image = sharp(await fs.readFile(path.join(srcDir, source.filename)))
-    if (source.width !== output.width || height !== source.height) {
+    if (!isWhole(source)) {
+      image = image.extract({ left: 0, top: source.top, width: source.width, height: source.bottom - source.top })
+    }
+    if (source.width !== output.width || height !== source.bottom - source.top) {
       image = image.resize(output.width, height, { fit: 'fill', kernel: 'lanczos3' })
     }
     layers.push({ input: await image.png().toBuffer(), top, left: 0 })
@@ -383,7 +432,10 @@ export async function stitchChapter(chapter: ChapterRef, groups: unknown): Promi
       excluded: originals.filter(name => !used.has(name)),
       outputs: outputs.map((o, i) => ({
         filename: written[i],
-        sources: o.sources.map(s => s.filename),
+        sources: [...new Set(o.sources.map(s => s.filename))],
+        ...(o.sources.every(isWhole)
+          ? {}
+          : { pieces: o.sources.map(s => ({ file: s.filename, top: s.top, bottom: s.bottom })) }),
         width: o.width,
         height: o.height,
         bytes: sizes[i]

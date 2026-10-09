@@ -4,9 +4,10 @@
  *
  *   GET    /chapters                       downloaded chapters with page counts + stitch state
  *   GET    /chapters/:id                   the chapter's pages (measured), backup record, blockers, prev/next chapter
+ *   GET    /chapters/:id/profiles          per-page row "ink" profiles for Auto stitch
  *   GET    /chapters/:id/thumb/:filename   a small preview of one page
  *   GET    /chapters/:id/image/:filename   one page at full size
- *   POST   /chapters/:id                   stitch, body { groups: string[][] }
+ *   POST   /chapters/:id                   stitch, body { groups: (string | { file, top, bottom })[][] }
  *   POST   /chapters/:id/undo              restore the originals from the backup
  *   DELETE /chapters/:id/backup            keep the stitch, delete the originals
  */
@@ -17,12 +18,15 @@ import fs from 'fs/promises'
 import sharp from 'sharp'
 import { prisma } from '../index.js'
 import { reconcileQuietly } from '../services/diskReconcile.js'
+import { getImageFiles } from '../services/chapterManifest.js'
+import { PROFILE_WIDTH, profilePages } from '../services/stitchAnalysis.js'
 import {
   STITCH_MAX_HEIGHT,
   StitchError,
   discardBackup,
   doneNeighbours,
   getStitchState,
+  measurePages,
   readRecord,
   stitchChapter,
   undoStitch
@@ -122,6 +126,18 @@ export function initStitchRoutes(): Router {
       })
     } catch (error) {
       sendError(res, error, 'read chapter pages')
+    }
+  })
+
+  router.get('/chapters/:id/profiles', async (req: Request, res: Response) => {
+    try {
+      const chapter = await findChapter(req.params.id)
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+      const dir = path.join(process.env.DOWNLOAD_ROOT || './downloads', chapter.folderPath)
+      const pages = await measurePages(dir, await getImageFiles(dir))
+      res.json({ profileWidth: PROFILE_WIDTH, profiles: await profilePages(dir, pages) })
+    } catch (error) {
+      sendError(res, error, 'measure blank rows')
     }
   })
 

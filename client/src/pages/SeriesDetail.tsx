@@ -727,12 +727,20 @@ export default function SeriesDetail() {
                           Preview
                         </Button>
                       )}
-                      {currentStatus === 'done' && (chapter.pageCount ?? 0) > LARGE_CHAPTER_PAGES && (
+                      {currentStatus === 'done' && (
                         <Button
                           variant="outline"
                           size="sm"
-                          className="h-7 border-amber-500 text-amber-600 dark:text-amber-400"
-                          title="Too many pages to process — stitch them into fewer, taller pages"
+                          className={
+                            (chapter.pageCount ?? 0) > LARGE_CHAPTER_PAGES
+                              ? 'h-7 border-amber-500 text-amber-600 dark:text-amber-400'
+                              : 'h-7'
+                          }
+                          title={
+                            (chapter.pageCount ?? 0) > LARGE_CHAPTER_PAGES
+                              ? 'Too many pages to process — stitch them into fewer, taller pages'
+                              : 'Re-cut the pages at blank rows so no panel is split between two pages'
+                          }
                           onClick={e => {
                             e.stopPropagation()
                             navigate(`/stitch/chapter/${chapter.id}`)

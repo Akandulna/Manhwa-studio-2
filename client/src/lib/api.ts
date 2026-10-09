@@ -2750,6 +2750,20 @@ export interface StitchRecord {
   outputs: { filename: string; sources: string[]; width: number; height: number; bytes: number }[]
 }
 
+/** One page's rows for Auto stitch: base64, one byte per row, 0 = blank. */
+export interface StitchProfile {
+  filename: string
+  rows: number
+  ink: string
+}
+
+/** A band of one page's source rows, [top, bottom). */
+export interface StitchPieceSpec {
+  file: string
+  top: number
+  bottom: number
+}
+
 /** The downloaded chapters either side of this one in its series. */
 export interface ChapterNeighbours {
   prev: { id: string; number: number } | null
@@ -2783,7 +2797,11 @@ export const stitchApi = {
   imageUrl: (id: string, filename: string, version: string) =>
     `${API_BASE}/stitch/chapters/${id}/image/${encodeURIComponent(filename)}?v=${encodeURIComponent(version)}`,
 
-  stitch: (id: string, groups: string[][]) =>
+  profiles: (id: string) =>
+    fetchApi<{ profileWidth: number; profiles: StitchProfile[] }>(`/stitch/chapters/${id}/profiles`),
+
+  /** Each group is one output page: whole pages by name, cut pages as row pieces. */
+  stitch: (id: string, groups: (string | StitchPieceSpec)[][]) =>
     fetchApi<{ originalPages: number; stitchedPages: number; excluded: number }>(`/stitch/chapters/${id}`, {
       method: 'POST',
       body: JSON.stringify({ groups })

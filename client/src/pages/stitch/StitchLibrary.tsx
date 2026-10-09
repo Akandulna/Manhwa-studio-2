@@ -7,14 +7,14 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
-import { ArrowLeft, CheckCircle, Layers, Loader2, Search } from 'lucide-react'
+import { ArrowLeft, CheckCircle, Layers, Loader2, Search, Sparkles } from 'lucide-react'
 
 export default function StitchLibrary() {
   const navigate = useNavigate()
   const { toast } = useToast()
   const [rows, setRows] = useState<StitchChapterRow[]>([])
   const [loading, setLoading] = useState(true)
-  const [onlyLarge, setOnlyLarge] = useState(true)
+  const [onlyLarge, setOnlyLarge] = useState(false)
   const [query, setQuery] = useState('')
 
   useEffect(() => {
@@ -62,7 +62,8 @@ export default function StitchLibrary() {
             Page Stitcher
           </h1>
           <p className="text-muted-foreground">
-            Join a chapter's many short pages into a few tall ones. Normal chapters have 14–20 pages.
+            Join a chapter's many short pages into a few tall ones, or Auto stitch any chapter: re-cut it into ~12k px
+            pages only across blank rows, so no panel is split between two pages.
           </p>
         </div>
       </div>
@@ -120,6 +121,19 @@ export default function StitchLibrary() {
                   >
                     {r.pageCount} pages
                   </Badge>
+                )}
+                {!r.stitched && (
+                  <Button
+                    size="sm"
+                    title="Plan cuts at blank rows for this chapter and preview them"
+                    onClick={e => {
+                      e.preventDefault()
+                      navigate(`/stitch/chapter/${r.id}?auto=1`)
+                    }}
+                  >
+                    <Sparkles className="h-4 w-4 mr-1.5" />
+                    Auto stitch
+                  </Button>
                 )}
                 <Button variant="outline" size="sm" tabIndex={-1}>
                   {r.stitched ? 'Review' : 'Stitch'}

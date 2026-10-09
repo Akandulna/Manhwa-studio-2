@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent, MouseEvent } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
-import { stitchApi, StitchChapterState, StitchPage } from '@/lib/api'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { stitchApi, StitchChapterState, StitchPage, StitchProfile } from '@/lib/api'
 import {
   DropTarget,
   Groups,
@@ -13,6 +13,18 @@ import {
   splitGroup,
   stitchedSize
 } from '@/lib/stitchPlan'
+import {
+  Cut,
+  StripPiece,
+  autoOptions,
+  bandMiddle,
+  blankBands,
+  buildStrip,
+  outputPieces,
+  piecesOf,
+  planCuts,
+  segments
+} from '@/lib/autoStitch'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -34,6 +46,7 @@ import {
   Plus,
   RotateCcw,
   Scissors,
+  Sparkles,
   Trash2,
   Undo2,
   Wand2,
@@ -49,6 +62,8 @@ const HISTORY_LIMIT = 50
 interface Layout {
   groups: Groups
   excluded: Set<string>
+  /** Set in Auto stitch view: the chapter is one strip cut at these strip px, kept sorted. */
+  cuts: Cut[] | null
 }
 
 function formatBytes(bytes: number): string {
@@ -63,6 +78,7 @@ function sameTarget(a: DropTarget | null, b: DropTarget | null): boolean {
 
 export default function StitchWorkspace() {
   const { id } = useParams<{ id: string }>()
+  const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const { toast } = useToast()
 
@@ -72,7 +88,11 @@ export default function StitchWorkspace() {
 
   const [target, setTarget] = useState(String(DEFAULT_TARGET))
   const [columnWidth, setColumnWidth] = useState(140)
-  const [layout, setLayout] = useState<Layout>({ groups: [], excluded: new Set() })
+  const [layout, setLayout] = useState<Layout>({ groups: [], excluded: new Set(), cuts: null })
+  const [profiles, setProfiles] = useState<StitchProfile[] | null>(null)
+  const [measuring, setMeasuring] = useState(false)
+  /** The target the current cuts were planned for; flags use it, not the box being typed in. */
+  const [planTarget, setPlanTarget] = useState(DEFAULT_TARGET)
   const [history, setHistory] = useState<Layout[]>([])
   const [previewGroup, setPreviewGroup] = useState<number | null>(null)
 
@@ -87,7 +107,7 @@ export default function StitchWorkspace() {
   const stripRef = useRef<HTMLDivElement>(null)
   const dropRef = useRef<DropTarget | null>(null)
 
-  const { groups, excluded } = layout
+  const { groups, excluded, cuts } = layout
 
   // Switching chapter keeps this component mounted: drop the old chapter's state.
   useEffect(() => {
@@ -101,7 +121,8 @@ export default function StitchWorkspace() {
     try {
       const data = await stitchApi.getChapter(id)
       setState(data)
-      setLayout({ groups: autoGroups(data.pages, new Set(), DEFAULT_TARGET), excluded: new Set() })
+      setProfiles(null)
+      setLayout({ groups: autoGroups(data.pages, new Set(), DEFAULT_TARGET), excluded: new Set(), cuts: null })
       setHistory([])
       setSelected(new Set())
       setTarget(String(DEFAULT_TARGET))
@@ -123,7 +144,13 @@ export default function StitchWorkspace() {
   /** Apply a layout edit, keeping the previous layout for Undo. */
   const commit = (next: Partial<Layout>) => {
     const merged = { ...layout, ...next }
-    if (JSON.stringify(merged.groups) === JSON.stringify(layout.groups) && merged.excluded === layout.excluded) return
+    if (
+      JSON.stringify(merged.groups) === JSON.stringify(layout.groups) &&
+      merged.excluded === layout.excluded &&
+      JSON.stringify(merged.cuts) === JSON.stringify(layout.cuts)
+    ) {
+      return
+    }
     setHistory(h => [...h.slice(-(HISTORY_LIMIT - 1)), layout])
     setLayout(merged)
   }
@@ -153,6 +180,8 @@ export default function StitchWorkspace() {
   const pages = state?.pages ?? []
   const maxHeight = state?.maxHeight ?? 16383
   const flat = useMemo(() => groups.flat(), [groups])
+  const pageByName = useMemo(() => new Map(pages.map(p => [p.filename, p])), [pages])
+  const indexByName = useMemo(() => new Map(pages.map((p, i) => [p.filename, i])), [pages])
   const outputs = useMemo(
     () =>
       groups.map(group => {
@@ -170,25 +199,104 @@ export default function StitchWorkspace() {
     () => outOfOrderGroups(groups, i => excluded.has(pages[i]?.filename)),
     [groups, excluded, pages]
   )
-  const outputCount = outputNumbers.filter(n => n > 0).length
-  const overLimit = outputs.filter(o => o.overLimit).length
-  const tallest = Math.max(0, ...outputs.map(o => o.height))
 
-  const applyAuto = () => {
+  // ---- Auto stitch: one strip, cut at blank rows ----
+
+  const strip = useMemo(
+    () => (cuts && profiles ? buildStrip(pages, profiles, excluded) : null),
+    [cuts, profiles, pages, excluded]
+  )
+  const bands = useMemo(() => (strip ? blankBands(strip) : []), [strip])
+  const autoPages = useMemo(() => {
+    if (!strip || !cuts) return []
+    const options = autoOptions(planTarget, maxHeight)
+    const ranges = segments(strip, cuts)
+    return ranges.map((range, k) => {
+      const height = range.bottom - range.top
+      const last = k === ranges.length - 1
+      return {
+        range,
+        height,
+        pieces: piecesOf(strip, range),
+        cutAbove: k > 0 ? cuts[k - 1] : null,
+        overLimit: height > maxHeight,
+        offRange: (height < options.min && !last) || height > options.max
+      }
+    })
+  }, [strip, cuts, maxHeight, planTarget])
+
+  const outputCount = cuts ? autoPages.length : outputNumbers.filter(n => n > 0).length
+  const overLimit = cuts ? autoPages.filter(p => p.overLimit).length : outputs.filter(o => o.overLimit).length
+  const tallest = Math.max(0, ...(cuts ? autoPages : outputs).map(o => o.height))
+  const forcedCuts = cuts ? cuts.filter(c => c.kind === 'forced').length : 0
+  const offRange = autoPages.filter(p => p.offRange).length
+
+  const readTarget = (): number | null => {
     const value = Number(target)
     if (!Number.isFinite(value) || value < 500) {
       toast({ title: 'Enter a target height of at least 500 px', variant: 'destructive' })
-      return
+      return null
     }
-    commit({ groups: autoGroups(pages, excluded, Math.min(value, maxHeight)) })
+    return Math.min(value, maxHeight)
+  }
+
+  const applyAuto = () => {
+    const value = readTarget()
+    if (value !== null) commit({ groups: autoGroups(pages, excluded, value) })
+  }
+
+  /** Plan the cuts for the kept pages; fetches the row profiles the first time. */
+  const planAuto = async (nextExcluded: Set<string> = excluded) => {
+    const value = readTarget()
+    if (value === null || !id) return
+    let rows = profiles
+    if (!rows) {
+      setMeasuring(true)
+      try {
+        rows = (await stitchApi.profiles(id)).profiles
+        setProfiles(rows)
+      } catch (error) {
+        toast({
+          title: 'Could not measure the pages',
+          description: error instanceof Error ? error.message : 'Unknown error',
+          variant: 'destructive'
+        })
+        return
+      } finally {
+        setMeasuring(false)
+      }
+    }
+    const nextStrip = buildStrip(pages, rows, nextExcluded)
+    setPlanTarget(value)
+    commit({ excluded: nextExcluded, cuts: planCuts(nextStrip, blankBands(nextStrip), autoOptions(value, maxHeight)) })
   }
 
   const toggleExcluded = (filename: string) => {
     const next = new Set(excluded)
     if (next.has(filename)) next.delete(filename)
     else next.add(filename)
-    commit({ excluded: next })
+    // In Auto stitch view the strip changes, so the cuts are planned again.
+    if (cuts) planAuto(next)
+    else commit({ excluded: next })
   }
+
+  const addCut = (cut: Cut) => {
+    if (!cuts || cuts.some(c => c.y === cut.y)) return
+    commit({ cuts: [...cuts, cut].sort((a, b) => a.y - b.y) })
+  }
+
+  const removeCut = (y: number) => {
+    if (cuts) commit({ cuts: cuts.filter(c => c.y !== y) })
+  }
+
+  // Opened with ?auto=1 (the library's Auto stitch button): plan straight away, once.
+  const autoRequested = searchParams.get('auto') === '1'
+  useEffect(() => {
+    if (!autoRequested || !state || state.record || state.pages.length === 0) return
+    setSearchParams({}, { replace: true })
+    planAuto()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRequested, state])
 
   // ---- Selection ----
 
@@ -324,7 +432,8 @@ export default function StitchWorkspace() {
     setBusy(kind)
     try {
       if (kind === 'stitch') {
-        const result = await stitchApi.stitch(id, outputGroups(pages, groups, excluded))
+        const body = strip && cuts ? outputPieces(strip, cuts) : outputGroups(pages, groups, excluded)
+        const result = await stitchApi.stitch(id, body)
         toast({
           title: 'Chapter stitched',
           description: `${result.originalPages} pages → ${result.stitchedPages} pages. The originals are backed up until you delete them.`
@@ -505,13 +614,35 @@ export default function StitchWorkspace() {
                     max={maxHeight}
                     step={500}
                     onChange={e => setTarget(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && applyAuto()}
+                    onKeyDown={e => e.key === 'Enter' && (cuts ? planAuto() : applyAuto())}
                   />
                   <span className="text-sm text-muted-foreground">px</span>
-                  <Button variant="outline" size="sm" onClick={applyAuto} title="Regroup every page in reading order">
-                    <Wand2 className="h-4 w-4 mr-2" />
-                    Auto group
+                  <Button
+                    size="sm"
+                    variant={cuts ? 'outline' : 'default'}
+                    onClick={() => planAuto()}
+                    disabled={measuring || pages.length === 0}
+                    title="Re-cut the whole chapter into pages near the target height, cutting only across blank rows so no artwork is split"
+                  >
+                    {measuring ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Sparkles className="h-4 w-4 mr-2" />}
+                    {measuring ? 'Measuring…' : cuts ? 'Re-plan cuts' : 'Auto stitch'}
                   </Button>
+                  {cuts ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => commit({ cuts: null })}
+                      title="Back to joining whole images by hand"
+                    >
+                      <Layers className="h-4 w-4 mr-2" />
+                      Group view
+                    </Button>
+                  ) : (
+                    <Button variant="outline" size="sm" onClick={applyAuto} title="Regroup whole images in reading order">
+                      <Wand2 className="h-4 w-4 mr-2" />
+                      Auto group
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     size="sm"
@@ -535,6 +666,16 @@ export default function StitchWorkspace() {
                   Tallest {tallest.toLocaleString()} px (max {maxHeight.toLocaleString()})
                   {excluded.size > 0 && ` · ${excluded.size} dropped`}
                 </div>
+                {cuts && (forcedCuts > 0 || offRange > 0) && (
+                  <div className="text-amber-600 dark:text-amber-400">
+                    {[
+                      forcedCuts > 0 && `${forcedCuts} cut${forcedCuts === 1 ? '' : 's'} through artwork`,
+                      offRange > 0 && `${offRange} page${offRange === 1 ? '' : 's'} outside ${autoOptions(planTarget, maxHeight).min.toLocaleString()}–${autoOptions(planTarget, maxHeight).max.toLocaleString()} px`
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </div>
+                )}
                 {selected.size > 0 && (
                   <div className="flex items-center gap-1 text-primary">
                     {selected.size} selected — drag to move
@@ -559,6 +700,16 @@ export default function StitchWorkspace() {
             </CardContent>
           </Card>
 
+          {cuts ? (
+            <p className="text-xs text-muted-foreground mb-3">
+              Auto stitch treats the chapter as one long strip and cuts it only across blank rows, so a panel is never
+              split between two pages. Each column is one output page. Faint dashed lines are other blank gaps: hover one
+              and click <Scissors className="inline h-3 w-3" /> to cut there. Use{' '}
+              <ArrowLeftToLine className="inline h-3 w-3" /> / <ArrowRightToLine className="inline h-3 w-3" /> to remove
+              the cut above / below a page, or <EyeOff className="inline h-3 w-3" /> on an image to drop it (the cuts are
+              planned again). Nothing changes on disk until you stitch, and a stitch can be undone.
+            </p>
+          ) : (
           <p className="text-xs text-muted-foreground mb-3">
             Each column is one output page. <strong>Drag</strong> an image to any spot in any page, or into the gap
             between pages to start a new one. Click to select, ⌘/Ctrl-click to add, Shift-click for a range, then drag
@@ -567,16 +718,142 @@ export default function StitchWorkspace() {
             page to add all of it to the previous / next page. Nothing changes on disk until you
             stitch, and a stitch can be undone.
           </p>
+          )}
 
           {overLimit > 0 && (
             <p className="flex items-center gap-2 text-sm text-destructive mb-3">
               <AlertTriangle className="h-4 w-4" />
-              {overLimit} page{overLimit === 1 ? ' is' : 's are'} taller than {maxHeight.toLocaleString()} px. Cut or
-              move images out of {overLimit === 1 ? 'it' : 'them'} before stitching.
+              {overLimit} page{overLimit === 1 ? ' is' : 's are'} taller than {maxHeight.toLocaleString()} px.{' '}
+              {cuts
+                ? `Add a cut inside ${overLimit === 1 ? 'it' : 'them'} before stitching.`
+                : `Cut or move images out of ${overLimit === 1 ? 'it' : 'them'} before stitching.`}
             </p>
           )}
 
-          {/* Output columns */}
+          {cuts && excluded.size > 0 && (
+            <div className="flex flex-wrap items-center gap-2 text-xs mb-3">
+              <span className="text-muted-foreground">Dropped images:</span>
+              {pages.map((p, i) =>
+                excluded.has(p.filename) ? (
+                  <button
+                    key={p.filename}
+                    className="flex items-center gap-1 rounded border px-1.5 py-0.5 hover:bg-accent"
+                    title="Put this image back (the cuts are planned again)"
+                    onClick={() => toggleExcluded(p.filename)}
+                  >
+                    {i + 1}
+                    <Eye className="h-3 w-3" />
+                  </button>
+                ) : null
+              )}
+            </div>
+          )}
+
+          {cuts ? (
+            /* Auto stitch columns: strip ranges, cut at blank rows */
+            <div className="flex gap-4 overflow-x-auto pb-4 items-start">
+              {autoPages.map((out, k) => {
+                const forced = out.cutAbove?.kind === 'forced'
+                const below = autoPages[k + 1]?.cutAbove
+                const markers = bands.filter(b => {
+                  const y = bandMiddle(b)
+                  return y > out.range.top && y < out.range.bottom
+                })
+                return (
+                  <div key={out.range.top} className="shrink-0" style={{ width: columnWidth }}>
+                    <div className="mb-2 text-xs">
+                      <div className="flex items-center gap-1">
+                        <div className={`flex-1 min-w-0 truncate font-medium ${out.overLimit ? 'text-destructive' : ''}`}>
+                          Page {k + 1}
+                        </div>
+                        <button
+                          className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
+                          title="Remove the cut above: join this page onto the previous one"
+                          disabled={!out.cutAbove}
+                          onClick={() => out.cutAbove && removeCut(out.cutAbove.y)}
+                        >
+                          <ArrowLeftToLine className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
+                          title="Remove the cut below: join the next page onto this one"
+                          disabled={!below}
+                          onClick={() => below && removeCut(below.y)}
+                        >
+                          <ArrowRightToLine className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
+                          title="Preview at full size"
+                          onClick={() => setPreviewGroup(k)}
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                      <div
+                        className={`truncate ${
+                          out.overLimit
+                            ? 'text-destructive'
+                            : out.offRange
+                              ? 'text-amber-600 dark:text-amber-400'
+                              : 'text-muted-foreground'
+                        }`}
+                      >
+                        {out.height.toLocaleString()} px · {out.pieces.length} img
+                      </div>
+                      {forced && (
+                        <div
+                          className="flex items-center gap-1 text-amber-600 dark:text-amber-400"
+                          title="No blank row fitted near here, so the cut above this page crosses artwork. Click a dashed gap line to cut there instead, then remove this cut."
+                        >
+                          <AlertTriangle className="h-3 w-3 shrink-0" />
+                          <span className="truncate">Cut through artwork</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div
+                      className={`relative rounded overflow-hidden border ${
+                        out.overLimit ? 'border-destructive ring-1 ring-destructive' : 'border-border'
+                      } ${forced ? 'border-t-4 border-t-amber-500' : ''}`}
+                    >
+                      {out.pieces.map(piece => (
+                        <PieceImage
+                          key={`${piece.page.filename}:${piece.top}`}
+                          src={thumb(pageByName.get(piece.page.filename)!)}
+                          piece={piece}
+                          label={`${(indexByName.get(piece.page.filename) ?? 0) + 1}`}
+                          onExclude={() => toggleExcluded(piece.page.filename)}
+                        />
+                      ))}
+                      {markers.map(band => {
+                        const y = bandMiddle(band)
+                        return (
+                          <div
+                            key={y}
+                            className="absolute inset-x-0 h-0 z-10 group/seam"
+                            style={{ top: `${((y - out.range.top) / out.height) * 100}%` }}
+                          >
+                            <button
+                              className="absolute inset-x-0 -top-2 h-4 flex items-center justify-center"
+                              title={`Blank gap, ${band.bottom - band.top} px tall: cut here`}
+                              onClick={() => addCut({ y, kind: 'gap', band })}
+                            >
+                              <span className="absolute inset-x-0 top-1/2 border-t border-dashed border-sky-500/70 group-hover/seam:border-t-2 group-hover/seam:border-primary" />
+                              <span className="relative rounded-full bg-primary text-primary-foreground p-0.5 opacity-0 group-hover/seam:opacity-100 shadow">
+                                <Scissors className="h-3 w-3" />
+                              </span>
+                            </button>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+          /* Output columns */
           <div ref={stripRef} className="flex overflow-x-auto pb-4 items-start">
             {groups.map((group, g) => {
               const out = outputs[g]
@@ -694,6 +971,7 @@ export default function StitchWorkspace() {
 
             {dragging && gapSlot(groups.length)}
           </div>
+          )}
         </>
       )}
 
@@ -730,7 +1008,30 @@ export default function StitchWorkspace() {
       {/* Full-size preview of one output page */}
       <Dialog open={previewGroup !== null} onOpenChange={open => !open && setPreviewGroup(null)}>
         <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col">
-          {previewGroup !== null && outputs[previewGroup] && (
+          {previewGroup !== null && cuts && strip && autoPages[previewGroup] && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Preview</DialogTitle>
+                <DialogDescription>
+                  Page {previewGroup + 1} · {autoPages[previewGroup].pieces.length} images · {strip.width} ×{' '}
+                  {autoPages[previewGroup].height.toLocaleString()} px
+                </DialogDescription>
+              </DialogHeader>
+              <div className="overflow-y-auto -mx-6 px-6 flex-1 min-h-0">
+                {autoPages[previewGroup].pieces.map(piece => {
+                  const p = pageByName.get(piece.page.filename)!
+                  return (
+                    <PieceImage
+                      key={`${piece.page.filename}:${piece.top}`}
+                      src={stitchApi.imageUrl(id, p.filename, String(p.bytes))}
+                      piece={piece}
+                    />
+                  )
+                })}
+              </div>
+            </>
+          )}
+          {previewGroup !== null && !cuts && outputs[previewGroup] && (
             <>
               <DialogHeader>
                 <DialogTitle>Preview</DialogTitle>
@@ -771,6 +1072,51 @@ function ZoomControl({ value, onChange, inline }: { value: number; onChange: (v:
         value={[value]}
         onValueChange={([v]) => onChange(v)}
       />
+    </div>
+  )
+}
+
+/** Rows [top, bottom) of one page, at the width of its container. */
+function PieceImage({
+  src,
+  piece,
+  label,
+  onExclude
+}: {
+  src: string
+  piece: StripPiece
+  label?: string
+  onExclude?: () => void
+}) {
+  const rows = piece.bottom - piece.top
+  return (
+    <div
+      className="relative overflow-hidden bg-white group/page"
+      style={{ aspectRatio: `${piece.page.width} / ${rows}` }}
+    >
+      <img
+        src={src}
+        alt={piece.page.filename}
+        loading="lazy"
+        draggable={false}
+        className="absolute left-0 w-full max-w-none select-none"
+        // A percentage top is of this box's height, so the page's rows line up at any width.
+        style={{ top: `${(-piece.top / rows) * 100}%` }}
+      />
+      {label && (
+        <span className="absolute top-1 left-1 rounded px-1 text-[10px] text-white pointer-events-none bg-black/60 opacity-0 group-hover/page:opacity-100">
+          {label}
+        </span>
+      )}
+      {onExclude && (
+        <button
+          className="absolute top-1 right-1 z-20 rounded bg-black/60 p-0.5 text-white opacity-0 group-hover/page:opacity-100 hover:bg-black/80"
+          title="Drop this image from the chapter (the cuts are planned again)"
+          onClick={onExclude}
+        >
+          <EyeOff className="h-3 w-3" />
+        </button>
+      )}
     </div>
   )
 }
