@@ -50,6 +50,7 @@ function App() {
           <Route path="/series/:id" element={<SeriesDetail />} />
           <Route path="/queue" element={<DownloadQueue />} />
           <Route path="/stitch" element={<StitchLibrary />} />
+          <Route path="/stitch/series/:seriesId" element={<StitchLibrary />} />
           <Route path="/stitch/chapter/:id" element={<StitchWorkspace />} />
           <Route path="/chapter/:id/preview" element={<ChapterPreview />} />
           

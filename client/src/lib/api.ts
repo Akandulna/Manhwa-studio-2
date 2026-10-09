@@ -2757,6 +2757,12 @@ export interface StitchProfile {
   ink: string
 }
 
+/** Repeated intro ends / outro starts at `row` of `file`; seen in chapter `referenceNumber` too. */
+export interface StitchEdges {
+  intro: { file: string; row: number; referenceNumber: number } | null
+  outro: { file: string; row: number; referenceNumber: number } | null
+}
+
 /** A band of one page's source rows, [top, bottom). */
 export interface StitchPieceSpec {
   file: string
@@ -2797,8 +2803,11 @@ export const stitchApi = {
   imageUrl: (id: string, filename: string, version: string) =>
     `${API_BASE}/stitch/chapters/${id}/image/${encodeURIComponent(filename)}?v=${encodeURIComponent(version)}`,
 
+  /** Row profiles, plus where art repeated from nearby chapters (intro / outro) ends and starts. */
   profiles: (id: string) =>
-    fetchApi<{ profileWidth: number; profiles: StitchProfile[] }>(`/stitch/chapters/${id}/profiles`),
+    fetchApi<{ profileWidth: number; profiles: StitchProfile[]; edges: StitchEdges }>(
+      `/stitch/chapters/${id}/profiles`
+    ),
 
   /** Each group is one output page: whole pages by name, cut pages as row pieces. */
   stitch: (id: string, groups: (string | StitchPieceSpec)[][]) =>

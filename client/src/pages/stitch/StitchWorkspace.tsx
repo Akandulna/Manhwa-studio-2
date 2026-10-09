@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent, MouseEvent } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { stitchApi, StitchChapterState, StitchPage, StitchProfile } from '@/lib/api'
+import { stitchApi, StitchChapterState, StitchEdges, StitchPage, StitchProfile } from '@/lib/api'
 import {
   DropTarget,
   Groups,
@@ -15,6 +15,7 @@ import {
 } from '@/lib/stitchPlan'
 import {
   Cut,
+  Dropped,
   StripPiece,
   autoOptions,
   bandMiddle,
@@ -22,14 +23,18 @@ import {
   buildStrip,
   outputPieces,
   piecesOf,
-  planCuts,
-  segments
+  planChapter,
+  segments,
+  toggleDropped,
+  withCut,
+  withoutCut
 } from '@/lib/autoStitch'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Slider } from '@/components/ui/slider'
+import { Switch } from '@/components/ui/switch'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import ChapterSwitcher from '@/components/ChapterSwitcher'
@@ -59,11 +64,24 @@ const DEFAULT_TARGET = 12000
 /** Layout edits kept for Undo. */
 const HISTORY_LIMIT = 50
 
+/** Remembers the "Remove repeated intro / outro" switch per browser. */
+const REMOVE_EDGES_KEY = 'stitch.removeIntroOutro'
+
+function readRemoveEdges(): boolean {
+  try {
+    return localStorage.getItem(REMOVE_EDGES_KEY) !== 'false'
+  } catch {
+    return true
+  }
+}
+
 interface Layout {
   groups: Groups
   excluded: Set<string>
   /** Set in Auto stitch view: the chapter is one strip cut at these strip px, kept sorted. */
   cuts: Cut[] | null
+  /** Auto stitch pages left out of the stitch (repeated intro/outro, or deleted by hand). */
+  dropped: Dropped[]
 }
 
 function formatBytes(bytes: number): string {
@@ -88,8 +106,10 @@ export default function StitchWorkspace() {
 
   const [target, setTarget] = useState(String(DEFAULT_TARGET))
   const [columnWidth, setColumnWidth] = useState(140)
-  const [layout, setLayout] = useState<Layout>({ groups: [], excluded: new Set(), cuts: null })
+  const [layout, setLayout] = useState<Layout>({ groups: [], excluded: new Set(), cuts: null, dropped: [] })
   const [profiles, setProfiles] = useState<StitchProfile[] | null>(null)
+  const [edges, setEdges] = useState<StitchEdges | null>(null)
+  const [removeEdges, setRemoveEdges] = useState(readRemoveEdges)
   const [measuring, setMeasuring] = useState(false)
   /** The target the current cuts were planned for; flags use it, not the box being typed in. */
   const [planTarget, setPlanTarget] = useState(DEFAULT_TARGET)
@@ -107,7 +127,7 @@ export default function StitchWorkspace() {
   const stripRef = useRef<HTMLDivElement>(null)
   const dropRef = useRef<DropTarget | null>(null)
 
-  const { groups, excluded, cuts } = layout
+  const { groups, excluded, cuts, dropped } = layout
 
   // Switching chapter keeps this component mounted: drop the old chapter's state.
   useEffect(() => {
@@ -122,7 +142,13 @@ export default function StitchWorkspace() {
       const data = await stitchApi.getChapter(id)
       setState(data)
       setProfiles(null)
-      setLayout({ groups: autoGroups(data.pages, new Set(), DEFAULT_TARGET), excluded: new Set(), cuts: null })
+      setEdges(null)
+      setLayout({
+        groups: autoGroups(data.pages, new Set(), DEFAULT_TARGET),
+        excluded: new Set(),
+        cuts: null,
+        dropped: []
+      })
       setHistory([])
       setSelected(new Set())
       setTarget(String(DEFAULT_TARGET))
@@ -147,7 +173,8 @@ export default function StitchWorkspace() {
     if (
       JSON.stringify(merged.groups) === JSON.stringify(layout.groups) &&
       merged.excluded === layout.excluded &&
-      JSON.stringify(merged.cuts) === JSON.stringify(layout.cuts)
+      JSON.stringify(merged.cuts) === JSON.stringify(layout.cuts) &&
+      JSON.stringify(merged.dropped) === JSON.stringify(layout.dropped)
     ) {
       return
     }
@@ -211,23 +238,29 @@ export default function StitchWorkspace() {
     if (!strip || !cuts) return []
     const options = autoOptions(planTarget, maxHeight)
     const ranges = segments(strip, cuts)
+    const lastKept = ranges.map(r => r.top).filter(top => !dropped.some(d => d.y === top)).pop()
+    let number = 0
     return ranges.map((range, k) => {
       const height = range.bottom - range.top
-      const last = k === ranges.length - 1
+      const drop = dropped.find(d => d.y === range.top) ?? null
       return {
         range,
         height,
         pieces: piecesOf(strip, range),
         cutAbove: k > 0 ? cuts[k - 1] : null,
-        overLimit: height > maxHeight,
-        offRange: (height < options.min && !last) || height > options.max
+        drop,
+        /** Output page number, or 0 for a dropped page. */
+        number: drop ? 0 : ++number,
+        overLimit: !drop && height > maxHeight,
+        offRange: !drop && ((height < options.min && range.top !== lastKept) || height > options.max)
       }
     })
-  }, [strip, cuts, maxHeight, planTarget])
+  }, [strip, cuts, dropped, maxHeight, planTarget])
 
-  const outputCount = cuts ? autoPages.length : outputNumbers.filter(n => n > 0).length
+  const keptAutoPages = autoPages.filter(p => !p.drop)
+  const outputCount = cuts ? keptAutoPages.length : outputNumbers.filter(n => n > 0).length
   const overLimit = cuts ? autoPages.filter(p => p.overLimit).length : outputs.filter(o => o.overLimit).length
-  const tallest = Math.max(0, ...(cuts ? autoPages : outputs).map(o => o.height))
+  const tallest = Math.max(0, ...(cuts ? keptAutoPages : outputs).map(o => o.height))
   const forcedCuts = cuts ? cuts.filter(c => c.kind === 'forced').length : 0
   const offRange = autoPages.filter(p => p.offRange).length
 
@@ -245,16 +278,23 @@ export default function StitchWorkspace() {
     if (value !== null) commit({ groups: autoGroups(pages, excluded, value) })
   }
 
-  /** Plan the cuts for the kept pages; fetches the row profiles the first time. */
-  const planAuto = async (nextExcluded: Set<string> = excluded) => {
+  /**
+   * Plan the cuts for the kept pages, dropping the repeated intro/outro when
+   * `withEdges`; fetches the row profiles (and edge marks) the first time.
+   */
+  const planAuto = async (nextExcluded: Set<string> = excluded, withEdges = removeEdges) => {
     const value = readTarget()
     if (value === null || !id) return
     let rows = profiles
+    let marks = edges
     if (!rows) {
       setMeasuring(true)
       try {
-        rows = (await stitchApi.profiles(id)).profiles
+        const data = await stitchApi.profiles(id)
+        rows = data.profiles
+        marks = data.edges
         setProfiles(rows)
+        setEdges(marks)
       } catch (error) {
         toast({
           title: 'Could not measure the pages',
@@ -267,8 +307,19 @@ export default function StitchWorkspace() {
       }
     }
     const nextStrip = buildStrip(pages, rows, nextExcluded)
+    const plan = planChapter(nextStrip, blankBands(nextStrip), autoOptions(value, maxHeight), withEdges ? marks : null)
     setPlanTarget(value)
-    commit({ excluded: nextExcluded, cuts: planCuts(nextStrip, blankBands(nextStrip), autoOptions(value, maxHeight)) })
+    commit({ excluded: nextExcluded, ...plan })
+  }
+
+  const switchRemoveEdges = (on: boolean) => {
+    setRemoveEdges(on)
+    try {
+      localStorage.setItem(REMOVE_EDGES_KEY, String(on))
+    } catch {
+      // Private mode: the switch just isn't remembered.
+    }
+    if (cuts) planAuto(excluded, on)
   }
 
   const toggleExcluded = (filename: string) => {
@@ -281,12 +332,26 @@ export default function StitchWorkspace() {
   }
 
   const addCut = (cut: Cut) => {
-    if (!cuts || cuts.some(c => c.y === cut.y)) return
-    commit({ cuts: [...cuts, cut].sort((a, b) => a.y - b.y) })
+    if (cuts) commit(withCut(cuts, dropped, cut))
   }
 
   const removeCut = (y: number) => {
-    if (cuts) commit({ cuts: cuts.filter(c => c.y !== y) })
+    if (cuts) commit(withoutCut(cuts, dropped, y))
+  }
+
+  /** Delete or restore one Auto stitch page. */
+  const togglePage = (top: number) => commit({ dropped: toggleDropped(dropped, top) })
+
+  /** Group view: drop every image of a page, or put them all back. */
+  const toggleGroup = (g: number) => {
+    const names = groups[g].map(i => pages[i].filename)
+    const allOut = names.every(n => excluded.has(n))
+    const next = new Set(excluded)
+    for (const n of names) {
+      if (allOut) next.delete(n)
+      else next.add(n)
+    }
+    commit({ excluded: next })
   }
 
   // Opened with ?auto=1 (the library's Auto stitch button): plan straight away, once.
@@ -432,7 +497,7 @@ export default function StitchWorkspace() {
     setBusy(kind)
     try {
       if (kind === 'stitch') {
-        const body = strip && cuts ? outputPieces(strip, cuts) : outputGroups(pages, groups, excluded)
+        const body = strip && cuts ? outputPieces(strip, cuts, dropped) : outputGroups(pages, groups, excluded)
         const result = await stitchApi.stitch(id, body)
         toast({
           title: 'Chapter stitched',
@@ -514,7 +579,7 @@ export default function StitchWorkspace() {
     >
       {/* Header */}
       <div className="flex items-start gap-4 mb-6">
-        <Button variant="ghost" size="icon" onClick={() => navigate('/stitch')}>
+        <Button variant="ghost" size="icon" onClick={() => navigate(`/stitch/series/${state.seriesId}`)}>
           <ArrowLeft className="h-5 w-5" />
         </Button>
         <div className="flex-1 min-w-0">
@@ -654,6 +719,13 @@ export default function StitchWorkspace() {
                     Undo
                   </Button>
                 </div>
+                <label
+                  className="mt-2 flex items-center gap-2 text-xs text-muted-foreground cursor-pointer w-fit"
+                  title="Auto stitch compares the start and end of this chapter with nearby chapters and deletes the credit art they share (scanlator banners, title and end cards)"
+                >
+                  <Switch checked={removeEdges} onCheckedChange={switchRemoveEdges} />
+                  Auto stitch removes repeated intro / outro
+                </label>
               </div>
 
               <ZoomControl value={columnWidth} onChange={setColumnWidth} inline />
@@ -665,6 +737,7 @@ export default function StitchWorkspace() {
                 <div className="text-muted-foreground">
                   Tallest {tallest.toLocaleString()} px (max {maxHeight.toLocaleString()})
                   {excluded.size > 0 && ` · ${excluded.size} dropped`}
+                  {cuts && dropped.length > 0 && ` · ${dropped.length} page${dropped.length === 1 ? '' : 's'} deleted`}
                 </div>
                 {cuts && (forcedCuts > 0 || offRange > 0) && (
                   <div className="text-amber-600 dark:text-amber-400">
@@ -706,8 +779,10 @@ export default function StitchWorkspace() {
               split between two pages. Each column is one output page. Faint dashed lines are other blank gaps: hover one
               and click <Scissors className="inline h-3 w-3" /> to cut there. Use{' '}
               <ArrowLeftToLine className="inline h-3 w-3" /> / <ArrowRightToLine className="inline h-3 w-3" /> to remove
-              the cut above / below a page, or <EyeOff className="inline h-3 w-3" /> on an image to drop it (the cuts are
-              planned again). Nothing changes on disk until you stitch, and a stitch can be undone.
+              the cut above / below a page, <Trash2 className="inline h-3 w-3" /> to delete a whole page (repeated
+              intro/outro art is deleted for you when the switch is on), or <EyeOff className="inline h-3 w-3" /> on an
+              image to drop it (the cuts are planned again). Nothing changes on disk until you stitch, and a stitch can be
+              undone.
             </p>
           ) : (
           <p className="text-xs text-muted-foreground mb-3">
@@ -762,12 +837,25 @@ export default function StitchWorkspace() {
                 return (
                   <div key={out.range.top} className="shrink-0" style={{ width: columnWidth }}>
                     <div className="mb-2 text-xs">
-                      <div className="flex items-center gap-1">
-                        <div className={`flex-1 min-w-0 truncate font-medium ${out.overLimit ? 'text-destructive' : ''}`}>
-                          Page {k + 1}
+                      <div className="flex items-center gap-0.5">
+                        <div
+                          className={`flex-1 min-w-0 truncate font-medium ${
+                            out.overLimit ? 'text-destructive' : out.drop ? 'text-muted-foreground line-through' : ''
+                          }`}
+                        >
+                          {out.drop ? 'Deleted' : `Page ${out.number}`}
                         </div>
                         <button
-                          className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
+                          className={`p-0.5 rounded hover:bg-accent ${
+                            out.drop ? 'text-primary' : 'text-muted-foreground hover:text-destructive'
+                          }`}
+                          title={out.drop ? 'Restore this page' : 'Delete this page from the chapter'}
+                          onClick={() => togglePage(out.range.top)}
+                        >
+                          {out.drop ? <RotateCcw className="h-3.5 w-3.5" /> : <Trash2 className="h-3.5 w-3.5" />}
+                        </button>
+                        <button
+                          className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
                           title="Remove the cut above: join this page onto the previous one"
                           disabled={!out.cutAbove}
                           onClick={() => out.cutAbove && removeCut(out.cutAbove.y)}
@@ -775,7 +863,7 @@ export default function StitchWorkspace() {
                           <ArrowLeftToLine className="h-3.5 w-3.5" />
                         </button>
                         <button
-                          className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
+                          className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
                           title="Remove the cut below: join the next page onto this one"
                           disabled={!below}
                           onClick={() => below && removeCut(below.y)}
@@ -783,7 +871,7 @@ export default function StitchWorkspace() {
                           <ArrowRightToLine className="h-3.5 w-3.5" />
                         </button>
                         <button
-                          className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
+                          className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
                           title="Preview at full size"
                           onClick={() => setPreviewGroup(k)}
                         >
@@ -801,6 +889,11 @@ export default function StitchWorkspace() {
                       >
                         {out.height.toLocaleString()} px · {out.pieces.length} img
                       </div>
+                      {out.drop?.reason && (
+                        <div className="truncate text-primary" title={out.drop.reason}>
+                          {out.drop.reason}
+                        </div>
+                      )}
                       {forced && (
                         <div
                           className="flex items-center gap-1 text-amber-600 dark:text-amber-400"
@@ -815,7 +908,7 @@ export default function StitchWorkspace() {
                     <div
                       className={`relative rounded overflow-hidden border ${
                         out.overLimit ? 'border-destructive ring-1 ring-destructive' : 'border-border'
-                      } ${forced ? 'border-t-4 border-t-amber-500' : ''}`}
+                      } ${forced ? 'border-t-4 border-t-amber-500' : ''} ${out.drop ? 'opacity-30 grayscale' : ''}`}
                     >
                       {out.pieces.map(piece => (
                         <PieceImage
@@ -871,12 +964,21 @@ export default function StitchWorkspace() {
                       className="mb-2 text-xs"
                       onDragOver={e => handleZoneDragOver({ group: g, index: 0 }, e)}
                     >
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-0.5">
                         <div className={`flex-1 min-w-0 truncate font-medium ${out.overLimit ? 'text-destructive' : ''}`}>
                           {outputNumbers[g] > 0 ? `Page ${outputNumbers[g]}` : 'Dropped'}
                         </div>
                         <button
-                          className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
+                          className={`p-0.5 rounded hover:bg-accent ${
+                            out.kept.length === 0 ? 'text-primary' : 'text-muted-foreground hover:text-destructive'
+                          }`}
+                          title={out.kept.length === 0 ? 'Restore every image of this page' : 'Delete this page: drop all its images'}
+                          onClick={() => toggleGroup(g)}
+                        >
+                          {out.kept.length === 0 ? <RotateCcw className="h-3.5 w-3.5" /> : <Trash2 className="h-3.5 w-3.5" />}
+                        </button>
+                        <button
+                          className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
                           title="Add this whole page to the end of the previous page"
                           disabled={g === 0}
                           onClick={() => commit({ groups: joinWithPrevious(groups, g) })}
@@ -884,7 +986,7 @@ export default function StitchWorkspace() {
                           <ArrowLeftToLine className="h-3.5 w-3.5" />
                         </button>
                         <button
-                          className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
+                          className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
                           title="Add this whole page to the start of the next page"
                           disabled={g === groups.length - 1}
                           // Joining the next page onto this one puts this page's images first.
@@ -894,7 +996,7 @@ export default function StitchWorkspace() {
                         </button>
                         {out.kept.length > 0 && (
                           <button
-                            className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
+                            className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
                             title="Preview at full size"
                             onClick={() => setPreviewGroup(g)}
                           >
@@ -1013,7 +1115,8 @@ export default function StitchWorkspace() {
               <DialogHeader>
                 <DialogTitle>Preview</DialogTitle>
                 <DialogDescription>
-                  Page {previewGroup + 1} · {autoPages[previewGroup].pieces.length} images · {strip.width} ×{' '}
+                  {autoPages[previewGroup].drop ? 'Deleted page' : `Page ${autoPages[previewGroup].number}`} ·{' '}
+                  {autoPages[previewGroup].pieces.length} images · {strip.width} ×{' '}
                   {autoPages[previewGroup].height.toLocaleString()} px
                 </DialogDescription>
               </DialogHeader>

@@ -202,9 +202,14 @@ function pageCost(height: number, o: AutoOptions, last: boolean): number {
   return cost
 }
 
-/** Choose the cuts for the whole strip (see the file comment). */
-export function planCuts(strip: Strip, bands: Band[], o: AutoOptions): Cut[] {
-  if (strip.height <= 0) return []
+/** Choose the cuts for strip range `range` (default: all of it; see the file comment). */
+export function planCuts(
+  strip: Strip,
+  bands: Band[],
+  o: AutoOptions,
+  range: Band = { top: 0, bottom: strip.height }
+): Cut[] {
+  if (range.bottom - range.top <= 0) return []
   const candidates: Candidate[] = [
     ...bands.map(band => {
       const y = bandMiddle(band)
@@ -212,11 +217,15 @@ export function planCuts(strip: Strip, bands: Band[], o: AutoOptions): Cut[] {
     }),
     ...fallbackCandidates(strip, bands)
   ]
-    .filter(c => c.y > 0 && c.y < strip.height)
+    .filter(c => c.y > range.top && c.y < range.bottom)
     .sort((a, b) => a.y - b.y)
 
   // Node 0 is the strip's top, the last node its bottom.
-  const nodes: { y: number; cost: number; cut?: Cut }[] = [{ y: 0, cost: 0 }, ...candidates, { y: strip.height, cost: 0 }]
+  const nodes: { y: number; cost: number; cut?: Cut }[] = [
+    { y: range.top, cost: 0 },
+    ...candidates,
+    { y: range.bottom, cost: 0 }
+  ]
   const best = new Array<number>(nodes.length).fill(Infinity)
   const from = new Array<number>(nodes.length).fill(-1)
   best[0] = 0
@@ -272,11 +281,124 @@ export function piecesOf(strip: Strip, range: Band): StripPiece[] {
   return pieces
 }
 
-/** The `groups` body the server stitches: whole pages by name, cut ones as row pieces. */
-export function outputPieces(strip: Strip, cuts: Cut[]): (string | PieceSpec)[][] {
-  return segments(strip, cuts).map(range =>
-    piecesOf(strip, range).map(({ page, top, bottom }) =>
-      top === 0 && bottom === page.height ? page.filename : { file: page.filename, top, bottom }
+/** The `groups` body the server stitches: whole pages by name, cut ones as row pieces. Dropped pages are left out. */
+export function outputPieces(strip: Strip, cuts: Cut[], dropped: Dropped[] = []): (string | PieceSpec)[][] {
+  const gone = new Set(dropped.map(d => d.y))
+  return segments(strip, cuts)
+    .filter(range => !gone.has(range.top))
+    .map(range =>
+      piecesOf(strip, range).map(({ page, top, bottom }) =>
+        top === 0 && bottom === page.height ? page.filename : { file: page.filename, top, bottom }
+      )
     )
-  )
+}
+
+// ============ Dropped pages and repeated intro / outro ============
+
+/** An output page left out of the stitch, named by the strip y it starts at. */
+export interface Dropped {
+  y: number
+  /** Shown on the page; empty when the user deleted it by hand. */
+  reason: string
+}
+
+/** Where the server found repeated art: intro ends / outro starts at `row` of `file`. */
+export interface EdgeMark {
+  file: string
+  row: number
+  referenceNumber: number
+}
+
+export interface EdgeMarks {
+  intro: EdgeMark | null
+  outro: EdgeMark | null
+}
+
+/** A repeated intro/outro is only cut off at a page boundary or blank gap this close to where it ends. */
+const EDGE_SNAP = 200
+
+function stripY(strip: Strip, mark: EdgeMark): number | null {
+  const page = strip.pages.find(p => p.filename === mark.file)
+  return page ? page.top + Math.round((mark.row * page.scaledHeight) / page.height) : null
+}
+
+/**
+ * The cut that separates repeated art ending (or starting) near `y`: a page
+ * boundary if one is close — scanlators usually add their art as separate
+ * images — else the nearest blank gap. Never a cut through artwork: with
+ * neither nearby, nothing is dropped and the user can delete it by hand.
+ */
+export function edgeCut(strip: Strip, bands: Band[], y: number): Cut | null {
+  const near = (at: number) => Math.abs(at - y) <= EDGE_SNAP
+  const boundaries = strip.pages.slice(1).map(p => p.top).filter(near)
+  if (boundaries.length > 0) {
+    const at = boundaries.reduce((a, b) => (Math.abs(b - y) < Math.abs(a - y) ? b : a))
+    return { y: at, kind: 'gap' }
+  }
+  const gaps = bands.filter(b => near(bandMiddle(b)) || (b.top <= y && b.bottom >= y))
+  if (gaps.length === 0) return null
+  const band = gaps.reduce((a, b) => (Math.abs(bandMiddle(b) - y) < Math.abs(bandMiddle(a) - y) ? b : a))
+  return { y: bandMiddle(band), kind: 'gap', band }
+}
+
+/**
+ * Plan the whole chapter: cut off the repeated intro and outro (when found
+ * and `edges` is given) as dropped pages, and plan the cuts between them.
+ */
+export function planChapter(
+  strip: Strip,
+  bands: Band[],
+  o: AutoOptions,
+  edges: EdgeMarks | null
+): { cuts: Cut[]; dropped: Dropped[] } {
+  let top = 0
+  let bottom = strip.height
+  const cuts: Cut[] = []
+  const dropped: Dropped[] = []
+
+  const introY = edges?.intro ? stripY(strip, edges.intro) : null
+  const intro = introY !== null ? edgeCut(strip, bands, introY) : null
+  if (intro && intro.y > 0 && intro.y < bottom) {
+    top = intro.y
+    cuts.push(intro)
+    dropped.push({ y: 0, reason: `Intro — repeats Ch ${edges!.intro!.referenceNumber}` })
+  }
+
+  const outroY = edges?.outro ? stripY(strip, edges.outro) : null
+  const outro = outroY !== null ? edgeCut(strip, bands, outroY) : null
+  // Leave at least a page of story between them.
+  if (outro && outro.y > top + o.min && outro.y < bottom) {
+    bottom = outro.y
+    dropped.push({ y: outro.y, reason: `Outro — repeats Ch ${edges!.outro!.referenceNumber}` })
+  }
+
+  cuts.push(...planCuts(strip, bands, o, { top, bottom }))
+  if (bottom < strip.height) cuts.push(outro!)
+  return { cuts, dropped }
+}
+
+/** Remove the cut at `y`. The two pages it separated merge, and stay dropped only if both were. */
+export function withoutCut(cuts: Cut[], dropped: Dropped[], y: number): { cuts: Cut[]; dropped: Dropped[] } {
+  const above = Math.max(0, ...cuts.filter(c => c.y < y).map(c => c.y))
+  const belowDropped = dropped.some(d => d.y === y)
+  return {
+    cuts: cuts.filter(c => c.y !== y),
+    dropped: dropped.filter(d => d.y !== y && (d.y !== above || belowDropped))
+  }
+}
+
+/** Add a cut. Splitting a dropped page leaves both halves dropped. */
+export function withCut(cuts: Cut[], dropped: Dropped[], cut: Cut): { cuts: Cut[]; dropped: Dropped[] } {
+  if (cuts.some(c => c.y === cut.y)) return { cuts, dropped }
+  const top = Math.max(0, ...cuts.filter(c => c.y < cut.y).map(c => c.y))
+  const parent = dropped.find(d => d.y === top)
+  return {
+    cuts: [...cuts, cut].sort((a, b) => a.y - b.y),
+    dropped: parent ? [...dropped, { y: cut.y, reason: parent.reason }] : dropped
+  }
+}
+
+/** Delete or restore the page starting at `y`. */
+export function toggleDropped(dropped: Dropped[], y: number): Dropped[] {
+  return dropped.some(d => d.y === y) ? dropped.filter(d => d.y !== y) : [...dropped, { y, reason: '' }]
 }

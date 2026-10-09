@@ -12,8 +12,12 @@ import {
   buildStrip,
   outputPieces,
   piecesOf,
+  planChapter,
   planCuts,
   segments,
+  toggleDropped,
+  withCut,
+  withoutCut,
   type PageProfile
 } from './autoStitch.ts'
 
@@ -116,5 +120,61 @@ describe('outputPieces', () => {
       piecesOf(s, { top: 0, bottom: 1000 }).map(p => [p.page.filename, p.top, p.bottom]),
       [['p1', 0, 1000]]
     )
+  })
+})
+
+describe('planChapter', () => {
+  // 40k strip: intro art 0–1500 (own page), story with gaps every 1k, outro art from 38.5k (own page).
+  const blank: [number, number][] = []
+  for (let y = 1000; y < 37000; y += 1000) blank.push([y - 50, y + 50])
+  const defs = [page(1, 1500, []), page(2, 37000, blank), page(3, 1500, [])]
+
+  it('drops the repeated intro and outro at page boundaries and plans the story between', () => {
+    const s = strip(defs)
+    const edges = {
+      intro: { file: 'p1', row: 1450, referenceNumber: 2 },
+      outro: { file: 'p3', row: 80, referenceNumber: 4 }
+    }
+    const { cuts, dropped } = planChapter(s, blankBands(s), options, edges)
+    assert.deepEqual(dropped, [
+      { y: 0, reason: 'Intro — repeats Ch 2' },
+      { y: 38500, reason: 'Outro — repeats Ch 4' }
+    ])
+    assert.equal(cuts[0].y, 1500)
+    assert.equal(cuts[cuts.length - 1].y, 38500)
+    const kept = outputPieces(s, cuts, dropped)
+    assert.equal(kept.length, segments(s, cuts).length - 2)
+    assert.ok(kept.flat().every(p => p !== 'p1' && p !== 'p3'))
+  })
+
+  it('drops nothing when no boundary or gap is near the repeated art', () => {
+    const s = strip([page(1, 20000, [])])
+    const { dropped } = planChapter(s, blankBands(s), options, {
+      intro: { file: 'p1', row: 3000, referenceNumber: 2 },
+      outro: null
+    })
+    assert.deepEqual(dropped, [])
+  })
+})
+
+describe('dropped pages', () => {
+  const cuts = [{ y: 100, kind: 'gap' as const }, { y: 200, kind: 'gap' as const }]
+
+  it('keeps a merged page only if both halves were dropped', () => {
+    // Page at 100 dropped, page at 200 kept: the merged page is kept.
+    assert.deepEqual(withoutCut(cuts, [{ y: 100, reason: '' }], 200).dropped, [])
+    assert.deepEqual(withoutCut(cuts, [{ y: 100, reason: 'a' }, { y: 200, reason: 'b' }], 200).dropped, [{ y: 100, reason: 'a' }])
+    assert.deepEqual(withoutCut(cuts, [{ y: 200, reason: '' }], 200).dropped, [])
+  })
+
+  it('splitting a dropped page keeps both halves dropped', () => {
+    const next = withCut(cuts, [{ y: 100, reason: 'Intro' }], { y: 150, kind: 'gap' })
+    assert.deepEqual(next.cuts.map(c => c.y), [100, 150, 200])
+    assert.deepEqual(next.dropped, [{ y: 100, reason: 'Intro' }, { y: 150, reason: 'Intro' }])
+  })
+
+  it('toggles a page', () => {
+    assert.deepEqual(toggleDropped([], 100), [{ y: 100, reason: '' }])
+    assert.deepEqual(toggleDropped([{ y: 100, reason: 'x' }], 100), [])
   })
 })

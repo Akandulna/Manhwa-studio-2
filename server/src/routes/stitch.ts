@@ -4,7 +4,7 @@
  *
  *   GET    /chapters                       downloaded chapters with page counts + stitch state
  *   GET    /chapters/:id                   the chapter's pages (measured), backup record, blockers, prev/next chapter
- *   GET    /chapters/:id/profiles          per-page row "ink" profiles for Auto stitch
+ *   GET    /chapters/:id/profiles          per-page row "ink" profiles + repeated intro/outro for Auto stitch
  *   GET    /chapters/:id/thumb/:filename   a small preview of one page
  *   GET    /chapters/:id/image/:filename   one page at full size
  *   POST   /chapters/:id                   stitch, body { groups: (string | { file, top, bottom })[][] }
@@ -20,6 +20,7 @@ import { prisma } from '../index.js'
 import { reconcileQuietly } from '../services/diskReconcile.js'
 import { getImageFiles } from '../services/chapterManifest.js'
 import { PROFILE_WIDTH, profilePages } from '../services/stitchAnalysis.js'
+import { IntroOutro, detectIntroOutro } from '../services/stitchIntroOutro.js'
 import {
   STITCH_MAX_HEIGHT,
   StitchError,
@@ -135,7 +136,13 @@ export function initStitchRoutes(): Router {
       if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
       const dir = path.join(process.env.DOWNLOAD_ROOT || './downloads', chapter.folderPath)
       const pages = await measurePages(dir, await getImageFiles(dir))
-      res.json({ profileWidth: PROFILE_WIDTH, profiles: await profilePages(dir, pages) })
+      const profiles = await profilePages(dir, pages)
+      // Detection is a bonus: if it fails, Auto stitch still works without it.
+      const edges: IntroOutro = await detectIntroOutro(chapter, pages).catch(error => {
+        console.warn('[stitch] intro/outro detection failed:', error)
+        return { intro: null, outro: null }
+      })
+      res.json({ profileWidth: PROFILE_WIDTH, profiles, edges })
     } catch (error) {
       sendError(res, error, 'measure blank rows')
     }

@@ -132,11 +132,11 @@ interface ChapterRef {
 
 // ============ Paths ============
 
-function chapterDir(folderPath: string): string {
+export function chapterDir(folderPath: string): string {
   return path.join(process.env.DOWNLOAD_ROOT || './downloads', folderPath)
 }
 
-function backupDir(folderPath: string): string {
+export function backupDir(folderPath: string): string {
   return path.join(chapterDir(folderPath), BACKUP_DIR)
 }
 
