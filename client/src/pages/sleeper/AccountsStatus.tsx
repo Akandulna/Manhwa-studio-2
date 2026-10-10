@@ -2,7 +2,11 @@
  * Accounts — every browser profile on the phones (one ChatGPT and one Google
  * account each): its plans, ChatGPT's image limit over the rolling 3 hours, and
  * Gemini's daily requests in AI Studio for speech (voiceover) and scripts
- * (narration). Totals on top, then one table per phone.
+ * (narration). Totals on top, then one table of accounts.
+ *
+ * The phones sign in to the same accounts, and the limits are the account's,
+ * not the phone's: a profile on each phone with the same account name (any
+ * case) is one row, its uploads and requests added up across the phones.
  *
  * Plans are what Sleeper-Cell's Tools → Profiles → Check last found on the
  * phone (each profile's `check`). A profile never checked there can have its
@@ -25,11 +29,12 @@ import {
   type PhoneOverview,
   type PhoneOverviewRun,
   type PhoneProfileCheck,
-  type PhoneSiteCheck
+  type PhoneSiteCheck,
+  type PhoneUploadProfile
 } from '@/lib/api'
 import { UPLOAD_LIMIT, uploadOverview, uploadUsage, type UploadUsage } from '@/lib/uploadUsage'
 import { cn } from '@/lib/utils'
-import { Bar, clock, InfoTip, MINUTE, phoneList, PhoneHeading, planLabel, plural, SleeperPage, span, useNow } from './sleeperShared'
+import { Bar, clock, InfoTip, MINUTE, phoneList, planLabel, plural, SleeperPage, span, useNow } from './sleeperShared'
 
 /** A profile running out sooner than this is flagged. */
 const RUNS_OUT_SOON_MS = 30 * MINUTE
@@ -70,42 +75,100 @@ function usePlans() {
   return { plans, setPlan }
 }
 
-/** One profile on one phone, across ChatGPT and both Gemini limits (they share the profile id). */
+/** One account, across every phone that has a profile for it, ChatGPT and both Gemini limits. */
 interface Account {
-  id: string
+  key: string
+  /** As the first phone names it. */
   name: string
-  phone: string | null
-  selected: boolean
+  /** Every name the phones give it (they differ only in case), for the plans saved by name. */
+  names: string[]
+  /** The phones with a profile for it. */
+  phones: (string | null)[]
+  /** The phones whose browser is on it: their next run starts in it. */
+  selectedOn: (string | null)[]
   upload: UploadUsage | null
   speech: PhoneGeminiProfile | null
   scripts: PhoneGeminiProfile | null
-  /** The phone's last Tools → Profiles → Check of it. */
+  /** The latest Tools → Profiles → Check of it, on any phone. */
   check: PhoneProfileCheck | null
 }
 
-function accountsOf(overview: PhoneOverview | null, now: number): Account[] {
-  const accounts = new Map<string, Account>()
-  const add = (p: { id: string; name: string; phone: string | null; selected: boolean }) => {
-    const known = accounts.get(p.id)
-    if (known) return known
-    const account: Account = { id: p.id, name: p.name, phone: p.phone, selected: p.selected, upload: null, speech: null, scripts: null, check: null }
-    accounts.set(p.id, account)
-    return account
+const accountKey = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase()
+
+const latest = (times: (string | null)[]): string | null =>
+  times.reduce<string | null>((best, t) => (t && (!best || Date.parse(t) > Date.parse(best)) ? t : best), null)
+
+/** One account's ChatGPT profiles on several phones as one: their upload slots added up, the latest limit. */
+function mergeUploads(profiles: PhoneUploadProfile[]): PhoneUploadProfile {
+  if (profiles.length === 1) return profiles[0]
+  const slots = new Map<string, number>()
+  for (const u of profiles.flatMap(p => p.uploads)) slots.set(u.at, (slots.get(u.at) ?? 0) + u.images)
+  return {
+    ...profiles[0],
+    selected: profiles.some(p => p.selected),
+    limitedUntil: latest(profiles.map(p => p.limitedUntil)),
+    uploads: [...slots].map(([at, images]) => ({ at, images })).sort((a, b) => Date.parse(a.at) - Date.parse(b.at)),
+    limits: profiles.flatMap(p => p.limits).sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
   }
-  for (const p of overview?.profiles ?? []) {
-    const account = add(p)
-    account.upload = uploadUsage(p, now)
-    account.check = p.check ?? null
-  }
-  for (const p of overview?.gemini?.speech?.profiles ?? []) add(p).speech = p
-  for (const p of overview?.gemini?.narration?.profiles ?? []) add(p).scripts = p
-  return [...accounts.values()]
 }
 
-/** Is a Gemini run of this kind on this account now. With one profile the run names none: the selected one is it. */
-function geminiInUse(runs: PhoneOverviewRun[], kind: PhoneOverviewRun['kind'], account: Account): boolean {
-  return runs.some(r => r.kind === kind && r.phone === account.phone && (r.account === account.name || (!r.account && account.selected)))
+/** One account's Gemini profiles on several phones as one: today's requests added up, the highest limit seen. */
+function mergeGemini(profiles: PhoneGeminiProfile[]): PhoneGeminiProfile | null {
+  if (profiles.length <= 1) return profiles[0] ?? null
+  const limits = profiles.map(p => p.limit).filter((l): l is number => l !== null)
+  return {
+    ...profiles[0],
+    selected: profiles.some(p => p.selected),
+    today: profiles.reduce((sum, p) => sum + p.today, 0),
+    limit: limits.length ? Math.max(...limits) : null,
+    limitedUntil: latest(profiles.map(p => p.limitedUntil))
+  }
 }
+
+function accountsOf(overview: PhoneOverview | null, now: number): Account[] {
+  const found = new Map<string, {
+    account: Account; uploads: PhoneUploadProfile[]; speech: PhoneGeminiProfile[]; scripts: PhoneGeminiProfile[]
+  }>()
+  const add = (p: { name: string; phone: string | null; selected: boolean }) => {
+    const key = accountKey(p.name)
+    let entry = found.get(key)
+    if (!entry) {
+      const account: Account = { key, name: p.name, names: [], phones: [], selectedOn: [], upload: null, speech: null, scripts: null, check: null }
+      entry = { account, uploads: [], speech: [], scripts: [] }
+      found.set(key, entry)
+    }
+    const { account } = entry
+    if (!account.names.includes(p.name)) account.names.push(p.name)
+    if (!account.phones.includes(p.phone)) account.phones.push(p.phone)
+    if (p.selected && !account.selectedOn.includes(p.phone)) account.selectedOn.push(p.phone)
+    return entry
+  }
+  for (const p of overview?.profiles ?? []) add(p).uploads.push(p)
+  for (const p of overview?.gemini?.speech?.profiles ?? []) add(p).speech.push(p)
+  for (const p of overview?.gemini?.narration?.profiles ?? []) add(p).scripts.push(p)
+  return [...found.values()].map(({ account, uploads, speech, scripts }) => {
+    const checks = uploads.map(p => p.check).filter((c): c is PhoneProfileCheck => !!c)
+    const lastCheck = latest(checks.map(c => c.checkedAt))
+    return {
+      ...account,
+      upload: uploads.length ? uploadUsage(mergeUploads(uploads), now) : null,
+      speech: mergeGemini(speech),
+      scripts: mergeGemini(scripts),
+      check: checks.find(c => c.checkedAt === lastCheck) ?? null
+    }
+  })
+}
+
+/** Is a Gemini run of this kind on this account now, on any phone. With one profile the run names none: the selected one is it. */
+function geminiInUse(runs: PhoneOverviewRun[], kind: PhoneOverviewRun['kind'], account: Account): boolean {
+  return runs.some(r => r.kind === kind && account.phones.includes(r.phone) && (
+    (r.account != null && accountKey(r.account) === account.key) || (!r.account && account.selectedOn.includes(r.phone))
+  ))
+}
+
+/** The plans set here for an account, under any of its names. */
+const planOf = (plans: Plans, account: Account) =>
+  plans[account.name] ?? account.names.map(n => plans[n]).find(Boolean) ?? {}
 
 function PlanSelect({ value, options, onChange, label }: { value: string | undefined; options: readonly string[]; onChange: (plan: string | null) => void; label: string }) {
   return (
@@ -190,8 +253,8 @@ function Th({ children, tip, className }: { children: React.ReactNode; tip?: str
   )
 }
 
-function AccountTable({ accounts, runs, plans, setPlan, now }: {
-  accounts: Account[]; runs: PhoneOverviewRun[]; plans: Plans; setPlan: ReturnType<typeof usePlans>['setPlan']; now: number
+function AccountTable({ accounts, phones, runs, plans, setPlan, now }: {
+  accounts: Account[]; phones: string[]; runs: PhoneOverviewRun[]; plans: Plans; setPlan: ReturnType<typeof usePlans>['setPlan']; now: number
 }) {
   return (
     <div className="overflow-x-auto">
@@ -219,22 +282,29 @@ function AccountTable({ accounts, runs, plans, setPlan, now }: {
         </thead>
         <tbody>
           {accounts.map(account => {
-            const plan = plans[account.name] ?? {}
+            const plan = planOf(plans, account)
+            // With several phones, say which ones an account is missing from, and which phone it's next up on.
+            const onlyOn = phones.length > 1 && phones.some(p => !account.phones.includes(p))
+              ? account.phones.filter((p): p is string => !!p)
+              : []
             const uploading = account.upload?.pace != null
             const voicing = geminiInUse(runs, 'voiceover', account)
             const writing = geminiInUse(runs, 'narration', account)
             return (
-              <tr key={account.id} className="border-t align-middle">
+              <tr key={account.key} className="border-t align-middle">
                 <td className="py-2.5 pr-4">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span className="font-medium">{account.name}</span>
                     {uploading && <Badge className="bg-sky-600 px-1.5 py-0 text-[10px] hover:bg-sky-600">uploading</Badge>}
                     {voicing && <Badge className="bg-sky-600 px-1.5 py-0 text-[10px] hover:bg-sky-600">voicing</Badge>}
                     {writing && <Badge className="bg-sky-600 px-1.5 py-0 text-[10px] hover:bg-sky-600">writing</Badge>}
-                    {!uploading && !voicing && !writing && account.selected && (
-                      <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">next up</Badge>
+                    {!uploading && !voicing && !writing && account.selectedOn.length > 0 && (
+                      <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+                        next up{phones.length > 1 && account.selectedOn[0] && <> · {account.selectedOn.join(', ')}</>}
+                      </Badge>
                     )}
                   </div>
+                  {onlyOn.length > 0 && <p className="text-[11px] text-muted-foreground">only on {onlyOn.join(', ')}</p>}
                 </td>
                 <td className="py-2.5 pr-4">
                   <PlanCell
@@ -273,17 +343,17 @@ function Total({ label, value, sub, warn }: { label: string; value: React.ReactN
   )
 }
 
-/** A Gemini limit over every profile: how many can still make requests. */
-function GeminiTotal({ label, usage, now }: { label: string; usage: PhoneGeminiUsage | null; now: number }) {
-  if (!usage?.profiles.length) return <Total label={label} value="—" sub="Not reported by this build" />
-  const ready = usage.profiles.filter(p => !p.limitedUntil && (p.limit === null || p.today < p.limit)).length
-  const today = usage.profiles.reduce((sum, p) => sum + p.today, 0)
+/** A Gemini limit over every account: how many can still make requests. */
+function GeminiTotal({ label, usage, profiles, now }: { label: string; usage: PhoneGeminiUsage | null; profiles: PhoneGeminiProfile[]; now: number }) {
+  if (!usage || !profiles.length) return <Total label={label} value="—" sub="Not reported by this build" />
+  const ready = profiles.filter(p => !p.limitedUntil && (p.limit === null || p.today < p.limit)).length
+  const today = profiles.reduce((sum, p) => sum + p.today, 0)
   const resetsAt = Date.parse(usage.resetsAt)
   return (
     <Total
       label={label}
       warn={ready === 0}
-      value={<>{ready}<span className="text-base font-semibold text-muted-foreground"> / {usage.profiles.length} ready</span></>}
+      value={<>{ready}<span className="text-base font-semibold text-muted-foreground"> / {profiles.length} ready</span></>}
       sub={<>{plural(today, 'request')} today · resets ~{clock(resetsAt)}{resetsAt > now && <> (in {span(resetsAt - now)})</>}</>}
     />
   )
@@ -297,20 +367,15 @@ export default function AccountsStatus() {
   const { plans, setPlan } = usePlans()
   const accounts = useMemo(() => accountsOf(overview, now), [overview, now])
   const phones = phoneList(overview, relay)
-  const several = phones.length > 1
+  const phoneNames = phones.map(p => p.name)
   const runs = overview?.runs ?? []
 
   const usages = accounts.map(a => a.upload).filter((u): u is UploadUsage => u !== null)
   const total = uploadOverview(usages, now)
   const limited = usages.filter(u => u.limitedUntil).length
 
-  // One table per phone, in the phones' order; any profile on a phone not listed goes last.
-  const groups: [string | null, Account[]][] = several
-    ? [
-        ...phones.map(p => [p.name, accounts.filter(a => a.phone === p.name)] as [string, Account[]]),
-        [null, accounts.filter(a => !phones.some(p => p.name === a.phone))] as [null, Account[]]
-      ].filter(([, list]) => list.length > 0)
-    : [[null, accounts]]
+  const speech = accounts.map(a => a.speech).filter((p): p is PhoneGeminiProfile => p !== null)
+  const scripts = accounts.map(a => a.scripts).filter((p): p is PhoneGeminiProfile => p !== null)
 
   return (
     <SleeperPage icon={Users} title="Accounts" receipt={receipt}>
@@ -332,28 +397,24 @@ export default function AccountsStatus() {
                   />
                 )
                 : <Total label="ChatGPT images" value="—" sub="Not reported by this build" />}
-              <GeminiTotal label="Gemini · speech" usage={overview.gemini?.speech ?? null} now={now} />
-              <GeminiTotal label="Gemini · scripts" usage={overview.gemini?.narration ?? null} now={now} />
+              <GeminiTotal label="Gemini · speech" usage={overview.gemini?.speech ?? null} profiles={speech} now={now} />
+              <GeminiTotal label="Gemini · scripts" usage={overview.gemini?.narration ?? null} profiles={scripts} now={now} />
             </CardContent>
           </Card>
 
           {accounts.length === 0
             ? <Card><CardContent className="p-5 text-sm text-muted-foreground">The phone hasn’t reported its accounts yet (older Sleeper-Cell builds don’t).</CardContent></Card>
             : (
-              <div className="space-y-6">
-                {groups.map(([phone, list]) => (
-                  <Card key={phone ?? 'one'}>
-                    <CardHeader className="pb-3">
-                      <CardTitle className="text-base">
-                        {phone ? <PhoneHeading name={phone} className="text-sm normal-case tracking-normal text-foreground" /> : several ? 'Other profiles' : `${plural(list.length, 'account')} on the phone`}
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <AccountTable accounts={list} runs={runs} plans={plans} setPlan={setPlan} now={now} />
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">
+                    {plural(accounts.length, 'account')}{phoneNames.length > 1 ? <> on {phoneNames.join(' and ')}</> : ' on the phone'}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <AccountTable accounts={accounts} phones={phoneNames} runs={runs} plans={plans} setPlan={setPlan} now={now} />
+                </CardContent>
+              </Card>
             )}
         </>
       )}
