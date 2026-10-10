@@ -1,7 +1,7 @@
 /**
  * Clipper3Library — Module 3 v3: Image Clipper 3.0
  *
- * Landing page for the four-pointer technique: a grid of series, "pick a
+ * Landing page for the four-pointer technique: a list of series, "pick a
  * series first". Selecting a series
  * navigates to its chapter list (Clipper3SeriesView), which links into the
  * actual pointer workspace (Clipper3Workspace).
@@ -32,6 +32,8 @@ import {
   type Clipper3Status,
   type Clipper3ChapterSummary
 } from '@/lib/api'
+import { usePublishedChapters } from '@/hooks/usePublishedChapters'
+import { SeriesCompletedBadge } from '@/components/PublishedBadge'
 
 // ============ Helpers ============
 
@@ -45,13 +47,15 @@ function formatWhen(iso: string | null): string {
 
 export default function Clipper3Library() {
   const [status, setStatus] = useState<Clipper3Status | null>(null)
+  // Parts completed on the Storage page (files deleted, continuity kept).
+  const { seriesCompletedParts } = usePublishedChapters()
   const [seriesList, setSeriesList] = useState<Clipper3Series[]>([])
   const [chapters, setChapters] = useState<Clipper3Chapter[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   /**
    * Clipper 3's own per-chapter progress, keyed by chapter id. `chopped` is
-   * read from crops3/ on disk, which is the fact this module produces. Empty until the summaries resolve — the cards then re-render.
+   * read from crops3/ on disk, which is the fact this module produces. Empty until the summaries resolve — the rows then re-render.
    */
   const [summaries, setSummaries] = useState<Record<string, Clipper3ChapterSummary>>({})
   /** For the phone profiles' ChatGPT upload counts, which aren't per series. */
@@ -83,8 +87,8 @@ export default function Clipper3Library() {
   )
 
   // Per-series, because that is the shape the endpoint has. Settled
-  // independently so one unreadable series folder leaves the other cards'
-  // counts intact rather than blanking the whole grid.
+  // independently so one unreadable series folder leaves the other rows'
+  // counts intact rather than blanking the whole list.
   useEffect(() => {
     if (seriesWithChapters.length === 0) return
     let cancelled = false
@@ -187,7 +191,7 @@ export default function Clipper3Library() {
       )}
 
       {seriesWithChapters.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        <Card className="overflow-hidden divide-y">
           {seriesWithChapters.map(s => {
             const seriesChapters = chapters.filter(c => c.seriesId === s.id)
             // Done here means "every page has its crops and matching metadata",
@@ -197,71 +201,69 @@ export default function Clipper3Library() {
             // from the denominator, so the bar never overstates progress.
             const done = seriesChapters.filter(c => summaries[c.id]?.fullyAttached).length
             // Cut output is tracked separately: a chapter can be re-detected
-            // after being cut, so this is a note on the card, not the progress.
+            // after being cut, so this is a note on the row, not the progress.
             const chopped = seriesChapters.filter(c => summaries[c.id]?.chopped).length
             const progress = seriesChapters.length > 0 ? Math.round((done / seriesChapters.length) * 100) : 0
             return (
-              <Link key={s.id} to={`/clipper3/series/${s.id}`}>
-                <Card className="h-full hover:border-primary transition-colors cursor-pointer">
-                  <CardContent className="p-4">
-                    <div className="aspect-[3/4] bg-muted rounded-lg mb-3 flex items-center justify-center overflow-hidden">
-                      {s.coverPath ? (
-                        <img
-                          src={`file://${s.coverPath}`}
-                          alt={s.title}
-                          className="w-full h-full object-cover"
-                          onError={(e) => {
-                            e.currentTarget.style.display = 'none'
-                            e.currentTarget.parentElement!.innerHTML = `<div class="flex items-center justify-center w-full h-full"><span class="text-4xl">📚</span></div>`
-                          }}
-                        />
-                      ) : (
-                        <span className="text-4xl">📚</span>
-                      )}
-                    </div>
+              <Link
+                key={s.id}
+                to={`/clipper3/series/${s.id}`}
+                className="flex items-center gap-4 px-4 py-3 hover:bg-accent/50 transition-colors"
+              >
+              <div className="h-10 w-10 shrink-0 rounded-md bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center">
+                <Scissors className="h-5 w-5 text-primary/40" />
+              </div>
 
-                    <h3 className="font-semibold truncate mb-2">{s.title}</h3>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <h3 className="font-semibold truncate">{s.title}</h3>
+                  <SeriesCompletedBadge parts={seriesCompletedParts(s.id)} />
+                </div>
+                <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <Globe className="h-3 w-3 shrink-0" />
+                  <span className="truncate">{s.sourceSite}</span>
+                </div>
+              </div>
 
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground mb-3">
-                      <Globe className="h-3 w-3" />
-                      <span className="truncate">{s.sourceSite}</span>
-                    </div>
+                <div className="hidden md:flex items-center gap-1.5 shrink-0">
+                  {chopped > 0 && (
+                    <Badge
+                      variant="outline"
+                      className="flex items-center gap-1"
+                      title={`${chopped} of ${seriesChapters.length} chapters have cut output in crops3/`}
+                    >
+                      <Scissors className="h-3 w-3" />
+                      {chopped} cut
+                    </Badge>
+                  )}
+                </div>
 
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-1.5">
-                          {progress === 100 ? (
-                            <Badge variant="success" className="flex items-center gap-1">
-                              <CheckCircle2 className="h-3 w-3" />
-                              Complete
-                            </Badge>
-                          ) : (
-                            <Badge variant="secondary" className="flex items-center gap-1">
-                              <ImageIcon className="h-3 w-3" />
-                              {done}/{seriesChapters.length}
-                            </Badge>
-                          )}
-                          {chopped > 0 && (
-                            <Badge
-                              variant="outline"
-                              className="flex items-center gap-1"
-                              title={`${chopped} of ${seriesChapters.length} chapters have cut output in crops3/`}
-                            >
-                              <Scissors className="h-3 w-3" />
-                              {chopped}
-                            </Badge>
-                          )}
-                        </div>
-                        <span className="text-xs text-muted-foreground">{progress}%</span>
-                      </div>
-                      <Progress value={progress} className="h-1.5" />
-                    </div>
-                  </CardContent>
-                </Card>
+                <span className="w-24 shrink-0 text-sm text-muted-foreground text-right">
+                  {seriesChapters.length} chapters
+                </span>
+
+                <div className="hidden sm:flex w-36 shrink-0 items-center gap-2">
+                  <Progress value={progress} className="h-1 flex-1" />
+                  <span className="w-9 text-xs text-muted-foreground text-right">{progress}%</span>
+                </div>
+
+                <div className="w-32 shrink-0 flex justify-end">
+                  {progress === 100 ? (
+                    <Badge variant="success" className="flex items-center gap-1">
+                      <CheckCircle2 className="h-3 w-3" />
+                      Complete
+                    </Badge>
+                  ) : (
+                    <Badge variant="secondary" className="flex items-center gap-1">
+                      <ImageIcon className="h-3 w-3" />
+                      {done}/{seriesChapters.length}
+                    </Badge>
+                  )}
+                </div>
               </Link>
             )
           })}
-        </div>
+        </Card>
       )}
     </div>
   )

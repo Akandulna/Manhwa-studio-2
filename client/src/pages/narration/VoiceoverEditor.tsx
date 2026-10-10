@@ -7,7 +7,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { usePublishedChapters } from '@/hooks/usePublishedChapters'
-import { PublishedBadge } from '@/components/PublishedBadge'
+import { CompletedBadge, PublishedBadge } from '@/components/PublishedBadge'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { voiceoverApi, settingsApi, VoiceoverChapterDetail, AudioSection, AudioFile } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -139,7 +139,7 @@ export default function VoiceoverEditor() {
   // Chapter data
   // Already rendered to video in this language — surfaced in the header so a
   // published chapter is not re-voiced by mistake.
-  const { isPublished } = usePublishedChapters(undefined, language)
+  const { isPublished, completedPart } = usePublishedChapters(undefined, language)
 
   const [chapter, setChapter] = useState<VoiceoverChapterDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -1048,7 +1048,9 @@ export default function VoiceoverEditor() {
             <div>
               <h1 className="text-lg font-semibold">
                 Chapter {chapter.number}: {chapter.title || 'Voiceover'}
-                {id && isPublished(id) && <PublishedBadge className="ml-2 align-middle" />}
+                {id && (completedPart(id) !== null
+                  ? <CompletedBadge part={completedPart(id)} className="ml-2 align-middle" />
+                  : isPublished(id) && <PublishedBadge className="ml-2 align-middle" />)}
               </h1>
               <p className="text-sm text-muted-foreground">{chapter.series.title}</p>
             </div>

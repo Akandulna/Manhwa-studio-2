@@ -4,10 +4,11 @@
  * receipts and passes messages both ways, so status needs no R2 operations.
  *
  * While the server runs it holds one WebSocket to the relay. On connect the
- * relay sends every receipt it holds, then each new one the moment the phone
- * posts it; they are kept here in memory, and r2Service serves them instead of
- * reading R2. Each arrival is pushed to the browser as `phone:receipt`
- * ({ kind }), and connection/phone presence changes as `phone:relay`.
+ * relay sends every receipt it holds, then each new one the moment a phone
+ * posts it; they are kept here in memory, per phone (Sleeper-Cell can run on
+ * several), and r2Service merges and serves them instead of reading R2. Each
+ * arrival is pushed to the browser as `phone:receipt` ({ kind }), and
+ * connection/phone presence changes as `phone:relay`.
  * "Refresh from phone" goes to the relay as a request message, and so do
  * Image Clipper's start and stop (see sendClipperCommand in r2Service).
  *
@@ -34,10 +35,33 @@ export type ReceiptKind = 'sync' | 'scripts' | 'crops'
  */
 export type PhoneAction = 'sync' | 'clipper_start' | 'clipper_stop'
 
-/** For `clipper_start`: the phone's series folder and ChatGPT tabs; without them, its last run's. */
+/**
+ * For `clipper_start`: the phone's series folder and ChatGPT tabs; without them,
+ * its last run's. `chapters` limits the run to those chapter folders (a series
+ * split between phones). `device` sends the request to that phone only.
+ */
 export interface PhoneRequestArgs {
   series?: string
   tabs?: number
+  chapters?: string[]
+  device?: string
+}
+
+/** One phone's copy of a receipt. `device` is its id, "" for Sleeper-Cell builds from before phones had one. */
+export interface RelayedReceipt<T> {
+  device: string
+  /** When the relay got it (ms). */
+  at: number
+  body: T
+}
+
+/** A phone the relay knows of: connected now, or with receipts stored. */
+export interface RelayPhone {
+  /** "" for the old app, which sends no id. */
+  id: string
+  /** Its name in Sleeper-Cell, made unique among the phones. */
+  name: string
+  connected: boolean
 }
 
 const KINDS = new Set<string>(['sync', 'scripts', 'crops'])
@@ -52,6 +76,8 @@ export interface RelayStatus {
    * "Start from Manhwa Studio" setting keeps the socket open in the background.
    */
   phones: number
+  /** The phones connected now, and those the relay holds receipts from. */
+  devices: RelayPhone[]
   lastError: string | null
   /** When the relay last passed on a receipt. */
   lastReceiptAt: string | null
@@ -68,6 +94,8 @@ let io: Server | null = null
 let socket: WebSocket | null = null
 let connected = false
 let phones = 0
+/** The phones connected, as the relay last said; empty from relays deployed before phones had ids. */
+let presence: { id: string; name: string }[] = []
 let lastError: string | null = null
 let lastReceiptAt: number | null = null
 let attempt = 0
@@ -75,7 +103,8 @@ let openedAt = 0
 let lastHeard = 0
 let retryTimer: NodeJS.Timeout | null = null
 let pingTimer: NodeJS.Timeout | null = null
-const receipts = new Map<ReceiptKind, object>()
+/** By phone id, then kind. */
+const receipts = new Map<string, Map<ReceiptKind, { at: number; body: object }>>()
 
 function relayEnv(): { url: string; token: string } | null {
   const url = (process.env.RELAY_URL || '').trim().replace(/\/+$/, '')
@@ -88,12 +117,55 @@ export function relayConfigured(): boolean {
 }
 
 /**
- * The relay's last copy of a receipt, or null when the relay isn't set up (so
- * the caller reads R2). `{}` when set up but the phone hasn't sent one yet.
+ * Each phone's last copy of a receipt, or null when the relay isn't set up (so
+ * the caller reads R2). Empty when set up but no phone has sent one yet.
  */
-export function relayReceipt<T extends object>(kind: ReceiptKind): T | null {
+export function relayReceipts<T extends object>(kind: ReceiptKind): RelayedReceipt<T>[] | null {
   if (!relayConfigured()) return null
-  return (receipts.get(kind) ?? {}) as T
+  const list: RelayedReceipt<T>[] = []
+  for (const [device, kinds] of receipts) {
+    const stored = kinds.get(kind)
+    if (stored) list.push({ device, at: stored.at, body: stored.body as T })
+  }
+  return list.sort((a, b) => phoneName(a.device).localeCompare(phoneName(b.device)))
+}
+
+/**
+ * Every phone the relay knows of. Its name is what it calls itself (on its
+ * socket, else in its newest receipt that names it); two phones with the
+ * same name (same model, never renamed) get the start of their id added.
+ */
+export function relayPhones(): RelayPhone[] {
+  const named = new Map<string, { name: string; connected: boolean }>()
+  for (const [device, kinds] of receipts) {
+    const name = [...kinds.values()]
+      .sort((a, b) => b.at - a.at)
+      .map(stored => (stored.body as { device?: unknown }).device)
+      .find((name): name is string => typeof name === 'string' && !!name.trim())
+    named.set(device, { name: name?.trim() ?? '', connected: false })
+  }
+  for (const device of presence) {
+    const known = named.get(device.id)
+    named.set(device.id, { name: device.name.trim() || known?.name || '', connected: true })
+  }
+  // A relay deployed before phones had ids counts them but doesn't list them: all it can carry is the old app's.
+  if (!presence.length && connected && phones > 0) {
+    named.set('', { name: named.get('')?.name ?? '', connected: true })
+  }
+  const list = [...named].map(([id, phone]) => ({
+    id,
+    name: (phone.name || 'Phone') + (id ? '' : ' (old app)'),
+    connected: phone.connected
+  }))
+  const counts = new Map<string, number>()
+  for (const phone of list) counts.set(phone.name, (counts.get(phone.name) ?? 0) + 1)
+  for (const phone of list) if (phone.id && counts.get(phone.name)! > 1) phone.name = `${phone.name} · ${phone.id.slice(0, 4)}`
+  return list.sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/** A phone's name as relayPhones gives it. */
+export function phoneName(device: string): string {
+  return relayPhones().find(p => p.id === device)?.name ?? (device ? 'Phone' : 'Phone (old app)')
 }
 
 export function relayStatus(): RelayStatus {
@@ -104,6 +176,7 @@ export function relayStatus(): RelayStatus {
     hasToken: !!(process.env.RELAY_TOKEN || '').trim(),
     connected,
     phones: connected ? phones : 0,
+    devices: connected || receipts.size ? relayPhones() : [],
     lastError,
     lastReceiptAt: lastReceiptAt ? new Date(lastReceiptAt).toISOString() : null
   }
@@ -173,6 +246,7 @@ function connect(): void {
     const wasConnected = connected
     connected = false
     phones = 0
+    presence = []
     clearTimers()
     if (wasConnected) console.log('Phone relay: disconnected')
     emitStatus()
@@ -191,9 +265,16 @@ function heartbeat(ws: WebSocket): void {
   if (ws.readyState === WebSocket.OPEN) ws.send('ping')
 }
 
+function parseDevices(raw: unknown): { id: string; name: string }[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((d): d is { id: string; name?: unknown } => !!d && typeof d === 'object' && typeof (d as { id?: unknown }).id === 'string')
+    .map(d => ({ id: d.id, name: typeof d.name === 'string' ? d.name : '' }))
+}
+
 function handle(text: string): void {
   if (text === 'pong') return
-  let message: { type?: string; kind?: string; at?: number; body?: unknown; phones?: number }
+  let message: { type?: string; kind?: string; device?: unknown; at?: number; body?: unknown; phones?: number; devices?: unknown }
   try {
     message = JSON.parse(text)
   } catch {
@@ -203,14 +284,26 @@ function handle(text: string): void {
     case 'hello':
     case 'presence':
       phones = Number(message.phones) || 0
+      presence = parseDevices(message.devices)
       emitStatus()
       break
     case 'receipt': {
       const { kind, body } = message
       if (!kind || !KINDS.has(kind) || !body || typeof body !== 'object' || Array.isArray(body)) return
-      receipts.set(kind as ReceiptKind, body)
-      lastReceiptAt = Number(message.at) || Date.now()
+      // A relay deployed before phones had ids sends none: one phone, as before.
+      const device = typeof message.device === 'string' ? message.device : ''
+      const at = Number(message.at) || Date.now()
+      const kinds = receipts.get(device) ?? new Map<ReceiptKind, { at: number; body: object }>()
+      kinds.set(kind as ReceiptKind, { at, body })
+      receipts.set(device, kinds)
+      lastReceiptAt = at
       io?.emit('phone:receipt', { kind })
+      break
+    }
+    case 'forgotten': {
+      if (typeof message.device !== 'string' || !receipts.delete(message.device)) return
+      for (const kind of KINDS) io?.emit('phone:receipt', { kind })
+      emitStatus()
       break
     }
   }
@@ -223,7 +316,9 @@ function handle(text: string): void {
  * when it isn't, the relay keeps the request for when it opens. `action:
  * 'sync'` has the phone first check R2 for chapters just sent; a relay
  * deployed before actions existed drops it, and the phone only answers.
- * `args` go with `clipper_start` (a relay deployed before it drops both).
+ * `args` go with `clipper_start` (a relay deployed before it drops both), but
+ * `args.device` goes with any action: then only that phone gets it, and
+ * `phones` is 1 or 0.
  */
 export async function sendPhoneRequest(
   action?: PhoneAction,
@@ -235,12 +330,15 @@ export async function sendPhoneRequest(
     id: randomUUID(),
     requestedAt: new Date().toISOString(),
     ...(action ? { action } : {}),
+    ...(args.device ? { device: args.device } : {}),
     ...(args.series ? { series: args.series } : {}),
-    ...(args.tabs ? { tabs: args.tabs } : {})
+    ...(args.tabs ? { tabs: args.tabs } : {}),
+    ...(args.chapters?.length ? { chapters: args.chapters } : {})
   }
   if (socket && connected && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: 'request', ...request }))
-    return { ...request, phones }
+    const reached = args.device ? Number(presence.some(d => d.id === args.device)) : phones
+    return { ...request, phones: reached }
   }
   const res = await fetch(`${env.url}/request`, {
     method: 'POST',
@@ -289,12 +387,34 @@ export async function updateRelayConfig(update: RelayConfigUpdate): Promise<void
   socket = null
   connected = false
   phones = 0
+  presence = []
   lastError = null
   attempt = 0
   receipts.clear()
   old?.terminate()
   connect()
   emitStatus()
+}
+
+/**
+ * Drops a phone the relay keeps receipts from: one that's gone, or the old
+ * app's copies once that phone runs a build with an id. The relay tells every
+ * desktop, which drops them too (see 'forgotten').
+ */
+export async function forgetPhone(device: string): Promise<void> {
+  const env = relayEnv()
+  if (!env) throw new Error('The phone relay is not set up')
+  const res = await fetch(`${env.url}/forget`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${env.token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ device })
+  })
+  if (res.status === 404) throw new Error('Redeploy the relay Worker (relay/ → npm run deploy): this one keeps a single phone')
+  if (!res.ok) throw new Error(relayHttpError(res.status))
+  if (receipts.delete(device)) {
+    for (const kind of KINDS) io?.emit('phone:receipt', { kind })
+    emitStatus()
+  }
 }
 
 /** Asks the relay what it holds, to check the URL and token. */

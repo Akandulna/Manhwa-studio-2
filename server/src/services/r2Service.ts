@@ -22,7 +22,8 @@ import { prisma } from '../index.js'
 import { writeEnvVars } from '../utils/envFile.js'
 import type { PhoneSeriesSync, PhoneSyncStatus } from './phoneSend.js'
 import { FREE_PLAN, attachUsageCounter, getMonthUsage, monthKey } from './r2Usage.js'
-import { relayConfigured, relayReceipt, sendPhoneRequest } from './phoneRelay.js'
+import { phoneName, relayConfigured, relayPhones, relayReceipts, sendPhoneRequest, type ReceiptKind } from './phoneRelay.js'
+import { mergeCropsReceipts, mergeScriptsReceipts, type PhoneReceipt } from './phoneReceipts.js'
 import { analyticsConfigured, getCloudflareMonthOps, invalidateAnalytics } from './r2Analytics.js'
 
 // ============ Config ============
@@ -180,6 +181,10 @@ export async function testR2Connection(): Promise<{ bucket: string }> {
 
 /** Set by phoneSend.ts while it sends chapters, so settings and deletes wait for it. */
 let uploadBusy = false
+
+export function isUploadBusy(): boolean {
+  return uploadBusy
+}
 
 export function setUploadBusy(busy: boolean): void {
   uploadBusy = busy
@@ -349,6 +354,9 @@ export interface PhoneScriptRun {
   since: string | null
   at: string | null
   tabs: PhoneScriptRunTab[]
+  /** The phone it runs on: its id ("" for the old app, or the one phone R2 carries) and name; null when not known. */
+  device: string | null
+  phone: string | null
 }
 
 export interface PhoneScriptRunTab {
@@ -448,17 +456,32 @@ export async function readPolledReceipt<T extends object>(client: S3Client, conf
 }
 
 /**
- * Which chapters have a narration script on the phone. Series and chapters are
+ * Every phone's copy of a receipt: from the relay, one per phone, or else the
+ * one in R2 (only one phone can report through R2: they would all write the
+ * same object). Null when neither is set up.
+ */
+export async function readPhoneReceipts<T extends object>(kind: ReceiptKind, name: string, fresh: boolean): Promise<PhoneReceipt<T>[] | null> {
+  const relayed = relayReceipts<T>(kind)
+  if (relayed) return relayed.map(r => ({ device: r.device, name: phoneName(r.device), body: r.body }))
+  const config = getR2Config()
+  if (!config) return null
+  const body = await readPolledReceipt<T>(createClient(config), config, name, fresh)
+  if (!Object.keys(body).length) return []
+  const device = (body as { device?: unknown }).device
+  return [{ device: '', name: typeof device === 'string' && device ? device : 'Phone', body }]
+}
+
+/**
+ * Which chapters have a narration script on the phones. Series and chapters are
  * matched by folder name, the names the R2 zip carries to the phone.
  */
 export async function getPhoneScripts(seriesId?: string, fresh = false): Promise<PhoneScriptsStatus> {
-  const config = getR2Config()
-  const relayed = relayReceipt<ScriptsReceipt>('scripts')
-  if (!config && !relayed) {
+  const list = await readPhoneReceipts<ScriptsReceipt>('scripts', SCRIPTS_RECEIPT_NAME, fresh)
+  if (!list) {
     return { configured: false, reportedAt: null, device: null, answers: null, series: {}, chapters: {}, hi: { series: {}, chapters: {} }, runs: [] }
   }
 
-  const receipt = relayed ?? await readPolledReceipt<ScriptsReceipt>(createClient(config!), config!, SCRIPTS_RECEIPT_NAME, fresh)
+  const receipt = mergeScriptsReceipts(list as PhoneReceipt<Record<string, unknown>>[]) as ScriptsReceipt
   const phoneSeries = receipt.series && typeof receipt.series === 'object' ? receipt.series : {}
 
   const rows = await prisma.series.findMany({ select: { id: true, rootFolder: true } })
@@ -541,7 +564,8 @@ export function parseScriptRuns(raw: unknown, now = Date.now()): PhoneScriptRun[
       account: typeof run.account === 'string' && run.account ? run.account : null,
       since: isTime(run.since) ? run.since : null,
       at,
-      tabs
+      tabs,
+      ...phoneOf(run)
     })
   }
   return runs
@@ -589,6 +613,9 @@ export interface PhoneCropsWorking {
   /** When Auto-run started this page. */
   since: string | null
   paused: boolean
+  /** The phone clipping it (see PhoneScriptRun). */
+  device: string | null
+  phone: string | null
 }
 
 /** How a done page was finished on the phone. */
@@ -604,6 +631,8 @@ export interface PhonePageFinish {
   account: string | null
   /** The ChatGPT models that answered, in order (a fix round can be answered by another). */
   models: string[]
+  /** The phone that finished it; null when not known. */
+  phone: string | null
 }
 
 /** A limit ChatGPT put on a phone profile. */
@@ -637,6 +666,9 @@ export interface PhoneUploadProfile {
   uploads: { at: string; images: number }[]
   /** Oldest first. */
   limits: PhoneUploadLimit[]
+  /** The phone the profile is on (see PhoneScriptRun). With several phones, `id` is "<device>:<profile id>". */
+  device: string | null
+  phone: string | null
 }
 
 /** One phone profile's Gemini requests in AI Studio today, for one kind of run. */
@@ -650,6 +682,9 @@ export interface PhoneGeminiProfile {
   limit: number | null
   /** While its speech limit is noted as used up; null otherwise. */
   limitedUntil: string | null
+  /** The phone the profile is on (see PhoneUploadProfile). */
+  device: string | null
+  phone: string | null
 }
 
 /** Gemini's limit for one kind of run on the phone's profiles. */
@@ -722,6 +757,14 @@ function count(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
 }
 
+/** The phone an item of a merged receipt is from (see phoneReceipts.ts). */
+function phoneOf(item: Record<string, unknown>): { device: string | null; phone: string | null } {
+  return {
+    device: typeof item.device === 'string' ? item.device : null,
+    phone: typeof item.phone === 'string' && item.phone ? item.phone : null
+  }
+}
+
 /** The receipt's `profiles`, dropping anything malformed. */
 export function parseUploadProfiles(raw: unknown): PhoneUploadProfile[] {
   if (!Array.isArray(raw)) return []
@@ -753,7 +796,8 @@ export function parseUploadProfiles(raw: unknown): PhoneUploadProfile[] {
         ? { since: entry.counting.since, images: count(entry.counting.images) }
         : null,
       uploads,
-      limits
+      limits,
+      ...phoneOf(entry)
     })
   }
   return profiles
@@ -771,7 +815,8 @@ export function parseGeminiUsage(raw: unknown): PhoneGeminiUsage | null {
       selected: entry.selected === true,
       today: count(entry.today),
       limit: count(entry.limit) || null,
-      limitedUntil: isTime(entry.limitedUntil) ? entry.limitedUntil : null
+      limitedUntil: isTime(entry.limitedUntil) ? entry.limitedUntil : null,
+      ...phoneOf(entry)
     })
   }
   return { resetsAt: raw.resetsAt, profiles }
@@ -783,11 +828,10 @@ export function parseGeminiUsage(raw: unknown): PhoneGeminiUsage | null {
  */
 export async function getPhoneCrops(seriesId?: string, chapterId?: string, fresh = false): Promise<PhoneCropsStatus> {
   const empty = { reportedAt: null, device: null, answers: null, series: {}, chapters: {}, working: null, workingPages: [], pages: {}, finished: {}, profiles: [] }
-  const config = getR2Config()
-  const relayed = relayReceipt<CropsReceipt>('crops')
-  if (!config && !relayed) return { configured: false, ...empty }
+  const list = await readPhoneReceipts<CropsReceipt>('crops', CROPS_RECEIPT_NAME, fresh)
+  if (!list) return { configured: false, ...empty }
 
-  const receipt = relayed ?? await readPolledReceipt<CropsReceipt>(createClient(config!), config!, CROPS_RECEIPT_NAME, fresh)
+  const receipt = mergeCropsReceipts(list as PhoneReceipt<Record<string, unknown>>[]) as CropsReceipt
   const phoneSeries = isObject(receipt.series) ? receipt.series : {}
 
   const rows = await prisma.series.findMany({ select: { id: true, rootFolder: true } })
@@ -824,7 +868,7 @@ export async function getPhoneCrops(seriesId?: string, chapterId?: string, fresh
       const parsed = parseWorking(working)
       const chapterId = parsed ? byFolder.get(parsed.chapter) : undefined
       if (!parsed || !chapterId) return null
-      return { chapterId, page: parsed.page, since: parsed.since, paused: parsed.paused }
+      return { chapterId, page: parsed.page, since: parsed.since, paused: parsed.paused, device: parsed.device, phone: parsed.phone }
     }
     status.working = toWorking(entry.working)
     status.workingPages = workingEntries(entry).map(toWorking).filter((w): w is PhoneCropsWorking => w !== null)
@@ -843,16 +887,19 @@ function parseFinish(finish: unknown): PhonePageFinish | null {
     run: finish.run === 'auto' || finish.run === 'manual' ? finish.run : null,
     profile: text(finish.profile),
     account: text(finish.account),
-    models: Array.isArray(finish.models) ? finish.models.filter((m): m is string => typeof m === 'string' && !!m) : []
+    models: Array.isArray(finish.models) ? finish.models.filter((m): m is string => typeof m === 'string' && !!m) : [],
+    phone: phoneOf(finish).phone
   }
 }
 
 /** A `working` entry by chapter folder, or null when malformed or stale (see WORKING_STALE_MS). */
-function parseWorking(working: unknown): { chapter: string; page: string; since: string | null; paused: boolean } | null {
+function parseWorking(working: unknown): {
+  chapter: string; page: string; since: string | null; paused: boolean; device: string | null; phone: string | null
+} | null {
   if (!isObject(working) || typeof working.page !== 'string' || !working.page || typeof working.chapter !== 'string') return null
   const since = typeof working.since === 'string' ? working.since : null
   if (since && Date.now() - Date.parse(since) > WORKING_STALE_MS) return null
-  return { chapter: working.chapter, page: working.page, since, paused: working.paused === true }
+  return { chapter: working.chapter, page: working.page, since, paused: working.paused === true, ...phoneOf(working) }
 }
 
 /** A series entry's pages in progress; older phone builds send only `working`. */
@@ -875,6 +922,9 @@ export interface PhoneOverviewWorking extends PhoneOverviewPlace {
   page: string
   since: string | null
   paused: boolean
+  /** The phone clipping it (see PhoneScriptRun). */
+  device: string | null
+  phone: string | null
 }
 
 export interface PhoneOverviewFinish extends PhoneOverviewPlace, PhonePageFinish {
@@ -924,10 +974,30 @@ export interface PhoneAutomation {
   resume: { seriesId: string | null; series: string; tabs: number; at: string } | null
 }
 
-/** Everything Sleeper-Cell has reported, across every series, for the Sleeper Cells page. */
+/** One phone running Sleeper-Cell. */
+export interface PhoneOverviewPhone {
+  /** Its id; "" for a build from before phones had one, which can't be started on its own. */
+  id: string
+  name: string
+  /** Sleeper-Cell's socket to the relay is open (the app is open, or listening for starts); null without the relay. */
+  connected: boolean | null
+  /** Its newest receipt. */
+  reportedAt: string | null
+  /** Its automation settings; null from builds before automation. */
+  automation: PhoneAutomation | null
+  /** Pages Auto-run is on there. */
+  working: number
+  /** Narration and voiceover runs going there. */
+  runs: number
+}
+
+/** Everything Sleeper-Cell has reported, across every series and phone, for the Sleeper Cells page. */
 export interface PhoneOverview {
   configured: boolean
+  /** Every phone's name, joined. */
   device: string | null
+  /** Each phone, by name. One without the relay: R2 carries one phone's receipts. */
+  phones: PhoneOverviewPhone[]
   /** The latest of the three receipts. */
   reportedAt: string | null
   /** When each receipt was last written; null if never. */
@@ -948,7 +1018,7 @@ export interface PhoneOverview {
   profiles: PhoneUploadProfile[]
   /** Gemini requests per profile today: the voiceover run's speech and the narration run's scripts; null from builds before each was sent. */
   gemini: { speech: PhoneGeminiUsage | null; narration: PhoneGeminiUsage | null }
-  /** Null from Sleeper-Cell builds before automation. */
+  /** The first phone's that may be started from here, else the first phone's; null from Sleeper-Cell builds before automation. */
   automation: PhoneAutomation | null
 }
 
@@ -962,18 +1032,16 @@ const OVERVIEW_UPLOADS = 30
  * however old, so this never lists the bucket once it has been listed.
  */
 export async function getPhoneOverview(sync: PhoneSyncStatus | null, fresh = false): Promise<PhoneOverview> {
-  const config = getR2Config()
-  const relayedCrops = relayReceipt<CropsReceipt>('crops')
   const empty: PhoneOverview = {
-    configured: false, device: null, reportedAt: null, reported: { sync: null, scripts: null, crops: null },
+    configured: false, device: null, phones: [], reportedAt: null, reported: { sync: null, scripts: null, crops: null },
     answers: null, working: [], runs: [], series: [], recent: [], recentCapped: false, uploads: [], profiles: [], gemini: { speech: null, narration: null }, automation: null
   }
-  if (!config && !relayedCrops) return empty
-
-  const [scripts, crops] = await Promise.all([
+  const [scripts, cropsList] = await Promise.all([
     getPhoneScripts(undefined, fresh).catch(() => null),
-    relayedCrops ?? readPolledReceipt<CropsReceipt>(createClient(config!), config!, CROPS_RECEIPT_NAME, fresh)
+    readPhoneReceipts<CropsReceipt>('crops', CROPS_RECEIPT_NAME, fresh)
   ])
+  if (!cropsList) return empty
+  const crops = mergeCropsReceipts(cropsList as PhoneReceipt<Record<string, unknown>>[]) as CropsReceipt
 
   const rows = await prisma.series.findMany({
     select: { id: true, title: true, rootFolder: true, chapters: { select: { id: true, folderPath: true, number: true } } }
@@ -995,7 +1063,9 @@ export async function getPhoneOverview(sync: PhoneSyncStatus | null, fresh = fal
   overview.answers = crops.answers ?? null
   overview.profiles = parseUploadProfiles(crops.profiles)
   overview.gemini = { speech: parseGeminiUsage(crops.speech), narration: parseGeminiUsage(crops.narration) }
-  overview.automation = parseAutomation(crops.automation, folder => byFolder.get(folder) ?? null)
+  const seriesFor = (folder: string) => byFolder.get(folder) ?? null
+  const automations = new Map(cropsList.map(r => [r.device, parseAutomation(r.body.automation, seriesFor)]))
+  overview.automation = [...automations.values()].find(a => a?.remoteStart) ?? [...automations.values()].find(a => a) ?? null
   overview.reported = { sync: sync?.reportedAt ?? null, scripts: scripts?.reportedAt ?? null, crops: crops.updatedAt ?? null }
   overview.reportedAt = Object.values(overview.reported)
     .filter((at): at is string => !!at)
@@ -1015,7 +1085,14 @@ export async function getPhoneOverview(sync: PhoneSyncStatus | null, fresh = fal
     for (const raw of workingEntries(entry)) {
       const working = parseWorking(raw)
       if (!working) continue
-      overview.working.push({ ...place(seriesFolder, working.chapter), page: working.page, since: working.since, paused: working.paused })
+      overview.working.push({
+        ...place(seriesFolder, working.chapter),
+        page: working.page,
+        since: working.since,
+        paused: working.paused,
+        device: working.device,
+        phone: working.phone
+      })
       summary.working++
     }
     for (const [chapterFolder, chapter] of Object.entries(isObject(entry.chapters) ? entry.chapters : {})) {
@@ -1059,7 +1136,40 @@ export async function getPhoneOverview(sync: PhoneSyncStatus | null, fresh = fal
   }
   const busy = (s: PhoneOverviewSeries) => s.working + s.runs.length
   overview.series.sort((a, b) => busy(b) - busy(a) || a.title.localeCompare(b.title))
+  overview.phones = overviewPhones(overview, automations)
   return overview
+}
+
+/**
+ * Each phone: the relay's list (connected, or with receipts kept), each with
+ * its newest receipt and what it's doing. Without the relay, the one phone
+ * whose receipts are in R2.
+ */
+function overviewPhones(overview: PhoneOverview, automations: Map<string, PhoneAutomation | null>): PhoneOverviewPhone[] {
+  const busy = (device: string) => ({
+    working: overview.working.filter(w => (w.device ?? '') === device).length,
+    runs: overview.runs.filter(r => (r.device ?? '') === device).length
+  })
+  if (!relayConfigured()) {
+    if (!overview.reportedAt) return []
+    return [{ id: '', name: overview.device ?? 'Phone', connected: null, reportedAt: overview.reportedAt, automation: automations.get('') ?? null, ...busy('') }]
+  }
+  const reported = new Map<string, string>()
+  for (const kind of ['sync', 'scripts', 'crops'] as const) {
+    for (const receipt of relayReceipts<{ updatedAt?: unknown }>(kind) ?? []) {
+      const at = receipt.body.updatedAt
+      const before = reported.get(receipt.device)
+      if (isTime(at) && (!before || Date.parse(at) > Date.parse(before))) reported.set(receipt.device, at)
+    }
+  }
+  return relayPhones().map(phone => ({
+    id: phone.id,
+    name: phone.name,
+    connected: phone.connected,
+    reportedAt: reported.get(phone.id) ?? null,
+    automation: automations.get(phone.id) ?? null,
+    ...busy(phone.id)
+  }))
 }
 
 function parseAutomation(raw: unknown, seriesFor: (folder: string) => { id: string; title: string } | null): PhoneAutomation | null {
@@ -1079,18 +1189,45 @@ function parseAutomation(raw: unknown, seriesFor: (folder: string) => { id: stri
 /** Image Clipper's most ChatGPT tabs at once (ClipperRun.MAX_TABS on the phone). */
 export const PHONE_MAX_TABS = 4
 
+export interface PhoneClipperTarget {
+  device: string
+  name: string
+  /** The chapter folders it was given; null for the whole series (or a stop). */
+  chapters: string[] | null
+  /** It was connected, so it got the command at once (else it acts on it if it connects within 10 minutes). */
+  reached: boolean
+}
+
+export interface PhoneClipperSent extends PhoneUpdateRequest {
+  /** Each phone sent the command; one entry with device "*" when it went to every phone. */
+  targets: PhoneClipperTarget[]
+}
+
 /**
- * Starts or stops Image Clipper on the phone, through the relay: the phone acts
+ * Starts or stops Image Clipper on the phones, through the relay: a phone acts
  * on it with "Start from Manhwa Studio" on, waking itself if need be, and
  * ignores it after 10 minutes. `start` clips `seriesId` in `tabs` ChatGPT tabs;
  * without them it goes on with the phone's last run, in its last tab count.
+ *
+ * `device` sends it to that phone only. `split` (a start, with a series) shares
+ * the series' unfinished chapters out between the phones that can take it (see
+ * splitChapters), each getting its own start with its chapters, so no two
+ * phones clip the same page. Without either, every phone gets it.
  */
 export async function sendClipperCommand(
   command: 'start' | 'stop',
-  options: { seriesId?: string; tabs?: number } = {}
-): Promise<PhoneUpdateRequest> {
+  options: { seriesId?: string; tabs?: number; device?: string; split?: boolean } = {}
+): Promise<PhoneClipperSent> {
   if (!relayConfigured()) throw new Error('Starting Image Clipper on the phone needs the phone relay (Settings → Cloudflare)')
-  if (command === 'stop') return { ...(await sendPhoneRequest('clipper_stop')), via: 'relay' }
+  const { device } = options
+  if (device !== undefined && !relayPhones().some(p => p.id === device && p.id)) throw new Error('That phone is not known to the relay')
+  const target = (sent: { phones: number }, chapters: string[] | null = null): PhoneClipperTarget =>
+    device ? { device, name: phoneName(device), chapters, reached: sent.phones > 0 } : { device: '*', name: 'Every phone', chapters, reached: sent.phones > 0 }
+
+  if (command === 'stop') {
+    const sent = await sendPhoneRequest('clipper_stop', { device })
+    return { ...sent, via: 'relay', targets: [target(sent)] }
+  }
   let series: string | undefined
   if (options.seriesId) {
     const row = await prisma.series.findUnique({ where: { id: options.seriesId }, select: { rootFolder: true } })
@@ -1101,7 +1238,78 @@ export async function sendClipperCommand(
   if (options.tabs !== undefined && !(Number.isInteger(options.tabs) && options.tabs >= 1 && options.tabs <= PHONE_MAX_TABS)) {
     throw new Error(`tabs must be 1 to ${PHONE_MAX_TABS}`)
   }
-  return { ...(await sendPhoneRequest('clipper_start', { series, tabs: options.tabs })), via: 'relay' }
+  if (!options.split) {
+    const sent = await sendPhoneRequest('clipper_start', { series, tabs: options.tabs, device })
+    return { ...sent, via: 'relay', targets: [target(sent)] }
+  }
+
+  if (!options.seriesId || !series) throw new Error('Pick a series to split between the phones')
+  const phones = startablePhones()
+  if (phones.length < 2) throw new Error('Splitting needs two phones open with “Start from Manhwa Studio” on')
+  const shares = await splitChapters(options.seriesId, phones.map(p => p.id))
+  const targets: PhoneClipperTarget[] = []
+  let first: (PhoneUpdateRequest & { phones: number }) | null = null
+  let reached = 0
+  for (const phone of phones) {
+    const chapters = shares.get(phone.id) ?? []
+    if (!chapters.length) continue
+    const sent = await sendPhoneRequest('clipper_start', { series, tabs: options.tabs, chapters, device: phone.id })
+    first ??= { ...sent, via: 'relay' }
+    reached += sent.phones
+    targets.push({ device: phone.id, name: phone.name, chapters, reached: sent.phones > 0 })
+  }
+  if (!first) throw new Error('Every chapter of this series is clipped on the phones already')
+  return { ...first, phones: reached, targets }
+}
+
+/** Phones the relay can start on their own now: connected, with an id, and "Start from Manhwa Studio" on. */
+function startablePhones(): { id: string; name: string }[] {
+  const remote = new Set(
+    (relayReceipts<{ automation?: { remoteStart?: unknown } }>('crops') ?? [])
+      .filter(r => r.body.automation?.remoteStart === true)
+      .map(r => r.device)
+  )
+  return relayPhones().filter(p => p.id && p.connected && remote.has(p.id))
+}
+
+/**
+ * Shares a series' chapters left to clip out between `devices`, in reading
+ * order, each chapter to the phone with the fewest pages given so far, so the
+ * phones finish about together and the early chapters are done first. Left
+ * means not every page has its crop JSON on some phone. Only chapters the
+ * phones have downloaded count, when they report downloads.
+ */
+export async function splitChapters(seriesId: string, devices: string[]): Promise<Map<string, string[]>> {
+  const row = await prisma.series.findUnique({
+    where: { id: seriesId },
+    select: { rootFolder: true, chapters: { select: { folderPath: true, number: true, pageCount: true } } }
+  })
+  if (!row) throw new Error('Series not found')
+  const folder = path.basename(row.rootFolder)
+  const crops = mergeCropsReceipts((relayReceipts<Record<string, unknown>>('crops') ?? []).map(r => ({ ...r, name: r.device })))
+  const progress = (isObject(crops.series) && isObject(crops.series[folder]) && isObject(crops.series[folder].chapters)
+    ? crops.series[folder].chapters
+    : {}) as Record<string, { total?: unknown; done?: unknown }>
+  const downloaded = new Set<string>()
+  for (const receipt of relayReceipts<{ series?: Record<string, { chapters?: Record<string, unknown> }> }>('sync') ?? []) {
+    for (const chapter of Object.keys(receipt.body.series?.[folder]?.chapters ?? {})) downloaded.add(chapter)
+  }
+
+  const shares = new Map(devices.map(d => [d, [] as string[]]))
+  const load = new Map(devices.map(d => [d, 0]))
+  const chapters = [...row.chapters].sort((a, b) => a.number - b.number)
+  for (const chapter of chapters) {
+    const name = path.basename(chapter.folderPath)
+    if (downloaded.size && !downloaded.has(name)) continue
+    const phone = progress[name]
+    const total = count(phone?.total) || chapter.pageCount || 0
+    const done = count(phone?.done)
+    if (total > 0 && done >= total) continue
+    const lightest = devices.reduce((a, b) => (load.get(b)! < load.get(a)! ? b : a))
+    shares.get(lightest)!.push(name)
+    load.set(lightest, load.get(lightest)! + Math.max(1, total - done))
+  }
+  return shares
 }
 
 /**

@@ -8,6 +8,8 @@
  *   POST   /chapters/:id/delete     clean one chapter's reclaimable data
  *   POST   /series/:id/delete       clean every exported chapter of a series
  *   DELETE /series/:id/videos/:dir/:file   remove one rendered MP4
+ *   GET    /series/:id/parts       narration Parts with export state (partArchive)
+ *   POST   /series/:id/parts/:part/complete   delete a finished Part, keep its continuity
  *
  * Deleting is POST rather than DELETE for the chapter/series cleanups because
  * the categories to remove and the `allowUnexported` acknowledgement travel in
@@ -26,6 +28,7 @@ import {
   scanStorage,
   type CategoryKey
 } from '../services/storageService.js'
+import { completePart, getSeriesParts } from '../services/partArchive.js'
 
 /** Validate the requested categories against the catalogue. */
 function parseCategories(raw: unknown): CategoryKey[] {
@@ -123,6 +126,26 @@ export function initStorageRoutes(): Router {
       res.json(result)
     } catch (error) {
       fail(res, error, 'Failed to delete video')
+    }
+  })
+
+  router.get('/series/:id/parts', async (req: Request, res: Response) => {
+    try {
+      res.json(await getSeriesParts(req.params.id))
+    } catch (error) {
+      fail(res, error, 'Failed to list parts')
+    }
+  })
+
+  // Body: { confirm: <series title> }. Irreversible — see partArchive.ts.
+  router.post('/series/:id/parts/:part/complete', async (req: Request, res: Response) => {
+    try {
+      const part = parseInt(req.params.part, 10)
+      if (!Number.isInteger(part) || part < 1) throw new Error('Invalid part number')
+      const confirm = typeof req.body?.confirm === 'string' ? req.body.confirm : ''
+      res.json(await completePart(req.params.id, part, confirm))
+    } catch (error) {
+      fail(res, error, 'Failed to complete part')
     }
   })
 

@@ -62,7 +62,11 @@ vi.mock('../../index.js', () => ({
 vi.mock('../storageService.js', () => ({
   getPublishedChapters: async () => ({ chapters: { c5: true }, series: {}, scannedAt: '' })
 }))
-vi.mock('../phoneRelay.js', () => ({ relayReceipt: () => receipt }))
+vi.mock('../phoneRelay.js', () => ({
+  relayReceipts: () => [{ device: '', at: 0, body: receipt }],
+  relayConfigured: () => true,
+  phoneName: () => 'Phone'
+}))
 
 // R2: what was sent, and what is in the bucket before the send.
 let config: object | null = null

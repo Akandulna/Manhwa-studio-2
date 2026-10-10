@@ -108,7 +108,7 @@ export function PhoneRelayCard() {
             !status.configured
               ? <Badge variant="secondary">Not set up</Badge>
               : status.connected
-                ? <Badge variant="success">{status.phones > 0 ? 'Live · phone open' : 'Live · phone closed'}</Badge>
+                ? <Badge variant="success">{status.phones > 1 ? `Live · ${status.phones} phones open` : status.phones > 0 ? 'Live · phone open' : 'Live · phone closed'}</Badge>
                 : <Badge variant="destructive">Not connected</Badge>
           )}
         </CardTitle>

@@ -58,7 +58,7 @@ import {
 } from '../services/phoneSend.js'
 import { getPhoneScriptsZip, importPhoneScripts, previewPhoneScripts } from '../services/phoneScriptImport.js'
 import { requestLanguage } from '../services/narrationLanguage.js'
-import { relayStatus, testRelay, updateRelayConfig } from '../services/phoneRelay.js'
+import { forgetPhone, relayStatus, testRelay, updateRelayConfig } from '../services/phoneRelay.js'
 
 function message(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
@@ -173,14 +173,30 @@ export function initR2Routes(io: Server): Router {
 
   router.post('/phone/clipper', async (req: Request, res: Response) => {
     try {
-      const { command, seriesId, tabs } = req.body ?? {}
+      const { command, seriesId, tabs, device, split } = req.body ?? {}
       if (command !== 'start' && command !== 'stop') throw new Error('command must be start or stop')
       if (seriesId !== undefined && (typeof seriesId !== 'string' || !seriesId)) throw new Error('seriesId must be a series id')
       if (tabs !== undefined && typeof tabs !== 'number') throw new Error('tabs must be a number')
-      res.json(await sendClipperCommand(command, { seriesId, tabs }))
+      if (device !== undefined && (typeof device !== 'string' || !device)) throw new Error('device must be a phone id')
+      if (split !== undefined && typeof split !== 'boolean') throw new Error('split must be true or false')
+      if (device !== undefined && split) throw new Error('Pick one phone or split, not both')
+      res.json(await sendClipperCommand(command, { seriesId, tabs, device, split }))
     } catch (error) {
       console.error('Phone Image Clipper command failed:', error)
       res.status(400).json({ error: message(error, 'Could not reach the phone') })
+    }
+  })
+
+  // Drops a phone's receipts from the relay: one no longer used, or the old app's copies.
+  router.post('/phone/forget', async (req: Request, res: Response) => {
+    try {
+      const { device } = req.body ?? {}
+      if (typeof device !== 'string') throw new Error('device must be a phone id')
+      await forgetPhone(device)
+      res.json({ ok: true })
+    } catch (error) {
+      console.error('Forgetting the phone failed:', error)
+      res.status(400).json({ error: message(error, 'Could not forget the phone') })
     }
   })
 

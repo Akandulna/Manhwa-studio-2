@@ -27,6 +27,16 @@ Then:
 2. **Sleeper-Cell** → Settings → Manhwa → **Paste R2 settings**: fills in the live relay URL and token.
    Reopen the app; the badge in Manhwa Studio shows "Live · phone open".
 
+## Several phones
+
+Sleeper-Cell can run on more than one phone. Each phone has its own id and a name (Sleeper-Cell → Settings →
+Manhwa → Phone name; the model if left blank), and the relay keeps each phone's receipts apart. Manhwa Studio merges
+them: its Phone Status page lists every phone, and Start can split a series' chapters between them.
+
+To move from one phone: deploy this relay first (`npm run deploy`), then update Sleeper-Cell on the phones. A phone
+that reported before it had an id shows up as "(old app)"; once it runs the new build, its first receipt replaces
+those old copies. A phone that's gone can be removed with the bin icon on Phone Status.
+
 ## Local testing
 
 ```sh

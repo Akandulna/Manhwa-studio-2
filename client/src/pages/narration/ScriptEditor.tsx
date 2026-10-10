@@ -13,7 +13,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { usePublishedChapters } from '@/hooks/usePublishedChapters'
-import { PublishedBadge } from '@/components/PublishedBadge'
+import { CompletedBadge, PublishedBadge } from '@/components/PublishedBadge'
 import { useParams, useNavigate } from 'react-router-dom'
 import { narrationApi, ChapterScriptDetail, ManualPromptResponse, AIStatus, HinglishEvent } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -66,7 +66,7 @@ export default function ScriptEditor() {
 
   // Already rendered to video in this language — surfaced in the header so a
   // published chapter is not rewritten by mistake.
-  const { isPublished } = usePublishedChapters(undefined, language)
+  const { isPublished, completedPart } = usePublishedChapters(undefined, language)
 
   const [chapter, setChapter] = useState<ChapterScriptDetail | null>(null)
   const [aiStatus, setAIStatus] = useState<AIStatus | null>(null)
@@ -532,7 +532,7 @@ export default function ScriptEditor() {
         </div>
 
         <div className="flex items-center gap-2">
-          {id && isPublished(id) && <PublishedBadge />}
+          {id && (completedPart(id) !== null ? <CompletedBadge part={completedPart(id)} /> : isPublished(id) && <PublishedBadge />)}
           {hasChanges && (
             <Badge variant="outline" className="text-yellow-500 border-yellow-500">
               Unsaved

@@ -10,6 +10,11 @@
  * Everything comes from the three receipts the phone sends (see
  * usePhoneOverview): live through the phone relay, or on "Refresh from phone"
  * without it. The only timer re-renders the elapsed times, with no request.
+ *
+ * Sleeper-Cell can run on several phones (through the relay). The server merges
+ * their receipts; with more than one, each phone gets a row in the first card,
+ * what is going on is labelled with its phone, and Start can split a series
+ * between the phones or go to one.
  */
 
 import { useEffect, useMemo, useState } from 'react'
@@ -29,6 +34,7 @@ import {
   Smartphone,
   Sparkles,
   Square,
+  Trash2,
   Upload
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -46,6 +52,7 @@ import {
   type PhoneAutomation,
   type PhoneOverview,
   type PhoneOverviewFinish,
+  type PhoneOverviewPhone,
   type PhoneOverviewRun,
   type PhoneOverviewWorking,
   type PhoneGeminiProfile,
@@ -111,6 +118,17 @@ function chapterLabel(place: { chapter: string; chapterNumber: number | null }):
 /** The page name without its extension: page_004.webp → page_004. */
 function pageLabel(page: string): string {
   return page.replace(/\.[a-z0-9]+$/i, '')
+}
+
+/** Which phone something is on, shown only when there are several. */
+function PhoneTag({ phone, className }: { phone: string | null; className?: string }) {
+  if (!phone) return null
+  return (
+    <span className={cn('inline-flex min-w-0 items-center gap-1 rounded bg-secondary px-1.5 py-0 text-[10px] font-medium text-muted-foreground', className)} title={phone}>
+      <Smartphone className="h-2.5 w-2.5 flex-shrink-0" />
+      <span className="truncate">{phone}</span>
+    </span>
+  )
 }
 
 function Tile({ label, value, sub, className }: { label: string; value: React.ReactNode; sub?: React.ReactNode; className?: string }) {
@@ -224,18 +242,87 @@ function linkLabel(relay: RelayStatus | null): React.ReactNode {
   return <span className="text-emerald-500">Live (relay)</span>
 }
 
+/** One phone's line: open or not, and what it's doing. */
+function phoneLine(phone: PhoneOverviewPhone, relay: RelayStatus | null, now: number): { tone: Tone; live: boolean; text: string } {
+  const doing = [
+    ...(phone.working ? [`clipping ${phone.working} page${phone.working === 1 ? '' : 's'}`] : []),
+    ...(phone.runs ? [`${phone.runs} run${phone.runs === 1 ? '' : 's'}`] : [])
+  ].join(' · ')
+  if (phone.connected === null || !relay?.connected) return { tone: 'idle', live: false, text: `${doing || 'last heard'} · ${ago(phone.reportedAt, now)}` }
+  if (!phone.connected) return { tone: 'bad', live: false, text: `Closed · ${ago(phone.reportedAt, now)}` }
+  if (doing) return { tone: 'good', live: true, text: doing[0].toUpperCase() + doing.slice(1) }
+  return { tone: 'good', live: false, text: phone.automation?.remoteStart ? 'Ready' : 'Open · idle' }
+}
+
+/** Each phone, when there are several: its light, name and state; a phone that's gone can be forgotten. */
+function PhoneList({ phones, relay, now }: { phones: PhoneOverviewPhone[]; relay: RelayStatus | null; now: number }) {
+  const { toast } = useToast()
+  const [forgetting, setForgetting] = useState<string | null>(null)
+  const forget = async (phone: PhoneOverviewPhone) => {
+    if (!window.confirm(`Forget “${phone.name}”? Its last status is dropped from here and from the relay. It comes back if it reports again.`)) return
+    setForgetting(phone.id)
+    try {
+      await r2Api.forgetPhone(phone.id)
+    } catch (error) {
+      toast({ title: 'Could not forget the phone', description: error instanceof Error ? error.message : String(error), variant: 'destructive' })
+    } finally {
+      setForgetting(null)
+    }
+  }
+  return (
+    <ul className="space-y-1.5 text-sm">
+      {phones.map(phone => {
+        const line = phoneLine(phone, relay, now)
+        return (
+          <li key={phone.id || 'old'} className="flex items-center gap-2">
+            <Light tone={line.tone} live={line.live} size="h-2 w-2" />
+            <span className="truncate font-medium" title={phone.id ? `id ${phone.id}` : 'A Sleeper-Cell build from before phones had ids: update it'}>{phone.name}</span>
+            <span className={cn('ml-auto whitespace-nowrap text-xs tabular-nums', line.tone === 'idle' ? 'text-muted-foreground' : TONE[line.tone].text)}>
+              {line.text}
+            </span>
+            {relay?.configured && !phone.connected && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 w-6 flex-shrink-0 p-0 text-muted-foreground"
+                title="Forget this phone"
+                disabled={forgetting !== null}
+                onClick={() => forget(phone)}
+              >
+                {forgetting === phone.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              </Button>
+            )}
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
 function PhoneCard({ relay, overview, running, paused, now }: {
   relay: RelayStatus | null; overview: PhoneOverview | null; running: number; paused: number; now: number
 }) {
-  const state = phoneState(relay, overview, running, paused, now)
+  const phones = overview?.phones ?? []
+  let state = phoneState(relay, overview, running, paused, now)
+  if (phones.length > 1 && relay?.configured && relay.connected) {
+    const open = phones.filter(p => p.connected).length
+    const busy = phones.filter(p => p.connected && p.working + p.runs > 0).length
+    if (busy > 0) {
+      state = { ...state, title: busy === phones.length ? `All ${busy} active` : `${busy} of ${phones.length} active` }
+    } else if (open > 0) {
+      state = { ...state, title: open === phones.length ? `All ${open} open` : `${open} of ${phones.length} open` }
+    }
+    if (open > 0) state = { ...state, detail: `${phones.length} phones run Sleeper-Cell. Each one’s state is below.` }
+  }
   return (
-    <AnswerCard icon={Smartphone} question="Is the phone active?">
+    <AnswerCard icon={Smartphone} question={phones.length > 1 ? 'Are the phones active?' : 'Is the phone active?'}>
       <Headline tone={state.tone} live={state.live} title={state.title} detail={state.detail} />
+      {phones.length > 1 && <PhoneList phones={phones} relay={relay} now={now} />}
       <Facts
         rows={[
           ['Last heard', <span title={overview?.reportedAt ? clock(overview.reportedAt) : undefined}>{ago(overview?.reportedAt ?? null, now)}</span>],
           ['Connection', linkLabel(relay)],
-          ['Device', overview?.device ?? '—']
+          phones.length > 1 ? ['Phones', phones.length] : ['Device', overview?.device ?? '—']
         ]}
       />
       {overview?.configured && (
@@ -258,7 +345,7 @@ function accountState(usage: UploadUsage, now: number): { tone: Tone; text: stri
   return { tone: 'good', text: `${usage.left} left · ready` }
 }
 
-function AccountRow({ usage, now }: { usage: UploadUsage; now: number }) {
+function AccountRow({ usage, now, several }: { usage: UploadUsage; now: number; several: boolean }) {
   const state = accountState(usage, now)
   const percent = usage.limitedUntil ? 100 : (usage.used / usage.limit) * 100
   return (
@@ -272,7 +359,10 @@ function AccountRow({ usage, now }: { usage: UploadUsage; now: number }) {
       </div>
       <Bar percent={percent} tone={state.tone === 'good' ? 'primary' : state.tone} />
       <div className="flex justify-between gap-2 text-[11px] text-muted-foreground tabular-nums">
-        <span>{usage.used} / {usage.limit} used in the last 3h</span>
+        <span className="flex min-w-0 items-center gap-1.5">
+          {several && <PhoneTag phone={usage.profile.phone} />}
+          <span className="whitespace-nowrap">{usage.used} / {usage.limit} used in the last 3h</span>
+        </span>
         {usage.nextFreeAt !== null && !usage.limitedUntil && usage.used > 0 && (
           <span>+{usage.nextFree} back ~{clock(usage.nextFreeAt)}</span>
         )}
@@ -316,7 +406,7 @@ function ImageLimitCard({ overview, now }: { overview: PhoneOverview | null; now
         detail={detail}
       />
       <div className="space-y-3">
-        {usages.map(usage => <AccountRow key={usage.profile.id} usage={usage} now={now} />)}
+        {usages.map(usage => <AccountRow key={usage.profile.id} usage={usage} now={now} several={(overview?.phones?.length ?? 0) > 1} />)}
       </div>
       <p className="mt-auto border-t pt-3 text-[11px] text-muted-foreground">
         ChatGPT allows {UPLOAD_LIMIT} images per account in any 3 hours; each one counts for 3 hours.
@@ -328,7 +418,7 @@ function ImageLimitCard({ overview, now }: { overview: PhoneOverview | null; now
 
 // ─── 3. What is it doing? ───────────────────────────────────────────────────
 
-function WorkingRow({ working, averageTook, now }: { working: PhoneOverviewWorking; averageTook: number | null; now: number }) {
+function WorkingRow({ working, averageTook, now, several }: { working: PhoneOverviewWorking; averageTook: number | null; now: number; several: boolean }) {
   const since = working.since ? Date.parse(working.since) : NaN
   const elapsed = Number.isNaN(since) ? null : Math.max(0, (now - since) / 1000)
   const overdue = elapsed !== null && averageTook !== null && elapsed > averageTook * 1.5
@@ -344,9 +434,10 @@ function WorkingRow({ working, averageTook, now }: { working: PhoneOverviewWorki
       <div className="flex items-center gap-2 text-sm">
         {working.paused ? <Pause className="h-3.5 w-3.5 text-amber-500" /> : <Light tone="good" live size="h-2 w-2" />}
         {working.chapterId
-          ? <Link to={`/clipper3/chapter/${working.chapterId}`} className="hover:underline">{where}</Link>
-          : <span>{where}</span>}
+          ? <Link to={`/clipper3/chapter/${working.chapterId}`} className="whitespace-nowrap hover:underline">{where}</Link>
+          : <span className="whitespace-nowrap">{where}</span>}
         {working.paused && <span className="text-xs text-amber-500">paused</span>}
+        {several && <PhoneTag phone={working.phone} />}
         <span className={cn('ml-auto whitespace-nowrap text-xs tabular-nums', overdue ? 'font-medium text-amber-500' : 'text-muted-foreground')}>
           {elapsed !== null ? formatTook(elapsed) : '—'}
           {averageTook !== null && <span className="text-muted-foreground"> of ~{formatTook(averageTook)}</span>}
@@ -370,7 +461,7 @@ function runTitle(run: PhoneOverviewRun): string {
 }
 
 /** A narration or voiceover run: its progress, then one row per AI Studio tab with the time on it so far. */
-function RunSection({ run, now }: { run: PhoneOverviewRun; now: number }) {
+function RunSection({ run, now, several }: { run: PhoneOverviewRun; now: number; several: boolean }) {
   const kind = RUN_KIND[run.kind]
   const Icon = kind.icon
   const percent = run.total ? (run.done / run.total) * 100 : 0
@@ -387,6 +478,7 @@ function RunSection({ run, now }: { run: PhoneOverviewRun; now: number }) {
         {run.kind === 'voiceover' && <span className="text-xs text-muted-foreground">{LANGUAGE_LABEL[language]}</span>}
         {run.paused && <span className="text-xs text-amber-500">paused</span>}
         {run.stopping && <span className="text-xs text-amber-500">stopping</span>}
+        {several && <PhoneTag phone={run.phone} />}
         <span className="ml-auto whitespace-nowrap text-xs tabular-nums text-muted-foreground">
           {run.done}/{run.total} {kind.unit}{run.total === 1 ? '' : 's'}
         </span>
@@ -426,6 +518,7 @@ function DoingCard({ overview, running, paused, averageTook, phoneClosed, now }:
 }) {
   const working = overview?.working ?? []
   const runs = overview?.runs ?? []
+  const several = (overview?.phones?.length ?? 0) > 1
   const activeRuns = runs.filter(r => !r.paused)
   const last = overview?.recent[0] ?? null
   // Which series and chapters the open pages are in: "Monarch of Supreme Beings · Ch. 15, 16".
@@ -452,7 +545,7 @@ function DoingCard({ overview, running, paused, averageTook, phoneClosed, now }:
     : going.length > 1 ? `${going.length} runs going` : anyPaused ? 'Paused' : resume ? `Resumes ~${clock(resume.at)}` : 'Idle'
   const runsDetail = runs.length
     ? runs.map((r, i) => (
-        <span key={r.kind}>{i > 0 && '; '}{RUN_KIND[r.kind].name} · <span className="font-medium text-foreground">{r.series}</span></span>
+        <span key={`${r.device ?? ''}/${r.kind}`}>{i > 0 && '; '}{RUN_KIND[r.kind].name} · <span className="font-medium text-foreground">{r.series}</span></span>
       ))
     : null
   const detail = working.length === 0 && runsDetail
@@ -477,14 +570,14 @@ function DoingCard({ overview, running, paused, averageTook, phoneClosed, now }:
           <AlertTriangle className="h-3.5 w-3.5" /> The app is closed, so this is from its last report ({ago(overview?.reportedAt ?? null, now)}).
         </p>
       )}
-      {runs.map(run => <RunSection key={run.kind} run={run} now={now} />)}
+      {runs.map(run => <RunSection key={`${run.device ?? ''}/${run.kind}`} run={run} now={now} several={several} />)}
       {working.length > 0 && runs.length > 0 && (
         <p className="flex items-center gap-2 pt-1 text-sm font-medium"><ImageUp className="h-3.5 w-3.5 text-muted-foreground" /> Image Clipper</p>
       )}
       {working.length > 0 && (
         <div className="space-y-3" title="One page per ChatGPT tab. A page still running after 45 minutes is taken as a dead run and dropped.">
           {working.map(w => (
-            <WorkingRow key={`${w.series}/${w.chapter}/${w.page}`} working={w} averageTook={averageTook} now={now} />
+            <WorkingRow key={`${w.device ?? ''}/${w.series}/${w.chapter}/${w.page}`} working={w} averageTook={averageTook} now={now} several={several} />
           ))}
         </div>
       )}
@@ -509,7 +602,7 @@ function geminiState(profile: PhoneGeminiProfile): { tone: Tone; text: string } 
   return { tone: left === 0 ? 'bad' : left <= profile.limit * 0.2 ? 'warn' : 'good', text: `${left} left` }
 }
 
-function GeminiRow({ profile, inUse }: { profile: PhoneGeminiProfile; inUse: boolean }) {
+function GeminiRow({ profile, inUse, several }: { profile: PhoneGeminiProfile; inUse: boolean; several: boolean }) {
   const state = geminiState(profile)
   const percent = profile.limitedUntil ? 100 : profile.limit ? (profile.today / profile.limit) * 100 : 0
   return (
@@ -522,8 +615,9 @@ function GeminiRow({ profile, inUse }: { profile: PhoneGeminiProfile; inUse: boo
         <span className={cn('ml-auto whitespace-nowrap text-xs font-medium tabular-nums', TONE[state.tone].text)}>{state.text}</span>
       </div>
       <Bar percent={percent} tone={state.tone === 'good' ? 'primary' : state.tone} />
-      <div className="text-[11px] text-muted-foreground tabular-nums">
-        {profile.today} / {profile.limit ?? '?'} requests today
+      <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground tabular-nums">
+        {several && <PhoneTag phone={profile.phone} />}
+        <span className="whitespace-nowrap">{profile.today} / {profile.limit ?? '?'} requests today</span>
       </div>
     </div>
   )
@@ -545,7 +639,9 @@ function geminiTotals(usage: PhoneGeminiUsage) {
 }
 
 /** A Gemini limit's section: its totals in a line, then a row per profile. */
-function GeminiSection({ label, usage, inUse }: { label: string; usage: PhoneGeminiUsage; inUse: string | null }) {
+function GeminiSection({ label, usage, inUse, several }: {
+  label: string; usage: PhoneGeminiUsage; inUse: { phone: string | null; account: string }[]; several: boolean
+}) {
   const totals = geminiTotals(usage)
   const tone: Tone = totals.allLimited || (totals.allKnown && totals.left === 0) ? 'bad' : totals.limited > 0 ? 'warn' : 'good'
   return (
@@ -560,7 +656,12 @@ function GeminiSection({ label, usage, inUse }: { label: string; usage: PhoneGem
       </div>
       {/* With one profile, the run reports no account name: the selected profile is the one in use. */}
       {usage.profiles.map(p => (
-        <GeminiRow key={p.id} profile={p} inUse={inUse !== null && (inUse === p.name || (inUse === '' && p.selected))} />
+        <GeminiRow
+          key={p.id}
+          profile={p}
+          several={several}
+          inUse={inUse.some(run => run.phone === p.phone && (run.account === p.name || (run.account === '' && p.selected)))}
+        />
       ))}
     </div>
   )
@@ -577,11 +678,10 @@ function GeminiLimitCard({ overview, now }: { overview: PhoneOverview | null; no
       </AnswerCard>
     )
   }
-  // The profile each run is on: its name, '' when the phone has one profile (and names none), null when not running.
-  const onRun = (kind: PhoneOverviewRun['kind']) => {
-    const run = overview?.runs.find(r => r.kind === kind)
-    return run ? run.account ?? '' : null
-  }
+  // The profile each run of a kind is on, by phone: its name, '' when the phone has one profile (and names none).
+  const onRun = (kind: PhoneOverviewRun['kind']) =>
+    (overview?.runs ?? []).filter(r => r.kind === kind).map(r => ({ phone: r.phone, account: r.account ?? '' }))
+  const several = (overview?.phones?.length ?? 0) > 1
   const sections = [
     speech && { label: 'Voiceover · speech', usage: speech, totals: geminiTotals(speech), inUse: onRun('voiceover') },
     narration && { label: 'Narration · scripts', usage: narration, totals: geminiTotals(narration), inUse: onRun('narration') }
@@ -605,7 +705,7 @@ function GeminiLimitCard({ overview, now }: { overview: PhoneOverview | null; no
         title={<>{today}<span className="text-lg font-semibold text-muted-foreground"> request{today === 1 ? '' : 's'} today</span></>}
         detail={detail}
       />
-      {sections.map(x => <GeminiSection key={x.label} label={x.label} usage={x.usage} inUse={x.inUse} />)}
+      {sections.map(x => <GeminiSection key={x.label} label={x.label} usage={x.usage} inUse={x.inUse} several={several} />)}
       <p className="mt-auto border-t pt-3 text-[11px] text-muted-foreground">
         AI Studio Run taps per profile; each limit is the count it reached before Gemini last stopped it. Speech and scripts are limited apart.
         Resets at midnight Pacific: ~{clock(resetsAt)} here{resetsAt > now && <>, in {span(resetsAt - now)}</>}.
@@ -631,35 +731,88 @@ function automationSummary(automation: PhoneAutomation | null): string {
   return `${mode} · resume after the limit ${automation.resumeAfterLimit ? 'on' : 'off'}`
 }
 
+/** "Every phone" for Stop, and for Start when there's one phone (or an older server that lists none). */
+const ALL = 'all'
+/** Start shares the series' chapters out between the phones that can be started. */
+const SPLIT = 'split'
+
+/** The chapters a phone was given, short: "Ch. 2, 5, 7" or "12 chapters". */
+function chaptersLabel(chapters: string[], numbers: Map<string, number>): string {
+  if (chapters.length > 6) return `${chapters.length} chapters`
+  return `Ch. ${chapters.map(c => numbers.get(c) ?? c).join(', ')}`
+}
+
 /**
  * Starts Image Clipper on the phone, on a series it has, or stops it. The phone
- * wakes itself to start; what it does next shows in the cards above.
+ * wakes itself to start; what it does next shows in the cards above. With
+ * several phones, Start splits the series between the ones that can be started
+ * (each gets its own chapters, so none clips another's pages), or goes to one.
  */
-function RemoteCard({ relay, overview, busy, now }: { relay: RelayStatus | null; overview: PhoneOverview | null; busy: boolean; now: number }) {
+function RemoteCard({ relay, overview, now }: { relay: RelayStatus | null; overview: PhoneOverview | null; now: number }) {
   const { toast } = useToast()
-  const automation = overview?.automation ?? null
+  const phones = overview?.phones ?? []
+  const several = phones.length > 1
+  const startable = phones.filter(p => p.id && p.connected && p.automation?.remoteStart)
   const choices = overview?.series ?? []
   // The series to offer first: the one waiting to resume, else the one running, else the first with pages left.
-  const preferred = automation?.resume?.seriesId
+  const preferred = overview?.automation?.resume?.seriesId
     ?? overview?.working.find(w => w.seriesId)?.seriesId
     ?? choices.find(s => s.crops && s.crops.done < s.crops.total)?.id
     ?? choices[0]?.id
     ?? ''
   const [picked, setPicked] = useState('')
   const [tabs, setTabs] = useState<number | null>(null)
+  const [pickedTarget, setPickedTarget] = useState('')
   const [sending, setSending] = useState<'start' | 'stop' | null>(null)
   const seriesId = picked || preferred
+
+  const targets = [
+    ...(startable.length >= 2 ? [{ value: SPLIT, label: `Split between ${startable.length} phones` }] : []),
+    ...(several ? startable.map(p => ({ value: p.id, label: `Only ${p.name}` })) : [])
+  ]
+  const target = targets.some(t => t.value === pickedTarget) ? pickedTarget : targets[0]?.value ?? ALL
+  const onePhone = target !== SPLIT && target !== ALL ? phones.find(p => p.id === target) ?? null : null
+  // The phones Start goes to, and their automation (the only phone's, with one).
+  const going = target === SPLIT ? startable : onePhone ? [onePhone] : phones
+  const automation = onePhone?.automation ?? overview?.automation ?? null
+  const busy = target === ALL && !several
+    ? (overview?.working.length ?? 0) > 0
+    : going.some(p => p.working > 0)
   const tabCount = tabs ?? automation?.resume?.tabs ?? DEFAULT_TABS
-  const blocker = remoteBlocker(relay, automation)
-  const resume = automation?.resume ?? null
+  const resumes = several
+    ? phones.filter(p => p.automation?.resume).map(p => ({ phone: p.name, resume: p.automation!.resume! }))
+    : automation?.resume ? [{ phone: null, resume: automation.resume }] : []
+  const old = phones.find(p => !p.id)
+
+  let blocker: React.ReactNode | null
+  if (!several) {
+    blocker = remoteBlocker(relay, automation)
+  } else if (!relay?.configured || !relay.connected) {
+    blocker = remoteBlocker(relay, automation)
+  } else if (!startable.length) {
+    blocker = 'No phone can be started now: open Sleeper-Cell and turn on “Start from Manhwa Studio” (Tools → Settings → Automation).'
+  } else {
+    blocker = null
+  }
+  const splitNeedsSeries = target === SPLIT && !seriesId
 
   const send = async (command: 'start' | 'stop') => {
     setSending(command)
     try {
-      const sent = await r2Api.sendPhoneClipper(command, command === 'start' ? { seriesId: seriesId || undefined, tabs: tabCount } : {})
+      const options = command === 'start'
+        ? { seriesId: seriesId || undefined, tabs: tabCount, ...(target === SPLIT ? { split: true } : onePhone ? { device: onePhone.id } : {}) }
+        : onePhone ? { device: onePhone.id } : {}
+      const sent = await r2Api.sendPhoneClipper(command, options)
+      const numbers = new Map<string, number>()
+      for (const w of overview?.working ?? []) if (w.chapterNumber !== null) numbers.set(w.chapter, w.chapterNumber)
+      const split = command === 'start' && target === SPLIT && sent.targets?.length
       toast({
-        title: command === 'start' ? 'Start sent to the phone' : 'Stop sent to the phone',
-        description: sent.phones
+        title: command === 'start'
+          ? split ? `Start sent to ${sent.targets!.length} phones` : 'Start sent to the phone'
+          : onePhone ? `Stop sent to ${onePhone.name}` : 'Stop sent to the phone',
+        description: split
+          ? sent.targets!.map(t => `${t.name}: ${chaptersLabel(t.chapters ?? [], numbers)}${t.reached ? '' : ' (not connected)'}`).join(' · ')
+          : sent.phones
           ? 'Sleeper-Cell got it. What it does shows here as it goes.'
           : 'The phone isn’t connected right now. It acts on this if it connects within 10 minutes.'
       })
@@ -679,21 +832,26 @@ function RemoteCard({ relay, overview, busy, now }: { relay: RelayStatus | null;
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
           <Play className="h-4 w-4 text-muted-foreground" />
-          Image Clipper on the phone
+          Image Clipper on the {several ? 'phones' : 'phone'}
         </CardTitle>
-        <CardDescription>{automationSummary(automation)}</CardDescription>
+        <CardDescription>
+          {several
+            ? 'Split shares the series’ chapters left out between the phones, balanced by pages, in reading order: no page is clipped twice. Start again to share out what’s left.'
+            : automationSummary(automation)}
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
-        {resume && (
-          <p className="flex items-center gap-1.5 text-sm">
+        {resumes.map(({ phone, resume }) => (
+          <p key={phone ?? 'one'} className="flex items-center gap-1.5 text-sm">
             <Clock className="h-4 w-4 flex-shrink-0 text-amber-500" />
             <span>
+              {phone && <span className="font-medium">{phone}: </span>}
               Resumes <span className="font-medium">{resume.series}</span> at ~{clock(resume.at)}
               {Date.parse(resume.at) > now && <> (in {span(Date.parse(resume.at) - now)})</>} in {resume.tabs} tab{resume.tabs === 1 ? '' : 's'}.
               Stop cancels it.
             </span>
           </p>
-        )}
+        ))}
         <div className="flex flex-wrap items-center gap-3">
           <Select value={seriesId} onValueChange={setPicked} disabled={!choices.length}>
             <SelectTrigger className="w-72">
@@ -707,26 +865,50 @@ function RemoteCard({ relay, overview, busy, now }: { relay: RelayStatus | null;
               ))}
             </SelectContent>
           </Select>
+          {several && targets.length > 0 && (
+            <Select value={target} onValueChange={setPickedTarget}>
+              <SelectTrigger className="w-60" aria-label="Which phones">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {targets.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
           <div className="flex items-center gap-1" role="group" aria-label="ChatGPT tabs">
-            <span className="mr-1 text-xs text-muted-foreground">Tabs</span>
+            <span className="mr-1 text-xs text-muted-foreground">Tabs{target === SPLIT ? ' each' : ''}</span>
             {Array.from({ length: MAX_TABS }, (_, i) => i + 1).map(n => (
               <Button key={n} size="sm" variant={tabCount === n ? 'default' : 'outline'} className="h-8 w-8 p-0" onClick={() => setTabs(n)}>
                 {n}
               </Button>
             ))}
           </div>
-          <Button onClick={() => send('start')} disabled={!!blocker || busy || sending !== null}>
+          <Button onClick={() => send('start')} disabled={!!blocker || busy || splitNeedsSeries || sending !== null}>
             {sending === 'start' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
-            Start
+            {target === SPLIT ? 'Start split' : 'Start'}
           </Button>
-          <Button variant="outline" onClick={() => send('stop')} disabled={!!blocker || (!busy && !resume) || sending !== null}>
+          <Button
+            variant="outline"
+            onClick={() => send('stop')}
+            disabled={!!blocker || (!going.some(p => p.working > 0) && !busy && !resumes.length) || sending !== null}
+            title={onePhone ? `Stops ${onePhone.name} only` : several ? 'Stops every phone' : undefined}
+          >
             {sending === 'stop' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Square className="mr-2 h-4 w-4" />}
-            Stop
+            {several && !onePhone ? 'Stop all' : 'Stop'}
           </Button>
         </div>
         {blocker
           ? <p className="flex items-center gap-1.5 text-xs text-amber-500"><AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />{blocker}</p>
-          : busy && <p className="text-xs text-muted-foreground">Image Clipper is running on the phone: stop it to start another series.</p>}
+          : busy && (
+            <p className="text-xs text-muted-foreground">
+              Image Clipper is running on {several ? going.filter(p => p.working > 0).map(p => p.name).join(' and ') : 'the phone'}: stop it to start another run.
+            </p>
+          )}
+        {several && old && (
+          <p className="text-xs text-muted-foreground">
+            {old.name} runs a Sleeper-Cell build from before several phones: update it to start it from here or split with it.
+          </p>
+        )}
       </CardContent>
     </Card>
   )
@@ -734,7 +916,7 @@ function RemoteCard({ relay, overview, busy, now }: { relay: RelayStatus | null;
 
 // ─── History ────────────────────────────────────────────────────────────────
 
-function FinishRow({ finish }: { finish: PhoneOverviewFinish }) {
+function FinishRow({ finish, several }: { finish: PhoneOverviewFinish; several: boolean }) {
   const model = finish.models[finish.models.length - 1]
   return (
     <tr className="border-t">
@@ -747,6 +929,7 @@ function FinishRow({ finish }: { finish: PhoneOverviewFinish }) {
       <td className="py-1.5 pr-3 font-mono text-xs">{pageLabel(finish.page)}</td>
       <td className="py-1.5 pr-3 tabular-nums whitespace-nowrap">{finish.took !== null ? formatTook(finish.took) : '—'}</td>
       <td className="py-1.5 text-xs text-muted-foreground whitespace-nowrap">
+        {several && <PhoneTag phone={finish.phone} className="mr-1.5" />}
         {finish.run === 'manual' ? 'Pasted by hand' : [finish.account, model].filter(Boolean).join(' · ') || '—'}
         {finish.models.length > 1 && <span title={finish.models.join(' → ')}> (+{finish.models.length - 1} fix)</span>}
       </td>
@@ -781,7 +964,8 @@ export default function SleeperCells() {
     const accounts = new Map<string, number>()
     for (const f of overview.recent) {
       if (new Date(f.at).toDateString() !== today || f.run === 'manual') continue
-      const name = f.account ?? f.profile ?? 'Unknown account'
+      const account = f.account ?? f.profile ?? 'Unknown account'
+      const name = (overview.phones?.length ?? 0) > 1 && f.phone ? `${f.phone} · ${account}` : account
       accounts.set(name, (accounts.get(name) ?? 0) + 1)
     }
     return {
@@ -845,7 +1029,7 @@ export default function SleeperCells() {
         <GeminiLimitCard overview={overview} now={now} />
       </div>
 
-      {overview?.configured && <RemoteCard relay={relay} overview={overview} busy={running + paused > 0} now={now} />}
+      {overview?.configured && <RemoteCard relay={relay} overview={overview} now={now} />}
 
       {/* Today's pace */}
       {stats && overview?.configured && (
@@ -991,7 +1175,7 @@ export default function SleeperCells() {
                         </thead>
                         <tbody>
                           {(showAllRecent ? overview.recent : overview.recent.slice(0, RECENT_SHOWN)).map(f => (
-                            <FinishRow key={`${f.series}/${f.chapter}/${f.page}`} finish={f} />
+                            <FinishRow key={`${f.series}/${f.chapter}/${f.page}`} finish={f} several={(overview.phones?.length ?? 0) > 1} />
                           ))}
                         </tbody>
                       </table>

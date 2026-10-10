@@ -65,8 +65,9 @@ async function runReconcile(): Promise<ReconcileResult> {
   const result: ReconcileResult = { resetChapters: [], missingPages: {}, removedAudio: 0 }
   const root = downloadRoot()
 
+  // A completed Part's files were deleted on purpose; its chapters stay "done".
   const chapters = await prisma.chapter.findMany({
-    where: { status: 'done' },
+    where: { status: 'done', completedAt: null },
     select: {
       id: true,
       number: true,

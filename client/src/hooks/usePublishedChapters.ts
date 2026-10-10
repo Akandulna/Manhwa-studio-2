@@ -28,6 +28,10 @@ export interface PublishedState {
   publishedCount: (chapterIds: string[]) => number
   /** Published/total for a whole series, or null if it is not known yet. */
   seriesPublished: (seriesId: string) => SeriesPublished | null
+  /** The Part this chapter was completed with (its files deleted), or null. */
+  completedPart: (chapterId: string) => number | null
+  /** A series' completed Part numbers, ascending. */
+  seriesCompletedParts: (seriesId: string) => number[]
   loading: boolean
 }
 
@@ -40,6 +44,8 @@ export interface PublishedState {
 export function usePublishedChapters(seriesId?: string, language?: NarrationLanguage): PublishedState {
   const [map, setMap] = useState<Record<string, boolean>>({})
   const [seriesMap, setSeriesMap] = useState<Record<string, SeriesPublished>>({})
+  const [completed, setCompleted] = useState<Record<string, number>>({})
+  const [completedParts, setCompletedParts] = useState<Record<string, number[]>>({})
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -52,12 +58,16 @@ export function usePublishedChapters(seriesId?: string, language?: NarrationLang
         if (cancelled) return
         setMap(result.chapters)
         setSeriesMap(result.series ?? {})
+        setCompleted(result.completed ?? {})
+        setCompletedParts(result.completedParts ?? {})
       })
       .catch(() => {
         // Advisory only — leave every chapter unmarked.
         if (cancelled) return
         setMap({})
         setSeriesMap({})
+        setCompleted({})
+        setCompletedParts({})
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -70,6 +80,8 @@ export function usePublishedChapters(seriesId?: string, language?: NarrationLang
     isPublished: (chapterId: string) => map[chapterId] === true,
     publishedCount: (chapterIds: string[]) => chapterIds.filter(id => map[id] === true).length,
     seriesPublished: (seriesId: string) => seriesMap[seriesId] ?? null,
+    completedPart: (chapterId: string) => completed[chapterId] ?? null,
+    seriesCompletedParts: (seriesId: string) => completedParts[seriesId] ?? [],
     loading
   }
 }

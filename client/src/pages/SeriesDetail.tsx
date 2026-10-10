@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { usePublishedChapters } from '@/hooks/usePublishedChapters'
-import { PublishedBadge, publishedRowClass } from '@/components/PublishedBadge'
+import { CompletedBadge, PublishedBadge, completedRowClass, publishedRowClass } from '@/components/PublishedBadge'
 import { useParams, useNavigate } from 'react-router-dom'
 import { seriesApi, downloadsApi, chaptersApi, Series, Chapter, LARGE_CHAPTER_PAGES } from '@/lib/api'
 import { useSocket } from '@/lib/socket'
@@ -57,7 +57,7 @@ export default function SeriesDetail() {
   
   // Chapters already rendered to video, so they are not re-downloaded or
   // reprocessed by mistake.
-  const { isPublished } = usePublishedChapters(id)
+  const { isPublished, completedPart } = usePublishedChapters(id)
 
   const [series, setSeries] = useState<Series | null>(null)
   const [loading, setLoading] = useState(true)
@@ -653,6 +653,9 @@ export default function SeriesDetail() {
                 const progress = chapterProgress[chapter.id]
                 const currentStatus = getChapterStatus(chapter)
                 const isSelectable = currentStatus === 'pending' || currentStatus === 'failed'
+                // A completed Part's files are gone: nothing to preview, stitch or count.
+                const completed = completedPart(chapter.id)
+                const workable = currentStatus === 'done' && completed === null
                 
                 return (
                   <div 
@@ -661,7 +664,7 @@ export default function SeriesDetail() {
                       flex items-center gap-4 p-3 rounded-lg border
                       ${isSelectable ? 'hover:bg-accent cursor-pointer' : ''}
                       ${selectedChapters.has(chapter.id) ? 'bg-accent border-primary' : ''}
-                      ${isPublished(chapter.id) ? publishedRowClass : ''}
+                      ${completed !== null ? completedRowClass : isPublished(chapter.id) ? publishedRowClass : ''}
                     `}
                     onClick={() => isSelectable && handleToggleChapter(chapter.id)}
                   >
@@ -707,12 +710,12 @@ export default function SeriesDetail() {
                     </div>
                     
                     <div className="flex items-center gap-2">
-                      {chapter.pageCount && currentStatus === 'done' && (
+                      {chapter.pageCount && workable && (
                         <span className="text-sm text-muted-foreground">
                           {chapter.downloadedCount}/{chapter.pageCount} pages
                         </span>
                       )}
-                      {currentStatus === 'done' && (
+                      {workable && (
                         <Button
                           variant="outline"
                           size="sm"
@@ -727,7 +730,7 @@ export default function SeriesDetail() {
                           Preview
                         </Button>
                       )}
-                      {currentStatus === 'done' && (
+                      {workable && (
                         <Button
                           variant="outline"
                           size="sm"
@@ -750,8 +753,12 @@ export default function SeriesDetail() {
                           Stitch
                         </Button>
                       )}
-                      {isPublished(chapter.id) && <PublishedBadge />}
-                      {getStatusBadge(currentStatus)}
+                      {completed !== null
+                        ? <CompletedBadge part={completed} />
+                        : <>
+                            {isPublished(chapter.id) && <PublishedBadge />}
+                            {getStatusBadge(currentStatus)}
+                          </>}
                     </div>
                   </div>
                 )

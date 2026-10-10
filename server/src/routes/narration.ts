@@ -35,6 +35,7 @@ import {
 } from '../services/hinglishService.js'
 import { Server } from 'socket.io'
 import { cachedProbe } from '../utils/cachedProbe.js'
+import { readArchivedContinuity } from '../services/partArchive.js'
 import {
   NarrationLanguage,
   requestLanguage,
@@ -247,10 +248,14 @@ router.get('/chapters/:id', async (req: Request, res: Response) => {
       
       const prevScript = prevChapter?.scripts[0]
       if (prevChapter && prevScript) {
+        // A completed Part's last chapter: its R2 archive stands in for a lost row.
+        const archived = (!prevScript.rollingSummary || !prevScript.closingParagraph) && prevChapter.completedAt
+          ? await readArchivedContinuity(prevChapter.id, language)
+          : null
         previousContext = {
           chapterNumber: prevChapter.number,
-          rollingSummary: prevScript.rollingSummary,
-          closingParagraph: prevScript.closingParagraph
+          rollingSummary: prevScript.rollingSummary || archived?.rollingSummary || null,
+          closingParagraph: prevScript.closingParagraph || archived?.closingParagraph || null
         }
       }
     }
@@ -412,6 +417,11 @@ router.get('/chapters/:id/manual-prompt', async (req: Request, res: Response) =>
       
       previousSummary = prevChapter?.scripts[0]?.rollingSummary || undefined
       previousClosing = prevChapter?.scripts[0]?.closingParagraph || undefined
+      if ((!previousSummary || !previousClosing) && prevChapter?.completedAt) {
+        const archived = await readArchivedContinuity(prevChapter.id, language)
+        previousSummary ||= archived?.rollingSummary || undefined
+        previousClosing ||= archived?.closingParagraph || undefined
+      }
     }
     
     const prompt = buildManualModePrompt(

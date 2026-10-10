@@ -1,30 +1,47 @@
 /**
- * Sleeper-Cell relay: carries the phone's status receipts to Manhwa Studio,
- * and Manhwa Studio's "Refresh from phone" requests to the phone, without
+ * Sleeper-Cell relay: carries the phones' status receipts to Manhwa Studio,
+ * and Manhwa Studio's "Refresh from phone" requests to the phones, without
  * touching R2. One Durable Object ("main") holds the last copy of each
- * receipt in its SQLite storage, so whichever side connects later still gets
- * the current state, even when the other side is offline or the Mac is off.
+ * receipt of each phone in its SQLite storage, so whichever side connects
+ * later still gets the current state, even when the other side is offline or
+ * the Mac is off.
  *
- *   POST /receipt/:kind   phone → relay. Body: the receipt JSON (kind: sync | scripts | crops).
- *                         Stored, then pushed to every connected desktop.
- *   POST /request         desktop → relay, when its socket is down. Body: { id, requestedAt, action? }.
+ * Phones: Sleeper-Cell names itself with a device id (a random id it keeps)
+ * and a name the user can change. Builds from before then send neither; they
+ * count as the device "" and are shown as one phone on the old app.
+ *
+ *   POST /receipt/:kind?device=<id>[&replaces=legacy]   phone → relay. Body: the receipt JSON
+ *                         (kind: sync | scripts | crops). Stored under the phone's id, then pushed to every
+ *                         connected desktop. `replaces=legacy` comes from a phone that sent receipts before
+ *                         it had an id: those (device "") are its own old copies and are dropped. The answer
+ *                         echoes `device`, which tells the phone it may stop sending `replaces`.
+ *   POST /request         desktop → relay, when its socket is down. Body: { id, requestedAt, action?, device? }.
+ *   POST /forget          desktop → relay. Body: { device }. Drops that phone's receipts and requests.
  *   GET  /state           what is stored (sizes and times, not bodies), and who is connected.
- *   GET  /ws?role=desktop|phone   WebSocket. A desktop is sent { type: 'hello' } and every
- *                         stored receipt, then each new one. A phone is sent the last request.
+ *   GET  /ws?role=desktop|phone[&device=<id>&name=<name>]   WebSocket. A desktop is sent { type: 'hello' }
+ *                         and every stored receipt, then each new one. A phone is sent the requests meant for it.
  *
  * Messages on the sockets (JSON):
- *   relay → desktop  { type: 'hello', phones, request } · { type: 'receipt', kind, at, body }
- *                    { type: 'presence', phones } · { type: 'requested', id, phones }
- *   desktop → relay  { type: 'request', id, requestedAt, action? }
- *   relay → phone    { type: 'request', id, requestedAt, action?, series?, tabs? }
+ *   relay → desktop  { type: 'hello', phones, devices, request } · { type: 'receipt', kind, device, at, body }
+ *                    { type: 'presence', phones, devices } · { type: 'requested', id, phones }
+ *                    { type: 'forgotten', device }
+ *   desktop → relay  { type: 'request', id, requestedAt, action?, device?, series?, tabs?, chapters? }
+ *   relay → phone    { type: 'request', id, requestedAt, action?, device?, series?, tabs?, chapters? }
+ *
+ * `phones` counts the phones connected; `devices` lists them: [{ id, name }].
+ *
+ * `device` on a request sends it to that phone only; without it, it goes to
+ * every phone. The last request for each (and the last one for all) is kept
+ * and handed to a phone when it connects, oldest first.
  *
  * `action` is optional: "sync" asks the phone to also check R2 for chapters the
  * desktop just sent, before it answers with its receipts. "clipper_start" starts
  * Image Clipper on the phone, on `series` in `tabs` ChatGPT tabs (both optional:
- * the phone's last run and tab count), waking it if need be; "clipper_stop" stops
- * it. The phone acts on those only with its "Start from Manhwa Studio" setting on,
- * and ignores ones older than 10 minutes, as the last request is handed over again
- * whenever it connects.
+ * the phone's last run and tab count), and only on the chapter folders in
+ * `chapters` when given (the desktop splitting a series between phones),
+ * waking it if need be; "clipper_stop" stops it. The phone acts on those only
+ * with its "Start from Manhwa Studio" setting on, and ignores ones older than
+ * 10 minutes, as requests are handed over again whenever it connects.
  *   either → relay   "ping"; the runtime answers "pong" without waking the object.
  *
  * Every request needs `Authorization: Bearer <RELAY_TOKEN>` (or `?token=` for
@@ -45,6 +62,13 @@ const KINDS = new Set(['sync', 'scripts', 'crops'])
 
 /** Durable Object WebSocket messages are capped at 1 MiB; a receipt must fit in one. */
 const MAX_BODY = 1_000_000
+
+/** A phone's id: what Sleeper-Cell generates, with room to spare. "" is the old app, which sends none. */
+const DEVICE_ID = /^[A-Za-z0-9_-]{1,64}$/
+const MAX_NAME = 60
+/** Chapter folders one start may name, and their length. */
+const MAX_CHAPTERS = 1000
+const MAX_CHAPTER_NAME = 200
 
 const encoder = new TextEncoder()
 
@@ -67,7 +91,19 @@ export default {
   }
 } satisfies ExportedHandler<Env>
 
-interface StoredRequest { id: string; requestedAt: string; action?: string; series?: string; tabs?: number }
+interface StoredRequest {
+  id: string
+  requestedAt: string
+  action?: string
+  /** The one phone it's for; every phone when absent. */
+  device?: string
+  series?: string
+  tabs?: number
+  chapters?: string[]
+}
+
+/** What a phone socket carries across hibernation. */
+interface PhoneAttachment { device: string; name: string }
 
 /** What a request may ask of the phone besides its receipts. */
 const ACTIONS = new Set(['sync', 'clipper_start', 'clipper_stop'])
@@ -75,57 +111,109 @@ const ACTIONS = new Set(['sync', 'clipper_start', 'clipper_stop'])
 /** Image Clipper's most ChatGPT tabs at once (ClipperRun.MAX_TABS on the phone). */
 const MAX_TABS = 4
 
+const DEVICE_TAG = 'device:'
+
 export class Relay extends DurableObject<Env> {
   private sql: SqlStorage
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
     this.sql = ctx.storage.sql
-    this.sql.exec('CREATE TABLE IF NOT EXISTS receipts (kind TEXT PRIMARY KEY, body TEXT NOT NULL, at INTEGER NOT NULL)')
-    this.sql.exec('CREATE TABLE IF NOT EXISTS requests (slot INTEGER PRIMARY KEY, id TEXT NOT NULL, requested_at TEXT NOT NULL)')
-    // Added after the first deploy; an object created before then lacks it.
-    const columns = this.sql.exec<{ name: string }>('PRAGMA table_info(requests)').toArray().map(c => c.name)
-    if (!columns.includes('action')) this.sql.exec('ALTER TABLE requests ADD COLUMN action TEXT')
-    if (!columns.includes('series')) this.sql.exec('ALTER TABLE requests ADD COLUMN series TEXT')
-    if (!columns.includes('tabs')) this.sql.exec('ALTER TABLE requests ADD COLUMN tabs INTEGER')
+    this.migrate()
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'))
+  }
+
+  /**
+   * Receipts and requests are kept per phone. The first relay kept one of each,
+   * from the one phone there was: those move over as the old app's (device "").
+   */
+  private migrate(): void {
+    this.sql.exec(
+      'CREATE TABLE IF NOT EXISTS phone_receipts (device TEXT NOT NULL, kind TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL, ' +
+        'PRIMARY KEY (device, kind))'
+    )
+    this.sql.exec(
+      'CREATE TABLE IF NOT EXISTS phone_requests (target TEXT PRIMARY KEY, id TEXT NOT NULL, requested_at TEXT NOT NULL, ' +
+        'action TEXT, series TEXT, tabs INTEGER, chapters TEXT)'
+    )
+    const tables = new Set(this.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'").toArray().map(t => t.name))
+    if (tables.has('receipts')) {
+      this.sql.exec("INSERT OR IGNORE INTO phone_receipts (device, kind, body, at) SELECT '', kind, body, at FROM receipts")
+      this.sql.exec('DROP TABLE receipts')
+    }
+    if (tables.has('requests')) {
+      const columns = this.sql.exec<{ name: string }>('PRAGMA table_info(requests)').toArray().map(c => c.name)
+      const pick = (name: string) => (columns.includes(name) ? name : 'NULL')
+      this.sql.exec(
+        `INSERT OR IGNORE INTO phone_requests (target, id, requested_at, action, series, tabs) ` +
+          `SELECT '', id, requested_at, ${pick('action')}, ${pick('series')}, ${pick('tabs')} FROM requests WHERE slot = 1`
+      )
+      this.sql.exec('DROP TABLE requests')
+    }
   }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url)
-    if (url.pathname === '/ws') return this.accept(request, url.searchParams.get('role'))
+    if (url.pathname === '/ws') return this.accept(request, url)
     if (request.method === 'POST' && url.pathname.startsWith('/receipt/')) {
-      return this.postReceipt(decodeURIComponent(url.pathname.slice('/receipt/'.length)), await request.text())
+      // Read before any answer: the runtime faults on a body left unread.
+      const text = await request.text()
+      const device = url.searchParams.get('device') ?? ''
+      if (device && !DEVICE_ID.test(device)) return new Response('Bad device id', { status: 400 })
+      return this.postReceipt(
+        decodeURIComponent(url.pathname.slice('/receipt/'.length)),
+        device,
+        text,
+        url.searchParams.get('replaces') === 'legacy'
+      )
     }
     if (request.method === 'POST' && url.pathname === '/request') {
       const stored = this.storeRequest(await request.json().catch(() => null))
       return stored ? Response.json({ ok: true, phones: stored.phones }) : new Response('Bad request', { status: 400 })
     }
+    if (request.method === 'POST' && url.pathname === '/forget') {
+      const { device } = ((await request.json().catch(() => null)) ?? {}) as { device?: unknown }
+      if (typeof device !== 'string' || (device && !DEVICE_ID.test(device))) return new Response('Bad device id', { status: 400 })
+      this.forget(device)
+      return Response.json({ ok: true })
+    }
     if (request.method === 'GET' && url.pathname === '/state') {
-      const receipts = this.sql.exec<{ kind: string; at: number; size: number }>(
-        'SELECT kind, at, length(body) AS size FROM receipts'
+      const receipts = this.sql.exec<{ device: string; kind: string; at: number; size: number }>(
+        'SELECT device, kind, at, length(body) AS size FROM phone_receipts'
       ).toArray()
-      return Response.json({ receipts, request: this.lastRequest(), phones: this.count('phone'), desktops: this.count('desktop') })
+      return Response.json({
+        receipts,
+        request: this.lastRequest(''),
+        phones: this.devices().length,
+        devices: this.devices(),
+        desktops: this.sockets('desktop').length
+      })
     }
     return new Response('Not found', { status: 404 })
   }
 
-  private accept(request: Request, role: string | null): Response {
+  private accept(request: Request, url: URL): Response {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return new Response('Expected a WebSocket upgrade', { status: 426 })
     }
+    const role = url.searchParams.get('role')
     if (role !== 'desktop' && role !== 'phone') return new Response('role must be desktop or phone', { status: 400 })
+    const device = role === 'phone' ? url.searchParams.get('device') ?? '' : ''
+    if (device && !DEVICE_ID.test(device)) return new Response('Bad device id', { status: 400 })
 
     const { 0: client, 1: server } = new WebSocketPair()
-    this.ctx.acceptWebSocket(server, [role])
+    // The role stays the first tag (see roleOf).
+    this.ctx.acceptWebSocket(server, device ? [role, DEVICE_TAG + device] : [role])
     if (role === 'desktop') {
-      server.send(JSON.stringify({ type: 'hello', phones: this.count('phone'), request: this.lastRequest() }))
-      for (const row of this.sql.exec<{ kind: string; body: string; at: number }>('SELECT kind, body, at FROM receipts')) {
-        server.send(receiptMessage(row.kind, row.body, row.at))
+      const devices = this.devices()
+      server.send(JSON.stringify({ type: 'hello', phones: devices.length, devices, request: this.lastRequest('') }))
+      for (const row of this.sql.exec<{ device: string; kind: string; body: string; at: number }>('SELECT device, kind, body, at FROM phone_receipts')) {
+        server.send(receiptMessage(row.kind, row.device, row.body, row.at))
       }
     } else {
-      const last = this.lastRequest()
-      if (last) server.send(JSON.stringify({ type: 'request', ...last }))
+      const name = (url.searchParams.get('name') ?? '').trim().slice(0, MAX_NAME)
+      server.serializeAttachment({ device, name } satisfies PhoneAttachment)
+      for (const pending of this.requestsFor(device)) server.send(JSON.stringify({ type: 'request', ...pending }))
       this.broadcastPresence()
     }
     return new Response(null, { status: 101, webSocket: client })
@@ -161,7 +249,7 @@ export class Relay extends DurableObject<Env> {
     if (this.roleOf(ws) === 'phone') this.broadcastPresence(ws)
   }
 
-  private postReceipt(kind: string, text: string): Response {
+  private postReceipt(kind: string, device: string, text: string, replacesLegacy: boolean): Response {
     if (!KINDS.has(kind)) return new Response(`Unknown receipt kind "${kind}"`, { status: 404 })
     if (text.length > MAX_BODY) return new Response('Receipt too large', { status: 413 })
     let parsed: unknown
@@ -173,54 +261,111 @@ export class Relay extends DurableObject<Env> {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return new Response('Receipt must be a JSON object', { status: 400 })
     }
+    if (device && replacesLegacy) this.forget('')
     const at = Date.now()
     this.sql.exec(
-      'INSERT INTO receipts (kind, body, at) VALUES (?, ?, ?) ON CONFLICT(kind) DO UPDATE SET body = excluded.body, at = excluded.at',
-      kind, text, at
+      'INSERT INTO phone_receipts (device, kind, body, at) VALUES (?, ?, ?, ?) ' +
+        'ON CONFLICT(device, kind) DO UPDATE SET body = excluded.body, at = excluded.at',
+      device, kind, text, at
     )
-    const message = receiptMessage(kind, text, at)
-    for (const ws of this.sockets('desktop')) ws.send(message)
-    return Response.json({ ok: true, at, desktops: this.count('desktop') })
+    const message = receiptMessage(kind, device, text, at)
+    const desktops = this.sockets('desktop')
+    for (const ws of desktops) ws.send(message)
+    // `device` tells the phone this relay keeps phones apart (one deployed before didn't, and ignored `replaces`).
+    return Response.json({ ok: true, at, device, desktops: desktops.length })
   }
 
-  /** Saves a request and passes it to every connected phone. Null when it isn't a valid request. */
+  /** Drops a phone's receipts and the requests kept for it, and tells the desktops. */
+  private forget(device: string): void {
+    this.sql.exec('DELETE FROM phone_receipts WHERE device = ?', device)
+    if (device) this.sql.exec('DELETE FROM phone_requests WHERE target = ?', device)
+    const message = JSON.stringify({ type: 'forgotten', device })
+    for (const ws of this.sockets('desktop')) ws.send(message)
+  }
+
+  /** Saves a request and passes it to the phone it's for, or every phone. Null when it isn't a valid request. */
   private storeRequest(value: unknown): { request: StoredRequest; phones: number } | null {
-    const { id, requestedAt, action, series, tabs } = (value ?? {}) as {
-      id?: unknown; requestedAt?: unknown; action?: unknown; series?: unknown; tabs?: unknown
+    const { id, requestedAt, action, device, series, tabs, chapters } = (value ?? {}) as {
+      id?: unknown; requestedAt?: unknown; action?: unknown; device?: unknown; series?: unknown; tabs?: unknown; chapters?: unknown
     }
     if (typeof id !== 'string' || !id || id.length > 100) return null
+    if (device !== undefined && device !== null && (typeof device !== 'string' || (device && !DEVICE_ID.test(device)))) return null
     const request: StoredRequest = { id, requestedAt: typeof requestedAt === 'string' ? requestedAt : new Date().toISOString() }
     if (typeof action === 'string' && ACTIONS.has(action)) request.action = action
+    if (typeof device === 'string' && device) request.device = device
     if (request.action === 'clipper_start') {
       if (typeof series === 'string' && series.trim() && series.length <= 200) request.series = series.trim()
       if (typeof tabs === 'number' && Number.isInteger(tabs) && tabs >= 1 && tabs <= MAX_TABS) request.tabs = tabs
+      if (Array.isArray(chapters)) {
+        const names = chapters.filter((c): c is string => typeof c === 'string' && !!c && c.length <= MAX_CHAPTER_NAME)
+        if (names.length > MAX_CHAPTERS) return null
+        if (names.length) request.chapters = names
+      }
     }
     this.sql.exec(
-      'INSERT INTO requests (slot, id, requested_at, action, series, tabs) VALUES (1, ?, ?, ?, ?, ?) ' +
-        'ON CONFLICT(slot) DO UPDATE SET id = excluded.id, requested_at = excluded.requested_at, action = excluded.action, ' +
-        'series = excluded.series, tabs = excluded.tabs',
-      request.id, request.requestedAt, request.action ?? null, request.series ?? null, request.tabs ?? null
+      'INSERT INTO phone_requests (target, id, requested_at, action, series, tabs, chapters) VALUES (?, ?, ?, ?, ?, ?, ?) ' +
+        'ON CONFLICT(target) DO UPDATE SET id = excluded.id, requested_at = excluded.requested_at, action = excluded.action, ' +
+        'series = excluded.series, tabs = excluded.tabs, chapters = excluded.chapters',
+      request.device ?? '', request.id, request.requestedAt, request.action ?? null, request.series ?? null, request.tabs ?? null,
+      request.chapters ? JSON.stringify(request.chapters) : null
     )
     const message = JSON.stringify({ type: 'request', ...request })
-    const phones = this.sockets('phone')
+    const phones = request.device ? this.ctx.getWebSockets(DEVICE_TAG + request.device).filter(open) : this.sockets('phone')
     for (const ws of phones) ws.send(message)
-    return { request, phones: phones.length }
+    return { request, phones: request.device ? Math.min(phones.length, 1) : this.devices().length }
   }
 
-  private lastRequest(): StoredRequest | null {
-    const row = this.sql.exec<{ id: string; requested_at: string; action: string | null; series: string | null; tabs: number | null }>(
-      'SELECT id, requested_at, action, series, tabs FROM requests WHERE slot = 1'
-    ).toArray()[0]
+  /** The requests a phone that just connected should see: the last one for every phone, and its own, oldest first. */
+  private requestsFor(device: string): StoredRequest[] {
+    const requests = [this.lastRequest('')]
+    if (device) requests.push(this.lastRequest(device))
+    return requests
+      .filter((r): r is StoredRequest => r !== null)
+      .sort((a, b) => (Date.parse(a.requestedAt) || 0) - (Date.parse(b.requestedAt) || 0))
+  }
+
+  private lastRequest(target: string): StoredRequest | null {
+    const row = this.sql.exec<{
+      id: string; requested_at: string; action: string | null; series: string | null; tabs: number | null; chapters: string | null
+    }>('SELECT id, requested_at, action, series, tabs, chapters FROM phone_requests WHERE target = ?', target).toArray()[0]
     if (!row) return null
     const request: StoredRequest = { id: row.id, requestedAt: row.requested_at }
     if (row.action) request.action = row.action
+    if (target) request.device = target
     if (row.series) request.series = row.series
     if (row.tabs) request.tabs = row.tabs
+    if (row.chapters) {
+      try {
+        const chapters = JSON.parse(row.chapters)
+        if (Array.isArray(chapters) && chapters.length) request.chapters = chapters
+      } catch {
+        // Written by storeRequest, so always JSON.
+      }
+    }
     return request
   }
 
+  /**
+   * The phones connected now, one entry per phone (a reconnecting phone can
+   * briefly hold two sockets). Old-app phones have no id, so each counts.
+   */
+  private devices(except?: WebSocket): { id: string; name: string }[] {
+    const seen = new Map<string, { id: string; name: string }>()
+    let legacy = 0
+    for (const ws of this.sockets('phone', except)) {
+      const attachment = (ws.deserializeAttachment() ?? { device: '', name: '' }) as PhoneAttachment
+      if (!attachment.device) {
+        seen.set(`legacy:${legacy++}`, { id: '', name: attachment.name })
+      } else if (!seen.has(attachment.device) || attachment.name) {
+        seen.set(attachment.device, { id: attachment.device, name: attachment.name })
+      }
+    }
+    return [...seen.values()]
+  }
+
   private broadcastPresence(except?: WebSocket): void {
-    const message = JSON.stringify({ type: 'presence', phones: this.count('phone', except) })
+    const devices = this.devices(except)
+    const message = JSON.stringify({ type: 'presence', phones: devices.length, devices })
     for (const ws of this.sockets('desktop')) ws.send(message)
   }
 
@@ -230,15 +375,15 @@ export class Relay extends DurableObject<Env> {
   }
 
   private sockets(role: Role, except?: WebSocket): WebSocket[] {
-    return this.ctx.getWebSockets(role).filter(ws => ws !== except && ws.readyState === WebSocket.READY_STATE_OPEN)
-  }
-
-  private count(role: Role, except?: WebSocket): number {
-    return this.sockets(role, except).length
+    return this.ctx.getWebSockets(role).filter(ws => ws !== except && open(ws))
   }
 }
 
+function open(ws: WebSocket): boolean {
+  return ws.readyState === WebSocket.READY_STATE_OPEN
+}
+
 /** `body` is already-validated JSON text, so it is spliced in rather than parsed and re-encoded. */
-function receiptMessage(kind: string, body: string, at: number): string {
-  return `{"type":"receipt","kind":${JSON.stringify(kind)},"at":${at},"body":${body}}`
+function receiptMessage(kind: string, device: string, body: string, at: number): string {
+  return `{"type":"receipt","kind":${JSON.stringify(kind)},"device":${JSON.stringify(device)},"at":${at},"body":${body}}`
 }

@@ -92,7 +92,8 @@ export class DownloadManager {
         include: { series: true }
       });
       
-      if (!chapter) continue;
+      // A completed Part's chapters were deleted on purpose (partArchive.ts).
+      if (!chapter || chapter.completedAt) continue;
       
       // Mark as queued
       await prisma.chapter.update({

@@ -55,6 +55,8 @@ model Chapter {
   downloadedCount Int            @default(0)
   error           String?
   createdAt       DateTime       @default(now())
+  completedAt     DateTime?      // Its Part was completed on the Storage page: files deleted, only script continuity kept (partArchive.ts)
+  completedPart   Int?           // Which narration Part that was
   
   series          Series         @relation(fields: [seriesId], references: [id], onDelete: Cascade)
   pages           Page[]

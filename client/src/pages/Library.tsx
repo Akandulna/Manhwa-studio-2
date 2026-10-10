@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { usePublishedChapters } from '@/hooks/usePublishedChapters'
-import { publishedRowClass } from '@/components/PublishedBadge'
+import { SeriesCompletedBadge, publishedRowClass } from '@/components/PublishedBadge'
 import { Link, useNavigate } from 'react-router-dom'
 import { seriesApi, r2Api, stitchApi, Series, PhoneSendJob, PhoneSyncStatus, LARGE_CHAPTER_PAGES } from '@/lib/api'
 import { useSocket } from '@/lib/socket'
@@ -37,7 +37,7 @@ export default function Library() {
   const [series, setSeries] = useState<Series[]>([])
   // How many chapters of each series are actually rendered to video — the
   // disk's answer, read from Editor 2.0's _video2 folders.
-  const { seriesPublished } = usePublishedChapters()
+  const { seriesPublished, seriesCompletedParts } = usePublishedChapters()
   const [loading, setLoading] = useState(true)
   const [importDialogOpen, setImportDialogOpen] = useState(false)
   const [scanning, setScanning] = useState(false)
@@ -485,7 +485,10 @@ export default function Library() {
                 </div>
 
                 <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 min-w-0">
                   <h3 className="font-semibold truncate">{s.title}</h3>
+                  <SeriesCompletedBadge parts={seriesCompletedParts(s.id)} />
+                </div>
                   <div className="flex items-center gap-1 text-xs text-muted-foreground">
                     <Globe className="h-3 w-3 shrink-0" />
                     <span className="truncate">{s.sourceSite}</span>

@@ -11,15 +11,18 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { seriesApi, type Series } from '@/lib/api'
-import { Card, CardContent } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
+import { Card } from '@/components/ui/card'
 import { Clapperboard, Globe, Loader2 } from 'lucide-react'
 import { LanguageTabs } from '@/components/LanguageTabs'
 import { LANGUAGE_LABEL, useNarrationLanguage, withLang } from '@/lib/narrationLanguage'
+import { usePublishedChapters } from '@/hooks/usePublishedChapters'
+import { SeriesCompletedBadge } from '@/components/PublishedBadge'
 
 export default function EditorLibrary2() {
   const [language, setLanguage] = useNarrationLanguage('editor2')
   const [series, setSeries] = useState<Series[]>([])
+  // Parts completed on the Storage page (files deleted, continuity kept).
+  const { seriesCompletedParts } = usePublishedChapters()
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -73,43 +76,36 @@ export default function EditorLibrary2() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+      <Card className="overflow-hidden divide-y">
         {series.map((s) => (
-          <Link key={s.id} to={withLang(`/editor2/${s.id}`, language)}>
-            <Card className="h-full hover:border-primary transition-colors cursor-pointer">
-              <CardContent className="p-4">
-                <div className="aspect-[3/4] bg-muted rounded-lg mb-3 flex items-center justify-center overflow-hidden">
-                  {s.coverPath ? (
-                    <img
-                      src={`file://${s.coverPath}`}
-                      alt={s.title}
-                      className="w-full h-full object-cover"
-                      onError={(e) => {
-                        e.currentTarget.style.display = 'none'
-                        e.currentTarget.parentElement!.innerHTML = `<div class="flex items-center justify-center w-full h-full"><span class="text-4xl">🎬</span></div>`
-                      }}
-                    />
-                  ) : (
-                    <span className="text-4xl">🎬</span>
-                  )}
-                </div>
+          <Link
+            key={s.id}
+            to={withLang(`/editor2/${s.id}`, language)}
+            className="flex items-center gap-4 px-4 py-3 hover:bg-accent/50 transition-colors"
+          >
+            <div className="h-10 w-10 shrink-0 rounded-md bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center">
+              <Clapperboard className="h-5 w-5 text-primary/40" />
+            </div>
 
-                <h3 className="font-semibold truncate mb-2">{s.title}</h3>
-
-                <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span className="flex items-center gap-1 min-w-0">
-                    <Globe className="h-3 w-3 flex-shrink-0" />
-                    <span className="truncate">{s.sourceSite}</span>
-                  </span>
-                  {s.chapterCount !== undefined && (
-                    <Badge variant="secondary">{s.chapterCount} ch</Badge>
-                  )}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 min-w-0">
+                  <h3 className="font-semibold truncate">{s.title}</h3>
+                  <SeriesCompletedBadge parts={seriesCompletedParts(s.id)} done />
                 </div>
-              </CardContent>
-            </Card>
+              <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                <Globe className="h-3 w-3 shrink-0" />
+                <span className="truncate">{s.sourceSite}</span>
+              </div>
+            </div>
+
+            {s.chapterCount !== undefined && (
+              <span className="w-24 shrink-0 text-sm text-muted-foreground text-right">
+                {s.chapterCount} chapters
+              </span>
+            )}
           </Link>
         ))}
-      </div>
+      </Card>
     </div>
   )
 }

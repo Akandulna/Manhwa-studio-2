@@ -118,11 +118,11 @@ const DIR_CATEGORY: Record<string, CategoryKey> = {
 }
 
 /** Series-level folders holding rendered video (Editor 1.0, and 2.0 in English and Hindi). */
-type VideoDir = '_video' | '_video2' | '_video2_hi'
-const VIDEO_DIRS: VideoDir[] = ['_video', '_video2', '_video2_hi']
+export type VideoDir = '_video' | '_video2' | '_video2_hi'
+export const VIDEO_DIRS: VideoDir[] = ['_video', '_video2', '_video2_hi']
 
 /** The video folders that count as one narration language's renders. */
-function videoDirsFor(language?: NarrationLanguage): VideoDir[] {
+export function videoDirsFor(language?: NarrationLanguage): VideoDir[] {
   if (!language) return VIDEO_DIRS
   return language === 'en' ? ['_video', '_video2'] : [video2FolderName('hi') as VideoDir]
 }
@@ -166,7 +166,7 @@ export function reclaimableOf(sizes: Sizes): number {
  * directory that has vanished mid-scan counts as zero instead of failing the
  * whole page — this runs against a tree the user is actively deleting from.
  */
-async function measureDir(dir: string): Promise<{ bytes: number; files: number }> {
+export async function measureDir(dir: string): Promise<{ bytes: number; files: number }> {
   let bytes = 0
   let files = 0
 
@@ -199,6 +199,14 @@ async function measureDir(dir: string): Promise<{ bytes: number; files: number }
 
 // ============ Exported? ============
 
+/** The chapter number a rendered video's file name carries (`ch007_…`), or null. */
+export function videoChapterNumber(fileName: string): number | null {
+  const m = /(?:^|_)ch(\d{3,})_/.exec(fileName)
+  if (!m) return null
+  const n = parseInt(m[1], 10)
+  return Number.isFinite(n) ? n : null
+}
+
 /**
  * The chapter numbers this series has a rendered MP4 for.
  *
@@ -209,9 +217,11 @@ async function measureDir(dir: string): Promise<{ bytes: number; files: number }
  * chapter and are counted as series-level video instead of marking anything
  * exported; guessing would be the one error that costs source material.
  */
-async function scanExportedChapterNumbers(
+export async function scanExportedChapterNumbers(
   rootFolder: string,
-  dirs: VideoDir[] = VIDEO_DIRS
+  dirs: VideoDir[] = VIDEO_DIRS,
+  /** Skip 0-byte files (a render that died before writing), as Editor 2.0's own list does. */
+  nonEmpty = false
 ): Promise<Set<number>> {
   const found = new Set<number>()
 
@@ -225,10 +235,16 @@ async function scanExportedChapterNumbers(
     }
     for (const name of entries) {
       if (!name.toLowerCase().endsWith('.mp4')) continue
-      const m = /(?:^|_)ch(\d{3,})_/.exec(name)
-      if (!m) continue
-      const n = parseInt(m[1], 10)
-      if (Number.isFinite(n)) found.add(n)
+      const n = videoChapterNumber(name)
+      if (n === null || found.has(n)) continue
+      if (nonEmpty) {
+        try {
+          if ((await fs.stat(path.join(dir, name))).size === 0) continue
+        } catch {
+          continue
+        }
+      }
+      found.add(n)
     }
   }
 
@@ -250,8 +266,10 @@ export interface ChapterStorage {
   totalBytes: number
   reclaimableBytes: number
   fileCount: number
-  /** A rendered MP4 exists for this chapter number. */
+  /** A rendered MP4 exists for this chapter number, or its Part was completed. */
   exported: boolean
+  /** The Part this chapter was completed with (files deleted), or null. */
+  completedPart: number | null
   /** Which exporter's record vouches for it, for the tooltip. */
   exportedVia: 'editor2' | null
 }
@@ -354,6 +372,7 @@ export async function scanStorage(): Promise<StorageOverview> {
         slice.map(async ch => {
           const { sizes, files, exists } = await scanChapterFolder(ch.folderPath)
           const viaEditor2 = exportedNumbers.has(Math.round(ch.number))
+          const completed = ch.completedAt !== null
           const chapter: ChapterStorage = {
             id: ch.id,
             number: ch.number,
@@ -366,8 +385,9 @@ export async function scanStorage(): Promise<StorageOverview> {
             totalBytes: totalOf(sizes),
             reclaimableBytes: reclaimableOf(sizes),
             fileCount: files,
-            exported: viaEditor2,
-            exportedVia: viaEditor2 ? 'editor2' : null
+            exported: viaEditor2 || completed,
+            exportedVia: viaEditor2 ? 'editor2' : null,
+            completedPart: completed ? ch.completedPart : null
           }
           return chapter
         })
@@ -464,7 +484,7 @@ export async function scanStorage(): Promise<StorageOverview> {
 // which is the only form that can be trusted.
 
 /** Delete `target`, but only if it really resolves inside the download root. */
-async function removeWithin(target: string): Promise<boolean> {
+export async function removeWithin(target: string): Promise<boolean> {
   const root = path.resolve(process.env.DOWNLOAD_ROOT || './downloads')
   const resolved = path.resolve(target)
 
@@ -513,6 +533,9 @@ export async function deleteChapterData(
     include: { series: { select: { id: true, rootFolder: true } } }
   })
   if (!chapter) throw new Error('Chapter not found')
+  if (chapter.completedAt) {
+    return { chapterId: chapter.id, chapterNumber: chapter.number, categories: [], freedBytes: 0, skipped: 'Part completed — nothing left to clean' }
+  }
 
   const selected = categories.filter(key => {
     const meta = CATEGORIES.find(c => c.key === key)
@@ -749,6 +772,10 @@ export interface PublishedMap {
   chapters: Record<string, boolean>
   /** Series id → how many of its chapters are published, out of how many. */
   series: Record<string, { published: number; total: number }>
+  /** Chapter id → the Part it was completed with (files deleted, scripts' continuity kept). */
+  completed: Record<string, number>
+  /** Series id → its completed Part numbers, ascending. */
+  completedParts: Record<string, number[]>
   scannedAt: string
 }
 
@@ -771,22 +798,33 @@ export async function getPublishedChapters(
 ): Promise<PublishedMap> {
   const allSeries = await prisma.series.findMany({
     where: seriesId ? { id: seriesId } : undefined,
-    select: { id: true, rootFolder: true, chapters: { select: { id: true, number: true } } }
+    select: {
+      id: true,
+      rootFolder: true,
+      chapters: { select: { id: true, number: true, completedAt: true, completedPart: true } }
+    }
   })
 
   const chapters: Record<string, boolean> = {}
   const series: Record<string, { published: number; total: number }> = {}
+  const completed: Record<string, number> = {}
+  const completedParts: Record<string, number[]> = {}
 
   for (const s of allSeries) {
     const exportedNumbers = await scanExportedChapterNumbers(s.rootFolder, videoDirsFor(language))
     let published = 0
     for (const ch of s.chapters) {
-      const isPublished = exportedNumbers.has(Math.round(ch.number))
+      // A completed Part's videos were deleted with it (the user keeps the final
+      // cut elsewhere), so its chapters stay published in both languages.
+      const isPublished = ch.completedAt !== null || exportedNumbers.has(Math.round(ch.number))
       chapters[ch.id] = isPublished
       if (isPublished) published += 1
+      if (ch.completedAt !== null) completed[ch.id] = ch.completedPart ?? 0
     }
     series[s.id] = { published, total: s.chapters.length }
+    const parts = [...new Set(s.chapters.filter(ch => ch.completedAt !== null).map(ch => ch.completedPart ?? 0))]
+    if (parts.length > 0) completedParts[s.id] = parts.sort((a, b) => a - b)
   }
 
-  return { chapters, series, scannedAt: new Date().toISOString() }
+  return { chapters, series, completed, completedParts, scannedAt: new Date().toISOString() }
 }

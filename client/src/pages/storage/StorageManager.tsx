@@ -40,6 +40,8 @@ import {
   type StorageCategoryMeta,
   type StorageVideoFile
 } from '@/lib/api'
+import { CompletedBadge } from '@/components/PublishedBadge'
+import { PartsPanel } from './PartsPanel'
 
 // ============ Formatting ============
 
@@ -124,6 +126,7 @@ function Legend({
 }
 
 function ExportBadge({ chapter }: { chapter: ChapterStorage }) {
+  if (chapter.completedPart !== null) return <CompletedBadge part={chapter.completedPart} />
   if (chapter.exported) {
     return (
       <Badge
@@ -505,6 +508,9 @@ export default function StorageManager() {
                 ? Math.round((series.exportedChapterCount / series.chapterCount) * 100)
                 : 0
               const seriesVideos = videos[series.id] ?? []
+              const completedParts = [...new Set(
+                series.chapters.flatMap(c => (c.completedPart !== null ? [c.completedPart] : []))
+              )].sort((a, b) => a - b)
 
               return (
                 <Card key={series.id}>
@@ -522,6 +528,7 @@ export default function StorageManager() {
                         <span className="min-w-0">
                           <span className="flex flex-wrap items-center gap-2">
                             <span className="truncate text-lg font-semibold">{series.title}</span>
+                            {completedParts.map(part => <CompletedBadge key={part} part={part} />)}
                             {!series.exists && (
                               <Badge variant="destructive" className="flex items-center gap-1">
                                 <AlertTriangle className="h-3 w-3" />
@@ -577,6 +584,9 @@ export default function StorageManager() {
                     {/* Chapters */}
                     {isOpen && (
                       <div className="mt-5 border-t pt-5">
+                        <div className="mb-6">
+                          <PartsPanel seriesId={series.id} onChanged={() => load(true)} />
+                        </div>
                         <div className="overflow-x-auto">
                           <table className="w-full text-sm">
                             <thead>
@@ -626,7 +636,7 @@ export default function StorageManager() {
                                         size="sm"
                                         variant="ghost"
                                         onClick={() => cleanChapter(chapter)}
-                                        disabled={busy === chapter.id || frees <= 0}
+                                        disabled={busy === chapter.id || frees <= 0 || chapter.completedPart !== null}
                                         title={
                                           chapter.exported
                                             ? 'Delete the selected data from this chapter'

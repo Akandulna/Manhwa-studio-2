@@ -1979,6 +1979,8 @@ export interface ChapterStorage {
   fileCount: number
   exported: boolean
   exportedVia: 'editor2' | null
+  /** The Part this chapter was completed with (files deleted), or null. */
+  completedPart: number | null
 }
 
 export interface SeriesStorage {
@@ -2029,7 +2031,57 @@ export interface StorageVideoFile {
 export interface PublishedMap {
   chapters: Record<string, boolean>
   series: Record<string, { published: number; total: number }>
+  /** Chapter id → the Part it was completed with. */
+  completed?: Record<string, number>
+  /** Series id → its completed Part numbers. */
+  completedParts?: Record<string, number[]>
   scannedAt: string
+}
+
+export interface PartChapter {
+  id: string
+  number: number
+  title: string | null
+  folderPath: string
+  exportedEn: boolean
+  exportedHi: boolean
+  completed: boolean
+}
+
+export interface SeriesPart {
+  number: number
+  firstChapter: number
+  lastChapter: number
+  closed: boolean
+  /** Ends at a "Part end" marked in Narration, rather than at the last exported chapter. */
+  endMarked: boolean
+  completed: boolean
+  completedAt: string | null
+  chapters: PartChapter[]
+  exportedEn: number
+  exportedHi: number
+  ready: boolean
+  blocker: string | null
+  localBytes: number
+}
+
+export interface SeriesParts {
+  seriesId: string
+  title: string
+  r2Configured: boolean
+  parts: SeriesPart[]
+}
+
+export interface CompletePartResult {
+  partNumber: number
+  chapters: number
+  continuityKey: string | null
+  r2Deleted: string[]
+  r2FreedBytes: number
+  r2Kept: string[]
+  localFreedBytes: number
+  videosDeleted: number
+  warnings: string[]
 }
 
 export const storageApi = {
@@ -2046,6 +2098,15 @@ export const storageApi = {
   },
 
   getCategories: () => fetchApi<StorageCategoryMeta[]>('/storage/categories'),
+
+  getParts: (seriesId: string) => fetchApi<SeriesParts>(`/storage/series/${seriesId}/parts`),
+
+  /** Irreversible: deletes the Part locally and in R2, keeping only its continuity. */
+  completePart: (seriesId: string, part: number, confirm: string) =>
+    fetchApi<CompletePartResult>(`/storage/series/${seriesId}/parts/${part}/complete`, {
+      method: 'POST',
+      body: JSON.stringify({ confirm })
+    }),
 
   getSeriesVideos: (seriesId: string) =>
     fetchApi<StorageVideoFile[]>(`/storage/series/${seriesId}/videos`),
@@ -2300,6 +2361,9 @@ export interface PhoneScriptRun {
   at: string | null
   /** What each AI Studio tab is on; a tab between splits is left out. */
   tabs: PhoneScriptRunTab[]
+  /** The phone it's on: its id ("" for the old app, or the one phone R2 carries) and name; null when not known. */
+  device: string | null
+  phone: string | null
 }
 
 export interface PhoneScriptRunTab {
@@ -2354,6 +2418,9 @@ export interface PhoneCropsWorking {
   /** When Auto-run started this page. */
   since: string | null
   paused: boolean
+  /** The phone it's on: its id ("" for the old app, or the one phone R2 carries) and name; null when not known. */
+  device: string | null
+  phone: string | null
 }
 
 /** Crop pointers made on the Sleeper-Cell phone, from the receipt it writes to R2 as pages start and finish. */
@@ -2410,6 +2477,9 @@ export interface PhoneUploadProfile {
   uploads: { at: string; images: number }[]
   /** Oldest first. */
   limits: PhoneUploadLimit[]
+  /** The phone it's on (see PhoneScriptRun). With several phones, `id` is "<device>:<profile id>". */
+  device: string | null
+  phone: string | null
 }
 
 /** One phone profile's Gemini requests in AI Studio today, for one kind of run. */
@@ -2423,6 +2493,9 @@ export interface PhoneGeminiProfile {
   limit: number | null
   /** While its speech limit is noted as used up; null otherwise. */
   limitedUntil: string | null
+  /** The phone it's on: its id ("" for the old app, or the one phone R2 carries) and name; null when not known. */
+  device: string | null
+  phone: string | null
 }
 
 /** Gemini's limit for one kind of run on the phone's profiles. */
@@ -2445,6 +2518,8 @@ export interface PhonePageFinish {
   account: string | null
   /** The ChatGPT models that answered, in order (a fix round can be answered by another). */
   models: string[]
+  /** The phone that finished it; null when not known. */
+  phone: string | null
 }
 
 /** Where a page is: the series and chapter in the library when they match, else the phone's folder names. */
@@ -2462,6 +2537,9 @@ export interface PhoneOverviewWorking extends PhoneOverviewPlace {
   page: string
   since: string | null
   paused: boolean
+  /** The phone it's on: its id ("" for the old app, or the one phone R2 carries) and name; null when not known. */
+  device: string | null
+  phone: string | null
 }
 
 export interface PhoneOverviewFinish extends PhoneOverviewPlace, PhonePageFinish {
@@ -2511,10 +2589,29 @@ export interface PhoneAutomation {
   resume: { seriesId: string | null; series: string; tabs: number; at: string } | null
 }
 
-/** Everything Sleeper-Cell has reported, across every series (the Sleeper Cells page). */
+/** One phone running Sleeper-Cell. */
+export interface PhoneOverviewPhone {
+  /** Its id; "" for a build from before phones had one, which can't be started on its own. */
+  id: string
+  name: string
+  /** Sleeper-Cell's socket to the relay is open (the app is open, or listening for starts); null without the relay. */
+  connected: boolean | null
+  /** Its newest receipt. */
+  reportedAt: string | null
+  automation: PhoneAutomation | null
+  /** Pages Auto-run is on there. */
+  working: number
+  /** Narration and voiceover runs going there. */
+  runs: number
+}
+
+/** Everything Sleeper-Cell has reported, across every series and phone (the Sleeper Cells page). */
 export interface PhoneOverview {
   configured: boolean
+  /** Every phone's name, joined. */
   device: string | null
+  /** Each phone (older servers leave it out). One without the relay: R2 carries one phone's receipts. */
+  phones?: PhoneOverviewPhone[]
   /** The latest of the three receipts. */
   reportedAt: string | null
   /** When each receipt was last written; null if never. */
@@ -2534,7 +2631,7 @@ export interface PhoneOverview {
   profiles: PhoneUploadProfile[]
   /** Gemini requests per profile today: the voiceover run's speech and the narration run's scripts; null from builds before each was sent. */
   gemini: { speech: PhoneGeminiUsage | null; narration: PhoneGeminiUsage | null }
-  /** Null from Sleeper-Cell builds before automation. */
+  /** The first phone's that can be started from here, else the first phone's; null from Sleeper-Cell builds before automation. */
   automation: PhoneAutomation | null
 }
 
@@ -2559,8 +2656,15 @@ export interface RelayStatus {
    * "Start from Manhwa Studio" setting keeps the socket open in the background.
    */
   phones: number
+  /** The phones connected, and those the relay keeps receipts from (older servers leave it out). */
+  devices?: { id: string; name: string; connected: boolean }[]
   lastError: string | null
   lastReceiptAt: string | null
+}
+
+/** Image Clipper's start or stop, as sent: to each phone, or to every phone (device "*"). */
+export interface PhoneClipperSent extends PhoneUpdateRequest {
+  targets?: { device: string; name: string; chapters: string[] | null; reached: boolean }[]
 }
 
 /** The script zip the phone uploads once every chapter of a series is done ("Zip and upload to R2"). */
@@ -2655,9 +2759,15 @@ export const r2Api = {
   /**
    * Starts Image Clipper on the phone, through the relay: on `seriesId` in
    * `tabs` ChatGPT tabs, or without them the phone's last run. Or stops it.
+   * `device` sends it to that phone only; `split` shares the series' chapters
+   * left out between the phones that can be started.
    */
-  sendPhoneClipper: (command: 'start' | 'stop', options: { seriesId?: string; tabs?: number } = {}) =>
-    fetchApi<PhoneUpdateRequest>('/r2/phone/clipper', { method: 'POST', body: JSON.stringify({ command, ...options }) }),
+  sendPhoneClipper: (command: 'start' | 'stop', options: { seriesId?: string; tabs?: number; device?: string; split?: boolean } = {}) =>
+    fetchApi<PhoneClipperSent>('/r2/phone/clipper', { method: 'POST', body: JSON.stringify({ command, ...options }) }),
+
+  /** Drops a phone's receipts from the relay: one no longer used, or the old app's copies. */
+  forgetPhone: (device: string) =>
+    fetchApi<{ ok: true }>('/r2/phone/forget', { method: 'POST', body: JSON.stringify({ device }) }),
 
   getRelay: () => fetchApi<RelayStatus>('/r2/relay'),
 

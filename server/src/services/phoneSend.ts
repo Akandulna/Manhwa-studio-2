@@ -45,7 +45,8 @@ import { prisma } from '../index.js'
 import { getPublishedChapters } from './storageService.js'
 import { getImageFiles } from './chapterManifest.js'
 import { listMetadataImageStems, listPointedImageStems, stemOf } from './clipper3/perImageStore.js'
-import { relayReceipt } from './phoneRelay.js'
+import { phoneName, relayConfigured, relayReceipts } from './phoneRelay.js'
+import { mergeSyncReceipts } from './phoneReceipts.js'
 import {
   PART_SIZE,
   assertWithinFreePlan,
@@ -155,10 +156,14 @@ interface SyncReceipt {
   series?: Record<string, { chapters?: Record<string, ReceiptChapter>; cleared?: Record<string, { at?: string; sentAt?: string }> }>
 }
 
-/** From the relay when it holds one (no R2 operation), else R2: a HEAD, plus a GET when it changed, and only when `fresh` or never read. */
+/**
+ * From the relay when it is set up (no R2 operation), every phone's merged
+ * (see mergeSyncReceipts: a chapter counts as on the phones once all have it);
+ * else R2: a HEAD, plus a GET when it changed, and only when `fresh` or never read.
+ */
 async function readSyncReceipt(config: R2Config | null, fresh: boolean): Promise<SyncReceipt> {
-  const relayed = relayReceipt<SyncReceipt>('sync')
-  if (relayed) return relayed
+  const relayed = relayReceipts<Record<string, unknown>>('sync')
+  if (relayed) return mergeSyncReceipts(relayed.map(r => ({ device: r.device, name: phoneName(r.device), body: r.body }))) as SyncReceipt
   if (!config) return {}
   return readPolledReceipt<SyncReceipt>(createClient(config), config, PHONE_RECEIPT_NAME, fresh).catch(() => ({}))
 }
@@ -919,8 +924,7 @@ export interface PhoneSyncStatus {
 /** What the phone has of the chapters sent, per series. Ledger plus the phone's receipt; no bucket listing. */
 export async function getPhoneSync(fresh = false): Promise<PhoneSyncStatus> {
   const config = getR2Config()
-  const relayed = relayReceipt<SyncReceipt>('sync')
-  if (!config && !relayed) return { configured: false, reportedAt: null, device: null, series: {} }
+  if (!config && !relayConfigured()) return { configured: false, reportedAt: null, device: null, series: {} }
   const receipt = await readSyncReceipt(config, fresh)
 
   const ledgerRows = await prisma.phoneChapterSend.findMany()

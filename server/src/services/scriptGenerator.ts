@@ -44,6 +44,7 @@ import {
   ImageProcessingConfig
 } from './imageProcessor.js'
 import { HinglishConversionService, getConvertibleChapters, readEnglishSource } from './hinglishService.js'
+import { readArchivedContinuity } from './partArchive.js'
 
 // Helper to get full folder path by prepending DOWNLOAD_ROOT
 function getFullFolderPath(relativePath: string): string {
@@ -261,7 +262,9 @@ export class ScriptGenerationService {
         include: scriptIn(language)
       })
       
-      if (!prevChapter?.scripts[0]?.rollingSummary) {
+      const prevSummary = prevChapter?.scripts[0]?.rollingSummary
+        || (prevChapter?.completedAt ? (await readArchivedContinuity(prevChapter.id, language))?.rollingSummary : null)
+      if (!prevSummary) {
         return {
           success: false,
           completed: 0,
@@ -765,9 +768,18 @@ export class ScriptGenerationService {
       include: scriptIn(language)
     })
     
+    let previousSummary = prevChapter?.scripts[0]?.rollingSummary || null
+    let previousClosing = prevChapter?.scripts[0]?.closingParagraph || null
+    // A completed Part's last chapter: its R2 archive stands in for a lost row.
+    if ((!previousSummary || !previousClosing) && prevChapter?.completedAt) {
+      const archived = await readArchivedContinuity(prevChapter.id, language)
+      previousSummary ||= archived?.rollingSummary || null
+      previousClosing ||= archived?.closingParagraph || null
+    }
+
     return {
-      previousSummary: prevChapter?.scripts[0]?.rollingSummary || null,
-      previousClosing: prevChapter?.scripts[0]?.closingParagraph || null,
+      previousSummary,
+      previousClosing,
       aboutSummary: chapter.series?.aboutSummary || null
     }
   }

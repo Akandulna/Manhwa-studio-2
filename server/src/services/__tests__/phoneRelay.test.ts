@@ -12,8 +12,18 @@ vi.mock('../r2Usage.js', () => ({ FREE_PLAN: {}, attachUsageCounter: () => {}, g
 vi.mock('../../index.js', () => ({
   prisma: {
     series: {
-      findMany: async () => [{ id: 's1', rootFolder: '/lib/Solo Hero' }],
-      findUnique: async ({ where }: { where: { id: string } }) => (where.id === 's1' ? { rootFolder: '/lib/Solo Hero' } : null)
+      findMany: async () => [{ id: 's1', title: 'Solo Hero', rootFolder: '/lib/Solo Hero', chapters: [{ id: 'c1', folderPath: 'Solo Hero/Chapter 001', number: 1 }] }],
+      findUnique: async ({ where }: { where: { id: string } }) => (where.id === 's1'
+        ? {
+            rootFolder: '/lib/Solo Hero',
+            chapters: [
+              { folderPath: 'Solo Hero/Chapter 003', number: 3, pageCount: 4 },
+              { folderPath: 'Solo Hero/Chapter 001', number: 1, pageCount: 2 },
+              { folderPath: 'Solo Hero/Chapter 002', number: 2, pageCount: 10 },
+              { folderPath: 'Solo Hero/Chapter 004', number: 4, pageCount: 5 }
+            ]
+          }
+        : null)
     },
     chapter: { findMany: async () => [{ id: 'c1', folderPath: 'Solo Hero/Chapter 001' }] }
   }
@@ -41,7 +51,7 @@ Object.assign(process.env, {
   R2_ACCOUNT_ID: 'a', R2_ACCESS_KEY_ID: 'k', R2_SECRET_ACCESS_KEY: 's', R2_BUCKET: 'b',
   RELAY_URL: `http://localhost:${(relay.address() as AddressInfo).port}/`, RELAY_TOKEN: 't0ken'
 })
-const { startPhoneRelay, relayStatus } = await import('../phoneRelay.js')
+const { startPhoneRelay, relayStatus, relayReceipts } = await import('../phoneRelay.js')
 const { getPhoneScripts, getPhoneCrops, getPhoneOverview, requestPhoneUpdate, sendClipperCommand } = await import('../r2Service.js')
 
 const emitted: { event: string; payload: unknown }[] = []
@@ -125,5 +135,80 @@ describe('phone relay', () => {
   it('tracks the phone coming and going', async () => {
     desktop!.send(JSON.stringify({ type: 'presence', phones: 0 }))
     await until(() => relayStatus().phones === 0)
+  })
+})
+
+describe('two phones', () => {
+  const now = new Date().toISOString()
+  const crops = (device: string, series: object) => ({
+    type: 'receipt', kind: 'crops', device, at: 10, body: {
+      device: 'Honor', updatedAt: now, series,
+      automation: { wakeMode: 'dedicated', resumeAfterLimit: true, remoteStart: true, resume: null }
+    }
+  })
+
+  it('merges their receipts and lists each phone', async () => {
+    emitted.length = 0
+    desktop!.send(JSON.stringify({ type: 'presence', phones: 2, devices: [{ id: 'aaaa1111', name: 'Honor' }, { id: 'bbbb2222', name: 'Honor' }] }))
+    desktop!.send(JSON.stringify(crops('aaaa1111', { 'Solo Hero': {
+      total: 21, done: 2, workingPages: [{ chapter: 'Chapter 002', page: 'p1.webp', since: now }],
+      chapters: { 'Chapter 001': { total: 2, done: 2, pages: { 'a.webp': 'done', 'b.webp': 'done' } } }
+    } })))
+    desktop!.send(JSON.stringify(crops('bbbb2222', { 'Solo Hero': {
+      total: 21, done: 2,
+      chapters: {
+        'Chapter 001': { total: 2, done: 1, pages: { 'a.webp': 'done', 'b.webp': 'in_progress' } },
+        'Chapter 003': { total: 4, done: 1, pages: { 'a.webp': 'done' } }
+      }
+    } })))
+    await until(() => (relayReceipts('crops') ?? []).length === 3)
+
+    // Chapter 001's pages count once, Chapter 003's add on: 3, not 4 (summed) or 2 (either phone).
+    expect((await getPhoneCrops('s1')).series).toEqual({ s1: { done: 3, total: 21 } })
+    const overview = await getPhoneOverview(null)
+    const byId = Object.fromEntries(overview.phones.map(p => [p.id, p]))
+    // Same model: told apart by the start of their ids. The old app's copy from the tests above is still kept.
+    expect(byId.aaaa1111).toMatchObject({ name: 'Honor · aaaa', connected: true, working: 1, automation: { remoteStart: true } })
+    expect(byId.bbbb2222).toMatchObject({ name: 'Honor · bbbb', connected: true, working: 0 })
+    expect(byId['']).toMatchObject({ name: 'Pixel (old app)', connected: false })
+    expect(overview.working).toEqual([expect.objectContaining({ page: 'p1.webp', device: 'aaaa1111', phone: 'Honor · aaaa' })])
+  })
+
+  it('splits a series between the phones, unfinished chapters only, balanced by pages left', async () => {
+    received.length = 0
+    const sent = await sendClipperCommand('start', { seriesId: 's1', tabs: 2, split: true })
+    // In reading order, each to the phone with the fewest pages so far: 002 (10 pages) to one, 003 (3 left) and 004 (5) to the other.
+    expect(sent.targets).toEqual([
+      { device: 'aaaa1111', name: 'Honor · aaaa', chapters: ['Chapter 002'], reached: true },
+      { device: 'bbbb2222', name: 'Honor · bbbb', chapters: ['Chapter 003', 'Chapter 004'], reached: true }
+    ])
+    expect(sent.phones).toBe(2)
+    await until(() => received.length === 2)
+    expect(received.map(m => JSON.parse(m))).toEqual([
+      expect.objectContaining({ action: 'clipper_start', device: 'aaaa1111', series: 'Solo Hero', tabs: 2, chapters: ['Chapter 002'] }),
+      expect.objectContaining({ action: 'clipper_start', device: 'bbbb2222', series: 'Solo Hero', tabs: 2, chapters: ['Chapter 003', 'Chapter 004'] })
+    ])
+  })
+
+  it('stops one phone only', async () => {
+    received.length = 0
+    const sent = await sendClipperCommand('stop', { device: 'bbbb2222' })
+    expect(sent.targets).toEqual([{ device: 'bbbb2222', name: 'Honor · bbbb', chapters: null, reached: true }])
+    await until(() => received.length === 1)
+    expect(JSON.parse(received[0])).toMatchObject({ action: 'clipper_stop', device: 'bbbb2222' })
+    await expect(sendClipperCommand('stop', { device: 'nobody' })).rejects.toThrow('not known')
+  })
+
+  it('needs two phones that can be started to split', async () => {
+    desktop!.send(JSON.stringify({ type: 'presence', phones: 1, devices: [{ id: 'aaaa1111', name: 'Honor' }] }))
+    await until(() => relayStatus().phones === 1)
+    await expect(sendClipperCommand('start', { seriesId: 's1', split: true })).rejects.toThrow('two phones')
+  })
+
+  it('drops a phone the relay forgot', async () => {
+    emitted.length = 0
+    desktop!.send(JSON.stringify({ type: 'forgotten', device: '' }))
+    await until(() => emitted.some(e => e.event === 'phone:receipt'))
+    expect(relayStatus().devices.map(d => d.id).sort()).toEqual(['aaaa1111', 'bbbb2222'])
   })
 })

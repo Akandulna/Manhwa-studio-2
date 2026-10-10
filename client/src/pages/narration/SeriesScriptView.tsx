@@ -13,7 +13,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { usePublishedChapters } from '@/hooks/usePublishedChapters'
-import { PublishedBadge, publishedRowClass } from '@/components/PublishedBadge'
+import { CompletedBadge, PublishedBadge, completedRowClass, publishedRowClass } from '@/components/PublishedBadge'
 import { PhoneScriptBadge } from '@/components/PhoneSyncBadge'
 import { usePhoneScripts } from '@/hooks/usePhoneScripts'
 import { PhoneScriptImport } from '@/components/narration/PhoneScriptImport'
@@ -126,7 +126,7 @@ export default function SeriesScriptView() {
 
   // Chapters already rendered to video in this language — no need to rewrite
   // or re-voice them.
-  const { isPublished } = usePublishedChapters(id, language)
+  const { isPublished, completedPart } = usePublishedChapters(id, language)
   // Scripts written in the Sleeper-Cell phone app, updated as the phone saves
   // them: English on the English tab, its Hinglish conversions on the Hindi tab.
   const phoneScriptsReceipt = usePhoneScripts(id)
@@ -1022,9 +1022,12 @@ export default function SeriesScriptView() {
                   <span className="text-sm font-normal text-muted-foreground">
                     ({part.chapters.length} chapters)
                   </span>
+                  {part.chapters.every(c => completedPart(c.id) !== null) && <CompletedBadge part={part.partNumber} />}
                 </CardTitle>
                 
-                {part.chapters[part.chapters.length - 1]?.script?.isPartEnd && (
+                {/* A completed Part's script files are deleted; nothing left to export. */}
+                {part.chapters[part.chapters.length - 1]?.script?.isPartEnd &&
+                  !part.chapters.some(c => completedPart(c.id) !== null) && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -1038,11 +1041,14 @@ export default function SeriesScriptView() {
             </CardHeader>
             <CardContent>
               <div className="space-y-2">
-                {part.chapters.map((chapter) => (
+                {part.chapters.map((chapter) => {
+                  // A completed Part's chapter: files deleted, only continuity kept — nothing to open.
+                  const completed = completedPart(chapter.id)
+                  return (
                     <div
                       key={chapter.id}
-                      className={`flex items-center gap-4 p-3 rounded-lg border hover:bg-accent transition-colors ${
-                        isPublished(chapter.id) ? publishedRowClass : ''
+                      className={`flex items-center gap-4 p-3 rounded-lg border transition-colors ${
+                        completed !== null ? completedRowClass : `hover:bg-accent ${isPublished(chapter.id) ? publishedRowClass : ''}`
                       }`}
                     >
                       <div className="flex-1 min-w-0">
@@ -1058,7 +1064,7 @@ export default function SeriesScriptView() {
                               Part End
                             </Badge>
                           )}
-                          {isPublished(chapter.id) && <PublishedBadge />}
+                          {completed === null && isPublished(chapter.id) && <PublishedBadge />}
                         </div>
                         
                         {language === 'en' && chapter.script?.error && (
@@ -1081,6 +1087,9 @@ export default function SeriesScriptView() {
                         )}
                       </div>
                       
+                      {completed !== null ? (
+                        <CompletedBadge part={completed} />
+                      ) : (
                       <div className="flex items-center gap-2">
                         {phoneScripts?.chapters[chapter.id] && (
                           <PhoneScriptBadge
@@ -1165,8 +1174,10 @@ export default function SeriesScriptView() {
                           </>
                         )}
                       </div>
+                      )}
                     </div>
-                ))}
+                  )
+                })}
               </div>
             </CardContent>
           </Card>

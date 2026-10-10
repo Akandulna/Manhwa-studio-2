@@ -63,6 +63,8 @@ import {
 } from 'lucide-react'
 
 import { useWakeLock } from '@/hooks/useWakeLock'
+import { usePublishedChapters } from '@/hooks/usePublishedChapters'
+import { CompletedBadge, completedRowClass } from '@/components/PublishedBadge'
 import { MurgaaDialog } from '@/components/narration/MurgaaDialog'
 import { chapterList, phoneEditorApi } from './phoneEditor'
 import { LanguageTabs } from '@/components/LanguageTabs'
@@ -138,6 +140,8 @@ function GateDot({ ok, icon, label }: { ok: boolean; icon: React.ReactNode; labe
 
 export default function EditorChapterList2() {
   const { seriesId } = useParams<{ seriesId: string }>()
+  // Chapters of a completed Part: files deleted on the Storage page, nothing to edit.
+  const { completedPart } = usePublishedChapters(seriesId)
   const navigate = useNavigate()
   const { toast } = useToast()
   const [language, setLanguage] = useNarrationLanguage('editor2')
@@ -980,6 +984,25 @@ export default function EditorChapterList2() {
           )}
 
           {chapters.map(ch => {
+            const completed = completedPart(ch.id)
+            if (completed !== null) {
+              return (
+                <div
+                  key={ch.id}
+                  data-chapter-row={ch.id}
+                  className={`flex items-center gap-3 px-4 py-2 ${completedRowClass}`}
+                >
+                  <span className="w-4 flex-shrink-0" />
+                  <span className="font-semibold text-sm tabular-nums w-14 flex-shrink-0">
+                    Ch {ch.number}
+                  </span>
+                  <span className="text-xs text-muted-foreground truncate flex-1 min-w-0">
+                    {ch.title || <span className="opacity-50">Untitled</span>}
+                  </span>
+                  <CompletedBadge part={completed} label={`Part ${completed} done`} />
+                </div>
+              )
+            }
             const content = pasted[ch.id]?.trim() ?? ''
             const done = content.length > 0 && isProcessed(ch.id, language, content)
             const isOpen = expanded === ch.id

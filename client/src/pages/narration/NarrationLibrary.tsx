@@ -11,7 +11,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { narrationApi, NarrationSeries } from '@/lib/api'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { 
@@ -28,8 +28,12 @@ import { useSocket } from '@/lib/socket'
 import { usePhoneScripts } from '@/hooks/usePhoneScripts'
 import { LanguageTabs } from '@/components/LanguageTabs'
 import { LANGUAGE_LABEL, useNarrationLanguage, withLang } from '@/lib/narrationLanguage'
+import { usePublishedChapters } from '@/hooks/usePublishedChapters'
+import { SeriesCompletedBadge } from '@/components/PublishedBadge'
 
 export default function NarrationLibrary() {
+  // Parts completed on the Storage page (files deleted, continuity kept).
+  const { seriesCompletedParts } = usePublishedChapters()
   const [language, setLanguage] = useNarrationLanguage('narration')
   const [series, setSeries] = useState<NarrationSeries[]>([])
   const [loading, setLoading] = useState(true)
@@ -138,59 +142,53 @@ export default function NarrationLibrary() {
         <LanguageTabs value={language} onChange={setLanguage} />
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-        {series.map((s) => (
-          <Link key={s.id} to={withLang(`/narration/series/${s.id}`, language)}>
-            <Card className="h-full hover:border-primary transition-colors cursor-pointer">
-              <CardContent className="p-4">
-                {/* Cover placeholder or image */}
-                <div className="aspect-[3/4] bg-muted rounded-lg mb-3 flex items-center justify-center overflow-hidden">
-                  {s.coverPath ? (
-                    <img 
-                      src={`file://${s.coverPath}`} 
-                      alt={s.title}
-                      className="w-full h-full object-cover"
-                      onError={(e) => {
-                        e.currentTarget.style.display = 'none'
-                        e.currentTarget.parentElement!.innerHTML = `<div class="flex items-center justify-center w-full h-full"><span class="text-4xl">📚</span></div>`
-                      }}
-                    />
-                  ) : (
-                    <span className="text-4xl">📚</span>
-                  )}
+      <Card className="overflow-hidden divide-y">
+        {series.map((s) => {
+          const progress = getScriptProgress(s)
+          // The phone writes English scripts only
+          const onPhone = language === 'en' ? phoneScripts?.series[s.id] : undefined
+          return (
+            <Link
+              key={s.id}
+              to={withLang(`/narration/series/${s.id}`, language)}
+              className="flex items-center gap-4 px-4 py-3 hover:bg-accent/50 transition-colors"
+            >
+              <div className="h-10 w-10 shrink-0 rounded-md bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center">
+                <FileText className="h-5 w-5 text-primary/40" />
+              </div>
+
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <h3 className="font-semibold truncate">{s.title}</h3>
+                  <SeriesCompletedBadge parts={seriesCompletedParts(s.id)} />
                 </div>
-
-                {/* Title */}
-                <h3 className="font-semibold truncate mb-2">{s.title}</h3>
-
-                {/* Meta info */}
-                <div className="flex items-center gap-2 text-xs text-muted-foreground mb-3">
-                  <Globe className="h-3 w-3" />
+                <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <Globe className="h-3 w-3 shrink-0" />
                   <span className="truncate">{s.sourceSite}</span>
                 </div>
+              </div>
 
-                {/* Script progress */}
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    {getStatusBadge(s)}
-                    <span className="text-xs text-muted-foreground">
-                      {getScriptProgress(s)}%
-                    </span>
-                  </div>
-                  <Progress value={getScriptProgress(s)} className="h-1.5" />
-                  {/* The phone writes English scripts only */}
-                  {language === 'en' && phoneScripts?.series[s.id] && (
-                    <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                      <Smartphone className="h-3 w-3" />
-                      {phoneScripts.series[s.id].done}/{phoneScripts.series[s.id].total} done on phone
-                    </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          </Link>
-        ))}
-      </div>
+              {onPhone && (
+                <span className="hidden md:flex items-center gap-1 shrink-0 text-xs text-muted-foreground">
+                  <Smartphone className="h-3 w-3" />
+                  {onPhone.done}/{onPhone.total} done on phone
+                </span>
+              )}
+
+              <span className="w-24 shrink-0 text-sm text-muted-foreground text-right">
+                {s.downloadedChapterCount} chapters
+              </span>
+
+              <div className="hidden sm:flex w-36 shrink-0 items-center gap-2">
+                <Progress value={progress} className="h-1 flex-1" />
+                <span className="w-9 text-xs text-muted-foreground text-right">{progress}%</span>
+              </div>
+
+              <div className="w-32 shrink-0 flex justify-end">{getStatusBadge(s)}</div>
+            </Link>
+          )
+        })}
+      </Card>
     </div>
   )
 }

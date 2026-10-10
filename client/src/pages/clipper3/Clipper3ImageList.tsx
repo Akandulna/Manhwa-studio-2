@@ -1353,7 +1353,7 @@ function Clipper3ChapterImageList() {
               className="min-w-0"
               onClick={() => rowRefs.current.get(working.page)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
             >
-              <PhoneWorkingBadge page={working.page} paused={working.paused} device={phoneCrops.device} />
+              <PhoneWorkingBadge page={working.page} paused={working.paused} device={working.phone ?? phoneCrops.device} />
             </button>
           ))}
         </div>
@@ -1491,9 +1491,9 @@ function Clipper3ChapterImageList() {
                     </p>
                   </div>
                   {phoneOnThis && phoneWorking ? (
-                    <PhoneWorkingBadge page={img.filename} paused={phoneWorking.paused} device={phoneCrops?.device ?? null} showPage={false} />
+                    <PhoneWorkingBadge page={img.filename} paused={phoneWorking.paused} device={phoneWorking.phone ?? phoneCrops?.device ?? null} showPage={false} />
                   ) : phonePage && (
-                    <PhonePageBadge state={phonePage} device={phoneCrops?.device ?? null} finish={phoneCrops?.finished[img.filename]} />
+                    <PhonePageBadge state={phonePage} device={phoneCrops?.finished[img.filename]?.phone ?? phoneCrops?.device ?? null} finish={phoneCrops?.finished[img.filename]} />
                   )}
                   {autoPage && autoPage.step !== 'queued' && <AutoRunBadge page={autoPage} />}
                   {isDone ? (

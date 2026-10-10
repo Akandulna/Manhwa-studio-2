@@ -69,8 +69,8 @@ describe('getPhoneCrops', () => {
     expect(status.pages).toEqual({ '001.jpg': 'done', '002.jpg': 'done', '007.jpg': 'in_progress' })
     // Only done pages; a bad time or a missing account reads as null.
     expect(status.finished).toEqual({
-      '001.jpg': { at: '2026-09-30T09:58:00Z', took: 192, run: 'auto', profile: 'chatgpt-2', account: 'Alt', models: ['gpt-5-thinking'] },
-      '002.jpg': { at: '2026-09-30T09:59:00Z', took: null, run: null, profile: null, account: null, models: [] }
+      '001.jpg': { at: '2026-09-30T09:58:00Z', took: 192, run: 'auto', profile: 'chatgpt-2', account: 'Alt', models: ['gpt-5-thinking'], phone: 'Pixel 8' },
+      '002.jpg': { at: '2026-09-30T09:59:00Z', took: null, run: null, profile: null, account: null, models: [], phone: 'Pixel 8' }
     })
     expect(status.working).toMatchObject({ chapterId: 'c10', page: '007.jpg', paused: false })
 
@@ -123,8 +123,8 @@ describe('getPhoneCrops', () => {
     }
     const status = await read('s1')
     expect(status.workingPages).toEqual([
-      { chapterId: 'c9', page: '004.jpg', since: now, paused: true },
-      { chapterId: 'c10', page: '001.jpg', since: now, paused: true }
+      { chapterId: 'c9', page: '004.jpg', since: now, paused: true, device: '', phone: 'Phone' },
+      { chapterId: 'c10', page: '001.jpg', since: now, paused: true, device: '', phone: 'Phone' }
     ])
     expect(status.working).toMatchObject({ chapterId: 'c9', page: '004.jpg' })
     expect((await read()).workingPages).toEqual([])
@@ -133,7 +133,7 @@ describe('getPhoneCrops', () => {
   it('falls back to the single working page from older phone builds', async () => {
     const since = new Date().toISOString()
     receipt = { series: { 'Solo Hero': { total: 1, done: 0, working: { chapter: 'Chapter 010', page: '007.jpg', since }, chapters: {} } } }
-    expect((await read('s1')).workingPages).toEqual([{ chapterId: 'c10', page: '007.jpg', since, paused: false }])
+    expect((await read('s1')).workingPages).toEqual([{ chapterId: 'c10', page: '007.jpg', since, paused: false, device: '', phone: 'Phone' }])
     receipt = { series: { 'Solo Hero': { total: 1, done: 0, chapters: {} } } }
     expect((await read('s1')).workingPages).toEqual([])
   })
@@ -176,9 +176,10 @@ describe('getPhoneCrops', () => {
         id: 'Default', name: 'Main', selected: true, limitedUntil: null, trackingSince: '2026-10-01T08:00:00Z',
         counting: { since: '2026-10-01T09:00:00Z', images: 14 },
         uploads: [{ at: '2026-10-01T09:05:00Z', images: 8 }, { at: '2026-10-01T09:10:00Z', images: 6 }],
-        limits: [{ at: '2026-10-01T09:00:00Z', until: '2026-10-01T12:00:00Z', used: 60, countedSince: '2026-10-01T08:00:00Z', complete: false, flagged: false, reason: 'You\'ve hit the upload limit' }]
+        limits: [{ at: '2026-10-01T09:00:00Z', until: '2026-10-01T12:00:00Z', used: 60, countedSince: '2026-10-01T08:00:00Z', complete: false, flagged: false, reason: 'You\'ve hit the upload limit' }],
+        device: '', phone: 'Phone'
       },
-      { id: 'profile-1', name: 'profile-1', selected: false, limitedUntil: '2026-10-01T13:00:00Z', trackingSince: null, counting: null, uploads: [], limits: [] }
+      { id: 'profile-1', name: 'profile-1', selected: false, limitedUntil: '2026-10-01T13:00:00Z', trackingSince: null, counting: null, uploads: [], limits: [], device: '', phone: 'Phone' }
     ])
 
     // Older phone builds send no profiles.
@@ -200,9 +201,9 @@ describe('parseGeminiUsage', () => {
     })).toEqual({
       resetsAt: '2026-10-10T07:00:00Z',
       profiles: [
-        { id: 'Default', name: 'Main', selected: true, today: 12, limit: 15, limitedUntil: null },
-        { id: 'profile-1', name: 'profile-1', selected: false, today: 4, limit: null, limitedUntil: '2026-10-10T07:00:00Z' },
-        { id: 'profile-2', name: 'profile-2', selected: false, today: 0, limit: null, limitedUntil: null }
+        { id: 'Default', name: 'Main', selected: true, today: 12, limit: 15, limitedUntil: null, device: null, phone: null },
+        { id: 'profile-1', name: 'profile-1', selected: false, today: 4, limit: null, limitedUntil: '2026-10-10T07:00:00Z', device: null, phone: null },
+        { id: 'profile-2', name: 'profile-2', selected: false, today: 0, limit: null, limitedUntil: null, device: null, phone: null }
       ]
     })
   })

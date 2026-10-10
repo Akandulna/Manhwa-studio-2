@@ -7,7 +7,7 @@
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { usePublishedChapters } from '@/hooks/usePublishedChapters'
-import { PublishedBadge, publishedRowClass } from '@/components/PublishedBadge'
+import { CompletedBadge, PublishedBadge, completedRowClass, publishedRowClass } from '@/components/PublishedBadge'
 import { PhoneCropsBadge } from '@/components/PhoneSyncBadge'
 import { usePhoneCrops } from '@/hooks/usePhoneCrops'
 import { PhoneRefreshButton } from '@/components/PhoneRefreshButton'
@@ -152,7 +152,7 @@ export default function Clipper3SeriesView() {
   const [error, setError] = useState<string | null>(null)
 
   // Chapters already rendered to video, so the user can skip re-cutting them.
-  const { isPublished } = usePublishedChapters(id)
+  const { isPublished, completedPart } = usePublishedChapters(id)
   const [summaries, setSummaries] = useState<Record<string, Clipper3ChapterSummary>>({})
   // Crop pointers the Sleeper-Cell phone is making. Live through the phone
   // relay; without it, re-read from R2 only when "Refresh from phone" asks.
@@ -801,13 +801,15 @@ export default function Clipper3SeriesView() {
         <div className="p-6 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
           {seriesChapters.map(chapter => {
             const isSelected = selected.has(chapter.id)
+            // A completed Part's pages and crops are deleted: shown, not opened.
+            const completed = completedPart(chapter.id)
 
             // While selecting, the card toggles instead of navigating — so the
             // same card is a link in one mode and a checkbox row in the other.
             const card = (
-              <Card className={`cursor-pointer transition-colors group ${
-                isSelected ? 'border-primary bg-accent' : 'hover:border-primary'
-              } ${isPublished(chapter.id) ? publishedRowClass : ''} ${
+              <Card className={`transition-colors group ${completed !== null ? 'cursor-default' : 'cursor-pointer'} ${
+                isSelected ? 'border-primary bg-accent' : completed !== null ? '' : 'hover:border-primary'
+              } ${completed !== null ? completedRowClass : isPublished(chapter.id) ? publishedRowClass : ''} ${
                 phoneCrops?.workingPages.some(w => w.chapterId === chapter.id) ? 'ring-2 ring-sky-500/60' : ''
               }`}>
                 <CardContent className="p-4">
@@ -837,9 +839,15 @@ export default function Clipper3SeriesView() {
                   </p>
 
                   <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                    <AttachedStatusBadge summary={summaries[chapter.id]} />
-                    <ChoppedStatusBadge summary={summaries[chapter.id]} />
-                    {isPublished(chapter.id) && <PublishedBadge />}
+                    {completed !== null ? (
+                      <CompletedBadge part={completed} />
+                    ) : (
+                      <>
+                        <AttachedStatusBadge summary={summaries[chapter.id]} />
+                        <ChoppedStatusBadge summary={summaries[chapter.id]} />
+                        {isPublished(chapter.id) && <PublishedBadge />}
+                      </>
+                    )}
                     {phoneCrops && (phoneCrops.chapters[chapter.id] || phoneCrops.workingPages.some(w => w.chapterId === chapter.id)) && (
                       <PhoneCropsBadge
                         done={phoneCrops.chapters[chapter.id]?.done ?? 0}
@@ -852,6 +860,10 @@ export default function Clipper3SeriesView() {
                 </CardContent>
               </Card>
             )
+
+            if (completed !== null) {
+              return <div key={chapter.id} className="block cursor-default">{card}</div>
+            }
 
             return selecting ? (
               <div
