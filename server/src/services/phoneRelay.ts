@@ -38,10 +38,13 @@ export type ReceiptKind = 'sync' | 'scripts' | 'crops'
  * for chapters just sent; `clipper_start`, `narration_start`, `editor_start`
  * and `voiceover_start` start a run (with "Start from Manhwa Studio" on in
  * Sleeper-Cell), `clipper_stop` stops Image Clipper and `run_stop` whichever
- * run is going (builds from before the other runs know only `clipper_stop`);
+ * run is going (builds from before the other runs know only `clipper_stop`),
+ * `run_finish` has it stop once the pages, chapter or splits it's on are done;
  * `screen_on`, `screen_off` and `screenshot` are Phone Status's screen
- * controls. Keep in step with ACTIONS in relay/src/index.ts, Automation.kt and
- * RemoteScreen.kt on the phone.
+ * controls; `profile_select`, `chatgpt_settings` and `chatgpt_options` its
+ * profile controls (phoneProfiles.ts). Keep in step with ACTIONS in
+ * relay/src/index.ts, Automation.kt, RemoteScreen.kt and RemoteProfiles.kt on
+ * the phone.
  */
 export type PhoneAction =
   | 'sync'
@@ -51,9 +54,13 @@ export type PhoneAction =
   | 'editor_start'
   | 'voiceover_start'
   | 'run_stop'
+  | 'run_finish'
   | 'screen_on'
   | 'screen_off'
   | 'screenshot'
+  | 'profile_select'
+  | 'chatgpt_settings'
+  | 'chatgpt_options'
 
 /** The phone's screen state, and its browser tabs as JPEGs (see phoneScreen.ts). */
 export type ScreenKind = 'screen' | 'screenshot'
@@ -74,6 +81,10 @@ export interface PhoneRequestArgs {
   flow?: 'classic' | 'steps'
   language?: 'en' | 'hi'
   device?: string
+  /** For profile_select, chatgpt_settings and chatgpt_options: the phone's own id of the browser profile. */
+  profile?: string
+  /** For chatgpt_settings: each a name, or null for "as the account has it". */
+  settings?: { mode: 'Chat' | 'Work' | null; model: string | null; effort: string | null }
 }
 
 /** One phone's copy of a receipt. `device` is its id, "" for Sleeper-Cell builds from before phones had one. */
@@ -91,7 +102,18 @@ export interface RelayPhone {
   /** Its name in Sleeper-Cell, made unique among the phones. */
   name: string
   connected: boolean
+  /**
+   * When the relay last heard from it (to within a minute while connected),
+   * and, once it's gone, how: "closed" (Sleeper-Cell closed its link),
+   * "shutdown" (the phone switched off) or "lost" (the link broke or its pings
+   * stopped: off, out of battery or offline). Null from relays deployed before
+   * they kept this, and for the old app.
+   */
+  seenAt: string | null
+  left: PhoneLeft | null
 }
+
+export type PhoneLeft = 'closed' | 'shutdown' | 'lost'
 
 const KINDS = new Set<string>(['sync', 'scripts', 'crops'])
 const SCREEN_KINDS = new Set<string>(['screen', 'screenshot'])
@@ -126,6 +148,8 @@ let connected = false
 let phones = 0
 /** The phones connected, as the relay last said; empty from relays deployed before phones had ids. */
 let presence: { id: string; name: string }[] = []
+/** Every phone with an id that ever connected, and how it last went, as the relay last said. */
+let seen = new Map<string, { at: number; left: PhoneLeft | null }>()
 let lastError: string | null = null
 let lastReceiptAt: number | null = null
 let attempt = 0
@@ -206,11 +230,16 @@ export function relayPhones(): RelayPhone[] {
   if (!presence.length && connected && phones > 0) {
     named.set('', { name: named.get('')?.name ?? '', connected: true })
   }
-  const list = [...named].map(([id, phone]) => ({
-    id,
-    name: (phone.name || 'Phone') + (id ? '' : ' (old app)'),
-    connected: phone.connected
-  }))
+  const list = [...named].map(([id, phone]) => {
+    const last = id ? seen.get(id) : undefined
+    return {
+      id,
+      name: (phone.name || 'Phone') + (id ? '' : ' (old app)'),
+      connected: phone.connected,
+      seenAt: last ? new Date(last.at).toISOString() : null,
+      left: last && !phone.connected ? last.left ?? 'lost' : null
+    }
+  })
   const counts = new Map<string, number>()
   for (const phone of list) counts.set(phone.name, (counts.get(phone.name) ?? 0) + 1)
   for (const phone of list) if (phone.id && counts.get(phone.name)! > 1) phone.name = `${phone.name} · ${phone.id.slice(0, 4)}`
@@ -326,9 +355,22 @@ function parseDevices(raw: unknown): { id: string; name: string }[] {
     .map(d => ({ id: d.id, name: typeof d.name === 'string' ? d.name : '' }))
 }
 
+const LEFT = new Set<string>(['closed', 'shutdown', 'lost'])
+
+/** The relay's `seen`; null when it sent none (deployed before it kept it), so the last copy stays. */
+function parseSeen(raw: unknown): Map<string, { at: number; left: PhoneLeft | null }> | null {
+  if (!Array.isArray(raw)) return null
+  const map = new Map<string, { at: number; left: PhoneLeft | null }>()
+  for (const d of raw as { id?: unknown; at?: unknown; left?: unknown }[]) {
+    if (!d || typeof d.id !== 'string' || !d.id || !Number.isFinite(Number(d.at))) continue
+    map.set(d.id, { at: Number(d.at), left: typeof d.left === 'string' && LEFT.has(d.left) ? (d.left as PhoneLeft) : null })
+  }
+  return map
+}
+
 function handle(text: string): void {
   if (text === 'pong') return
-  let message: { type?: string; kind?: string; device?: unknown; at?: number; body?: unknown; phones?: number; devices?: unknown }
+  let message: { type?: string; kind?: string; device?: unknown; at?: number; body?: unknown; phones?: number; devices?: unknown; seen?: unknown }
   try {
     message = JSON.parse(text)
   } catch {
@@ -339,6 +381,7 @@ function handle(text: string): void {
     case 'presence':
       phones = Number(message.phones) || 0
       presence = parseDevices(message.devices)
+      seen = parseSeen(message.seen) ?? seen
       emitStatus()
       break
     case 'receipt': {
@@ -368,6 +411,7 @@ function handle(text: string): void {
     }
     case 'forgotten': {
       if (typeof message.device !== 'string') return
+      seen.delete(message.device)
       if (screens.delete(message.device)) io?.emit('phone:screen', { device: message.device })
       if (!receipts.delete(message.device)) return
       for (const kind of KINDS) io?.emit('phone:receipt', { kind })
@@ -404,7 +448,9 @@ export async function sendPhoneRequest(
     ...(args.chapters?.length ? { chapters: args.chapters } : {}),
     ...(args.ai ? { ai: args.ai } : {}),
     ...(args.flow ? { flow: args.flow } : {}),
-    ...(args.language ? { language: args.language } : {})
+    ...(args.language ? { language: args.language } : {}),
+    ...(args.profile ? { profile: args.profile } : {}),
+    ...(args.settings ? { settings: args.settings } : {})
   }
   if (socket && connected && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: 'request', ...request }))
@@ -459,6 +505,7 @@ export async function updateRelayConfig(update: RelayConfigUpdate): Promise<void
   connected = false
   phones = 0
   presence = []
+  seen = new Map()
   lastError = null
   attempt = 0
   receipts.clear()

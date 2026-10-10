@@ -141,6 +141,8 @@ function mergeGemini(list: PhoneReceipt<Obj>[], key: 'speech' | 'narration'): Ob
 function taggedProfile(profile: unknown, receipt: PhoneReceipt<Obj>, several: boolean): unknown {
   if (!isObject(profile)) return profile
   const tagged = tag(profile, receipt) as Obj
+  // The phone's own id, which requests about the profile name it by.
+  if (typeof profile.id === 'string') tagged.profileId = profile.id
   if (several && typeof profile.id === 'string') tagged.id = `${receipt.device}:${profile.id}`
   return tagged
 }

@@ -22,7 +22,7 @@ import { prisma } from '../index.js'
 import { writeEnvVars } from '../utils/envFile.js'
 import type { PhoneSeriesSync, PhoneSyncStatus } from './phoneSend.js'
 import { FREE_PLAN, attachUsageCounter, getMonthUsage, monthKey } from './r2Usage.js'
-import { phoneName, relayConfigured, relayPhones, relayReceipts, sendPhoneRequest, type PhoneAction, type ReceiptKind } from './phoneRelay.js'
+import { phoneName, relayConfigured, relayPhones, relayReceipts, sendPhoneRequest, type PhoneAction, type PhoneLeft, type ReceiptKind } from './phoneRelay.js'
 import type { NarrationLanguage } from './narrationLanguage.js'
 import { mergeCropsReceipts, mergeScriptsReceipts, type PhoneReceipt } from './phoneReceipts.js'
 import { analyticsConfigured, getCloudflareMonthOps, invalidateAnalytics } from './r2Analytics.js'
@@ -671,6 +671,30 @@ export interface PhoneUploadProfile {
   /** The phone the profile is on (see PhoneScriptRun). With several phones, `id` is "<device>:<profile id>". */
   device: string | null
   phone: string | null
+  /** The phone's own id for it, which requests name it by (`id` may carry the device). */
+  profileId: string
+  /** Its ChatGPT settings for Image Clipper, and what its account offered when last read; null from older builds. */
+  chatGpt: PhoneChatGptProfile | null
+}
+
+/** A ChatGPT setting's choices in one mode, as the phone read them off the account. */
+export interface PhoneChatGptMode {
+  /** "Chat" or "Work"; null for an account with no switch. */
+  name: string | null
+  models: { name: string; picked: boolean }[]
+  /** The Power slider's steps, lowest first; a locked step's name isn't known (it isn't touched to learn it). */
+  efforts: { name: string | null; locked: boolean; picked: boolean }[]
+}
+
+export interface PhoneChatGptProfile {
+  /** What each new chat of a clipper run is set to; null leaves it as the account has it. */
+  settings: { mode: string | null; model: string | null; effort: string | null }
+  /** Null until read. */
+  options: { readAt: string | null; current: string | null; modes: PhoneChatGptMode[] } | null
+  /** A read of the options is going on. */
+  reading: boolean
+  /** Why the last read failed. */
+  error: string | null
 }
 
 /** One phone profile's Gemini requests in AI Studio today, for one kind of run. */
@@ -799,10 +823,41 @@ export function parseUploadProfiles(raw: unknown): PhoneUploadProfile[] {
         : null,
       uploads,
       limits,
-      ...phoneOf(entry)
+      ...phoneOf(entry),
+      profileId: typeof entry.profileId === 'string' && entry.profileId ? entry.profileId : entry.id,
+      chatGpt: parseChatGptProfile(entry.chatGpt)
     })
   }
   return profiles
+}
+
+/** A profile's `chatGpt` (ChatGptSettings.kt on the phone), dropping anything malformed. */
+function parseChatGptProfile(raw: unknown): PhoneChatGptProfile | null {
+  if (!isObject(raw)) return null
+  const name = (v: unknown): string | null => (typeof v === 'string' && v ? v : null)
+  const settings = isObject(raw.settings) ? raw.settings : {}
+  const options = isObject(raw.options) ? raw.options : null
+  return {
+    settings: { mode: name(settings.mode), model: name(settings.model), effort: name(settings.effort) },
+    options: options
+      ? {
+          readAt: isTime(options.readAt) ? options.readAt : null,
+          current: name(options.current),
+          modes: (Array.isArray(options.modes) ? options.modes : []).filter(isObject).map(mode => ({
+            name: name(mode.name),
+            models: (Array.isArray(mode.models) ? mode.models : [])
+              .filter(isObject)
+              .filter(m => name(m.name))
+              .map(m => ({ name: m.name as string, picked: m.picked === true })),
+            efforts: (Array.isArray(mode.efforts) ? mode.efforts : [])
+              .filter(isObject)
+              .map(e => ({ name: name(e.name), locked: e.locked === true, picked: e.picked === true }))
+          }))
+        }
+      : null,
+    reading: raw.reading === true,
+    error: name(raw.error)
+  }
 }
 
 /** The receipt's `speech` or `narration`; null from Sleeper-Cell builds before it was sent. */
@@ -978,6 +1033,10 @@ export interface PhoneAutomation {
   runs: PhoneRunKind[]
   /** How Image Clipper last ran there, the choices to offer first; null from builds before it was sent. */
   clipper: { ai: PhoneClipperAi; flow: PhoneClipperFlow; tabs: number } | null
+  /** It can stop a run once what it's on is done (stop with `after`); builds before can only stop it now. */
+  stopAfter: boolean
+  /** Image Clipper ends once the pages it's on are done. */
+  clipperStopping: boolean
 }
 
 /**
@@ -997,6 +1056,9 @@ export interface PhoneOverviewPhone {
   name: string
   /** Sleeper-Cell's socket to the relay is open (the app is open, or listening for starts); null without the relay. */
   connected: boolean | null
+  /** When the relay last heard from it, and how it went when not connected (see RelayPhone); null without them. */
+  seenAt: string | null
+  left: PhoneLeft | null
   /** Its newest receipt. */
   reportedAt: string | null
   /** Its automation settings; null from builds before automation. */
@@ -1168,7 +1230,10 @@ function overviewPhones(overview: PhoneOverview, automations: Map<string, PhoneA
   })
   if (!relayConfigured()) {
     if (!overview.reportedAt) return []
-    return [{ id: '', name: overview.device ?? 'Phone', connected: null, reportedAt: overview.reportedAt, automation: automations.get('') ?? null, ...busy('') }]
+    return [{
+      id: '', name: overview.device ?? 'Phone', connected: null, seenAt: null, left: null, reportedAt: overview.reportedAt,
+      automation: automations.get('') ?? null, ...busy('')
+    }]
   }
   const reported = new Map<string, string>()
   for (const kind of ['sync', 'scripts', 'crops'] as const) {
@@ -1182,6 +1247,8 @@ function overviewPhones(overview: PhoneOverview, automations: Map<string, PhoneA
     id: phone.id,
     name: phone.name,
     connected: phone.connected,
+    seenAt: phone.seenAt,
+    left: phone.left,
     reportedAt: reported.get(phone.id) ?? null,
     automation: automations.get(phone.id) ?? null,
     ...busy(phone.id)
@@ -1206,7 +1273,9 @@ function parseAutomation(raw: unknown, seriesFor: (folder: string) => { id: stri
           flow: raw.clipper.flow === 'steps' ? 'steps' : 'classic',
           tabs: Math.min(PHONE_MAX_TABS, Math.max(1, Number(raw.clipper.tabs) || 1))
         }
-      : null
+      : null,
+    stopAfter: raw.stopAfter === true,
+    clipperStopping: raw.clipperStopping === true
   }
 }
 
@@ -1246,6 +1315,8 @@ export interface PhoneAutomationOptions {
   language?: NarrationLanguage
   device?: string
   split?: boolean
+  /** A stop: once the pages, chapter or splits the run is on are done, as the phone's "Finish …, then stop". */
+  after?: boolean
 }
 
 const START_ACTION: Record<PhoneRunKind, PhoneAction> = {
@@ -1268,7 +1339,8 @@ const RUN_LABEL: Record<PhoneRunKind, string> = {
  * after 10 minutes. `start` runs `kind` (Image Clipper when left out) on
  * `seriesId`; Image Clipper alone may leave the series out, to go on with the
  * phone's last run in its last tab count. `stop` stops whichever run is going,
- * or only Image Clipper on builds that can't start the others.
+ * or only Image Clipper on builds that can't start the others; with `after`,
+ * once what the run is on is done (builds that can't say so refuse it).
  *
  * `device` sends it to that phone only. `split` (Image Clipper, with a series)
  * shares the series' unfinished chapters out between the phones that can take
@@ -1288,6 +1360,13 @@ export async function sendAutomationCommand(
   const runsOn = automationRuns(device)
 
   if (command === 'stop') {
+    if (options.after) {
+      if (!automationOf(device).every(a => a.stopAfter === true)) {
+        throw new Error('Update Sleeper-Cell to finish the run first: this build can only stop it now')
+      }
+      const sent = await sendPhoneRequest('run_finish', { device })
+      return { ...sent, via: 'relay', targets: [target(sent)] }
+    }
     // A build that can only start Image Clipper only knows its stop.
     const action = runsOn.length && runsOn.every(runs => runs.length > 1) ? 'run_stop' : 'clipper_stop'
     const sent = await sendPhoneRequest(action, { device })
@@ -1338,11 +1417,16 @@ export async function sendAutomationCommand(
   return { ...first, phones: reached, targets }
 }
 
-/** The runs each phone a command goes to can start, from its crops receipt: `device`'s, or every phone's. */
-function automationRuns(device: string | undefined): PhoneRunKind[][] {
+/** The `automation` of each phone a command goes to, from its crops receipt: `device`'s, or every phone's. */
+function automationOf(device: string | undefined): Record<string, unknown>[] {
   return (relayReceipts<{ automation?: unknown }>('crops') ?? [])
     .filter(r => (device === undefined || r.device === device) && isObject(r.body.automation))
-    .map(r => phoneRuns(r.body.automation as Record<string, unknown>))
+    .map(r => r.body.automation as Record<string, unknown>)
+}
+
+/** The runs each phone a command goes to can start. */
+function automationRuns(device: string | undefined): PhoneRunKind[][] {
+  return automationOf(device).map(phoneRuns)
 }
 
 /** Phones the relay can start on their own now: connected, with an id, and "Start from Manhwa Studio" on. */

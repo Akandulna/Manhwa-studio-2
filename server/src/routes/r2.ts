@@ -11,10 +11,13 @@
  *   GET  /phone/crops?seriesId=…&chapterId=…&fresh=1   which pages have crop JSON on the phone, and the page Auto-run is on
  *   GET  /phone/overview?fresh=1   all three receipts across every series, for the Sleeper Cells page
  *   POST /phone/request   ask the phone to write both receipts again ("Refresh from phone")
- *   POST /phone/automation { command: start|stop, kind?, seriesId?, tabs?, ai?, flow?, language?, device?, split? } — start a run
- *                         (Image Clipper, narration, Editor 2.0, voiceover) on the phone through the relay, or stop it
+ *   POST /phone/automation { command: start|stop, kind?, seriesId?, tabs?, ai?, flow?, language?, device?, split?, after? } — start a
+ *                         run (Image Clipper, narration, Editor 2.0, voiceover) on the phone through the relay, or stop it (`after`: once
+ *                         what it's on is done)
  *   GET  /phone/screens   each phone's screen state and last screenshot (relay only)
  *   GET  /phone/screens/:device/:index   one screenshot image (JPEG, never cached)
+ *   POST /phone/profile   { command: select|settings|options, device, profile, settings? } — pick the phone's profile, save its
+ *                         ChatGPT settings ({ mode, model, effort }), or have it read what its ChatGPT account offers
  *   DELETE /phone/screens/:device/screenshot   forget that phone's screenshot (its viewer closed)
  *   POST /phone/screen    { command: on|off|shot, device } — Wake, Screen off or Screenshot on one phone
  *   GET  /relay          the phone relay's settings (no token) and connection state
@@ -65,6 +68,7 @@ import {
 import { getPhoneScriptsZip, importPhoneScripts, previewPhoneScripts } from '../services/phoneScriptImport.js'
 import { requestLanguage } from '../services/narrationLanguage.js'
 import { forgetPhone, relayStatus, testRelay, updateRelayConfig } from '../services/phoneRelay.js'
+import { parseChatGptSettings, sendProfileCommand } from '../services/phoneProfiles.js'
 import { dropPhoneScreenshot, getPhoneScreens, phoneScreenshotImage, sendScreenCommand } from '../services/phoneScreen.js'
 
 function message(error: unknown, fallback: string): string {
@@ -180,18 +184,19 @@ export function initR2Routes(io: Server): Router {
 
   router.post('/phone/automation', async (req: Request, res: Response) => {
     try {
-      const { command, kind, seriesId, tabs, ai, flow, language, device, split } = req.body ?? {}
+      const { command, kind, seriesId, tabs, ai, flow, language, device, split, after } = req.body ?? {}
       if (command !== 'start' && command !== 'stop') throw new Error('command must be start or stop')
       if (kind !== undefined && !PHONE_RUN_KINDS.includes(kind)) throw new Error(`kind must be one of ${PHONE_RUN_KINDS.join(', ')}`)
       if (ai !== undefined && ai !== 'chatgpt' && ai !== 'aistudio') throw new Error('ai must be chatgpt or aistudio')
       if (flow !== undefined && flow !== 'classic' && flow !== 'steps') throw new Error('flow must be classic or steps')
       if (language !== undefined && language !== 'en' && language !== 'hi') throw new Error('language must be en or hi')
+      if (after !== undefined && typeof after !== 'boolean') throw new Error('after must be true or false')
       if (seriesId !== undefined && (typeof seriesId !== 'string' || !seriesId)) throw new Error('seriesId must be a series id')
       if (tabs !== undefined && typeof tabs !== 'number') throw new Error('tabs must be a number')
       if (device !== undefined && (typeof device !== 'string' || !device)) throw new Error('device must be a phone id')
       if (split !== undefined && typeof split !== 'boolean') throw new Error('split must be true or false')
       if (device !== undefined && split) throw new Error('Pick one phone or split, not both')
-      res.json(await sendAutomationCommand(command, { kind, seriesId, tabs, ai, flow, language, device, split }))
+      res.json(await sendAutomationCommand(command, { kind, seriesId, tabs, ai, flow, language, device, split, after }))
     } catch (error) {
       console.error('Phone automation command failed:', error)
       res.status(400).json({ error: message(error, 'Could not reach the phone') })
@@ -214,6 +219,19 @@ export function initR2Routes(io: Server): Router {
 
   router.delete('/phone/screens/:device/screenshot', (req: Request, res: Response) => {
     res.json({ ok: true, dropped: dropPhoneScreenshot(String(req.params.device)) })
+  })
+
+  router.post('/phone/profile', async (req: Request, res: Response) => {
+    try {
+      const { command, device, profile, settings } = req.body ?? {}
+      if (command !== 'select' && command !== 'settings' && command !== 'options') throw new Error('command must be select, settings or options')
+      if (typeof device !== 'string' || !device) throw new Error('device must be a phone id')
+      if (typeof profile !== 'string' || !profile) throw new Error('profile must be a profile id')
+      res.json(await sendProfileCommand(command, device, profile, command === 'settings' ? parseChatGptSettings(settings) : undefined))
+    } catch (error) {
+      console.error('Phone profile command failed:', error)
+      res.status(400).json({ error: message(error, 'Could not reach the phone') })
+    }
   })
 
   router.post('/phone/screen', async (req: Request, res: Response) => {

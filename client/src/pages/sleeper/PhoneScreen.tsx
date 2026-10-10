@@ -24,7 +24,15 @@ type Command = 'on' | 'off' | 'shot'
 const ANSWER_MS = 25_000
 
 const ACTION_OF: Record<Command, string> = { on: 'screen_on', off: 'screen_off', shot: 'screenshot' }
-const LABEL: Record<string, string> = { screen_on: 'Wake', screen_off: 'Screen off', screenshot: 'Screenshot' }
+/** The phone's last command, which may be a profile one (PhoneProfile.tsx): they answer the same way. */
+const LABEL: Record<string, string> = {
+  screen_on: 'Wake',
+  screen_off: 'Screen off',
+  screenshot: 'Screenshot',
+  profile_select: 'Select profile',
+  chatgpt_settings: 'ChatGPT settings',
+  chatgpt_options: 'Read options'
+}
 
 /** Why the screen controls can't reach this phone, or null when they can. */
 function screenBlocker(relay: RelayStatus | null, phone: PhoneOverviewPhone): string | null {

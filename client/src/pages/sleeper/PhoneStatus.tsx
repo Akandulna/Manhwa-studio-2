@@ -1,5 +1,6 @@
 /**
- * Phone Status — the phones themselves: is Sleeper-Cell open on each, how it
+ * Phone Status — the phones themselves: is Sleeper-Cell open on each (or, once
+ * it's gone, how: closed, switched off, or gone quiet), its battery, how it
  * is set up to run (its Automation settings), its screen (Wake, Screen off,
  * Screenshot; see PhoneScreen.tsx), and Run automation and Stop for it: any of
  * the phone's runs, picked and set up in RunAutomation.tsx. One card per
@@ -12,14 +13,18 @@
 
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { AlertTriangle, ArrowRight, Clock, Loader2, Play, Smartphone, Square, Trash2 } from 'lucide-react'
+import {
+  AlertTriangle, ArrowRight, BatteryCharging, BatteryFull, BatteryLow, BatteryMedium, BatteryWarning, Clock, Loader2, Play, Smartphone, Square, Trash2
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { useToast } from '@/components/ui/use-toast'
 import { usePhoneOverview } from '@/hooks/usePhoneOverview'
 import { usePhoneRelay } from '@/hooks/usePhoneRelay'
 import { usePhoneScreens } from '@/hooks/usePhoneScreens'
-import { r2Api, type PhoneAutomationOptions, type PhoneOverview, type PhoneOverviewPhone, type PhoneScreen, type RelayStatus } from '@/lib/api'
+import {
+  r2Api, type PhoneAutomationOptions, type PhoneBattery, type PhoneOverview, type PhoneOverviewPhone, type PhoneScreen, type RelayStatus
+} from '@/lib/api'
 import { uploadUsage } from '@/lib/uploadUsage'
 import { cn } from '@/lib/utils'
 import {
@@ -37,22 +42,46 @@ import {
   useNow,
   type Tone
 } from './sleeperShared'
+import { PhoneProfileControls } from './PhoneProfile'
 import { PhoneScreenControls } from './PhoneScreen'
 import { AUTOMATION_NAME, RunAutomationDialog } from './RunAutomation'
+import { stopAllChoice, stopChoice, StopRunDialog } from './StopRun'
 
 type Command = 'start' | 'stop'
 /** Sends a start or stop; resolves true once the relay took it. */
 type Send = (command: Command, options: PhoneAutomationOptions, to: string | null) => Promise<boolean>
 
-/** The phone's state in a word or two, with the light for it. Red is only for Sleeper-Cell closed. */
-function phoneState(phone: PhoneOverviewPhone, activity: ReturnType<typeof phoneActivity>, relay: RelayStatus | null, now: number) {
+/** At or under this, not charging, a phone that went quiet most likely ran out of battery. */
+const DEAD_LEVEL = 5
+
+/** A phone that isn't connected: how it went, as the relay saw it, and what its last battery says of it. */
+function goneState(phone: PhoneOverviewPhone, battery: PhoneBattery | null, heard: string, now: number): [string, string] {
+  const since = phone.seenAt ? ago(phone.seenAt, now) : 'a while ago'
+  switch (phone.left) {
+    case 'closed':
+      return ['Closed', `Sleeper-Cell was closed ${since}`]
+    case 'shutdown':
+      return ['Switched off', `The phone switched off ${since}`]
+    case 'lost':
+      return battery && !battery.charging && battery.level <= DEAD_LEVEL
+        ? ['Battery dead?', `Went quiet ${since} at ${battery.level}%: most likely out of battery`]
+        : ['Offline', `Went quiet ${since}: switched off, no internet, or Sleeper-Cell was stopped`]
+    default:
+      return ['Closed', `Sleeper-Cell isn’t open · ${heard}`]
+  }
+}
+
+/** The phone's state in a word or two, with the light for it. Red is only for a phone that isn't connected. */
+function phoneState(
+  phone: PhoneOverviewPhone, activity: ReturnType<typeof phoneActivity>, relay: RelayStatus | null, battery: PhoneBattery | null, now: number
+) {
   const heard = phone.reportedAt ? `Last heard ${ago(phone.reportedAt, now)}` : 'No report from it yet'
   const resume = phone.automation?.resume ?? null
   const state = (tone: Tone, title: string, detail: string, extra: { live?: boolean; hollow?: boolean } = {}) =>
     ({ tone, title, detail, live: !!extra.live, hollow: !!extra.hollow })
   if (!relay?.configured || phone.connected === null) return state('idle', activity.title ?? 'Unknown', `${heard} · live status needs the relay`)
   if (!relay.connected) return state('warn', 'Can’t tell', `The relay is offline · ${heard}`)
-  if (!phone.connected) return state('bad', 'Closed', `Sleeper-Cell isn’t open · ${heard}`)
+  if (!phone.connected) return state('bad', ...goneState(phone, battery, heard, now))
   if (activity.going.length) return state('good', activity.title!, heard, { live: true })
   if (activity.paused) return state('warn', 'Paused', heard)
   if (resume) return state('warn', `Resumes ~${clock(resume.at)}`, `Waiting for the ChatGPT limit to lift · ${heard}`)
@@ -79,6 +108,34 @@ function Row({ label, children }: { label: React.ReactNode; children: React.Reac
   )
 }
 
+const PLUG: Record<NonNullable<PhoneBattery['plugged']>, string> = { ac: 'charger', usb: 'USB', wireless: 'wireless', dock: 'dock' }
+
+/** The battery's level and charging; once the phone is gone, as of when it last said. */
+function BatteryLine({ battery, live, at, now }: { battery: PhoneBattery | null; live: boolean; at: string | null; now: number }) {
+  if (!battery) return <span className="text-muted-foreground">Not reported</span>
+  const low = !battery.charging && battery.level <= 15
+  const Icon = battery.charging ? BatteryCharging
+    : low ? BatteryWarning
+    : battery.level <= 40 ? BatteryLow
+    : battery.level <= 75 ? BatteryMedium
+    : BatteryFull
+  const how = battery.charging
+    ? battery.level >= 100 ? 'Full' : 'Charging'
+    : battery.plugged ? 'Plugged in, not charging' : null
+  return (
+    <span className="inline-flex items-center gap-1.5 tabular-nums">
+      <Icon className={cn('h-4 w-4 flex-shrink-0', low ? 'text-red-500' : battery.charging ? 'text-emerald-500' : 'text-muted-foreground')} />
+      <span className={cn('font-medium', low && 'text-red-500')}>{battery.level}%</span>
+      {(how || (!live && at)) && (
+        <span className="text-muted-foreground">
+          {how && <> · {how}{battery.plugged && battery.charging ? ` (${PLUG[battery.plugged]})` : ''}</>}
+          {!live && at && <> · as of {ago(at, now)}</>}
+        </span>
+      )}
+    </span>
+  )
+}
+
 function OnOff({ on }: { on: boolean }) {
   return <span className={on ? '' : 'text-muted-foreground'}>{on ? 'On' : 'Off'}</span>
 }
@@ -101,7 +158,8 @@ function PhoneCard({ phone, overview, relay, screen, several, startable, now, se
 }) {
   const { toast } = useToast()
   const activity = phoneActivity(overview, phone, several)
-  const state = phoneState(phone, activity, relay, now)
+  const battery = screen?.screen?.battery ?? null
+  const state = phoneState(phone, activity, relay, battery, now)
   const automation = phone.automation
   const resume = automation?.resume ?? null
   const blocker = startBlocker(relay, phone, several)
@@ -112,7 +170,9 @@ function PhoneCard({ phone, overview, relay, screen, several, startable, now, se
   const ready = usages.filter(u => u.left > 0).length
 
   const [open, setOpen] = useState(false)
+  const [stopOpen, setStopOpen] = useState(false)
   const target = several && phone.id ? { device: phone.id } : {}
+  const stop = stopChoice(activity.working.length, activity.runs, automation?.clipperStopping === true)
   const key = phone.id || phone.name
 
   const [forgetting, setForgetting] = useState(false)
@@ -153,6 +213,9 @@ function PhoneCard({ phone, overview, relay, screen, several, startable, now, se
 
         {/* Pointers to the other two pages */}
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+          <Row label="Battery">
+            <BatteryLine battery={battery} live={phone.connected === true} at={screen?.screen?.at ?? null} now={now} />
+          </Row>
           <Row label="Now">
             <Link to="/sleeper-cells/live" className="inline-flex items-center gap-1 hover:underline">
               {activity.title ?? <span className="text-muted-foreground">Nothing running</span>}
@@ -201,6 +264,18 @@ function PhoneCard({ phone, overview, relay, screen, several, startable, now, se
           <PhoneScreenControls phone={phone} relay={relay} screen={screen} now={now} />
         </div>
 
+        {/* Profile and its ChatGPT settings */}
+        <div className="border-t pt-4">
+          <PhoneProfileControls
+            phone={phone}
+            profiles={(overview?.profiles ?? []).filter(p => onPhone(p, phone, several))}
+            relay={relay}
+            screen={screen}
+            busy={busy}
+            now={now}
+          />
+        </div>
+
         {/* Run automation */}
         <div className="mt-auto space-y-3 border-t pt-4">
           <div className="flex flex-wrap items-center gap-2">
@@ -211,9 +286,10 @@ function PhoneCard({ phone, overview, relay, screen, several, startable, now, se
                   variant="outline"
                   disabled={!!blocker || sending !== null}
                   title={resume && !busy ? 'Cancels the resume' : undefined}
-                  onClick={() => send('stop', target, phone.name)}
+                  // Nothing running, only a resume waiting: there's nothing to finish first.
+                  onClick={() => (stop ? setStopOpen(true) : send('stop', target, phone.name))}
                 >
-                  {sending === `stop:${key}` ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Square className="mr-2 h-4 w-4" />}
+                  {sending?.startsWith('stop') && sending.endsWith(`:${key}`) ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Square className="mr-2 h-4 w-4" />}
                   Stop
                 </Button>
               )}
@@ -224,6 +300,18 @@ function PhoneCard({ phone, overview, relay, screen, several, startable, now, se
               )}
             </div>
           </div>
+          {stop?.stopping && <p className="text-sm text-amber-500">{stop.stoppingLabel}</p>}
+          {stop && stopOpen && (
+            <StopRunDialog
+              open={stopOpen}
+              onOpenChange={setStopOpen}
+              where={phone.name}
+              choice={stop}
+              canFinish={automation?.stopAfter === true}
+              sending={sending === `stop:${key}` ? 'now' : sending === `stop-after:${key}` ? 'after' : null}
+              onStop={after => send('stop', { ...target, after: after || undefined }, phone.name)}
+            />
+          )}
           {overview && open && (
             <RunAutomationDialog
               open={open}
@@ -254,11 +342,18 @@ function chaptersLabel(chapters: string[], numbers: Map<string, number>): string
   return `Ch. ${chapters.map(c => numbers.get(c) ?? c).join(', ')}`
 }
 
-/** With several phones that can be started: stops whatever runs on all of them at once. */
-function StopAllBar({ startable, overview, send, sending }: {
-  startable: PhoneOverviewPhone[]; overview: PhoneOverview | null; send: Send; sending: string | null
+/** With several phones that can be started: stops whatever runs on all of them at once, now or once what each is on is done. */
+function StopAllBar({ phones, startable, overview, send, sending }: {
+  phones: PhoneOverviewPhone[]; startable: PhoneOverviewPhone[]; overview: PhoneOverview | null; send: Send; sending: string | null
 }) {
+  const [open, setOpen] = useState(false)
   const going = !!(overview?.working.length || overview?.runs.length || startable.some(p => p.automation?.resume))
+  const choice = stopAllChoice(phones.flatMap(p => {
+    const activity = phoneActivity(overview, p, true)
+    return stopChoice(activity.working.length, activity.runs, p.automation?.clipperStopping === true) ?? []
+  }))
+  // The server sends a finish to every phone only when each reported build takes it.
+  const canFinish = phones.every(p => !p.automation || p.automation.stopAfter === true)
   return (
     <Card className="mb-6">
       <CardContent className="flex flex-wrap items-center gap-3 p-4">
@@ -266,10 +361,26 @@ function StopAllBar({ startable, overview, send, sending }: {
           {startable.length} phones ready
           <InfoTip text="Run automation on a phone’s card. Image Clipper can split a series between the phones there: no page is clipped twice." />
         </p>
-        <Button className="ml-auto" variant="outline" disabled={sending !== null || !going} onClick={() => send('stop', {}, null)}>
-          {sending === 'stop:all' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Square className="mr-2 h-4 w-4" />}
+        <Button
+          className="ml-auto"
+          variant="outline"
+          disabled={sending !== null || !going}
+          onClick={() => (choice ? setOpen(true) : send('stop', {}, null))}
+        >
+          {sending === 'stop:all' || sending === 'stop-after:all' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Square className="mr-2 h-4 w-4" />}
           Stop all
         </Button>
+        {choice && open && (
+          <StopRunDialog
+            open={open}
+            onOpenChange={setOpen}
+            where="every phone"
+            choice={choice}
+            canFinish={canFinish}
+            sending={sending === 'stop:all' ? 'now' : sending === 'stop-after:all' ? 'after' : null}
+            onStop={after => send('stop', after ? { after } : {}, null)}
+          />
+        )}
       </CardContent>
     </Card>
   )
@@ -317,13 +428,13 @@ export default function PhoneStatus() {
   /** Sends a start or Stop to one phone (`to`, its name) or to every phone (null). */
   const send: Send = async (command, options, to) => {
     const phone = to === null ? null : phones.find(p => p.name === to) ?? null
-    setSending(`${command}:${phone ? phone.id || phone.name : 'all'}`)
+    setSending(`${command}${options.after ? '-after' : ''}:${phone ? phone.id || phone.name : 'all'}`)
     try {
       const sent = await r2Api.sendPhoneAutomation(command, options)
       const numbers = new Map<string, number>()
       for (const w of overview?.working ?? []) if (w.chapterNumber !== null) numbers.set(w.chapter, w.chapterNumber)
       const split = command === 'start' && options.split && sent.targets?.length
-      const verb = command === 'start' ? AUTOMATION_NAME[options.kind ?? 'clipper'] : 'Stop'
+      const verb = command === 'start' ? AUTOMATION_NAME[options.kind ?? 'clipper'] : options.after ? 'Finish, then stop' : 'Stop'
       toast({
         title: split ? `${verb} sent to ${sent.targets!.length} phones` : `${verb} sent to ${several ? to ?? 'every phone' : 'the phone'}`,
         description: split
@@ -352,7 +463,7 @@ export default function PhoneStatus() {
         : (
           <>
             <ConnectionStrip relay={relay} overview={overview} phones={phones} now={now} />
-            {startable.length >= 2 && <StopAllBar startable={startable} overview={overview} send={send} sending={sending} />}
+            {startable.length >= 2 && <StopAllBar phones={phones} startable={startable} overview={overview} send={send} sending={sending} />}
             {phones.length === 0
               ? overview.configured && (
                 <Card><CardContent className="p-5 text-sm text-muted-foreground">No phone has reported yet. Open Sleeper-Cell on the phone, then Refresh from phone.</CardContent></Card>

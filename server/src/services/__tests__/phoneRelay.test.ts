@@ -129,9 +129,10 @@ describe('phone relay', () => {
     expect((await getPhoneOverview(null)).automation).toEqual({
       wakeMode: 'dedicated', resumeAfterLimit: true, remoteStart: true,
       resume: { seriesId: 's1', series: 'Solo Hero', tabs: 2, at: '2026-10-02T15:40:00.000Z' },
-      runs: ['clipper'], clipper: null
+      runs: ['clipper'], clipper: null, stopAfter: false, clipperStopping: false
     })
     await expect(sendAutomationCommand('start', { kind: 'editor', seriesId: 's1' })).rejects.toThrow('this build can only start Image Clipper')
+    await expect(sendAutomationCommand('stop', { after: true })).rejects.toThrow('this build can only stop it now')
   })
 
   it('starts the other runs on a build that has them, and stops whichever is going', async () => {
@@ -141,7 +142,8 @@ describe('phone relay', () => {
         series: {},
         automation: {
           wakeMode: 'personal', resumeAfterLimit: false, remoteStart: true, resume: null,
-          runs: ['clipper', 'narration', 'editor', 'voiceover'], clipper: { ai: 'aistudio', flow: 'steps', tabs: 3 }
+          runs: ['clipper', 'narration', 'editor', 'voiceover'], clipper: { ai: 'aistudio', flow: 'steps', tabs: 3 },
+          stopAfter: true, clipperStopping: true
         }
       }
     }))
@@ -172,6 +174,11 @@ describe('phone relay', () => {
     const stop = await sendAutomationCommand('stop')
     await until(() => received.some(m => m.includes(stop.id)))
     expect(JSON.parse(received.find(m => m.includes(stop.id))!)).toMatchObject({ action: 'run_stop' })
+    expect((await getPhoneOverview(null)).automation).toMatchObject({ stopAfter: true, clipperStopping: true })
+
+    const finish = await sendAutomationCommand('stop', { after: true })
+    await until(() => received.some(m => m.includes(finish.id)))
+    expect(JSON.parse(received.find(m => m.includes(finish.id))!)).toMatchObject({ action: 'run_finish' })
   })
 
   it('tracks the phone coming and going', async () => {
@@ -245,6 +252,34 @@ describe('two phones', () => {
     desktop!.send(JSON.stringify({ type: 'presence', phones: 1, devices: [{ id: 'aaaa1111', name: 'Honor' }] }))
     await until(() => relayStatus().phones === 1)
     await expect(sendAutomationCommand('start', { seriesId: 's1', split: true })).rejects.toThrow('two phones')
+  })
+
+  it('says when each phone was last seen, how it went, and its battery', async () => {
+    const { getPhoneScreens } = await import('../phoneScreen.js')
+    desktop!.send(JSON.stringify({
+      type: 'presence', phones: 1, devices: [{ id: 'aaaa1111', name: 'Honor' }],
+      seen: [
+        { id: 'aaaa1111', name: 'Honor', at: Date.parse('2026-10-11T10:00:00Z'), left: null },
+        { id: 'bbbb2222', name: 'Honor', at: Date.parse('2026-10-11T09:30:00Z'), left: 'shutdown' },
+        { id: 'cccc3333', name: 'Gone', at: 'never', left: 'lost' }
+      ]
+    }))
+    await until(() => relayStatus().devices.some(d => d.left === 'shutdown'))
+    const byId = new Map(relayStatus().devices.map(d => [d.id, d]))
+    expect(byId.get('aaaa1111')).toMatchObject({ connected: true, seenAt: '2026-10-11T10:00:00.000Z', left: null })
+    expect(byId.get('bbbb2222')).toMatchObject({ connected: false, seenAt: '2026-10-11T09:30:00.000Z', left: 'shutdown' })
+
+    // A presence without `seen` keeps the last copy; a phone gone with no word of how counts as lost.
+    desktop!.send(JSON.stringify({ type: 'presence', phones: 0, devices: [] }))
+    await until(() => relayStatus().phones === 0)
+    expect(relayStatus().devices.find(d => d.id === 'aaaa1111')).toMatchObject({ connected: false, seenAt: '2026-10-11T10:00:00.000Z', left: 'lost' })
+
+    desktop!.send(JSON.stringify({ type: 'receipt', kind: 'screen', device: 'bbbb2222', at: 9, body: { on: false, battery: { level: 4.4, charging: false, plugged: null } } }))
+    desktop!.send(JSON.stringify({ type: 'receipt', kind: 'screen', device: 'aaaa1111', at: 9, body: { on: true, battery: { level: 80, charging: true, plugged: 'usb' } } }))
+    await until(() => getPhoneScreens().filter(p => p.screen).length === 2)
+    const battery = new Map(getPhoneScreens().map(p => [p.device, p.screen?.battery]))
+    expect(battery.get('bbbb2222')).toEqual({ level: 4, charging: false, plugged: null })
+    expect(battery.get('aaaa1111')).toEqual({ level: 80, charging: true, plugged: 'usb' })
   })
 
   it('drops a phone the relay forgot', async () => {

@@ -132,8 +132,11 @@ interface Choice<T extends string> {
 }
 
 /** A row of buttons, one chosen, with the chosen one's hint under it. */
-function Choices<T extends string>({ label, choices, value, onChange }: { label: string; choices: Choice<T>[]; value: T; onChange: (value: T) => void }) {
-  const hint = choices.find(c => c.value === value)?.hint
+/** `disabled` greys the choices out and says why in place of the hint. */
+function Choices<T extends string>({ label, choices, value, onChange, disabled }: {
+  label: string; choices: Choice<T>[]; value: T; onChange: (value: T) => void; disabled?: string
+}) {
+  const hint = disabled ?? choices.find(c => c.value === value)?.hint
   return (
     <div className="space-y-1.5">
       <p className="text-sm font-medium">{label}</p>
@@ -145,6 +148,7 @@ function Choices<T extends string>({ label, choices, value, onChange }: { label:
             size="sm"
             role="radio"
             aria-checked={value === c.value}
+            disabled={!!disabled}
             variant={value === c.value ? 'default' : 'outline'}
             className="min-w-[4.5rem]"
             onClick={() => onChange(c.value)}
@@ -153,7 +157,7 @@ function Choices<T extends string>({ label, choices, value, onChange }: { label:
           </Button>
         ))}
       </div>
-      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+      {hint && <p className={cn('text-xs', disabled ? 'text-amber-500' : 'text-muted-foreground')}>{hint}</p>}
     </div>
   )
 }
@@ -288,14 +292,24 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
                 </Select>
               </div>
 
-              {automation.clipper && (choosesHow
-                ? (
-                  <>
-                    <Choices label="AI" choices={AI_CHOICES} value={ai} onChange={setAi} />
-                    <Choices label="Method" choices={FLOW_CHOICES} value={flow} onChange={setFlow} />
-                  </>
-                )
-                : <p className="text-sm text-muted-foreground">This Sleeper-Cell build uses the AI and method last picked on the phone. Update it to pick them here.</p>)}
+              {automation.clipper && (
+                <>
+                  <Choices
+                    label="AI"
+                    choices={AI_CHOICES}
+                    value={ai}
+                    onChange={setAi}
+                    disabled={choosesHow ? undefined : `${phone.name} runs an older Sleeper-Cell: it uses the AI last picked on the phone. Update it to pick here.`}
+                  />
+                  <Choices
+                    label="Method"
+                    choices={FLOW_CHOICES}
+                    value={flow}
+                    onChange={setFlow}
+                    disabled={choosesHow ? undefined : 'Same for the method: 1 step or 4 steps as last picked on the phone.'}
+                  />
+                </>
+              )}
 
               {automation.language && <Choices label="Language" choices={LANGUAGE_CHOICES} value={language} onChange={setLanguage} />}
 

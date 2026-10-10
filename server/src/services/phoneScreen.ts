@@ -6,7 +6,7 @@
  * Each phone answers with two receipts that phoneRelay.ts keeps apart from the
  * status ones:
  *   screen       { device, deviceId, updatedAt, answers?, on, locked, appOpen, keptOn, canLock, remoteStart,
- *                  last?: { action, ok, note, at } }
+ *                  last?: { action, ok, note, at }, battery?: { level, charging, plugged } | null }
  *   screenshot   { device, deviceId, takenAt, answers?, shots: [{ label, width, height, jpeg (base64) }] }
  *   (`answers` on a screenshot is the Screenshot or Wake request it follows.)
  * A screenshot is posted only when there is one; a failed one's note is in
@@ -31,6 +31,7 @@ interface ScreenReceipt {
   canLock?: unknown
   remoteStart?: unknown
   last?: { action?: unknown; ok?: unknown; note?: unknown; at?: unknown } | null
+  battery?: { level?: unknown; charging?: unknown; plugged?: unknown } | null
 }
 
 interface ScreenshotReceipt {
@@ -55,6 +56,30 @@ export interface PhoneScreenState {
   remoteStart: boolean
   /** The last command it handled. */
   last: { action: string; ok: boolean; note: string; at: string } | null
+  /** Its battery as of `at`; null from builds before they sent it. */
+  battery: PhoneBattery | null
+}
+
+export interface PhoneBattery {
+  /** 0–100. */
+  level: number
+  /** Charging, or full on the charger. */
+  charging: boolean
+  /** What it's plugged into; null when it isn't. */
+  plugged: 'ac' | 'usb' | 'wireless' | 'dock' | null
+}
+
+const PLUGS = new Set(['ac', 'usb', 'wireless', 'dock'])
+
+function parseBattery(raw: ScreenReceipt['battery']): PhoneBattery | null {
+  if (!raw || typeof raw !== 'object') return null
+  const level = Number(raw.level)
+  if (raw.level === null || !Number.isFinite(level)) return null
+  return {
+    level: Math.max(0, Math.min(100, Math.round(level))),
+    charging: raw.charging === true,
+    plugged: typeof raw.plugged === 'string' && PLUGS.has(raw.plugged) ? (raw.plugged as PhoneBattery['plugged']) : null
+  }
 }
 
 export interface PhoneScreenshot {
@@ -95,7 +120,8 @@ export function getPhoneScreens(): PhoneScreen[] {
       keptOn: body.keptOn === true,
       canLock: body.canLock === true,
       remoteStart: body.remoteStart === true,
-      last
+      last,
+      battery: parseBattery(body.battery)
     }
   }
   for (const { device, at, body } of relayScreens<ScreenshotReceipt>('screenshot')) {

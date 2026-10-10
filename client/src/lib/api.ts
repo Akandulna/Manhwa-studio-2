@@ -2480,6 +2480,33 @@ export interface PhoneUploadProfile {
   /** The phone it's on (see PhoneScriptRun). With several phones, `id` is "<device>:<profile id>". */
   device: string | null
   phone: string | null
+  /** The phone's own id for it, which profile requests name it by. */
+  profileId: string
+  /** Its ChatGPT settings for Image Clipper, and what its account offered when last read; null from older builds. */
+  chatGpt: PhoneChatGptProfile | null
+}
+
+/** A mode's choices, as the phone read them off the ChatGPT account. */
+export interface PhoneChatGptMode {
+  /** "Chat" or "Work"; null for an account with no switch. */
+  name: string | null
+  models: { name: string; picked: boolean }[]
+  /** The Power slider's steps, lowest first; a locked step's name isn't known. */
+  efforts: { name: string | null; locked: boolean; picked: boolean }[]
+}
+
+/** Each null leaves it as the account has it. */
+export interface PhoneChatGptSettings {
+  mode: 'Chat' | 'Work' | null
+  model: string | null
+  effort: string | null
+}
+
+export interface PhoneChatGptProfile {
+  settings: { mode: string | null; model: string | null; effort: string | null }
+  options: { readAt: string | null; current: string | null; modes: PhoneChatGptMode[] } | null
+  reading: boolean
+  error: string | null
 }
 
 /** One phone profile's Gemini requests in AI Studio today, for one kind of run. */
@@ -2591,6 +2618,10 @@ export interface PhoneAutomation {
   runs?: PhoneRunKind[]
   /** How Image Clipper last ran there; null from builds before it was sent. */
   clipper?: { ai: PhoneClipperAi; flow: PhoneClipperFlow; tabs: number } | null
+  /** It can stop a run once what it's on is done; builds before can only stop now. */
+  stopAfter?: boolean
+  /** Image Clipper ends once the pages it's on are done. */
+  clipperStopping?: boolean
 }
 
 /** The automation runs Sleeper-Cell can start from here (PhoneRunKind in r2Service.ts). */
@@ -2610,6 +2641,8 @@ export interface PhoneAutomationOptions {
   language?: NarrationLanguage
   device?: string
   split?: boolean
+  /** A stop once the pages, chapter or splits the run is on are done ("Finish …, then stop" on the phone). */
+  after?: boolean
 }
 
 /** One phone running Sleeper-Cell. */
@@ -2619,6 +2652,13 @@ export interface PhoneOverviewPhone {
   name: string
   /** Sleeper-Cell's socket to the relay is open (the app is open, or listening for starts); null without the relay. */
   connected: boolean | null
+  /**
+   * When the relay last heard from it, and, when it isn't connected, how it went: "closed" (Sleeper-Cell closed
+   * its link), "shutdown" (the phone switched off) or "lost" (the link broke or its pings stopped). Null from
+   * relays and servers before they kept this.
+   */
+  seenAt?: string | null
+  left?: PhoneLeft | null
   /** Its newest receipt. */
   reportedAt: string | null
   automation: PhoneAutomation | null
@@ -2626,6 +2666,17 @@ export interface PhoneOverviewPhone {
   working: number
   /** Narration and voiceover runs going there. */
   runs: number
+}
+
+export type PhoneLeft = 'closed' | 'shutdown' | 'lost'
+
+/** A phone's battery, sent with its screen state. */
+export interface PhoneBattery {
+  /** 0–100. */
+  level: number
+  /** Charging, or full on the charger. */
+  charging: boolean
+  plugged: 'ac' | 'usb' | 'wireless' | 'dock' | null
 }
 
 /** What a phone last said of its screen (it answers every screen command with this). */
@@ -2643,6 +2694,8 @@ export interface PhoneScreenState {
   canLock: boolean
   remoteStart: boolean
   last: { action: string; ok: boolean; note: string; at: string } | null
+  /** As of `at`; null (or missing, from older servers) from Sleeper-Cell builds before they sent it. */
+  battery?: PhoneBattery | null
 }
 
 /**
@@ -2713,7 +2766,7 @@ export interface RelayStatus {
    */
   phones: number
   /** The phones connected, and those the relay keeps receipts from (older servers leave it out). */
-  devices?: { id: string; name: string; connected: boolean }[]
+  devices?: { id: string; name: string; connected: boolean; seenAt?: string | null; left?: PhoneLeft | null }[]
   lastError: string | null
   lastReceiptAt: string | null
 }
@@ -2824,6 +2877,17 @@ export const r2Api = {
 
   /** Each phone's screen state and last screenshot, from the relay. */
   getPhoneScreens: () => fetchApi<{ phones: PhoneScreen[] }>('/r2/phone/screens'),
+
+  /**
+   * On one phone: select a browser profile (the next run starts in it), save
+   * its ChatGPT settings for Image Clipper, or read what its account offers.
+   * `profile` is the phone's own id for it (PhoneUploadProfile.profileId).
+   */
+  sendPhoneProfile: (command: 'select' | 'settings' | 'options', device: string, profile: string, settings?: PhoneChatGptSettings) =>
+    fetchApi<{ id: string; reached: boolean }>('/r2/phone/profile', {
+      method: 'POST',
+      body: JSON.stringify({ command, device, profile, ...(settings ? { settings } : {}) })
+    }),
 
   /** Forgets a phone's screenshot on the server, once its viewer closes. */
   dropPhoneScreenshot: (device: string) =>

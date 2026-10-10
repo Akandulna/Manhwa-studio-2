@@ -22,13 +22,19 @@
  *                         and every stored receipt, then each new one. A phone is sent the requests meant for it.
  *
  * Messages on the sockets (JSON):
- *   relay → desktop  { type: 'hello', phones, devices, request } · { type: 'receipt', kind, device, at, body }
- *                    { type: 'presence', phones, devices } · { type: 'requested', id, phones }
+ *   relay → desktop  { type: 'hello', phones, devices, seen, request } · { type: 'receipt', kind, device, at, body }
+ *                    { type: 'presence', phones, devices, seen } · { type: 'requested', id, phones }
  *                    { type: 'forgotten', device }
- *   desktop → relay  { type: 'request', id, requestedAt, action?, device?, series?, tabs?, chapters?, ai?, flow?, language? }
- *   relay → phone    { type: 'request', id, requestedAt, action?, device?, series?, tabs?, chapters?, ai?, flow?, language? }
+ *   desktop → relay  { type: 'request', id, requestedAt, action?, device?, series?, tabs?, chapters?, ai?, flow?, language?, profile?, settings? }
+ *   relay → phone    { type: 'request', id, requestedAt, action?, device?, series?, tabs?, chapters?, ai?, flow?, language?, profile?, settings? }
  *
  * `phones` counts the phones connected; `devices` lists them: [{ id, name }].
+ * `seen` lists every phone with an id that ever connected: [{ id, name, at, left }]. `left` is null while it's
+ * connected (`at` is then when it was last heard, to within CHECK_MS), else how it went at `at`: "closed" (the
+ * app closed its link: Sleeper-Cell closed, or "Start from Manhwa Studio" turned off), "shutdown" (the phone
+ * switching off), or "lost" (the link broke, or its pings stopped: off, out of battery, or offline).
+ * While a phone is connected an alarm runs every CHECK_MS: a phone keeps its CPU awake while connected and
+ * pings every 50 s, so a socket with no ping for SILENT_MS is a phone that is gone, and is closed.
  *
  * `device` on a request sends it to that phone only; without it, it goes to
  * every phone. The last request for each (and the last one for all) is kept
@@ -44,13 +50,18 @@
  * `series`' scripts, "editor_start" makes its Editor 2.0 timelines in
  * `language` ("en" | "hi"), and "voiceover_start" voices its splits in
  * `language` in `tabs` tabs. "clipper_stop" stops Image Clipper, "run_stop"
- * whichever run is going. The phone acts on those only
+ * whichever run is going, and "run_finish" has it stop once what it's on is done. The phone acts on those only
  * with its "Start from Manhwa Studio" setting on, and ignores ones older than
  * 10 minutes, as requests are handed over again whenever it connects.
  * "screen_on" turns the phone's screen on with Sleeper-Cell over the lock
  * screen, kept on until "screen_off"; "screenshot" has it post its browser
  * tabs as a "screenshot" receipt. It answers each with a "screen" receipt, and
- * ignores them after 2 minutes. A screenshot is never stored: it is passed to
+ * ignores them after 2 minutes. "profile_select" makes `profile` the browser
+ * profile the next run starts in (only with no run going), "chatgpt_settings"
+ * saves that profile's ChatGPT `settings` ({ mode, model, effort }, each a
+ * name or null) for Image Clipper's chats, and "chatgpt_options" has the phone
+ * read what that profile's ChatGPT account offers; all three answer in the
+ * crops receipt's profiles. A screenshot is never stored: it is passed to
  * the desktops connected at the time, and is lost when none is.
  *   either → relay   "ping"; the runtime answers "pong" without waking the object.
  *
@@ -118,16 +129,48 @@ interface StoredRequest {
   flow?: string
   /** Editor 2.0's and the voiceover's narration language. */
   language?: string
+  /** The browser profile a PROFILE_ACTIONS request is about, and the ChatGPT settings `chatgpt_settings` saves. */
+  profile?: string
+  settings?: ChatGptSettings
 }
 
-/** What a phone socket carries across hibernation. */
-interface PhoneAttachment { device: string; name: string }
+/** What a phone socket carries across hibernation; `at` is when it connected. */
+interface PhoneAttachment { device: string; name: string; at?: number }
+
+/** How a phone's link ended (see `seen` above). */
+type Left = 'closed' | 'shutdown' | 'lost'
+
+interface SeenPhone { id: string; name: string; at: number; left: Left | null }
+
+/** How often a connected phone's pings are checked, and how long without one means it's gone. */
+const CHECK_MS = 60_000
+const SILENT_MS = 150_000
 
 /** What a request may ask of the phone besides its receipts. */
 const ACTIONS = new Set([
-  'sync', 'clipper_start', 'clipper_stop', 'narration_start', 'editor_start', 'voiceover_start', 'run_stop',
-  'screen_on', 'screen_off', 'screenshot'
+  'sync', 'clipper_start', 'clipper_stop', 'narration_start', 'editor_start', 'voiceover_start', 'run_stop', 'run_finish',
+  'screen_on', 'screen_off', 'screenshot', 'profile_select', 'chatgpt_settings', 'chatgpt_options'
 ])
+
+/** Actions on one of the phone's browser profiles, named by `profile`; `chatgpt_settings` carries `settings` too. */
+const PROFILE_ACTIONS = new Set(['profile_select', 'chatgpt_settings', 'chatgpt_options'])
+const MAX_PROFILE = 100
+/** A ChatGPT setting's longest name (a model's, say). */
+const MAX_SETTING = 100
+
+type ChatGptSettings = { mode: string | null; model: string | null; effort: string | null }
+
+/** `settings` as a request carries them: each a name, or null for "as the account has it". Null when malformed. */
+function chatGptSettings(value: unknown): ChatGptSettings | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const pick = (v: unknown): string | null | undefined =>
+    v === null || v === undefined || v === '' ? null : typeof v === 'string' && v.length <= MAX_SETTING ? v : undefined
+  const { mode, model, effort } = value as Record<string, unknown>
+  const settings = { mode: pick(mode), model: pick(model), effort: pick(effort) }
+  if (settings.mode === undefined || settings.model === undefined || settings.effort === undefined) return null
+  if (settings.mode !== null && settings.mode !== 'Chat' && settings.mode !== 'Work') return null
+  return settings as ChatGptSettings
+}
 
 /** The actions that start a run on `series`. */
 const START_ACTIONS = new Set(['clipper_start', 'narration_start', 'editor_start', 'voiceover_start'])
@@ -169,6 +212,9 @@ export class Relay extends DurableObject<Env> {
         'action TEXT, series TEXT, tabs INTEGER, chapters TEXT, options TEXT)'
     )
     // `options` (ai, flow, language as JSON) came with starting runs other than Image Clipper.
+    this.sql.exec(
+      'CREATE TABLE IF NOT EXISTS phone_seen (device TEXT PRIMARY KEY, name TEXT NOT NULL, at INTEGER NOT NULL, left TEXT)'
+    )
     const requestColumns = this.sql.exec<{ name: string }>('PRAGMA table_info(phone_requests)').toArray().map(c => c.name)
     if (!requestColumns.includes('options')) this.sql.exec('ALTER TABLE phone_requests ADD COLUMN options TEXT')
     const tables = new Set(this.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'").toArray().map(t => t.name))
@@ -191,7 +237,7 @@ export class Relay extends DurableObject<Env> {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url)
-    if (url.pathname === '/ws') return this.accept(request, url)
+    if (url.pathname === '/ws') return await this.accept(request, url)
     if (request.method === 'POST' && url.pathname.startsWith('/receipt/')) {
       // Read before any answer: the runtime faults on a body left unread.
       const text = await request.text()
@@ -223,13 +269,14 @@ export class Relay extends DurableObject<Env> {
         request: this.lastRequest(''),
         phones: this.devices().length,
         devices: this.devices(),
+        seen: this.seen(),
         desktops: this.sockets('desktop').length
       })
     }
     return new Response('Not found', { status: 404 })
   }
 
-  private accept(request: Request, url: URL): Response {
+  private async accept(request: Request, url: URL): Promise<Response> {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return new Response('Expected a WebSocket upgrade', { status: 426 })
     }
@@ -243,15 +290,24 @@ export class Relay extends DurableObject<Env> {
     this.ctx.acceptWebSocket(server, device ? [role, DEVICE_TAG + device] : [role])
     if (role === 'desktop') {
       const devices = this.devices()
-      server.send(JSON.stringify({ type: 'hello', phones: devices.length, devices, request: this.lastRequest('') }))
+      server.send(JSON.stringify({ type: 'hello', phones: devices.length, devices, seen: this.seen(), request: this.lastRequest('') }))
       for (const row of this.sql.exec<{ device: string; kind: string; body: string; at: number }>('SELECT device, kind, body, at FROM phone_receipts')) {
         server.send(receiptMessage(row.kind, row.device, row.body, row.at))
       }
     } else {
       const name = (url.searchParams.get('name') ?? '').trim().slice(0, MAX_NAME)
-      server.serializeAttachment({ device, name } satisfies PhoneAttachment)
+      const at = Date.now()
+      server.serializeAttachment({ device, name, at } satisfies PhoneAttachment)
+      if (device) {
+        this.sql.exec(
+          'INSERT INTO phone_seen (device, name, at, left) VALUES (?, ?, ?, NULL) ' +
+            'ON CONFLICT(device) DO UPDATE SET name = excluded.name, at = excluded.at, left = NULL',
+          device, name, at
+        )
+      }
       for (const pending of this.requestsFor(device)) server.send(JSON.stringify({ type: 'request', ...pending }))
       this.broadcastPresence()
+      if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(at + CHECK_MS)
     }
     return new Response(null, { status: 101, webSocket: client })
   }
@@ -283,7 +339,61 @@ export class Relay extends DurableObject<Env> {
     } catch {
       // Already closed, or a reserved code (1005/1006) that can't be echoed.
     }
-    if (this.roleOf(ws) === 'phone') this.broadcastPresence(ws)
+    if (this.roleOf(ws) !== 'phone') return
+    const { device } = (ws.deserializeAttachment() ?? { device: '' }) as PhoneAttachment
+    if (device) this.left(device, reason === 'shutdown' ? 'shutdown' : code === 1000 ? 'closed' : 'lost', Date.now(), ws)
+    this.broadcastPresence(ws)
+  }
+
+  /**
+   * Every CHECK_MS while a phone is connected: closes the sockets of phones whose pings stopped, notes when the
+   * others were last heard, and settles phones left marked connected by a socket that is gone (as after a deploy).
+   */
+  async alarm(): Promise<void> {
+    const now = Date.now()
+    let dropped = false
+    for (const ws of this.sockets('phone')) {
+      const attachment = (ws.deserializeAttachment() ?? { device: '', name: '' }) as PhoneAttachment
+      const heard = Math.max(this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? 0, attachment.at ?? 0)
+      if (!heard) {
+        // Connected before sockets carried `at`, and no ping yet: counts from now.
+        ws.serializeAttachment({ ...attachment, at: now } satisfies PhoneAttachment)
+        continue
+      }
+      if (now - heard <= SILENT_MS) {
+        if (attachment.device) this.sql.exec('UPDATE phone_seen SET at = ? WHERE device = ? AND left IS NULL', heard, attachment.device)
+        continue
+      }
+      if (attachment.device) this.left(attachment.device, 'lost', heard, ws)
+      try {
+        ws.close(4000, 'No ping')
+      } catch {
+        // Already closing.
+      }
+      dropped = true
+    }
+    const connected = new Set(this.devices().map(d => d.id))
+    for (const row of this.sql.exec<{ device: string }>('SELECT device FROM phone_seen WHERE left IS NULL').toArray()) {
+      if (!connected.has(row.device)) {
+        this.sql.exec("UPDATE phone_seen SET left = 'lost' WHERE device = ?", row.device)
+        dropped = true
+      }
+    }
+    if (dropped) this.broadcastPresence()
+    if (this.sockets('phone').length) await this.ctx.storage.setAlarm(now + CHECK_MS)
+  }
+
+  /** Notes how phone `device` went, at `at`, unless another socket of it is still open (it reconnected). */
+  private left(device: string, how: Left, at: number, ws: WebSocket): void {
+    if (this.ctx.getWebSockets(DEVICE_TAG + device).some(other => other !== ws && open(other))) return
+    this.sql.exec('UPDATE phone_seen SET left = ?, at = ? WHERE device = ? AND left IS NULL', how, at, device)
+  }
+
+  /** Every phone with an id that ever connected, and how it last went (see `seen` above). */
+  private seen(): SeenPhone[] {
+    return this.sql.exec<{ device: string; name: string; at: number; left: string | null }>('SELECT device, name, at, left FROM phone_seen')
+      .toArray()
+      .map(row => ({ id: row.device, name: row.name, at: row.at, left: (row.left as Left | null) ?? null }))
   }
 
   private postReceipt(kind: string, device: string, text: string, replacesLegacy: boolean): Response {
@@ -322,15 +432,16 @@ export class Relay extends DurableObject<Env> {
   private forget(device: string): void {
     this.sql.exec('DELETE FROM phone_receipts WHERE device = ?', device)
     if (device) this.sql.exec('DELETE FROM phone_requests WHERE target = ?', device)
+    if (device) this.sql.exec('DELETE FROM phone_seen WHERE device = ?', device)
     const message = JSON.stringify({ type: 'forgotten', device })
     for (const ws of this.sockets('desktop')) ws.send(message)
   }
 
   /** Saves a request and passes it to the phone it's for, or every phone. Null when it isn't a valid request. */
   private storeRequest(value: unknown): { request: StoredRequest; phones: number } | null {
-    const { id, requestedAt, action, device, series, tabs, chapters, ai, flow, language } = (value ?? {}) as {
+    const { id, requestedAt, action, device, series, tabs, chapters, ai, flow, language, profile, settings } = (value ?? {}) as {
       id?: unknown; requestedAt?: unknown; action?: unknown; device?: unknown; series?: unknown; tabs?: unknown; chapters?: unknown
-      ai?: unknown; flow?: unknown; language?: unknown
+      ai?: unknown; flow?: unknown; language?: unknown; profile?: unknown; settings?: unknown
     }
     if (typeof id !== 'string' || !id || id.length > 100) return null
     if (device !== undefined && device !== null && (typeof device !== 'string' || (device && !DEVICE_ID.test(device)))) return null
@@ -354,7 +465,16 @@ export class Relay extends DurableObject<Env> {
       if (typeof flow === 'string' && FLOWS.has(flow)) request.flow = flow
     }
     if (LANGUAGE_ACTIONS.has(started) && typeof language === 'string' && LANGUAGES.has(language)) request.language = language
-    const options = { ai: request.ai, flow: request.flow, language: request.language }
+    if (PROFILE_ACTIONS.has(started)) {
+      if (typeof profile !== 'string' || !profile || profile.length > MAX_PROFILE) return null
+      request.profile = profile
+      if (started === 'chatgpt_settings') {
+        const parsed = chatGptSettings(settings)
+        if (!parsed) return null
+        request.settings = parsed
+      }
+    }
+    const options = { ai: request.ai, flow: request.flow, language: request.language, profile: request.profile, settings: request.settings }
     this.sql.exec(
       'INSERT INTO phone_requests (target, id, requested_at, action, series, tabs, chapters, options) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ' +
         'ON CONFLICT(target) DO UPDATE SET id = excluded.id, requested_at = excluded.requested_at, action = excluded.action, ' +
@@ -399,10 +519,13 @@ export class Relay extends DurableObject<Env> {
     }
     if (row.options) {
       try {
-        const { ai, flow, language } = JSON.parse(row.options) as Pick<StoredRequest, 'ai' | 'flow' | 'language'>
+        const { ai, flow, language, profile, settings } =
+          JSON.parse(row.options) as Pick<StoredRequest, 'ai' | 'flow' | 'language' | 'profile' | 'settings'>
         if (ai) request.ai = ai
         if (flow) request.flow = flow
         if (language) request.language = language
+        if (profile) request.profile = profile
+        if (settings) request.settings = settings
       } catch {
         // Written by storeRequest, so always JSON.
       }
@@ -430,7 +553,7 @@ export class Relay extends DurableObject<Env> {
 
   private broadcastPresence(except?: WebSocket): void {
     const devices = this.devices(except)
-    const message = JSON.stringify({ type: 'presence', phones: devices.length, devices })
+    const message = JSON.stringify({ type: 'presence', phones: devices.length, devices, seen: this.seen() })
     for (const ws of this.sockets('desktop')) ws.send(message)
   }
 

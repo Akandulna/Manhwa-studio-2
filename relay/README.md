@@ -6,7 +6,9 @@ the last copy of each receipt, so Manhwa Studio catches up when it opens even if
 See `src/index.ts` for the protocol.
 
 Runs on the Workers free plan: 100k requests/day; incoming WebSocket messages count 20 to 1; idle sockets
-hibernate and cost nothing. The phone sends a receipt only when something changes.
+hibernate and cost nothing. The phone sends a receipt only when something changes. While a phone is
+connected, an alarm wakes the relay once a minute (about 1,440 requests a day) to notice a phone that went
+quiet: switched off, out of battery or offline.
 
 ## Set up (once)
 
