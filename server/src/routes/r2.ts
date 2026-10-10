@@ -11,13 +11,13 @@
  *   GET  /phone/crops?seriesId=…&chapterId=…&fresh=1   which pages have crop JSON on the phone, and the page Auto-run is on
  *   GET  /phone/overview?fresh=1   all three receipts across every series, for the Sleeper Cells page
  *   POST /phone/request   ask the phone to write both receipts again ("Refresh from phone")
- *   POST /phone/automation { command: start|stop, kind?, seriesId?, tabs?, ai?, flow?, language?, device?, split?, after? } — start a
+ *   POST /phone/automation { command: start|stop, kind?, seriesId?, tabs?, ai?, flow?, chatGpt?, language?, device?, split?, after? } — start a
  *                         run (Image Clipper, narration, Editor 2.0, voiceover) on the phone through the relay, or stop it (`after`: once
  *                         what it's on is done)
  *   GET  /phone/screens   each phone's screen state and last screenshot (relay only)
  *   GET  /phone/screens/:device/:index   one screenshot image (JPEG, never cached)
- *   POST /phone/profile   { command: select|settings|options, device, profile, settings? } — pick the phone's profile, save its
- *                         ChatGPT settings ({ mode, model, effort }), or have it read what its ChatGPT account offers
+ *   POST /phone/profile   { command: select|options, device, profile } — pick the phone's profile, or have it read what that
+ *                         profile's ChatGPT account offers (modes, models, efforts)
  *   DELETE /phone/screens/:device/screenshot   forget that phone's screenshot (its viewer closed)
  *   POST /phone/screen    { command: on|off|shot, device } — Wake, Screen off or Screenshot on one phone
  *   GET  /relay          the phone relay's settings (no token) and connection state
@@ -184,7 +184,7 @@ export function initR2Routes(io: Server): Router {
 
   router.post('/phone/automation', async (req: Request, res: Response) => {
     try {
-      const { command, kind, seriesId, tabs, ai, flow, language, device, split, after } = req.body ?? {}
+      const { command, kind, seriesId, tabs, ai, flow, language, device, split, after, chatGpt } = req.body ?? {}
       if (command !== 'start' && command !== 'stop') throw new Error('command must be start or stop')
       if (kind !== undefined && !PHONE_RUN_KINDS.includes(kind)) throw new Error(`kind must be one of ${PHONE_RUN_KINDS.join(', ')}`)
       if (ai !== undefined && ai !== 'chatgpt' && ai !== 'aistudio') throw new Error('ai must be chatgpt or aistudio')
@@ -196,7 +196,8 @@ export function initR2Routes(io: Server): Router {
       if (device !== undefined && (typeof device !== 'string' || !device)) throw new Error('device must be a phone id')
       if (split !== undefined && typeof split !== 'boolean') throw new Error('split must be true or false')
       if (device !== undefined && split) throw new Error('Pick one phone or split, not both')
-      res.json(await sendAutomationCommand(command, { kind, seriesId, tabs, ai, flow, language, device, split, after }))
+      const choices = chatGpt === undefined || chatGpt === null ? undefined : parseChatGptSettings(chatGpt)
+      res.json(await sendAutomationCommand(command, { kind, seriesId, tabs, ai, flow, chatGpt: choices, language, device, split, after }))
     } catch (error) {
       console.error('Phone automation command failed:', error)
       res.status(400).json({ error: message(error, 'Could not reach the phone') })
@@ -223,11 +224,11 @@ export function initR2Routes(io: Server): Router {
 
   router.post('/phone/profile', async (req: Request, res: Response) => {
     try {
-      const { command, device, profile, settings } = req.body ?? {}
-      if (command !== 'select' && command !== 'settings' && command !== 'options') throw new Error('command must be select, settings or options')
+      const { command, device, profile } = req.body ?? {}
+      if (command !== 'select' && command !== 'options') throw new Error('command must be select or options')
       if (typeof device !== 'string' || !device) throw new Error('device must be a phone id')
       if (typeof profile !== 'string' || !profile) throw new Error('profile must be a profile id')
-      res.json(await sendProfileCommand(command, device, profile, command === 'settings' ? parseChatGptSettings(settings) : undefined))
+      res.json(await sendProfileCommand(command, device, profile))
     } catch (error) {
       console.error('Phone profile command failed:', error)
       res.status(400).json({ error: message(error, 'Could not reach the phone') })

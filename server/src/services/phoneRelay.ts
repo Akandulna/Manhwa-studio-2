@@ -41,8 +41,8 @@ export type ReceiptKind = 'sync' | 'scripts' | 'crops'
  * run is going (builds from before the other runs know only `clipper_stop`),
  * `run_finish` has it stop once the pages, chapter or splits it's on are done;
  * `screen_on`, `screen_off` and `screenshot` are Phone Status's screen
- * controls; `profile_select`, `chatgpt_settings` and `chatgpt_options` its
- * profile controls (phoneProfiles.ts). Keep in step with ACTIONS in
+ * controls; `profile_select` and `chatgpt_options` its profile controls
+ * (phoneProfiles.ts). Keep in step with ACTIONS in
  * relay/src/index.ts, Automation.kt, RemoteScreen.kt and RemoteProfiles.kt on
  * the phone.
  */
@@ -59,7 +59,6 @@ export type PhoneAction =
   | 'screen_off'
   | 'screenshot'
   | 'profile_select'
-  | 'chatgpt_settings'
   | 'chatgpt_options'
 
 /** The phone's screen state, and its browser tabs as JPEGs (see phoneScreen.ts). */
@@ -81,10 +80,10 @@ export interface PhoneRequestArgs {
   flow?: 'classic' | 'steps'
   language?: 'en' | 'hi'
   device?: string
-  /** For profile_select, chatgpt_settings and chatgpt_options: the phone's own id of the browser profile. */
+  /** For profile_select and chatgpt_options: the phone's own id of the browser profile. */
   profile?: string
-  /** For chatgpt_settings: each a name, or null for "as the account has it". */
-  settings?: { mode: 'Chat' | 'Work' | null; model: string | null; effort: string | null }
+  /** For clipper_start: ChatGPT's mode, model and effort, each a name or null for "as the account has it". */
+  chatGpt?: { mode: 'Chat' | 'Work' | null; model: string | null; effort: string | null }
 }
 
 /** One phone's copy of a receipt. `device` is its id, "" for Sleeper-Cell builds from before phones had one. */
@@ -450,7 +449,7 @@ export async function sendPhoneRequest(
     ...(args.flow ? { flow: args.flow } : {}),
     ...(args.language ? { language: args.language } : {}),
     ...(args.profile ? { profile: args.profile } : {}),
-    ...(args.settings ? { settings: args.settings } : {})
+    ...(args.chatGpt ? { chatGpt: args.chatGpt } : {})
   }
   if (socket && connected && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: 'request', ...request }))

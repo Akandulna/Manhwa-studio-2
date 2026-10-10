@@ -42,7 +42,7 @@ import {
   useNow,
   type Tone
 } from './sleeperShared'
-import { PhoneProfileControls } from './PhoneProfile'
+import { PhoneProfilePicker } from './PhoneProfile'
 import { PhoneScreenControls } from './PhoneScreen'
 import { AUTOMATION_NAME, RunAutomationDialog } from './RunAutomation'
 import { stopAllChoice, stopChoice, StopRunDialog } from './StopRun'
@@ -165,7 +165,8 @@ function PhoneCard({ phone, overview, relay, screen, several, startable, now, se
   const blocker = startBlocker(relay, phone, several)
   const busy = activity.busy
 
-  const usages = (overview?.profiles ?? []).filter(p => onPhone(p, phone, several)).map(p => uploadUsage(p, now))
+  const profiles = (overview?.profiles ?? []).filter(p => onPhone(p, phone, several))
+  const usages = profiles.map(p => uploadUsage(p, now))
   const imagesLeft = usages.reduce((sum, u) => sum + u.left, 0)
   const ready = usages.filter(u => u.left > 0).length
 
@@ -210,6 +211,9 @@ function PhoneCard({ phone, overview, relay, screen, several, startable, now, se
             </Button>
           )}
         </div>
+
+        {/* The profile it's on, up front */}
+        <PhoneProfilePicker phone={phone} profiles={profiles} relay={relay} screen={screen} busy={busy} />
 
         {/* Pointers to the other two pages */}
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
@@ -264,18 +268,6 @@ function PhoneCard({ phone, overview, relay, screen, several, startable, now, se
           <PhoneScreenControls phone={phone} relay={relay} screen={screen} now={now} />
         </div>
 
-        {/* Profile and its ChatGPT settings */}
-        <div className="border-t pt-4">
-          <PhoneProfileControls
-            phone={phone}
-            profiles={(overview?.profiles ?? []).filter(p => onPhone(p, phone, several))}
-            relay={relay}
-            screen={screen}
-            busy={busy}
-            now={now}
-          />
-        </div>
-
         {/* Run automation */}
         <div className="mt-auto space-y-3 border-t pt-4">
           <div className="flex flex-wrap items-center gap-2">
@@ -320,6 +312,10 @@ function PhoneCard({ phone, overview, relay, screen, several, startable, now, se
               overview={overview}
               several={several}
               startable={startable}
+              profiles={profiles}
+              relay={relay}
+              screen={screen}
+              now={now}
               sending={sending === `start:${key}` || sending === 'start:all'}
               onStart={options => send('start', options, options.split ? null : phone.name)}
             />

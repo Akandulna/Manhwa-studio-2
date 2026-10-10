@@ -66,6 +66,15 @@ export function pageLabel(page: string): string {
   return page.replace(/\.[a-z0-9]+$/i, '')
 }
 
+/**
+ * A plan as Sleeper-Cell's profile check reports it, to show: ChatGPT's "plus" → "Plus", Gemini's "Google AI Pro" →
+ * "AI Pro", "paid" → "Paid". Null when not known.
+ */
+export function planLabel(plan: string | null | undefined): string | null {
+  const name = plan?.replace(/^google\s+/i, '').trim()
+  return name ? name.charAt(0).toUpperCase() + name.slice(1) : null
+}
+
 export function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? '' : 's'}`
 }

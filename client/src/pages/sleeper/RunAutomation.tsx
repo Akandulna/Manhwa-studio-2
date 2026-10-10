@@ -2,8 +2,9 @@
  * Run automation — Phone Status's one way to start a run on a phone, in two
  * steps: which automation (Image Clipper, Narration scripts, Editor 2.0
  * timelines, Voiceover), then how (its series, and the choices that run has:
- * ChatGPT or Gemini, one prompt or four steps, tabs, language, one phone or
- * split between them). The runs and their choices are AUTOMATIONS below; a new
+ * ChatGPT or Gemini, one prompt or four steps, ChatGPT's mode, model and
+ * effort on plans that have them (PhoneProfile.tsx), tabs, language, one phone
+ * or split between them). The runs and their choices are AUTOMATIONS below; a new
  * phone run is one more entry there, plus its start on the phone
  * (Automation.kt) and the relay (relay/src/index.ts).
  */
@@ -15,15 +16,20 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import type {
   PhoneAutomationOptions,
+  PhoneChatGptSettings,
   PhoneClipperAi,
   PhoneClipperFlow,
   PhoneOverview,
   PhoneOverviewPhone,
   PhoneOverviewSeries,
-  PhoneRunKind
+  PhoneRunKind,
+  PhoneScreen,
+  PhoneUploadProfile,
+  RelayStatus
 } from '@/lib/api'
 import { LANGUAGE_LABEL, NARRATION_LANGUAGES, type NarrationLanguage } from '@/lib/narrationLanguage'
 import { cn } from '@/lib/utils'
+import { ChatGptChoices, hasChoices, NO_CHATGPT_CHOICES } from './PhoneProfile'
 import { clock } from './sleeperShared'
 
 /** Image Clipper's and the voiceover's most tabs at once (MAX_TABS in ClipperRun and VoiceoverRun on the phone). */
@@ -179,13 +185,18 @@ function TabChoices({ value, onChange, each }: { value: number; onChange: (n: nu
  * it (the page toasts how that went) and resolves once sent, closing the dialog.
  * `startable` counts the phones that can be started now, for Image Clipper's split.
  */
-export function RunAutomationDialog({ open, onOpenChange, phone, overview, several, startable, sending, onStart }: {
+export function RunAutomationDialog({ open, onOpenChange, phone, overview, several, startable, profiles, relay, screen, now, sending, onStart }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   phone: PhoneOverviewPhone
   overview: PhoneOverview
   several: boolean
   startable: PhoneOverviewPhone[]
+  /** This phone's profiles: the selected one's plan and options give Image Clipper's ChatGPT choices. */
+  profiles: PhoneUploadProfile[]
+  relay: RelayStatus | null
+  screen: PhoneScreen | null
+  now: number
   sending: boolean
   onStart: (options: PhoneAutomationOptions) => Promise<boolean>
 }) {
@@ -203,6 +214,9 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
   const [voiceTabs, setVoiceTabs] = useState(DEFAULT_TABS)
   const [language, setLanguage] = useState<NarrationLanguage>('en')
   const [split, setSplit] = useState(false)
+  const [chatGpt, setChatGpt] = useState<PhoneChatGptSettings>(last?.chatGpt ?? NO_CHATGPT_CHOICES)
+  // Only builds that report the last choices (null from older ones) take them with the start.
+  const choosesChatGpt = !!last?.chatGpt
 
   const automation = AUTOMATIONS.find(a => a.kind === kind) ?? null
   const seriesId = kind ? picked[kind] ?? preferredSeries(kind, overview, phone, several) : ''
@@ -222,6 +236,9 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
       seriesId: seriesId || undefined,
       ...(automation.tabs ? { tabs } : {}),
       ...(automation.clipper && choosesHow ? { ai, flow } : {}),
+      ...(automation.clipper && choosesChatGpt && ai === 'chatgpt'
+        ? { chatGpt: hasChoices(profiles.find(p => p.selected) ?? null) === false ? NO_CHATGPT_CHOICES : chatGpt }
+        : {}),
       ...(automation.language ? { language } : {}),
       ...(splitting ? { split: true } : phone.id && several ? { device: phone.id } : {})
     }
@@ -308,6 +325,9 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
                     onChange={setFlow}
                     disabled={choosesHow ? undefined : 'Same for the method: 1 step or 4 steps as last picked on the phone.'}
                   />
+                  {ai === 'chatgpt' && (choosesChatGpt
+                    ? <ChatGptChoices phone={phone} profiles={profiles} relay={relay} screen={screen} value={chatGpt} onChange={setChatGpt} now={now} />
+                    : <p className="text-xs text-muted-foreground">Update Sleeper-Cell on {phone.name} to pick ChatGPT’s mode, model and effort here.</p>)}
                 </>
               )}
 

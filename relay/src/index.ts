@@ -25,8 +25,8 @@
  *   relay → desktop  { type: 'hello', phones, devices, seen, request } · { type: 'receipt', kind, device, at, body }
  *                    { type: 'presence', phones, devices, seen } · { type: 'requested', id, phones }
  *                    { type: 'forgotten', device }
- *   desktop → relay  { type: 'request', id, requestedAt, action?, device?, series?, tabs?, chapters?, ai?, flow?, language?, profile?, settings? }
- *   relay → phone    { type: 'request', id, requestedAt, action?, device?, series?, tabs?, chapters?, ai?, flow?, language?, profile?, settings? }
+ *   desktop → relay  { type: 'request', id, requestedAt, action?, device?, series?, tabs?, chapters?, ai?, flow?, language?, profile?, chatGpt? }
+ *   relay → phone    { type: 'request', id, requestedAt, action?, device?, series?, tabs?, chapters?, ai?, flow?, language?, profile?, chatGpt? }
  *
  * `phones` counts the phones connected; `devices` lists them: [{ id, name }].
  * `seen` lists every phone with an id that ever connected: [{ id, name, at, left }]. `left` is null while it's
@@ -57,11 +57,11 @@
  * screen, kept on until "screen_off"; "screenshot" has it post its browser
  * tabs as a "screenshot" receipt. It answers each with a "screen" receipt, and
  * ignores them after 2 minutes. "profile_select" makes `profile` the browser
- * profile the next run starts in (only with no run going), "chatgpt_settings"
- * saves that profile's ChatGPT `settings` ({ mode, model, effort }, each a
- * name or null) for Image Clipper's chats, and "chatgpt_options" has the phone
- * read what that profile's ChatGPT account offers; all three answer in the
- * crops receipt's profiles. A screenshot is never stored: it is passed to
+ * profile the next run starts in (only with no run going), and
+ * "chatgpt_options" has the phone read what that profile's ChatGPT account
+ * offers; they answer in the crops receipt's profiles. "clipper_start" may carry `chatGpt` ({ mode,
+ * model, effort }, each a name or null): Image Clipper's ChatGPT choices,
+ * which the phone keeps for its later runs. A screenshot is never stored: it is passed to
  * the desktops connected at the time, and is lost when none is.
  *   either → relay   "ping"; the runtime answers "pong" without waking the object.
  *
@@ -129,9 +129,10 @@ interface StoredRequest {
   flow?: string
   /** Editor 2.0's and the voiceover's narration language. */
   language?: string
-  /** The browser profile a PROFILE_ACTIONS request is about, and the ChatGPT settings `chatgpt_settings` saves. */
+  /** The browser profile a PROFILE_ACTIONS request is about. */
   profile?: string
-  settings?: ChatGptSettings
+  /** Image Clipper's ChatGPT mode, model and effort, which the phone keeps for its later runs too. */
+  chatGpt?: ChatGptSettings
 }
 
 /** What a phone socket carries across hibernation; `at` is when it connected. */
@@ -149,18 +150,18 @@ const SILENT_MS = 150_000
 /** What a request may ask of the phone besides its receipts. */
 const ACTIONS = new Set([
   'sync', 'clipper_start', 'clipper_stop', 'narration_start', 'editor_start', 'voiceover_start', 'run_stop', 'run_finish',
-  'screen_on', 'screen_off', 'screenshot', 'profile_select', 'chatgpt_settings', 'chatgpt_options'
+  'screen_on', 'screen_off', 'screenshot', 'profile_select', 'chatgpt_options'
 ])
 
-/** Actions on one of the phone's browser profiles, named by `profile`; `chatgpt_settings` carries `settings` too. */
-const PROFILE_ACTIONS = new Set(['profile_select', 'chatgpt_settings', 'chatgpt_options'])
+/** Actions on one of the phone's browser profiles, named by `profile`. */
+const PROFILE_ACTIONS = new Set(['profile_select', 'chatgpt_options'])
 const MAX_PROFILE = 100
 /** A ChatGPT setting's longest name (a model's, say). */
 const MAX_SETTING = 100
 
 type ChatGptSettings = { mode: string | null; model: string | null; effort: string | null }
 
-/** `settings` as a request carries them: each a name, or null for "as the account has it". Null when malformed. */
+/** `chatGpt` as a clipper start carries it: each a name, or null for "as the account has it". Null when malformed. */
 function chatGptSettings(value: unknown): ChatGptSettings | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const pick = (v: unknown): string | null | undefined =>
@@ -439,9 +440,9 @@ export class Relay extends DurableObject<Env> {
 
   /** Saves a request and passes it to the phone it's for, or every phone. Null when it isn't a valid request. */
   private storeRequest(value: unknown): { request: StoredRequest; phones: number } | null {
-    const { id, requestedAt, action, device, series, tabs, chapters, ai, flow, language, profile, settings } = (value ?? {}) as {
+    const { id, requestedAt, action, device, series, tabs, chapters, ai, flow, language, profile, chatGpt } = (value ?? {}) as {
       id?: unknown; requestedAt?: unknown; action?: unknown; device?: unknown; series?: unknown; tabs?: unknown; chapters?: unknown
-      ai?: unknown; flow?: unknown; language?: unknown; profile?: unknown; settings?: unknown
+      ai?: unknown; flow?: unknown; language?: unknown; profile?: unknown; chatGpt?: unknown
     }
     if (typeof id !== 'string' || !id || id.length > 100) return null
     if (device !== undefined && device !== null && (typeof device !== 'string' || (device && !DEVICE_ID.test(device)))) return null
@@ -463,18 +464,18 @@ export class Relay extends DurableObject<Env> {
       }
       if (typeof ai === 'string' && AIS.has(ai)) request.ai = ai
       if (typeof flow === 'string' && FLOWS.has(flow)) request.flow = flow
+      if (chatGpt !== undefined) {
+        const parsed = chatGptSettings(chatGpt)
+        if (!parsed) return null
+        request.chatGpt = parsed
+      }
     }
     if (LANGUAGE_ACTIONS.has(started) && typeof language === 'string' && LANGUAGES.has(language)) request.language = language
     if (PROFILE_ACTIONS.has(started)) {
       if (typeof profile !== 'string' || !profile || profile.length > MAX_PROFILE) return null
       request.profile = profile
-      if (started === 'chatgpt_settings') {
-        const parsed = chatGptSettings(settings)
-        if (!parsed) return null
-        request.settings = parsed
-      }
     }
-    const options = { ai: request.ai, flow: request.flow, language: request.language, profile: request.profile, settings: request.settings }
+    const options = { ai: request.ai, flow: request.flow, language: request.language, profile: request.profile, chatGpt: request.chatGpt }
     this.sql.exec(
       'INSERT INTO phone_requests (target, id, requested_at, action, series, tabs, chapters, options) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ' +
         'ON CONFLICT(target) DO UPDATE SET id = excluded.id, requested_at = excluded.requested_at, action = excluded.action, ' +
@@ -519,13 +520,13 @@ export class Relay extends DurableObject<Env> {
     }
     if (row.options) {
       try {
-        const { ai, flow, language, profile, settings } =
-          JSON.parse(row.options) as Pick<StoredRequest, 'ai' | 'flow' | 'language' | 'profile' | 'settings'>
+        const { ai, flow, language, profile, chatGpt } =
+          JSON.parse(row.options) as Pick<StoredRequest, 'ai' | 'flow' | 'language' | 'profile' | 'chatGpt'>
         if (ai) request.ai = ai
         if (flow) request.flow = flow
         if (language) request.language = language
         if (profile) request.profile = profile
-        if (settings) request.settings = settings
+        if (chatGpt) request.chatGpt = chatGpt
       } catch {
         // Written by storeRequest, so always JSON.
       }

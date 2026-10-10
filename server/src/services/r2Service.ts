@@ -673,8 +673,25 @@ export interface PhoneUploadProfile {
   phone: string | null
   /** The phone's own id for it, which requests name it by (`id` may carry the device). */
   profileId: string
-  /** Its ChatGPT settings for Image Clipper, and what its account offered when last read; null from older builds. */
+  /** What its ChatGPT account offered when last read, for Run automation's choices; null from older builds. */
   chatGpt: PhoneChatGptProfile | null
+  /** Sleeper-Cell's Tools → Profiles → Check of it, as last done there: sign-ins and plans; null when never checked. */
+  check: PhoneProfileCheck | null
+}
+
+/** One site's part of a profile check. */
+export interface PhoneSiteCheck {
+  signedIn: boolean
+  email: string | null
+  /** ChatGPT's planType ("free", "go", "plus"…); Gemini's "free", "paid" or "Google AI Pro" and the like. */
+  plan: string | null
+  error: string | null
+}
+
+export interface PhoneProfileCheck {
+  checkedAt: string
+  chatGpt: PhoneSiteCheck | null
+  gemini: PhoneSiteCheck | null
 }
 
 /** A ChatGPT setting's choices in one mode, as the phone read them off the account. */
@@ -687,9 +704,7 @@ export interface PhoneChatGptMode {
 }
 
 export interface PhoneChatGptProfile {
-  /** What each new chat of a clipper run is set to; null leaves it as the account has it. */
-  settings: { mode: string | null; model: string | null; effort: string | null }
-  /** Null until read. */
+  /** Null until read. Free and Go list no modes: they have neither the switch nor the model picker. */
   options: { readAt: string | null; current: string | null; modes: PhoneChatGptMode[] } | null
   /** A read of the options is going on. */
   reading: boolean
@@ -825,20 +840,36 @@ export function parseUploadProfiles(raw: unknown): PhoneUploadProfile[] {
       limits,
       ...phoneOf(entry),
       profileId: typeof entry.profileId === 'string' && entry.profileId ? entry.profileId : entry.id,
-      chatGpt: parseChatGptProfile(entry.chatGpt)
+      chatGpt: parseChatGptProfile(entry.chatGpt),
+      check: parseProfileCheck(entry.check)
     })
   }
   return profiles
+}
+
+/** A profile's `check` (ProfileCheck.kt on the phone), dropping anything malformed. */
+function parseProfileCheck(raw: unknown): PhoneProfileCheck | null {
+  if (!isObject(raw) || !isTime(raw.checkedAt)) return null
+  const site = (value: unknown): PhoneSiteCheck | null => {
+    if (!isObject(value)) return null
+    const text = (v: unknown) => (typeof v === 'string' && v ? v : null)
+    return { signedIn: value.signedIn === true, email: text(value.email), plan: text(value.plan), error: text(value.error) }
+  }
+  return { checkedAt: raw.checkedAt, chatGpt: site(raw.chatGpt), gemini: site(raw.gemini) }
+}
+
+/** Run automation's ChatGPT choices as the phone reports them back: each a name or null. */
+function runSettingsOf(raw: Record<string, unknown>): ChatGptRunSettings {
+  const name = (v: unknown): string | null => (typeof v === 'string' && v ? v : null)
+  return { mode: raw.mode === 'Chat' || raw.mode === 'Work' ? raw.mode : null, model: name(raw.model), effort: name(raw.effort) }
 }
 
 /** A profile's `chatGpt` (ChatGptSettings.kt on the phone), dropping anything malformed. */
 function parseChatGptProfile(raw: unknown): PhoneChatGptProfile | null {
   if (!isObject(raw)) return null
   const name = (v: unknown): string | null => (typeof v === 'string' && v ? v : null)
-  const settings = isObject(raw.settings) ? raw.settings : {}
   const options = isObject(raw.options) ? raw.options : null
   return {
-    settings: { mode: name(settings.mode), model: name(settings.model), effort: name(settings.effort) },
     options: options
       ? {
           readAt: isTime(options.readAt) ? options.readAt : null,
@@ -1032,7 +1063,8 @@ export interface PhoneAutomation {
   /** The runs Manhwa Studio can start there; builds from before the others can start only Image Clipper. */
   runs: PhoneRunKind[]
   /** How Image Clipper last ran there, the choices to offer first; null from builds before it was sent. */
-  clipper: { ai: PhoneClipperAi; flow: PhoneClipperFlow; tabs: number } | null
+  /** How Image Clipper last ran; `chatGpt` is the mode, model and effort last picked in Run automation (older builds: null). */
+  clipper: { ai: PhoneClipperAi; flow: PhoneClipperFlow; tabs: number; chatGpt: ChatGptRunSettings | null } | null
   /** It can stop a run once what it's on is done (stop with `after`); builds before can only stop it now. */
   stopAfter: boolean
   /** Image Clipper ends once the pages it's on are done. */
@@ -1271,7 +1303,8 @@ function parseAutomation(raw: unknown, seriesFor: (folder: string) => { id: stri
       ? {
           ai: raw.clipper.ai === 'aistudio' ? 'aistudio' : 'chatgpt',
           flow: raw.clipper.flow === 'steps' ? 'steps' : 'classic',
-          tabs: Math.min(PHONE_MAX_TABS, Math.max(1, Number(raw.clipper.tabs) || 1))
+          tabs: Math.min(PHONE_MAX_TABS, Math.max(1, Number(raw.clipper.tabs) || 1)),
+          chatGpt: isObject(raw.clipper.chatGpt) ? runSettingsOf(raw.clipper.chatGpt) : null
         }
       : null,
     stopAfter: raw.stopAfter === true,
@@ -1302,6 +1335,8 @@ export interface PhoneAutomationSent extends PhoneUpdateRequest {
   targets: PhoneAutomationTarget[]
 }
 
+export type ChatGptRunSettings = { mode: 'Chat' | 'Work' | null; model: string | null; effort: string | null }
+
 export interface PhoneAutomationOptions {
   /** The run to start; Image Clipper when left out. A stop stops whichever run is going. */
   kind?: PhoneRunKind
@@ -1311,6 +1346,8 @@ export interface PhoneAutomationOptions {
   /** Image Clipper: ChatGPT or Gemini in AI Studio, and one prompt (classic) or four steps. */
   ai?: PhoneClipperAi
   flow?: PhoneClipperFlow
+  /** Image Clipper on ChatGPT: the mode, model and effort (each null: as the account has it); the phone keeps them. */
+  chatGpt?: ChatGptRunSettings
   /** Editor 2.0 and the voiceover: the narration language. */
   language?: NarrationLanguage
   device?: string
@@ -1389,7 +1426,7 @@ export async function sendAutomationCommand(
   const args = {
     series,
     tabs: takesTabs ? options.tabs : undefined,
-    ...(kind === 'clipper' ? { ai: options.ai, flow: options.flow } : {}),
+    ...(kind === 'clipper' ? { ai: options.ai, flow: options.flow, chatGpt: options.chatGpt } : {}),
     ...(kind === 'editor' || kind === 'voiceover' ? { language: options.language ?? 'en' } : {})
   }
   if (!options.split) {

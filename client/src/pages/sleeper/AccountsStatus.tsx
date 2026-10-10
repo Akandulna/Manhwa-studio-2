@@ -4,9 +4,10 @@
  * Gemini's daily requests in AI Studio for speech (voiceover) and scripts
  * (narration). Totals on top, then one table per phone.
  *
- * The phone doesn't know an account's plan, so it is set here and kept in the
- * Setting table (`phoneAccountPlans`), by account name, so the same account
- * keeps its plan on any phone.
+ * Plans are what Sleeper-Cell's Tools → Profiles → Check last found on the
+ * phone (each profile's `check`). A profile never checked there can have its
+ * plan set here instead, kept in the Setting table (`phoneAccountPlans`) by
+ * account name, so the same account keeps it on any phone.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -17,10 +18,18 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useToast } from '@/components/ui/use-toast'
 import { usePhoneOverview } from '@/hooks/usePhoneOverview'
 import { usePhoneRelay } from '@/hooks/usePhoneRelay'
-import { settingsApi, type PhoneGeminiProfile, type PhoneGeminiUsage, type PhoneOverview, type PhoneOverviewRun } from '@/lib/api'
+import {
+  settingsApi,
+  type PhoneGeminiProfile,
+  type PhoneGeminiUsage,
+  type PhoneOverview,
+  type PhoneOverviewRun,
+  type PhoneProfileCheck,
+  type PhoneSiteCheck
+} from '@/lib/api'
 import { UPLOAD_LIMIT, uploadOverview, uploadUsage, type UploadUsage } from '@/lib/uploadUsage'
 import { cn } from '@/lib/utils'
-import { Bar, clock, InfoTip, MINUTE, phoneList, PhoneHeading, plural, SleeperPage, span, useNow } from './sleeperShared'
+import { Bar, clock, InfoTip, MINUTE, phoneList, PhoneHeading, planLabel, plural, SleeperPage, span, useNow } from './sleeperShared'
 
 /** A profile running out sooner than this is flagged. */
 const RUNS_OUT_SOON_MS = 30 * MINUTE
@@ -70,6 +79,8 @@ interface Account {
   upload: UploadUsage | null
   speech: PhoneGeminiProfile | null
   scripts: PhoneGeminiProfile | null
+  /** The phone's last Tools → Profiles → Check of it. */
+  check: PhoneProfileCheck | null
 }
 
 function accountsOf(overview: PhoneOverview | null, now: number): Account[] {
@@ -77,11 +88,15 @@ function accountsOf(overview: PhoneOverview | null, now: number): Account[] {
   const add = (p: { id: string; name: string; phone: string | null; selected: boolean }) => {
     const known = accounts.get(p.id)
     if (known) return known
-    const account: Account = { id: p.id, name: p.name, phone: p.phone, selected: p.selected, upload: null, speech: null, scripts: null }
+    const account: Account = { id: p.id, name: p.name, phone: p.phone, selected: p.selected, upload: null, speech: null, scripts: null, check: null }
     accounts.set(p.id, account)
     return account
   }
-  for (const p of overview?.profiles ?? []) add(p).upload = uploadUsage(p, now)
+  for (const p of overview?.profiles ?? []) {
+    const account = add(p)
+    account.upload = uploadUsage(p, now)
+    account.check = p.check ?? null
+  }
   for (const p of overview?.gemini?.speech?.profiles ?? []) add(p).speech = p
   for (const p of overview?.gemini?.narration?.profiles ?? []) add(p).scripts = p
   return [...accounts.values()]
@@ -104,6 +119,18 @@ function PlanSelect({ value, options, onChange, label }: { value: string | undef
       </SelectContent>
     </Select>
   )
+}
+
+/**
+ * A plan's cell: what the phone's check found (signed out in amber, a failed check as —), with the email and when
+ * it was checked on hover; the plan set here when the phone never checked the profile.
+ */
+function PlanCell({ check, site, manual }: { check: PhoneProfileCheck | null; site: PhoneSiteCheck | null; manual: React.ReactNode }) {
+  if (!check || !site) return <>{manual}</>
+  const title = [site.email, site.error, `Checked on the phone ${new Date(check.checkedAt).toLocaleString()}`].filter(Boolean).join(' · ')
+  if (site.error) return <span className="text-muted-foreground" title={title}>—</span>
+  if (!site.signedIn) return <span className="text-xs font-medium text-amber-500" title={title}>Signed out</span>
+  return <span className="text-sm font-medium" title={title}>{planLabel(site.plan) ?? 'Signed in'}</span>
 }
 
 /** A limit's cell: what's left, when it changes, and a bar of what's left. */
@@ -182,10 +209,10 @@ function AccountTable({ accounts, runs, plans, setPlan, now }: {
         <thead>
           <tr className="text-left text-xs uppercase tracking-wide text-muted-foreground">
             <Th>Account</Th>
-            <Th>ChatGPT plan</Th>
+            <Th tip="From Sleeper-Cell’s Tools → Profiles → Check on the phone; set by hand only for a profile never checked there.">ChatGPT plan</Th>
             <Th tip={`ChatGPT takes ${UPLOAD_LIMIT} images per account in any 3 hours, on every plan; each upload counts for 3 hours.`}>Images · 3h</Th>
             <Th className="text-right" tip="Images uploaded in the last 24 hours.">24h</Th>
-            <Th>Gemini plan</Th>
+            <Th tip="From the same check on the phone: Free, Paid, or Google AI’s plan name when the page shows it.">Gemini plan</Th>
             <Th tip="AI Studio Run taps today for voiceover. The limit is what the profile reached before Gemini last stopped it.">Speech today</Th>
             <Th tip="AI Studio Run taps today for narration scripts, limited apart from speech.">Scripts today</Th>
           </tr>
@@ -210,12 +237,20 @@ function AccountTable({ accounts, runs, plans, setPlan, now }: {
                   </div>
                 </td>
                 <td className="py-2.5 pr-4">
-                  <PlanSelect label={`${account.name}’s ChatGPT plan`} value={plan.chatgpt} options={CHATGPT_PLANS} onChange={p => setPlan(account.name, 'chatgpt', p)} />
+                  <PlanCell
+                    check={account.check}
+                    site={account.check?.chatGpt ?? null}
+                    manual={<PlanSelect label={`${account.name}’s ChatGPT plan`} value={plan.chatgpt} options={CHATGPT_PLANS} onChange={p => setPlan(account.name, 'chatgpt', p)} />}
+                  />
                 </td>
                 <td className="py-2.5 pr-4"><ImagesCell usage={account.upload} now={now} /></td>
                 <td className="py-2.5 pr-4 text-right tabular-nums text-muted-foreground">{account.upload ? account.upload.lastDay : '—'}</td>
                 <td className="py-2.5 pr-4">
-                  <PlanSelect label={`${account.name}’s Gemini plan`} value={plan.gemini} options={GEMINI_PLANS} onChange={p => setPlan(account.name, 'gemini', p)} />
+                  <PlanCell
+                    check={account.check}
+                    site={account.check?.gemini ?? null}
+                    manual={<PlanSelect label={`${account.name}’s Gemini plan`} value={plan.gemini} options={GEMINI_PLANS} onChange={p => setPlan(account.name, 'gemini', p)} />}
+                  />
                 </td>
                 <td className="py-2.5 pr-4"><GeminiCell profile={account.speech} /></td>
                 <td className="py-2.5"><GeminiCell profile={account.scripts} /></td>

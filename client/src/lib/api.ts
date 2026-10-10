@@ -2482,8 +2482,25 @@ export interface PhoneUploadProfile {
   phone: string | null
   /** The phone's own id for it, which profile requests name it by. */
   profileId: string
-  /** Its ChatGPT settings for Image Clipper, and what its account offered when last read; null from older builds. */
+  /** What its ChatGPT account offered when last read, for Run automation's choices; null from older builds. */
   chatGpt: PhoneChatGptProfile | null
+  /** Sleeper-Cell's Tools → Profiles → Check of it, as last done there: sign-ins and plans; null when never checked. */
+  check: PhoneProfileCheck | null
+}
+
+/** One site's part of a profile check on the phone. */
+export interface PhoneSiteCheck {
+  signedIn: boolean
+  email: string | null
+  /** ChatGPT's planType ("free", "go", "plus"…); Gemini's "free", "paid" or "Google AI Pro" and the like. */
+  plan: string | null
+  error: string | null
+}
+
+export interface PhoneProfileCheck {
+  checkedAt: string
+  chatGpt: PhoneSiteCheck | null
+  gemini: PhoneSiteCheck | null
 }
 
 /** A mode's choices, as the phone read them off the ChatGPT account. */
@@ -2495,7 +2512,7 @@ export interface PhoneChatGptMode {
   efforts: { name: string | null; locked: boolean; picked: boolean }[]
 }
 
-/** Each null leaves it as the account has it. */
+/** Image Clipper's ChatGPT choices in Run automation; each null leaves it as the account has it. */
 export interface PhoneChatGptSettings {
   mode: 'Chat' | 'Work' | null
   model: string | null
@@ -2503,7 +2520,7 @@ export interface PhoneChatGptSettings {
 }
 
 export interface PhoneChatGptProfile {
-  settings: { mode: string | null; model: string | null; effort: string | null }
+  /** Null until read. Free and Go list no modes: they have neither the switch nor the model picker. */
   options: { readAt: string | null; current: string | null; modes: PhoneChatGptMode[] } | null
   reading: boolean
   error: string | null
@@ -2617,7 +2634,7 @@ export interface PhoneAutomation {
   /** The runs it can start from here; builds before the others start only Image Clipper (older servers leave it out). */
   runs?: PhoneRunKind[]
   /** How Image Clipper last ran there; null from builds before it was sent. */
-  clipper?: { ai: PhoneClipperAi; flow: PhoneClipperFlow; tabs: number } | null
+  clipper?: { ai: PhoneClipperAi; flow: PhoneClipperFlow; tabs: number; chatGpt?: PhoneChatGptSettings | null } | null
   /** It can stop a run once what it's on is done; builds before can only stop now. */
   stopAfter?: boolean
   /** Image Clipper ends once the pages it's on are done. */
@@ -2638,6 +2655,8 @@ export interface PhoneAutomationOptions {
   tabs?: number
   ai?: PhoneClipperAi
   flow?: PhoneClipperFlow
+  /** Image Clipper on ChatGPT: mode, model and effort; the phone keeps them for its later runs. */
+  chatGpt?: PhoneChatGptSettings
   language?: NarrationLanguage
   device?: string
   split?: boolean
@@ -2879,14 +2898,14 @@ export const r2Api = {
   getPhoneScreens: () => fetchApi<{ phones: PhoneScreen[] }>('/r2/phone/screens'),
 
   /**
-   * On one phone: select a browser profile (the next run starts in it), save
-   * its ChatGPT settings for Image Clipper, or read what its account offers.
+   * On one phone: select a browser profile (the next run starts in it), or
+   * read what one profile's ChatGPT account offers (modes, models, efforts).
    * `profile` is the phone's own id for it (PhoneUploadProfile.profileId).
    */
-  sendPhoneProfile: (command: 'select' | 'settings' | 'options', device: string, profile: string, settings?: PhoneChatGptSettings) =>
+  sendPhoneProfile: (command: 'select' | 'options', device: string, profile: string) =>
     fetchApi<{ id: string; reached: boolean }>('/r2/phone/profile', {
       method: 'POST',
-      body: JSON.stringify({ command, device, profile, ...(settings ? { settings } : {}) })
+      body: JSON.stringify({ command, device, profile })
     }),
 
   /** Forgets a phone's screenshot on the server, once its viewer closes. */
