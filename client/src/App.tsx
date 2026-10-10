@@ -27,8 +27,10 @@ import Clipper3Preview from '@/pages/clipper3/Clipper3Preview'
 // Music Library
 import MusicLibrary from '@/pages/music/MusicLibrary'
 
-// Sleeper Cells: the phone app's status
-import SleeperCells from '@/pages/sleeper/SleeperCells'
+// Sleeper Cells: the phone app's status, its accounts, and its live progress
+import PhoneStatus from '@/pages/sleeper/PhoneStatus'
+import AccountsStatus from '@/pages/sleeper/AccountsStatus'
+import LiveProgress from '@/pages/sleeper/LiveProgress'
 
 // Storage: local disk usage + cleanup
 import StorageManager from '@/pages/storage/StorageManager'
@@ -75,7 +77,9 @@ function App() {
           <Route path="/editor2/chapter/:chapterId/preview" element={<Editor2Preview />} />
 
           {/* Sleeper Cells */}
-          <Route path="/sleeper-cells" element={<SleeperCells />} />
+          <Route path="/sleeper-cells" element={<PhoneStatus />} />
+          <Route path="/sleeper-cells/accounts" element={<AccountsStatus />} />
+          <Route path="/sleeper-cells/live" element={<LiveProgress />} />
 
           {/* Shared */}
           <Route path="/storage" element={<StorageManager />} />

@@ -22,7 +22,9 @@ import {
   Sun,
   HardDrive,
   Smartphone,
-  Layers
+  Layers,
+  Users,
+  Activity
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
@@ -122,7 +124,7 @@ export default function Layout({ children }: LayoutProps) {
     }
   ]
 
-  // Sleeper Cells: the phone app. The dot is live only with the phone relay.
+  // Sleeper Cells: the phone app, its accounts, and what it's doing. The dot is live only with the phone relay.
   const sleeperModuleItems: NavItem[] = [
     {
       icon: <Smartphone className="h-5 w-5" />,
@@ -132,6 +134,16 @@ export default function Layout({ children }: LayoutProps) {
         dot: !relay.connected ? 'bg-amber-500' : relay.phones > 0 ? 'bg-emerald-500' : 'bg-muted-foreground/60',
         dotTitle: !relay.connected ? 'Relay offline' : relay.phones > 0 ? 'Sleeper-Cell is open' : 'Sleeper-Cell is closed'
       })
+    },
+    {
+      icon: <Users className="h-5 w-5" />,
+      label: 'Accounts',
+      href: '/sleeper-cells/accounts'
+    },
+    {
+      icon: <Activity className="h-5 w-5" />,
+      label: 'Live Progress',
+      href: '/sleeper-cells/live'
     }
   ]
 
@@ -150,7 +162,6 @@ export default function Layout({ children }: LayoutProps) {
   const isInClipper3 = location.pathname.startsWith('/clipper3')
   const isInEditor2 = location.pathname.startsWith('/editor2')
   const isInMusic = location.pathname.startsWith('/music')
-  const isInSleeper = location.pathname.startsWith('/sleeper-cells')
 
   // Renders a single nav link, collapsing to an icon-only button when needed.
   const renderNavLink = (item: NavItem, active: boolean) => (
@@ -288,7 +299,7 @@ export default function Layout({ children }: LayoutProps) {
           <div className="px-4 pb-4">
             {renderSectionLabel('SLEEPER CELLS')}
             <nav className="space-y-2">
-              {sleeperModuleItems.map((item) => renderNavLink(item, isInSleeper))}
+              {sleeperModuleItems.map((item) => renderNavLink(item, location.pathname === item.href))}
             </nav>
           </div>
 

@@ -11,7 +11,7 @@
  * count as the device "" and are shown as one phone on the old app.
  *
  *   POST /receipt/:kind?device=<id>[&replaces=legacy]   phone → relay. Body: the receipt JSON
- *                         (kind: sync | scripts | crops). Stored under the phone's id, then pushed to every
+ *                         (kind: sync | scripts | crops | screen | screenshot). Stored under the phone's id, then pushed to every
  *                         connected desktop. `replaces=legacy` comes from a phone that sent receipts before
  *                         it had an id: those (device "") are its own old copies and are dropped. The answer
  *                         echoes `device`, which tells the phone it may stop sending `replaces`.
@@ -42,6 +42,10 @@
  * waking it if need be; "clipper_stop" stops it. The phone acts on those only
  * with its "Start from Manhwa Studio" setting on, and ignores ones older than
  * 10 minutes, as requests are handed over again whenever it connects.
+ * "screen_on" turns the phone's screen on with Sleeper-Cell over the lock
+ * screen, kept on until "screen_off"; "screenshot" has it post its browser
+ * tabs as a "screenshot" receipt. It answers each with a "screen" receipt, and
+ * ignores them after 2 minutes.
  *   either → relay   "ping"; the runtime answers "pong" without waking the object.
  *
  * Every request needs `Authorization: Bearer <RELAY_TOKEN>` (or `?token=` for
@@ -58,7 +62,8 @@ export interface Env {
 
 type Role = 'desktop' | 'phone'
 
-const KINDS = new Set(['sync', 'scripts', 'crops'])
+/** `screen` is the phone's screen state; `screenshot` its browser tabs as JPEGs, posted when asked. */
+const KINDS = new Set(['sync', 'scripts', 'crops', 'screen', 'screenshot'])
 
 /** Durable Object WebSocket messages are capped at 1 MiB; a receipt must fit in one. */
 const MAX_BODY = 1_000_000
@@ -106,7 +111,7 @@ interface StoredRequest {
 interface PhoneAttachment { device: string; name: string }
 
 /** What a request may ask of the phone besides its receipts. */
-const ACTIONS = new Set(['sync', 'clipper_start', 'clipper_stop'])
+const ACTIONS = new Set(['sync', 'clipper_start', 'clipper_stop', 'screen_on', 'screen_off', 'screenshot'])
 
 /** Image Clipper's most ChatGPT tabs at once (ClipperRun.MAX_TABS on the phone). */
 const MAX_TABS = 4

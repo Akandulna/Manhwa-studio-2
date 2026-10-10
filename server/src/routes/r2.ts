@@ -12,6 +12,9 @@
  *   GET  /phone/overview?fresh=1   all three receipts across every series, for the Sleeper Cells page
  *   POST /phone/request   ask the phone to write both receipts again ("Refresh from phone")
  *   POST /phone/clipper   { command: start|stop, seriesId?, tabs? } — start or stop Image Clipper on the phone, through the relay
+ *   GET  /phone/screens   each phone's screen state and last screenshot (relay only)
+ *   GET  /phone/screens/:device/:index   one screenshot image (JPEG)
+ *   POST /phone/screen    { command: on|off|shot, device } — Wake, Screen off or Screenshot on one phone
  *   GET  /relay          the phone relay's settings (no token) and connection state
  *   PUT  /relay          { url, token, clearToken } — save; a blank token keeps the saved one
  *   POST /relay/test     ask the relay what it holds, to check the URL and token
@@ -59,6 +62,7 @@ import {
 import { getPhoneScriptsZip, importPhoneScripts, previewPhoneScripts } from '../services/phoneScriptImport.js'
 import { requestLanguage } from '../services/narrationLanguage.js'
 import { forgetPhone, relayStatus, testRelay, updateRelayConfig } from '../services/phoneRelay.js'
+import { getPhoneScreens, phoneScreenshotImage, sendScreenCommand } from '../services/phoneScreen.js'
 
 function message(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
@@ -183,6 +187,32 @@ export function initR2Routes(io: Server): Router {
       res.json(await sendClipperCommand(command, { seriesId, tabs, device, split }))
     } catch (error) {
       console.error('Phone Image Clipper command failed:', error)
+      res.status(400).json({ error: message(error, 'Could not reach the phone') })
+    }
+  })
+
+  router.get('/phone/screens', (_req: Request, res: Response) => {
+    res.json({ phones: getPhoneScreens() })
+  })
+
+  router.get('/phone/screens/:device/:index', (req: Request, res: Response) => {
+    const image = phoneScreenshotImage(String(req.params.device), Number(req.params.index))
+    if (!image) {
+      res.status(404).json({ error: 'No such screenshot' })
+      return
+    }
+    // The URL carries the time it was taken, so a new one gets a new URL.
+    res.set('Cache-Control', 'private, max-age=86400').type('image/jpeg').send(image)
+  })
+
+  router.post('/phone/screen', async (req: Request, res: Response) => {
+    try {
+      const { command, device } = req.body ?? {}
+      if (command !== 'on' && command !== 'off' && command !== 'shot') throw new Error('command must be on, off or shot')
+      if (typeof device !== 'string' || !device) throw new Error('device must be a phone id')
+      res.json(await sendScreenCommand(command, device))
+    } catch (error) {
+      console.error('Phone screen command failed:', error)
       res.status(400).json({ error: message(error, 'Could not reach the phone') })
     }
   })

@@ -10,7 +10,11 @@
  * arrival is pushed to the browser as `phone:receipt` ({ kind }), and
  * connection/phone presence changes as `phone:relay`.
  * "Refresh from phone" goes to the relay as a request message, and so do
- * Image Clipper's start and stop (see sendClipperCommand in r2Service).
+ * Image Clipper's start and stop (see sendClipperCommand in r2Service) and the
+ * screen controls (phoneScreen.ts). The phone's screen receipts (`screen`,
+ * `screenshot`) are kept apart from the three status receipts and pushed as
+ * `phone:screen` ({ device, kind }), so a screenshot doesn't reload the pages
+ * that follow `phone:receipt`.
  *
  * Settings → Cloudflare writes RELAY_URL / RELAY_TOKEN to the server's .env.
  * Without them nothing here runs and r2Service falls back to R2.
@@ -30,10 +34,15 @@ export type ReceiptKind = 'sync' | 'scripts' | 'crops'
 /**
  * What a request may ask of the phone besides its receipts: `sync` checks R2
  * for chapters just sent; `clipper_start` / `clipper_stop` start or stop Image
- * Clipper (with "Start from Manhwa Studio" on in Sleeper-Cell). Keep in step
- * with ACTIONS in relay/src/index.ts and Automation.kt on the phone.
+ * Clipper (with "Start from Manhwa Studio" on in Sleeper-Cell); `screen_on`,
+ * `screen_off` and `screenshot` are Phone Status's screen controls. Keep in
+ * step with ACTIONS in relay/src/index.ts, Automation.kt and RemoteScreen.kt
+ * on the phone.
  */
-export type PhoneAction = 'sync' | 'clipper_start' | 'clipper_stop'
+export type PhoneAction = 'sync' | 'clipper_start' | 'clipper_stop' | 'screen_on' | 'screen_off' | 'screenshot'
+
+/** The phone's screen state, and its browser tabs as JPEGs (see phoneScreen.ts). */
+export type ScreenKind = 'screen' | 'screenshot'
 
 /**
  * For `clipper_start`: the phone's series folder and ChatGPT tabs; without them,
@@ -65,6 +74,7 @@ export interface RelayPhone {
 }
 
 const KINDS = new Set<string>(['sync', 'scripts', 'crops'])
+const SCREEN_KINDS = new Set<string>(['screen', 'screenshot'])
 
 export interface RelayStatus {
   configured: boolean
@@ -105,6 +115,8 @@ let retryTimer: NodeJS.Timeout | null = null
 let pingTimer: NodeJS.Timeout | null = null
 /** By phone id, then kind. */
 const receipts = new Map<string, Map<ReceiptKind, { at: number; body: object }>>()
+/** By phone id, then kind. */
+const screens = new Map<string, Map<ScreenKind, { at: number; body: object }>>()
 
 function relayEnv(): { url: string; token: string } | null {
   const url = (process.env.RELAY_URL || '').trim().replace(/\/+$/, '')
@@ -128,6 +140,16 @@ export function relayReceipts<T extends object>(kind: ReceiptKind): RelayedRecei
     if (stored) list.push({ device, at: stored.at, body: stored.body as T })
   }
   return list.sort((a, b) => phoneName(a.device).localeCompare(phoneName(b.device)))
+}
+
+/** Each phone's last copy of a screen receipt; empty without the relay. */
+export function relayScreens<T extends object>(kind: ScreenKind): RelayedReceipt<T>[] {
+  const list: RelayedReceipt<T>[] = []
+  for (const [device, kinds] of screens) {
+    const stored = kinds.get(kind)
+    if (stored) list.push({ device, at: stored.at, body: stored.body as T })
+  }
+  return list
 }
 
 /**
@@ -289,10 +311,18 @@ function handle(text: string): void {
       break
     case 'receipt': {
       const { kind, body } = message
-      if (!kind || !KINDS.has(kind) || !body || typeof body !== 'object' || Array.isArray(body)) return
+      if (!kind || !body || typeof body !== 'object' || Array.isArray(body)) return
       // A relay deployed before phones had ids sends none: one phone, as before.
       const device = typeof message.device === 'string' ? message.device : ''
       const at = Number(message.at) || Date.now()
+      if (SCREEN_KINDS.has(kind)) {
+        const kinds = screens.get(device) ?? new Map<ScreenKind, { at: number; body: object }>()
+        kinds.set(kind as ScreenKind, { at, body })
+        screens.set(device, kinds)
+        io?.emit('phone:screen', { device, kind })
+        return
+      }
+      if (!KINDS.has(kind)) return
       const kinds = receipts.get(device) ?? new Map<ReceiptKind, { at: number; body: object }>()
       kinds.set(kind as ReceiptKind, { at, body })
       receipts.set(device, kinds)
@@ -301,7 +331,9 @@ function handle(text: string): void {
       break
     }
     case 'forgotten': {
-      if (typeof message.device !== 'string' || !receipts.delete(message.device)) return
+      if (typeof message.device !== 'string') return
+      if (screens.delete(message.device)) io?.emit('phone:screen', { device: message.device })
+      if (!receipts.delete(message.device)) return
       for (const kind of KINDS) io?.emit('phone:receipt', { kind })
       emitStatus()
       break
@@ -391,6 +423,7 @@ export async function updateRelayConfig(update: RelayConfigUpdate): Promise<void
   lastError = null
   attempt = 0
   receipts.clear()
+  screens.clear()
   old?.terminate()
   connect()
   emitStatus()
@@ -411,6 +444,7 @@ export async function forgetPhone(device: string): Promise<void> {
   })
   if (res.status === 404) throw new Error('Redeploy the relay Worker (relay/ → npm run deploy): this one keeps a single phone')
   if (!res.ok) throw new Error(relayHttpError(res.status))
+  if (screens.delete(device)) io?.emit('phone:screen', { device })
   if (receipts.delete(device)) {
     for (const kind of KINDS) io?.emit('phone:receipt', { kind })
     emitStatus()

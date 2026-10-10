@@ -2605,6 +2605,30 @@ export interface PhoneOverviewPhone {
   runs: number
 }
 
+/** What a phone last said of its screen (it answers every screen command with this). */
+export interface PhoneScreenState {
+  at: string
+  /** The request it answers, or null when the phone reported by itself (the screen went on or off). */
+  answers: string | null
+  on: boolean
+  locked: boolean
+  /** Sleeper-Cell is on screen. */
+  appOpen: boolean
+  /** Woken from here and kept on until Screen off. */
+  keptOn: boolean
+  /** Screen off locks at once (Sleeper-Cell is a device admin); otherwise the screen times out by itself. */
+  canLock: boolean
+  remoteStart: boolean
+  last: { action: string; ok: boolean; note: string; at: string } | null
+}
+
+/** A phone's screen state and last screenshot of its browser tabs. */
+export interface PhoneScreen {
+  device: string
+  screen: PhoneScreenState | null
+  screenshot: { takenAt: string; shots: { label: string; width: number; height: number; url: string }[] } | null
+}
+
 /** Everything Sleeper-Cell has reported, across every series and phone (the Sleeper Cells page). */
 export interface PhoneOverview {
   configured: boolean
@@ -2764,6 +2788,13 @@ export const r2Api = {
    */
   sendPhoneClipper: (command: 'start' | 'stop', options: { seriesId?: string; tabs?: number; device?: string; split?: boolean } = {}) =>
     fetchApi<PhoneClipperSent>('/r2/phone/clipper', { method: 'POST', body: JSON.stringify({ command, ...options }) }),
+
+  /** Each phone's screen state and last screenshot, from the relay. */
+  getPhoneScreens: () => fetchApi<{ phones: PhoneScreen[] }>('/r2/phone/screens'),
+
+  /** Wake (`on`, kept on until `off`), Screen off, or Screenshot (`shot`) on one phone. */
+  sendPhoneScreen: (command: 'on' | 'off' | 'shot', device: string) =>
+    fetchApi<{ id: string; reached: boolean }>('/r2/phone/screen', { method: 'POST', body: JSON.stringify({ command, device }) }),
 
   /** Drops a phone's receipts from the relay: one no longer used, or the old app's copies. */
   forgetPhone: (device: string) =>
