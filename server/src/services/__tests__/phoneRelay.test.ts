@@ -52,7 +52,7 @@ Object.assign(process.env, {
   RELAY_URL: `http://localhost:${(relay.address() as AddressInfo).port}/`, RELAY_TOKEN: 't0ken'
 })
 const { startPhoneRelay, relayStatus, relayReceipts } = await import('../phoneRelay.js')
-const { getPhoneScripts, getPhoneCrops, getPhoneOverview, requestPhoneUpdate, sendClipperCommand } = await import('../r2Service.js')
+const { getPhoneScripts, getPhoneCrops, getPhoneOverview, requestPhoneUpdate, sendAutomationCommand } = await import('../r2Service.js')
 
 const emitted: { event: string; payload: unknown }[] = []
 startPhoneRelay({ emit: (event: string, payload: unknown) => emitted.push({ event, payload }) } as never)
@@ -99,21 +99,21 @@ describe('phone relay', () => {
   })
 
   it('starts Image Clipper on the phone with the series folder and tabs, and stops it', async () => {
-    const start = await sendClipperCommand('start', { seriesId: 's1', tabs: 3 })
+    const start = await sendAutomationCommand('start', { seriesId: 's1', tabs: 3 })
     expect(start).toMatchObject({ via: 'relay', phones: 1 })
     await until(() => received.some(m => m.includes(start.id)))
     expect(JSON.parse(received.find(m => m.includes(start.id))!)).toEqual({
       type: 'request', id: start.id, requestedAt: start.requestedAt, action: 'clipper_start', series: 'Solo Hero', tabs: 3
     })
 
-    const stop = await sendClipperCommand('stop')
+    const stop = await sendAutomationCommand('stop')
     await until(() => received.some(m => m.includes(stop.id)))
     expect(JSON.parse(received.find(m => m.includes(stop.id))!)).toEqual({
       type: 'request', id: stop.id, requestedAt: stop.requestedAt, action: 'clipper_stop'
     })
 
-    await expect(sendClipperCommand('start', { seriesId: 'nope' })).rejects.toThrow('Series not found')
-    await expect(sendClipperCommand('start', { tabs: 9 })).rejects.toThrow('tabs must be 1 to 4')
+    await expect(sendAutomationCommand('start', { seriesId: 'nope' })).rejects.toThrow('Series not found')
+    await expect(sendAutomationCommand('start', { tabs: 9 })).rejects.toThrow('tabs must be 1 to 4')
     expect(send).not.toHaveBeenCalled()
   })
 
@@ -128,8 +128,50 @@ describe('phone relay', () => {
     await until(() => emitted.some(e => e.event === 'phone:receipt'))
     expect((await getPhoneOverview(null)).automation).toEqual({
       wakeMode: 'dedicated', resumeAfterLimit: true, remoteStart: true,
-      resume: { seriesId: 's1', series: 'Solo Hero', tabs: 2, at: '2026-10-02T15:40:00.000Z' }
+      resume: { seriesId: 's1', series: 'Solo Hero', tabs: 2, at: '2026-10-02T15:40:00.000Z' },
+      runs: ['clipper'], clipper: null
     })
+    await expect(sendAutomationCommand('start', { kind: 'editor', seriesId: 's1' })).rejects.toThrow('this build can only start Image Clipper')
+  })
+
+  it('starts the other runs on a build that has them, and stops whichever is going', async () => {
+    emitted.length = 0
+    desktop!.send(JSON.stringify({
+      type: 'receipt', kind: 'crops', at: 4, body: {
+        series: {},
+        automation: {
+          wakeMode: 'personal', resumeAfterLimit: false, remoteStart: true, resume: null,
+          runs: ['clipper', 'narration', 'editor', 'voiceover'], clipper: { ai: 'aistudio', flow: 'steps', tabs: 3 }
+        }
+      }
+    }))
+    await until(() => emitted.some(e => e.event === 'phone:receipt'))
+    expect((await getPhoneOverview(null)).automation).toMatchObject({
+      runs: ['clipper', 'narration', 'editor', 'voiceover'], clipper: { ai: 'aistudio', flow: 'steps', tabs: 3 }
+    })
+
+    const clip = await sendAutomationCommand('start', { seriesId: 's1', tabs: 2, ai: 'aistudio', flow: 'steps', language: 'hi' })
+    await until(() => received.some(m => m.includes(clip.id)))
+    expect(JSON.parse(received.find(m => m.includes(clip.id))!)).toEqual({
+      type: 'request', id: clip.id, requestedAt: clip.requestedAt, action: 'clipper_start', series: 'Solo Hero', tabs: 2, ai: 'aistudio', flow: 'steps'
+    })
+
+    const editor = await sendAutomationCommand('start', { kind: 'editor', seriesId: 's1', tabs: 2, ai: 'chatgpt', language: 'hi' })
+    await until(() => received.some(m => m.includes(editor.id)))
+    expect(JSON.parse(received.find(m => m.includes(editor.id))!)).toEqual({
+      type: 'request', id: editor.id, requestedAt: editor.requestedAt, action: 'editor_start', series: 'Solo Hero', language: 'hi'
+    })
+
+    const voice = await sendAutomationCommand('start', { kind: 'voiceover', seriesId: 's1', tabs: 4 })
+    await until(() => received.some(m => m.includes(voice.id)))
+    expect(JSON.parse(received.find(m => m.includes(voice.id))!)).toMatchObject({ action: 'voiceover_start', tabs: 4, language: 'en' })
+
+    await expect(sendAutomationCommand('start', { kind: 'narration' })).rejects.toThrow('Pick a series for Narration scripts')
+    await expect(sendAutomationCommand('start', { kind: 'narration', seriesId: 's1', split: true })).rejects.toThrow('Only Image Clipper can be split')
+
+    const stop = await sendAutomationCommand('stop')
+    await until(() => received.some(m => m.includes(stop.id)))
+    expect(JSON.parse(received.find(m => m.includes(stop.id))!)).toMatchObject({ action: 'run_stop' })
   })
 
   it('tracks the phone coming and going', async () => {
@@ -176,7 +218,7 @@ describe('two phones', () => {
 
   it('splits a series between the phones, unfinished chapters only, balanced by pages left', async () => {
     received.length = 0
-    const sent = await sendClipperCommand('start', { seriesId: 's1', tabs: 2, split: true })
+    const sent = await sendAutomationCommand('start', { seriesId: 's1', tabs: 2, split: true })
     // In reading order, each to the phone with the fewest pages so far: 002 (10 pages) to one, 003 (3 left) and 004 (5) to the other.
     expect(sent.targets).toEqual([
       { device: 'aaaa1111', name: 'Honor · aaaa', chapters: ['Chapter 002'], reached: true },
@@ -192,17 +234,17 @@ describe('two phones', () => {
 
   it('stops one phone only', async () => {
     received.length = 0
-    const sent = await sendClipperCommand('stop', { device: 'bbbb2222' })
+    const sent = await sendAutomationCommand('stop', { device: 'bbbb2222' })
     expect(sent.targets).toEqual([{ device: 'bbbb2222', name: 'Honor · bbbb', chapters: null, reached: true }])
     await until(() => received.length === 1)
     expect(JSON.parse(received[0])).toMatchObject({ action: 'clipper_stop', device: 'bbbb2222' })
-    await expect(sendClipperCommand('stop', { device: 'nobody' })).rejects.toThrow('not known')
+    await expect(sendAutomationCommand('stop', { device: 'nobody' })).rejects.toThrow('not known')
   })
 
   it('needs two phones that can be started to split', async () => {
     desktop!.send(JSON.stringify({ type: 'presence', phones: 1, devices: [{ id: 'aaaa1111', name: 'Honor' }] }))
     await until(() => relayStatus().phones === 1)
-    await expect(sendClipperCommand('start', { seriesId: 's1', split: true })).rejects.toThrow('two phones')
+    await expect(sendAutomationCommand('start', { seriesId: 's1', split: true })).rejects.toThrow('two phones')
   })
 
   it('drops a phone the relay forgot', async () => {

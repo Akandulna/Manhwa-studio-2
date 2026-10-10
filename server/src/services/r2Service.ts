@@ -22,7 +22,8 @@ import { prisma } from '../index.js'
 import { writeEnvVars } from '../utils/envFile.js'
 import type { PhoneSeriesSync, PhoneSyncStatus } from './phoneSend.js'
 import { FREE_PLAN, attachUsageCounter, getMonthUsage, monthKey } from './r2Usage.js'
-import { phoneName, relayConfigured, relayPhones, relayReceipts, sendPhoneRequest, type ReceiptKind } from './phoneRelay.js'
+import { phoneName, relayConfigured, relayPhones, relayReceipts, sendPhoneRequest, type PhoneAction, type ReceiptKind } from './phoneRelay.js'
+import type { NarrationLanguage } from './narrationLanguage.js'
 import { mergeCropsReceipts, mergeScriptsReceipts, type PhoneReceipt } from './phoneReceipts.js'
 import { analyticsConfigured, getCloudflareMonthOps, invalidateAnalytics } from './r2Analytics.js'
 
@@ -329,19 +330,20 @@ export interface PhoneScriptsStatus {
     /** By chapter id, for the series asked for; chapters not converted yet are left out. */
     chapters: Record<string, PhoneChapterHinglish>
   }
-  /** Runs going now in the phone's Narration and Voiceover libraries; empty from builds before they were reported. */
+  /** Runs going now in the phone's Narration, Editor 2.0 and Voiceover libraries; empty from builds before they were reported. */
   runs: PhoneScriptRun[]
 }
 
 /**
  * A run going on the phone: Auto-run writing a series' scripts in AI Studio
- * (narration), or voicing its splits (voiceover). `done` of `total` counts
- * chapters for narration and the run's splits for voiceover. Each tab is the
+ * (narration), making its Editor 2.0 timelines in ChatGPT (editor), or voicing
+ * its splits (voiceover). `done` of `total` counts chapters for narration and
+ * editor, and the run's splits for voiceover. Each tab is the
  * chapter (folder name) and, for voiceover, the 1-based split it's on; a tab
  * between splits is left out. `at` is when the run last changed.
  */
 export interface PhoneScriptRun {
-  kind: 'narration' | 'voiceover'
+  kind: 'narration' | 'editor' | 'voiceover'
   /** The series folder, as on the phone. */
   series: string
   done: number
@@ -542,7 +544,7 @@ export function parseScriptRuns(raw: unknown, now = Date.now()): PhoneScriptRun[
   if (!Array.isArray(raw)) return []
   const runs: PhoneScriptRun[] = []
   for (const run of raw) {
-    if (!isObject(run) || (run.kind !== 'narration' && run.kind !== 'voiceover') || typeof run.series !== 'string' || !run.series) continue
+    if (!isObject(run) || (run.kind !== 'narration' && run.kind !== 'editor' && run.kind !== 'voiceover') || typeof run.series !== 'string' || !run.series) continue
     const at = isTime(run.at) ? run.at : null
     if (at && now - Date.parse(at) > WORKING_STALE_MS) continue
     const tabs = (Array.isArray(run.tabs) ? run.tabs : [])
@@ -968,11 +970,25 @@ export interface PhoneAutomation {
   /** personal: shows over the lock screen, PIN kept. dedicated: dismisses the lock screen, locks after. */
   wakeMode: 'personal' | 'dedicated'
   resumeAfterLimit: boolean
-  /** Manhwa Studio may start and stop Image Clipper (sendClipperCommand). */
+  /** Manhwa Studio may start and stop its runs (sendAutomationCommand). */
   remoteStart: boolean
   /** The run waiting for a ChatGPT limit to lift, or for the phone to come online; null when none is. */
   resume: { seriesId: string | null; series: string; tabs: number; at: string } | null
+  /** The runs Manhwa Studio can start there; builds from before the others can start only Image Clipper. */
+  runs: PhoneRunKind[]
+  /** How Image Clipper last ran there, the choices to offer first; null from builds before it was sent. */
+  clipper: { ai: PhoneClipperAi; flow: PhoneClipperFlow; tabs: number } | null
 }
+
+/**
+ * The runs Sleeper-Cell can start from here: Image Clipper's crops (ChatGPT or
+ * Gemini in AI Studio, in one prompt or four steps), the narration scripts
+ * (Gemini), Editor 2.0's timelines (ChatGPT) and the voiceover (Gemini speech).
+ */
+export type PhoneRunKind = 'clipper' | 'narration' | 'editor' | 'voiceover'
+export const PHONE_RUN_KINDS: readonly PhoneRunKind[] = ['clipper', 'narration', 'editor', 'voiceover']
+export type PhoneClipperAi = 'chatgpt' | 'aistudio'
+export type PhoneClipperFlow = 'classic' | 'steps'
 
 /** One phone running Sleeper-Cell. */
 export interface PhoneOverviewPhone {
@@ -1182,14 +1198,28 @@ function parseAutomation(raw: unknown, seriesFor: (folder: string) => { id: stri
     remoteStart: raw.remoteStart === true,
     resume: resume
       ? { seriesId: row?.id ?? null, series: row?.title ?? (resume.series as string), tabs: Number(resume.tabs) || 1, at: resume.at as string }
+      : null,
+    runs: phoneRuns(raw),
+    clipper: isObject(raw.clipper)
+      ? {
+          ai: raw.clipper.ai === 'aistudio' ? 'aistudio' : 'chatgpt',
+          flow: raw.clipper.flow === 'steps' ? 'steps' : 'classic',
+          tabs: Math.min(PHONE_MAX_TABS, Math.max(1, Number(raw.clipper.tabs) || 1))
+        }
       : null
   }
+}
+
+/** The runs a crops receipt's `automation` says the phone can start: Image Clipper only from builds that don't say. */
+function phoneRuns(automation: Record<string, unknown>): PhoneRunKind[] {
+  if (!Array.isArray(automation.runs)) return ['clipper']
+  return PHONE_RUN_KINDS.filter(kind => (automation.runs as unknown[]).includes(kind))
 }
 
 /** Image Clipper's most ChatGPT tabs at once (ClipperRun.MAX_TABS on the phone). */
 export const PHONE_MAX_TABS = 4
 
-export interface PhoneClipperTarget {
+export interface PhoneAutomationTarget {
   device: string
   name: string
   /** The chapter folders it was given; null for the whole series (or a stop). */
@@ -1198,36 +1228,74 @@ export interface PhoneClipperTarget {
   reached: boolean
 }
 
-export interface PhoneClipperSent extends PhoneUpdateRequest {
+export interface PhoneAutomationSent extends PhoneUpdateRequest {
   /** Each phone sent the command; one entry with device "*" when it went to every phone. */
-  targets: PhoneClipperTarget[]
+  targets: PhoneAutomationTarget[]
+}
+
+export interface PhoneAutomationOptions {
+  /** The run to start; Image Clipper when left out. A stop stops whichever run is going. */
+  kind?: PhoneRunKind
+  seriesId?: string
+  /** Image Clipper's and the voiceover's tabs. */
+  tabs?: number
+  /** Image Clipper: ChatGPT or Gemini in AI Studio, and one prompt (classic) or four steps. */
+  ai?: PhoneClipperAi
+  flow?: PhoneClipperFlow
+  /** Editor 2.0 and the voiceover: the narration language. */
+  language?: NarrationLanguage
+  device?: string
+  split?: boolean
+}
+
+const START_ACTION: Record<PhoneRunKind, PhoneAction> = {
+  clipper: 'clipper_start',
+  narration: 'narration_start',
+  editor: 'editor_start',
+  voiceover: 'voiceover_start'
+}
+
+const RUN_LABEL: Record<PhoneRunKind, string> = {
+  clipper: 'Image Clipper',
+  narration: 'Narration scripts',
+  editor: 'Editor 2.0 timelines',
+  voiceover: 'Voiceover'
 }
 
 /**
- * Starts or stops Image Clipper on the phones, through the relay: a phone acts
- * on it with "Start from Manhwa Studio" on, waking itself if need be, and
- * ignores it after 10 minutes. `start` clips `seriesId` in `tabs` ChatGPT tabs;
- * without them it goes on with the phone's last run, in its last tab count.
+ * Starts or stops a run on the phones, through the relay: a phone acts on it
+ * with "Start from Manhwa Studio" on, waking itself if need be, and ignores it
+ * after 10 minutes. `start` runs `kind` (Image Clipper when left out) on
+ * `seriesId`; Image Clipper alone may leave the series out, to go on with the
+ * phone's last run in its last tab count. `stop` stops whichever run is going,
+ * or only Image Clipper on builds that can't start the others.
  *
- * `device` sends it to that phone only. `split` (a start, with a series) shares
- * the series' unfinished chapters out between the phones that can take it (see
- * splitChapters), each getting its own start with its chapters, so no two
- * phones clip the same page. Without either, every phone gets it.
+ * `device` sends it to that phone only. `split` (Image Clipper, with a series)
+ * shares the series' unfinished chapters out between the phones that can take
+ * it (see splitChapters), each getting its own start with its chapters, so no
+ * two phones clip the same page. Without either, every phone gets it.
  */
-export async function sendClipperCommand(
+export async function sendAutomationCommand(
   command: 'start' | 'stop',
-  options: { seriesId?: string; tabs?: number; device?: string; split?: boolean } = {}
-): Promise<PhoneClipperSent> {
-  if (!relayConfigured()) throw new Error('Starting Image Clipper on the phone needs the phone relay (Settings → Cloudflare)')
+  options: PhoneAutomationOptions = {}
+): Promise<PhoneAutomationSent> {
+  if (!relayConfigured()) throw new Error('Starting runs on the phone needs the phone relay (Settings → Cloudflare)')
   const { device } = options
+  const kind = options.kind ?? 'clipper'
   if (device !== undefined && !relayPhones().some(p => p.id === device && p.id)) throw new Error('That phone is not known to the relay')
-  const target = (sent: { phones: number }, chapters: string[] | null = null): PhoneClipperTarget =>
+  const target = (sent: { phones: number }, chapters: string[] | null = null): PhoneAutomationTarget =>
     device ? { device, name: phoneName(device), chapters, reached: sent.phones > 0 } : { device: '*', name: 'Every phone', chapters, reached: sent.phones > 0 }
+  const runsOn = automationRuns(device)
 
   if (command === 'stop') {
-    const sent = await sendPhoneRequest('clipper_stop', { device })
+    // A build that can only start Image Clipper only knows its stop.
+    const action = runsOn.length && runsOn.every(runs => runs.length > 1) ? 'run_stop' : 'clipper_stop'
+    const sent = await sendPhoneRequest(action, { device })
     return { ...sent, via: 'relay', targets: [target(sent)] }
   }
+  const old = runsOn.length > 0 && runsOn.every(runs => !runs.includes(kind))
+  if (old) throw new Error(`Update Sleeper-Cell to start ${RUN_LABEL[kind]} from here: this build can only start Image Clipper`)
+  if (kind !== 'clipper' && !options.seriesId) throw new Error(`Pick a series for ${RUN_LABEL[kind]}`)
   let series: string | undefined
   if (options.seriesId) {
     const row = await prisma.series.findUnique({ where: { id: options.seriesId }, select: { rootFolder: true } })
@@ -1235,31 +1303,46 @@ export async function sendClipperCommand(
     // The phone names series by their folder (see place() in getPhoneOverview).
     series = path.basename(row.rootFolder)
   }
+  const takesTabs = kind === 'clipper' || kind === 'voiceover'
   if (options.tabs !== undefined && !(Number.isInteger(options.tabs) && options.tabs >= 1 && options.tabs <= PHONE_MAX_TABS)) {
     throw new Error(`tabs must be 1 to ${PHONE_MAX_TABS}`)
   }
+  const args = {
+    series,
+    tabs: takesTabs ? options.tabs : undefined,
+    ...(kind === 'clipper' ? { ai: options.ai, flow: options.flow } : {}),
+    ...(kind === 'editor' || kind === 'voiceover' ? { language: options.language ?? 'en' } : {})
+  }
   if (!options.split) {
-    const sent = await sendPhoneRequest('clipper_start', { series, tabs: options.tabs, device })
+    const sent = await sendPhoneRequest(START_ACTION[kind], { ...args, device })
     return { ...sent, via: 'relay', targets: [target(sent)] }
   }
 
+  if (kind !== 'clipper') throw new Error('Only Image Clipper can be split between the phones')
   if (!options.seriesId || !series) throw new Error('Pick a series to split between the phones')
   const phones = startablePhones()
   if (phones.length < 2) throw new Error('Splitting needs two phones open with “Start from Manhwa Studio” on')
   const shares = await splitChapters(options.seriesId, phones.map(p => p.id))
-  const targets: PhoneClipperTarget[] = []
+  const targets: PhoneAutomationTarget[] = []
   let first: (PhoneUpdateRequest & { phones: number }) | null = null
   let reached = 0
   for (const phone of phones) {
     const chapters = shares.get(phone.id) ?? []
     if (!chapters.length) continue
-    const sent = await sendPhoneRequest('clipper_start', { series, tabs: options.tabs, chapters, device: phone.id })
+    const sent = await sendPhoneRequest('clipper_start', { ...args, chapters, device: phone.id })
     first ??= { ...sent, via: 'relay' }
     reached += sent.phones
     targets.push({ device: phone.id, name: phone.name, chapters, reached: sent.phones > 0 })
   }
   if (!first) throw new Error('Every chapter of this series is clipped on the phones already')
   return { ...first, phones: reached, targets }
+}
+
+/** The runs each phone a command goes to can start, from its crops receipt: `device`'s, or every phone's. */
+function automationRuns(device: string | undefined): PhoneRunKind[][] {
+  return (relayReceipts<{ automation?: unknown }>('crops') ?? [])
+    .filter(r => (device === undefined || r.device === device) && isObject(r.body.automation))
+    .map(r => phoneRuns(r.body.automation as Record<string, unknown>))
 }
 
 /** Phones the relay can start on their own now: connected, with an id, and "Start from Manhwa Studio" on. */

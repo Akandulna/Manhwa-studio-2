@@ -11,9 +11,11 @@
  *   GET  /phone/crops?seriesId=…&chapterId=…&fresh=1   which pages have crop JSON on the phone, and the page Auto-run is on
  *   GET  /phone/overview?fresh=1   all three receipts across every series, for the Sleeper Cells page
  *   POST /phone/request   ask the phone to write both receipts again ("Refresh from phone")
- *   POST /phone/clipper   { command: start|stop, seriesId?, tabs? } — start or stop Image Clipper on the phone, through the relay
+ *   POST /phone/automation { command: start|stop, kind?, seriesId?, tabs?, ai?, flow?, language?, device?, split? } — start a run
+ *                         (Image Clipper, narration, Editor 2.0, voiceover) on the phone through the relay, or stop it
  *   GET  /phone/screens   each phone's screen state and last screenshot (relay only)
- *   GET  /phone/screens/:device/:index   one screenshot image (JPEG)
+ *   GET  /phone/screens/:device/:index   one screenshot image (JPEG, never cached)
+ *   DELETE /phone/screens/:device/screenshot   forget that phone's screenshot (its viewer closed)
  *   POST /phone/screen    { command: on|off|shot, device } — Wake, Screen off or Screenshot on one phone
  *   GET  /relay          the phone relay's settings (no token) and connection state
  *   PUT  /relay          { url, token, clearToken } — save; a blank token keeps the saved one
@@ -45,7 +47,8 @@ import {
   missingR2Env,
   requestPhoneUpdate,
   publicR2Config,
-  sendClipperCommand,
+  PHONE_RUN_KINDS,
+  sendAutomationCommand,
   testR2Connection,
   updateR2Config
 } from '../services/r2Service.js'
@@ -62,7 +65,7 @@ import {
 import { getPhoneScriptsZip, importPhoneScripts, previewPhoneScripts } from '../services/phoneScriptImport.js'
 import { requestLanguage } from '../services/narrationLanguage.js'
 import { forgetPhone, relayStatus, testRelay, updateRelayConfig } from '../services/phoneRelay.js'
-import { getPhoneScreens, phoneScreenshotImage, sendScreenCommand } from '../services/phoneScreen.js'
+import { dropPhoneScreenshot, getPhoneScreens, phoneScreenshotImage, sendScreenCommand } from '../services/phoneScreen.js'
 
 function message(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
@@ -175,18 +178,22 @@ export function initR2Routes(io: Server): Router {
     }
   })
 
-  router.post('/phone/clipper', async (req: Request, res: Response) => {
+  router.post('/phone/automation', async (req: Request, res: Response) => {
     try {
-      const { command, seriesId, tabs, device, split } = req.body ?? {}
+      const { command, kind, seriesId, tabs, ai, flow, language, device, split } = req.body ?? {}
       if (command !== 'start' && command !== 'stop') throw new Error('command must be start or stop')
+      if (kind !== undefined && !PHONE_RUN_KINDS.includes(kind)) throw new Error(`kind must be one of ${PHONE_RUN_KINDS.join(', ')}`)
+      if (ai !== undefined && ai !== 'chatgpt' && ai !== 'aistudio') throw new Error('ai must be chatgpt or aistudio')
+      if (flow !== undefined && flow !== 'classic' && flow !== 'steps') throw new Error('flow must be classic or steps')
+      if (language !== undefined && language !== 'en' && language !== 'hi') throw new Error('language must be en or hi')
       if (seriesId !== undefined && (typeof seriesId !== 'string' || !seriesId)) throw new Error('seriesId must be a series id')
       if (tabs !== undefined && typeof tabs !== 'number') throw new Error('tabs must be a number')
       if (device !== undefined && (typeof device !== 'string' || !device)) throw new Error('device must be a phone id')
       if (split !== undefined && typeof split !== 'boolean') throw new Error('split must be true or false')
       if (device !== undefined && split) throw new Error('Pick one phone or split, not both')
-      res.json(await sendClipperCommand(command, { seriesId, tabs, device, split }))
+      res.json(await sendAutomationCommand(command, { kind, seriesId, tabs, ai, flow, language, device, split }))
     } catch (error) {
-      console.error('Phone Image Clipper command failed:', error)
+      console.error('Phone automation command failed:', error)
       res.status(400).json({ error: message(error, 'Could not reach the phone') })
     }
   })
@@ -201,8 +208,12 @@ export function initR2Routes(io: Server): Router {
       res.status(404).json({ error: 'No such screenshot' })
       return
     }
-    // The URL carries the time it was taken, so a new one gets a new URL.
-    res.set('Cache-Control', 'private, max-age=86400').type('image/jpeg').send(image)
+    // Kept nowhere, the browser's cache included.
+    res.set('Cache-Control', 'no-store').type('image/jpeg').send(image)
+  })
+
+  router.delete('/phone/screens/:device/screenshot', (req: Request, res: Response) => {
+    res.json({ ok: true, dropped: dropPhoneScreenshot(String(req.params.device)) })
   })
 
   router.post('/phone/screen', async (req: Request, res: Response) => {

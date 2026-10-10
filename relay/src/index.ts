@@ -25,8 +25,8 @@
  *   relay → desktop  { type: 'hello', phones, devices, request } · { type: 'receipt', kind, device, at, body }
  *                    { type: 'presence', phones, devices } · { type: 'requested', id, phones }
  *                    { type: 'forgotten', device }
- *   desktop → relay  { type: 'request', id, requestedAt, action?, device?, series?, tabs?, chapters? }
- *   relay → phone    { type: 'request', id, requestedAt, action?, device?, series?, tabs?, chapters? }
+ *   desktop → relay  { type: 'request', id, requestedAt, action?, device?, series?, tabs?, chapters?, ai?, flow?, language? }
+ *   relay → phone    { type: 'request', id, requestedAt, action?, device?, series?, tabs?, chapters?, ai?, flow?, language? }
  *
  * `phones` counts the phones connected; `devices` lists them: [{ id, name }].
  *
@@ -39,13 +39,19 @@
  * Image Clipper on the phone, on `series` in `tabs` ChatGPT tabs (both optional:
  * the phone's last run and tab count), and only on the chapter folders in
  * `chapters` when given (the desktop splitting a series between phones),
- * waking it if need be; "clipper_stop" stops it. The phone acts on those only
+ * waking it if need be; `ai` ("chatgpt" | "aistudio") and `flow` ("classic" |
+ * "steps") pick where and how it prompts the pages. "narration_start" writes
+ * `series`' scripts, "editor_start" makes its Editor 2.0 timelines in
+ * `language` ("en" | "hi"), and "voiceover_start" voices its splits in
+ * `language` in `tabs` tabs. "clipper_stop" stops Image Clipper, "run_stop"
+ * whichever run is going. The phone acts on those only
  * with its "Start from Manhwa Studio" setting on, and ignores ones older than
  * 10 minutes, as requests are handed over again whenever it connects.
  * "screen_on" turns the phone's screen on with Sleeper-Cell over the lock
  * screen, kept on until "screen_off"; "screenshot" has it post its browser
  * tabs as a "screenshot" receipt. It answers each with a "screen" receipt, and
- * ignores them after 2 minutes.
+ * ignores them after 2 minutes. A screenshot is never stored: it is passed to
+ * the desktops connected at the time, and is lost when none is.
  *   either → relay   "ping"; the runtime answers "pong" without waking the object.
  *
  * Every request needs `Authorization: Bearer <RELAY_TOKEN>` (or `?token=` for
@@ -62,8 +68,10 @@ export interface Env {
 
 type Role = 'desktop' | 'phone'
 
-/** `screen` is the phone's screen state; `screenshot` its browser tabs as JPEGs, posted when asked. */
+/** `screen` is the phone's screen state; `screenshot` its browser tabs as JPEGs, posted when asked (see PASS_ONLY). */
 const KINDS = new Set(['sync', 'scripts', 'crops', 'screen', 'screenshot'])
+/** Kinds passed to the desktops connected now and never stored: the user wants screenshots kept nowhere. */
+const PASS_ONLY = new Set(['screenshot'])
 
 /** Durable Object WebSocket messages are capped at 1 MiB; a receipt must fit in one. */
 const MAX_BODY = 1_000_000
@@ -105,15 +113,34 @@ interface StoredRequest {
   series?: string
   tabs?: number
   chapters?: string[]
+  /** Image Clipper's AI and prompt flow. */
+  ai?: string
+  flow?: string
+  /** Editor 2.0's and the voiceover's narration language. */
+  language?: string
 }
 
 /** What a phone socket carries across hibernation. */
 interface PhoneAttachment { device: string; name: string }
 
 /** What a request may ask of the phone besides its receipts. */
-const ACTIONS = new Set(['sync', 'clipper_start', 'clipper_stop', 'screen_on', 'screen_off', 'screenshot'])
+const ACTIONS = new Set([
+  'sync', 'clipper_start', 'clipper_stop', 'narration_start', 'editor_start', 'voiceover_start', 'run_stop',
+  'screen_on', 'screen_off', 'screenshot'
+])
 
-/** Image Clipper's most ChatGPT tabs at once (ClipperRun.MAX_TABS on the phone). */
+/** The actions that start a run on `series`. */
+const START_ACTIONS = new Set(['clipper_start', 'narration_start', 'editor_start', 'voiceover_start'])
+/** The runs that take `tabs`. */
+const TAB_ACTIONS = new Set(['clipper_start', 'voiceover_start'])
+/** The runs that take a `language`. */
+const LANGUAGE_ACTIONS = new Set(['editor_start', 'voiceover_start'])
+
+const AIS = new Set(['chatgpt', 'aistudio'])
+const FLOWS = new Set(['classic', 'steps'])
+const LANGUAGES = new Set(['en', 'hi'])
+
+/** Image Clipper's and the voiceover's most tabs at once (ClipperRun.MAX_TABS and VoiceoverRun.MAX_TABS on the phone). */
 const MAX_TABS = 4
 
 const DEVICE_TAG = 'device:'
@@ -139,8 +166,11 @@ export class Relay extends DurableObject<Env> {
     )
     this.sql.exec(
       'CREATE TABLE IF NOT EXISTS phone_requests (target TEXT PRIMARY KEY, id TEXT NOT NULL, requested_at TEXT NOT NULL, ' +
-        'action TEXT, series TEXT, tabs INTEGER, chapters TEXT)'
+        'action TEXT, series TEXT, tabs INTEGER, chapters TEXT, options TEXT)'
     )
+    // `options` (ai, flow, language as JSON) came with starting runs other than Image Clipper.
+    const requestColumns = this.sql.exec<{ name: string }>('PRAGMA table_info(phone_requests)').toArray().map(c => c.name)
+    if (!requestColumns.includes('options')) this.sql.exec('ALTER TABLE phone_requests ADD COLUMN options TEXT')
     const tables = new Set(this.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'").toArray().map(t => t.name))
     if (tables.has('receipts')) {
       this.sql.exec("INSERT OR IGNORE INTO phone_receipts (device, kind, body, at) SELECT '', kind, body, at FROM receipts")
@@ -155,6 +185,8 @@ export class Relay extends DurableObject<Env> {
       )
       this.sql.exec('DROP TABLE requests')
     }
+    // Stored by the first build that carried screenshots.
+    for (const kind of PASS_ONLY) this.sql.exec('DELETE FROM phone_receipts WHERE kind = ?', kind)
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -268,6 +300,12 @@ export class Relay extends DurableObject<Env> {
     }
     if (device && replacesLegacy) this.forget('')
     const at = Date.now()
+    if (PASS_ONLY.has(kind)) {
+      const desktops = this.sockets('desktop')
+      const message = receiptMessage(kind, device, text, at)
+      for (const ws of desktops) ws.send(message)
+      return Response.json({ ok: true, at, device, desktops: desktops.length })
+    }
     this.sql.exec(
       'INSERT INTO phone_receipts (device, kind, body, at) VALUES (?, ?, ?, ?) ' +
         'ON CONFLICT(device, kind) DO UPDATE SET body = excluded.body, at = excluded.at',
@@ -290,29 +328,40 @@ export class Relay extends DurableObject<Env> {
 
   /** Saves a request and passes it to the phone it's for, or every phone. Null when it isn't a valid request. */
   private storeRequest(value: unknown): { request: StoredRequest; phones: number } | null {
-    const { id, requestedAt, action, device, series, tabs, chapters } = (value ?? {}) as {
+    const { id, requestedAt, action, device, series, tabs, chapters, ai, flow, language } = (value ?? {}) as {
       id?: unknown; requestedAt?: unknown; action?: unknown; device?: unknown; series?: unknown; tabs?: unknown; chapters?: unknown
+      ai?: unknown; flow?: unknown; language?: unknown
     }
     if (typeof id !== 'string' || !id || id.length > 100) return null
     if (device !== undefined && device !== null && (typeof device !== 'string' || (device && !DEVICE_ID.test(device)))) return null
     const request: StoredRequest = { id, requestedAt: typeof requestedAt === 'string' ? requestedAt : new Date().toISOString() }
     if (typeof action === 'string' && ACTIONS.has(action)) request.action = action
     if (typeof device === 'string' && device) request.device = device
-    if (request.action === 'clipper_start') {
+    const started = request.action ?? ''
+    if (START_ACTIONS.has(started)) {
       if (typeof series === 'string' && series.trim() && series.length <= 200) request.series = series.trim()
+    }
+    if (TAB_ACTIONS.has(started)) {
       if (typeof tabs === 'number' && Number.isInteger(tabs) && tabs >= 1 && tabs <= MAX_TABS) request.tabs = tabs
+    }
+    if (started === 'clipper_start') {
       if (Array.isArray(chapters)) {
         const names = chapters.filter((c): c is string => typeof c === 'string' && !!c && c.length <= MAX_CHAPTER_NAME)
         if (names.length > MAX_CHAPTERS) return null
         if (names.length) request.chapters = names
       }
+      if (typeof ai === 'string' && AIS.has(ai)) request.ai = ai
+      if (typeof flow === 'string' && FLOWS.has(flow)) request.flow = flow
     }
+    if (LANGUAGE_ACTIONS.has(started) && typeof language === 'string' && LANGUAGES.has(language)) request.language = language
+    const options = { ai: request.ai, flow: request.flow, language: request.language }
     this.sql.exec(
-      'INSERT INTO phone_requests (target, id, requested_at, action, series, tabs, chapters) VALUES (?, ?, ?, ?, ?, ?, ?) ' +
+      'INSERT INTO phone_requests (target, id, requested_at, action, series, tabs, chapters, options) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ' +
         'ON CONFLICT(target) DO UPDATE SET id = excluded.id, requested_at = excluded.requested_at, action = excluded.action, ' +
-        'series = excluded.series, tabs = excluded.tabs, chapters = excluded.chapters',
+        'series = excluded.series, tabs = excluded.tabs, chapters = excluded.chapters, options = excluded.options',
       request.device ?? '', request.id, request.requestedAt, request.action ?? null, request.series ?? null, request.tabs ?? null,
-      request.chapters ? JSON.stringify(request.chapters) : null
+      request.chapters ? JSON.stringify(request.chapters) : null,
+      Object.values(options).some(Boolean) ? JSON.stringify(options) : null
     )
     const message = JSON.stringify({ type: 'request', ...request })
     const phones = request.device ? this.ctx.getWebSockets(DEVICE_TAG + request.device).filter(open) : this.sockets('phone')
@@ -332,7 +381,8 @@ export class Relay extends DurableObject<Env> {
   private lastRequest(target: string): StoredRequest | null {
     const row = this.sql.exec<{
       id: string; requested_at: string; action: string | null; series: string | null; tabs: number | null; chapters: string | null
-    }>('SELECT id, requested_at, action, series, tabs, chapters FROM phone_requests WHERE target = ?', target).toArray()[0]
+      options: string | null
+    }>('SELECT id, requested_at, action, series, tabs, chapters, options FROM phone_requests WHERE target = ?', target).toArray()[0]
     if (!row) return null
     const request: StoredRequest = { id: row.id, requestedAt: row.requested_at }
     if (row.action) request.action = row.action
@@ -343,6 +393,16 @@ export class Relay extends DurableObject<Env> {
       try {
         const chapters = JSON.parse(row.chapters)
         if (Array.isArray(chapters) && chapters.length) request.chapters = chapters
+      } catch {
+        // Written by storeRequest, so always JSON.
+      }
+    }
+    if (row.options) {
+      try {
+        const { ai, flow, language } = JSON.parse(row.options) as Pick<StoredRequest, 'ai' | 'flow' | 'language'>
+        if (ai) request.ai = ai
+        if (flow) request.flow = flow
+        if (language) request.language = language
       } catch {
         // Written by storeRequest, so always JSON.
       }

@@ -8,7 +8,7 @@
 
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Activity, AlertTriangle, ArrowRight, ChevronRight, Clock, FileText, Gauge, ImageUp, Mic, Pause, PenLine, Upload } from 'lucide-react'
+import { Activity, AlertTriangle, ArrowRight, ChevronRight, Clock, Clapperboard, FileText, Gauge, ImageUp, Mic, Pause, PenLine, Upload } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -75,17 +75,18 @@ function WorkingRow({ working, averageTook, now }: { working: PhoneOverviewWorki
 
 const RUN_KIND = {
   narration: { icon: PenLine, name: 'Narration', unit: 'chapter' },
+  editor: { icon: Clapperboard, name: 'Editor 2.0', unit: 'chapter' },
   voiceover: { icon: Mic, name: 'Voiceover', unit: 'split' }
 } as const
 
-/** A narration or voiceover run: its progress, then one row per AI Studio tab with the time on it so far. */
+/** A narration, Editor 2.0 or voiceover run: its progress, then one row per tab with the time on it so far. */
 function RunSection({ run, now }: { run: PhoneOverviewRun; now: number }) {
   const kind = RUN_KIND[run.kind]
   const Icon = kind.icon
   const percent = run.total ? (run.done / run.total) * 100 : 0
   const language = run.tabs[0]?.language ?? 'en'
   const lang = language === 'hi' ? '?lang=hi' : ''
-  const seriesLink = run.seriesId ? `/narration/series/${run.seriesId}${lang}` : null
+  const seriesLink = !run.seriesId ? null : run.kind === 'editor' ? `/editor2/${run.seriesId}` : `/narration/series/${run.seriesId}${lang}`
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2 text-sm">
@@ -93,7 +94,7 @@ function RunSection({ run, now }: { run: PhoneOverviewRun; now: number }) {
         <span className="font-medium">{kind.name}</span>
         <span className="text-muted-foreground">·</span>
         {seriesLink ? <Link to={seriesLink} className="truncate hover:underline">{run.series}</Link> : <span className="truncate">{run.series}</span>}
-        {run.kind === 'voiceover' && <span className="text-xs text-muted-foreground">{LANGUAGE_LABEL[language]}</span>}
+        {run.kind !== 'narration' && <span className="text-xs text-muted-foreground">{LANGUAGE_LABEL[language]}</span>}
         {run.paused && <span className="text-xs text-amber-500">paused</span>}
         {run.stopping && <span className="text-xs text-amber-500">stopping</span>}
         <span className="ml-auto whitespace-nowrap text-xs tabular-nums text-muted-foreground">
@@ -107,12 +108,12 @@ function RunSection({ run, now }: { run: PhoneOverviewRun; now: number }) {
         const elapsed = Number.isNaN(since) ? null : Math.max(0, (now - since) / 1000)
         const what = run.kind === 'voiceover'
           ? (tab.split !== null ? `split ${tab.split}${tab.splits ? ` of ${tab.splits}` : ''}` : 'split')
-          : `${LANGUAGE_LABEL[tab.language]} script`
+          : run.kind === 'editor' ? 'timeline' : `${LANGUAGE_LABEL[tab.language]} script`
         const where = <><span className="text-muted-foreground">{chapterLabel(tab)} · </span>{what}</>
         const tabLang = tab.language === 'hi' ? '?lang=hi' : ''
-        const link = tab.chapterId
-          ? run.kind === 'voiceover' ? `/narration/voiceover/${tab.chapterId}${tabLang}` : `/narration/chapter/${tab.chapterId}${tabLang}`
-          : null
+        const link = !tab.chapterId || run.kind === 'editor'
+          ? null
+          : run.kind === 'voiceover' ? `/narration/voiceover/${tab.chapterId}${tabLang}` : `/narration/chapter/${tab.chapterId}${tabLang}`
         return (
           <div key={`${tab.chapter}/${tab.language}/${tab.split ?? ''}`} className="flex items-center gap-2 pl-5 text-sm">
             {run.paused ? <Pause className="h-3.5 w-3.5 text-amber-500" /> : <Light tone="good" live size="h-2 w-2" />}

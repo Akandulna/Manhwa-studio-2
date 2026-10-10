@@ -1,8 +1,10 @@
 /**
  * Phone Status — the phones themselves: is Sleeper-Cell open on each, how it
  * is set up to run (its Automation settings), its screen (Wake, Screen off,
- * Screenshot; see PhoneScreen.tsx), and Image Clipper's Start and Stop for it. One card per phone; with two or more that can be started, a
- * Split bar shares one series' chapters out between them.
+ * Screenshot; see PhoneScreen.tsx), and Run automation and Stop for it: any of
+ * the phone's runs, picked and set up in RunAutomation.tsx. One card per
+ * phone; with two or more, Image Clipper can be split between them there, and
+ * a bar stops every phone at once.
  *
  * What the runs are doing is on Live Progress, and the accounts' limits on
  * Accounts; each card links there in one line.
@@ -10,15 +12,14 @@
 
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { AlertTriangle, ArrowRight, Clock, Loader2, Play, Smartphone, Split, Square, Trash2, X } from 'lucide-react'
+import { AlertTriangle, ArrowRight, Clock, Loader2, Play, Smartphone, Square, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 import { usePhoneOverview } from '@/hooks/usePhoneOverview'
 import { usePhoneRelay } from '@/hooks/usePhoneRelay'
 import { usePhoneScreens } from '@/hooks/usePhoneScreens'
-import { r2Api, type PhoneOverview, type PhoneOverviewPhone, type PhoneScreen, type RelayStatus } from '@/lib/api'
+import { r2Api, type PhoneAutomationOptions, type PhoneOverview, type PhoneOverviewPhone, type PhoneScreen, type RelayStatus } from '@/lib/api'
 import { uploadUsage } from '@/lib/uploadUsage'
 import { cn } from '@/lib/utils'
 import {
@@ -37,14 +38,11 @@ import {
   type Tone
 } from './sleeperShared'
 import { PhoneScreenControls } from './PhoneScreen'
-
-/** Image Clipper's most ChatGPT tabs at once (ClipperRun.MAX_TABS on the phone). */
-const MAX_TABS = 4
-const DEFAULT_TABS = 2
+import { AUTOMATION_NAME, RunAutomationDialog } from './RunAutomation'
 
 type Command = 'start' | 'stop'
-type SendOptions = { seriesId?: string; tabs?: number; device?: string; split?: boolean }
-type Send = (command: Command, options: SendOptions, to: string | null) => Promise<void>
+/** Sends a start or stop; resolves true once the relay took it. */
+type Send = (command: Command, options: PhoneAutomationOptions, to: string | null) => Promise<boolean>
 
 /** The phone's state in a word or two, with the light for it. Red is only for Sleeper-Cell closed. */
 function phoneState(phone: PhoneOverviewPhone, activity: ReturnType<typeof phoneActivity>, relay: RelayStatus | null, now: number) {
@@ -61,56 +59,15 @@ function phoneState(phone: PhoneOverviewPhone, activity: ReturnType<typeof phone
   return state('good', phone.automation?.remoteStart ? 'Ready' : 'Open · idle', heard, { hollow: true })
 }
 
-/** Why Start can't reach this phone, or null when it can. */
+/** Why Run automation can't reach this phone, or null when it can. */
 function startBlocker(relay: RelayStatus | null, phone: PhoneOverviewPhone, several: boolean): React.ReactNode | null {
-  if (!relay?.configured) return <>Start and Stop need the phone relay: <Link to="/settings" className="underline">set it up</Link> in Settings → Cloudflare.</>
+  if (!relay?.configured) return <>Run automation and Stop need the phone relay: <Link to="/settings" className="underline">set it up</Link> in Settings → Cloudflare.</>
   if (!relay.connected) return 'Manhwa Studio can’t reach the relay right now.'
   if (several && !phone.id) return 'This is an old Sleeper-Cell build: update it to start it from here.'
   if (several && !phone.connected) return 'Open Sleeper-Cell on this phone to start it.'
   if (!phone.automation) return phone.reportedAt ? 'Update Sleeper-Cell: this build can’t be started from here.' : 'No report from it yet: Refresh from phone.'
   if (!phone.automation.remoteStart) return 'Turn on “Start from Manhwa Studio” on the phone: Tools → Settings → Automation.'
   return null
-}
-
-/** The series to offer first: the one waiting to resume, else the one running, else the first with pages left. */
-function preferredSeries(overview: PhoneOverview | null, phone: PhoneOverviewPhone | null, several: boolean): string {
-  const choices = overview?.series ?? []
-  return (phone ? phone.automation?.resume?.seriesId : overview?.automation?.resume?.seriesId)
-    ?? overview?.working.find(w => w.seriesId && (!phone || !several || w.phone === phone.name))?.seriesId
-    ?? choices.find(s => s.crops && s.crops.done < s.crops.total)?.id
-    ?? choices[0]?.id
-    ?? ''
-}
-
-function SeriesSelect({ overview, value, onChange, className }: { overview: PhoneOverview | null; value: string; onChange: (id: string) => void; className?: string }) {
-  const choices = overview?.series ?? []
-  return (
-    <Select value={value} onValueChange={onChange} disabled={!choices.length}>
-      <SelectTrigger className={cn('h-9 w-64', className)} aria-label="Series">
-        <SelectValue placeholder="The phone’s last run" />
-      </SelectTrigger>
-      <SelectContent>
-        {choices.map(s => (
-          <SelectItem key={s.id} value={s.id}>
-            {s.title}{s.crops ? ` · ${s.crops.done}/${s.crops.total}` : ''}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  )
-}
-
-function TabPicker({ value, onChange, label = 'Tabs' }: { value: number; onChange: (n: number) => void; label?: string }) {
-  return (
-    <div className="flex items-center gap-1" role="group" aria-label="ChatGPT tabs">
-      <span className="mr-1 text-xs text-muted-foreground">{label}</span>
-      {Array.from({ length: MAX_TABS }, (_, i) => i + 1).map(n => (
-        <Button key={n} size="sm" variant={value === n ? 'default' : 'outline'} className="h-8 w-8 p-0" onClick={() => onChange(n)}>
-          {n}
-        </Button>
-      ))}
-    </div>
-  )
 }
 
 function Row({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
@@ -130,13 +87,14 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   return <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">{children}</p>
 }
 
-/** One phone: its state, what it's on in a line, its Automation settings, its screen, and Image Clipper's Start and Stop. */
-function PhoneCard({ phone, overview, relay, screen, several, now, send, sending }: {
+/** One phone: its state, what it's on in a line, its Automation settings, its screen, and Run automation and Stop. */
+function PhoneCard({ phone, overview, relay, screen, several, startable, now, send, sending }: {
   phone: PhoneOverviewPhone
   overview: PhoneOverview | null
   relay: RelayStatus | null
   screen: PhoneScreen | null
   several: boolean
+  startable: PhoneOverviewPhone[]
   now: number
   send: Send
   sending: string | null
@@ -147,17 +105,13 @@ function PhoneCard({ phone, overview, relay, screen, several, now, send, sending
   const automation = phone.automation
   const resume = automation?.resume ?? null
   const blocker = startBlocker(relay, phone, several)
-  const clipping = activity.working.length > 0
+  const busy = activity.busy
 
   const usages = (overview?.profiles ?? []).filter(p => onPhone(p, phone, several)).map(p => uploadUsage(p, now))
   const imagesLeft = usages.reduce((sum, u) => sum + u.left, 0)
   const ready = usages.filter(u => u.left > 0).length
 
   const [open, setOpen] = useState(false)
-  const [picked, setPicked] = useState('')
-  const [tabs, setTabs] = useState<number | null>(null)
-  const seriesId = picked || preferredSeries(overview, phone, several)
-  const tabCount = tabs ?? resume?.tabs ?? DEFAULT_TABS
   const target = several && phone.id ? { device: phone.id } : {}
   const key = phone.id || phone.name
 
@@ -217,7 +171,7 @@ function PhoneCard({ phone, overview, relay, screen, several, now, send, sending
 
         {/* Automation */}
         <div className="space-y-2">
-          <SectionLabel>Automation <InfoTip text="Set on the phone: Sleeper-Cell → Tools → Settings → Automation." /></SectionLabel>
+          <SectionLabel>Automation settings <InfoTip text="Set on the phone: Sleeper-Cell → Tools → Settings → Automation." /></SectionLabel>
           {automation
             ? (
               <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
@@ -247,48 +201,40 @@ function PhoneCard({ phone, overview, relay, screen, several, now, send, sending
           <PhoneScreenControls phone={phone} relay={relay} screen={screen} now={now} />
         </div>
 
-        {/* Image Clipper controls */}
+        {/* Run automation */}
         <div className="mt-auto space-y-3 border-t pt-4">
-          <div className="flex items-center gap-2">
-            <SectionLabel>Image Clipper</SectionLabel>
+          <div className="flex flex-wrap items-center gap-2">
+            <SectionLabel>Runs</SectionLabel>
             <div className="ml-auto flex gap-2">
-              {(clipping || resume) && (
+              {(busy || resume) && (
                 <Button
                   variant="outline"
-                  size="sm"
                   disabled={!!blocker || sending !== null}
-                  title={resume && !clipping ? 'Cancels the resume' : undefined}
+                  title={resume && !busy ? 'Cancels the resume' : undefined}
                   onClick={() => send('stop', target, phone.name)}
                 >
                   {sending === `stop:${key}` ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Square className="mr-2 h-4 w-4" />}
                   Stop
                 </Button>
               )}
-              {!clipping && !open && (
-                <Button size="sm" disabled={!!blocker || sending !== null} onClick={() => setOpen(true)}>
-                  <Play className="mr-2 h-4 w-4" /> Start…
+              {!busy && (
+                <Button disabled={!!blocker || sending !== null} onClick={() => setOpen(true)}>
+                  <Play className="mr-2 h-4 w-4" /> Run automation
                 </Button>
               )}
             </div>
           </div>
-          {open && !clipping && (
-            <div className="flex flex-wrap items-center gap-3 rounded-md bg-secondary/40 p-3">
-              <SeriesSelect overview={overview} value={seriesId} onChange={setPicked} className="w-auto min-w-0 flex-1" />
-              <TabPicker value={tabCount} onChange={setTabs} />
-              <div className="flex gap-2">
-                <Button size="sm" variant="ghost" className="h-8 w-8 p-0" title="Cancel" onClick={() => setOpen(false)}>
-                  <X className="h-4 w-4" />
-                </Button>
-                <Button
-                  size="sm"
-                  disabled={!!blocker || sending !== null}
-                  onClick={() => send('start', { seriesId: seriesId || undefined, tabs: tabCount, ...target }, phone.name).then(() => setOpen(false))}
-                >
-                  {sending === `start:${key}` ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
-                  Start
-                </Button>
-              </div>
-            </div>
+          {overview && open && (
+            <RunAutomationDialog
+              open={open}
+              onOpenChange={setOpen}
+              phone={phone}
+              overview={overview}
+              several={several}
+              startable={startable}
+              sending={sending === `start:${key}` || sending === 'start:all'}
+              onStart={options => send('start', options, options.split ? null : phone.name)}
+            />
           )}
           {blocker && (
             <p className="flex items-start gap-1.5 text-xs text-amber-500">
@@ -308,42 +254,22 @@ function chaptersLabel(chapters: string[], numbers: Map<string, number>): string
   return `Ch. ${chapters.map(c => numbers.get(c) ?? c).join(', ')}`
 }
 
-/** One series split between the phones that can be started: each gets its own chapters, so no page is clipped twice. */
-function SplitBar({ startable, overview, send, sending }: {
+/** With several phones that can be started: stops whatever runs on all of them at once. */
+function StopAllBar({ startable, overview, send, sending }: {
   startable: PhoneOverviewPhone[]; overview: PhoneOverview | null; send: Send; sending: string | null
 }) {
-  const [picked, setPicked] = useState('')
-  const [tabs, setTabs] = useState(DEFAULT_TABS)
-  const seriesId = picked || preferredSeries(overview, null, true)
-  const clipping = startable.filter(p => p.working > 0)
+  const going = !!(overview?.working.length || overview?.runs.length || startable.some(p => p.automation?.resume))
   return (
     <Card className="mb-6">
       <CardContent className="flex flex-wrap items-center gap-3 p-4">
         <p className="flex items-center gap-2 text-sm font-medium">
-          <Split className="h-4 w-4 text-muted-foreground" />
-          Split across {startable.length} phones
-          <InfoTip text="Shares the series’ chapters left out between the phones, balanced by pages, in reading order: no page is clipped twice. Start again to share out what’s left." />
+          {startable.length} phones ready
+          <InfoTip text="Run automation on a phone’s card. Image Clipper can split a series between the phones there: no page is clipped twice." />
         </p>
-        <SeriesSelect overview={overview} value={seriesId} onChange={setPicked} />
-        <TabPicker value={tabs} onChange={setTabs} label="Tabs each" />
-        <div className="ml-auto flex gap-2">
-          <Button
-            variant="outline"
-            disabled={sending !== null || !(overview?.working.length || startable.some(p => p.automation?.resume))}
-            onClick={() => send('stop', {}, null)}
-          >
-            {sending === 'stop:all' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Square className="mr-2 h-4 w-4" />}
-            Stop all
-          </Button>
-          <Button
-            disabled={sending !== null || !seriesId || clipping.length > 0}
-            title={clipping.length ? `${clipping.map(p => p.name).join(' and ')} ${clipping.length === 1 ? 'is' : 'are'} clipping: stop first.` : undefined}
-            onClick={() => send('start', { seriesId, tabs, split: true }, null)}
-          >
-            {sending === 'start:all' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
-            Start split
-          </Button>
-        </div>
+        <Button className="ml-auto" variant="outline" disabled={sending !== null || !going} onClick={() => send('stop', {}, null)}>
+          {sending === 'stop:all' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Square className="mr-2 h-4 w-4" />}
+          Stop all
+        </Button>
       </CardContent>
     </Card>
   )
@@ -388,30 +314,32 @@ export default function PhoneStatus() {
   const startable = phones.filter(p => p.id && p.connected && p.automation?.remoteStart)
   const [sending, setSending] = useState<string | null>(null)
 
-  /** Sends Start or Stop to one phone (`to`, its name) or to every phone (null). */
+  /** Sends a start or Stop to one phone (`to`, its name) or to every phone (null). */
   const send: Send = async (command, options, to) => {
     const phone = to === null ? null : phones.find(p => p.name === to) ?? null
     setSending(`${command}:${phone ? phone.id || phone.name : 'all'}`)
     try {
-      const sent = await r2Api.sendPhoneClipper(command, options)
+      const sent = await r2Api.sendPhoneAutomation(command, options)
       const numbers = new Map<string, number>()
       for (const w of overview?.working ?? []) if (w.chapterNumber !== null) numbers.set(w.chapter, w.chapterNumber)
       const split = command === 'start' && options.split && sent.targets?.length
-      const verb = command === 'start' ? 'Start' : 'Stop'
+      const verb = command === 'start' ? AUTOMATION_NAME[options.kind ?? 'clipper'] : 'Stop'
       toast({
-        title: split ? `Start sent to ${sent.targets!.length} phones` : `${verb} sent to ${several ? to ?? 'every phone' : 'the phone'}`,
+        title: split ? `${verb} sent to ${sent.targets!.length} phones` : `${verb} sent to ${several ? to ?? 'every phone' : 'the phone'}`,
         description: split
           ? sent.targets!.map(t => `${t.name}: ${chaptersLabel(t.chapters ?? [], numbers)}${t.reached ? '' : ' (not connected)'}`).join(' · ')
           : sent.phones
           ? 'Sleeper-Cell got it. Live Progress shows what it does.'
           : 'The phone isn’t connected right now. It acts on this if it connects within 10 minutes.'
       })
+      return true
     } catch (error) {
       toast({
-        title: command === 'start' ? 'Could not start the phone' : 'Could not stop the phone',
+        title: command === 'start' ? 'Could not start the run' : 'Could not stop the phone',
         description: error instanceof Error ? error.message : String(error),
         variant: 'destructive'
       })
+      return false
     } finally {
       setSending(null)
     }
@@ -424,7 +352,7 @@ export default function PhoneStatus() {
         : (
           <>
             <ConnectionStrip relay={relay} overview={overview} phones={phones} now={now} />
-            {startable.length >= 2 && <SplitBar startable={startable} overview={overview} send={send} sending={sending} />}
+            {startable.length >= 2 && <StopAllBar startable={startable} overview={overview} send={send} sending={sending} />}
             {phones.length === 0
               ? overview.configured && (
                 <Card><CardContent className="p-5 text-sm text-muted-foreground">No phone has reported yet. Open Sleeper-Cell on the phone, then Refresh from phone.</CardContent></Card>
@@ -439,6 +367,7 @@ export default function PhoneStatus() {
                       relay={relay}
                       screen={screens.get(phone.id) ?? null}
                       several={several}
+                      startable={startable}
                       now={now}
                       send={send}
                       sending={sending}

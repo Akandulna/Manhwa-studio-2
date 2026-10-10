@@ -10,11 +10,13 @@
  * arrival is pushed to the browser as `phone:receipt` ({ kind }), and
  * connection/phone presence changes as `phone:relay`.
  * "Refresh from phone" goes to the relay as a request message, and so do
- * Image Clipper's start and stop (see sendClipperCommand in r2Service) and the
+ * the automation runs' start and stop (see sendAutomationCommand in r2Service) and the
  * screen controls (phoneScreen.ts). The phone's screen receipts (`screen`,
  * `screenshot`) are kept apart from the three status receipts and pushed as
  * `phone:screen` ({ device, kind }), so a screenshot doesn't reload the pages
- * that follow `phone:receipt`.
+ * that follow `phone:receipt`. A screenshot is kept nowhere but here, in
+ * memory, until it has been seen (dropScreenshot) or SCREENSHOT_TTL_MS pass;
+ * the relay only passes it on.
  *
  * Settings → Cloudflare writes RELAY_URL / RELAY_TOKEN to the server's .env.
  * Without them nothing here runs and r2Service falls back to R2.
@@ -33,26 +35,44 @@ export type ReceiptKind = 'sync' | 'scripts' | 'crops'
 
 /**
  * What a request may ask of the phone besides its receipts: `sync` checks R2
- * for chapters just sent; `clipper_start` / `clipper_stop` start or stop Image
- * Clipper (with "Start from Manhwa Studio" on in Sleeper-Cell); `screen_on`,
- * `screen_off` and `screenshot` are Phone Status's screen controls. Keep in
- * step with ACTIONS in relay/src/index.ts, Automation.kt and RemoteScreen.kt
- * on the phone.
+ * for chapters just sent; `clipper_start`, `narration_start`, `editor_start`
+ * and `voiceover_start` start a run (with "Start from Manhwa Studio" on in
+ * Sleeper-Cell), `clipper_stop` stops Image Clipper and `run_stop` whichever
+ * run is going (builds from before the other runs know only `clipper_stop`);
+ * `screen_on`, `screen_off` and `screenshot` are Phone Status's screen
+ * controls. Keep in step with ACTIONS in relay/src/index.ts, Automation.kt and
+ * RemoteScreen.kt on the phone.
  */
-export type PhoneAction = 'sync' | 'clipper_start' | 'clipper_stop' | 'screen_on' | 'screen_off' | 'screenshot'
+export type PhoneAction =
+  | 'sync'
+  | 'clipper_start'
+  | 'clipper_stop'
+  | 'narration_start'
+  | 'editor_start'
+  | 'voiceover_start'
+  | 'run_stop'
+  | 'screen_on'
+  | 'screen_off'
+  | 'screenshot'
 
 /** The phone's screen state, and its browser tabs as JPEGs (see phoneScreen.ts). */
 export type ScreenKind = 'screen' | 'screenshot'
 
 /**
- * For `clipper_start`: the phone's series folder and ChatGPT tabs; without them,
- * its last run's. `chapters` limits the run to those chapter folders (a series
- * split between phones). `device` sends the request to that phone only.
+ * For the starts: the phone's series folder, and the tabs for Image Clipper and
+ * the voiceover; Image Clipper without them goes on with its last run's.
+ * `chapters` limits Image Clipper to those chapter folders (a series split
+ * between phones); `ai` and `flow` are where and how it prompts the pages.
+ * `language` is Editor 2.0's and the voiceover's. `device` sends the request
+ * to that phone only.
  */
 export interface PhoneRequestArgs {
   series?: string
   tabs?: number
   chapters?: string[]
+  ai?: 'chatgpt' | 'aistudio'
+  flow?: 'classic' | 'steps'
+  language?: 'en' | 'hi'
   device?: string
 }
 
@@ -117,6 +137,9 @@ let pingTimer: NodeJS.Timeout | null = null
 const receipts = new Map<string, Map<ReceiptKind, { at: number; body: object }>>()
 /** By phone id, then kind. */
 const screens = new Map<string, Map<ScreenKind, { at: number; body: object }>>()
+/** A screenshot nobody looked at is dropped after this. */
+const SCREENSHOT_TTL_MS = 10 * 60_000
+const screenshotTimers = new Map<string, NodeJS.Timeout>()
 
 function relayEnv(): { url: string; token: string } | null {
   const url = (process.env.RELAY_URL || '').trim().replace(/\/+$/, '')
@@ -140,6 +163,15 @@ export function relayReceipts<T extends object>(kind: ReceiptKind): RelayedRecei
     if (stored) list.push({ device, at: stored.at, body: stored.body as T })
   }
   return list.sort((a, b) => phoneName(a.device).localeCompare(phoneName(b.device)))
+}
+
+/** Drops a phone's screenshot, once seen or left too long. Returns whether there was one. */
+export function dropScreenshot(device: string): boolean {
+  clearTimeout(screenshotTimers.get(device))
+  screenshotTimers.delete(device)
+  if (!screens.get(device)?.delete('screenshot')) return false
+  io?.emit('phone:screen', { device, kind: 'screenshot' })
+  return true
 }
 
 /** Each phone's last copy of a screen receipt; empty without the relay. */
@@ -319,6 +351,10 @@ function handle(text: string): void {
         const kinds = screens.get(device) ?? new Map<ScreenKind, { at: number; body: object }>()
         kinds.set(kind as ScreenKind, { at, body })
         screens.set(device, kinds)
+        if (kind === 'screenshot') {
+          clearTimeout(screenshotTimers.get(device))
+          screenshotTimers.set(device, setTimeout(() => dropScreenshot(device), SCREENSHOT_TTL_MS))
+        }
         io?.emit('phone:screen', { device, kind })
         return
       }
@@ -348,7 +384,7 @@ function handle(text: string): void {
  * when it isn't, the relay keeps the request for when it opens. `action:
  * 'sync'` has the phone first check R2 for chapters just sent; a relay
  * deployed before actions existed drops it, and the phone only answers.
- * `args` go with `clipper_start` (a relay deployed before it drops both), but
+ * `args` go with the starts (a relay deployed before them drops them), but
  * `args.device` goes with any action: then only that phone gets it, and
  * `phones` is 1 or 0.
  */
@@ -365,7 +401,10 @@ export async function sendPhoneRequest(
     ...(args.device ? { device: args.device } : {}),
     ...(args.series ? { series: args.series } : {}),
     ...(args.tabs ? { tabs: args.tabs } : {}),
-    ...(args.chapters?.length ? { chapters: args.chapters } : {})
+    ...(args.chapters?.length ? { chapters: args.chapters } : {}),
+    ...(args.ai ? { ai: args.ai } : {}),
+    ...(args.flow ? { flow: args.flow } : {}),
+    ...(args.language ? { language: args.language } : {})
   }
   if (socket && connected && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: 'request', ...request }))

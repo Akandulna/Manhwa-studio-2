@@ -2347,7 +2347,7 @@ export interface PhoneScriptsStatus {
  * chapters for narration and the run's splits for voiceover.
  */
 export interface PhoneScriptRun {
-  kind: 'narration' | 'voiceover'
+  kind: 'narration' | 'editor' | 'voiceover'
   series: string
   done: number
   total: number
@@ -2583,10 +2583,33 @@ export interface PhoneAutomation {
   /** personal: shows over the lock screen, PIN kept. dedicated: dismisses the lock screen, locks after. */
   wakeMode: 'personal' | 'dedicated'
   resumeAfterLimit: boolean
-  /** "Start from Manhwa Studio" is on: the Start and Stop buttons reach it. */
+  /** "Start from Manhwa Studio" is on: Run automation and Stop reach it. */
   remoteStart: boolean
   /** The run waiting for a ChatGPT limit to lift, or for the phone to come online; null when none is. */
   resume: { seriesId: string | null; series: string; tabs: number; at: string } | null
+  /** The runs it can start from here; builds before the others start only Image Clipper (older servers leave it out). */
+  runs?: PhoneRunKind[]
+  /** How Image Clipper last ran there; null from builds before it was sent. */
+  clipper?: { ai: PhoneClipperAi; flow: PhoneClipperFlow; tabs: number } | null
+}
+
+/** The automation runs Sleeper-Cell can start from here (PhoneRunKind in r2Service.ts). */
+export type PhoneRunKind = 'clipper' | 'narration' | 'editor' | 'voiceover'
+/** Image Clipper's AI: ChatGPT, or Gemini in AI Studio. */
+export type PhoneClipperAi = 'chatgpt' | 'aistudio'
+/** Image Clipper's prompting: one prompt then review rounds (classic), or four steps. */
+export type PhoneClipperFlow = 'classic' | 'steps'
+
+/** What to start: the run, its series, and how (the options that run takes). */
+export interface PhoneAutomationOptions {
+  kind?: PhoneRunKind
+  seriesId?: string
+  tabs?: number
+  ai?: PhoneClipperAi
+  flow?: PhoneClipperFlow
+  language?: NarrationLanguage
+  device?: string
+  split?: boolean
 }
 
 /** One phone running Sleeper-Cell. */
@@ -2622,11 +2645,20 @@ export interface PhoneScreenState {
   last: { action: string; ok: boolean; note: string; at: string } | null
 }
 
-/** A phone's screen state and last screenshot of its browser tabs. */
+/**
+ * A phone's screen state, and the screenshot of its browser tabs waiting to be
+ * seen: the server holds it in memory only, until its viewer closes (then
+ * dropPhoneScreenshot) or for 10 minutes.
+ */
 export interface PhoneScreen {
   device: string
   screen: PhoneScreenState | null
-  screenshot: { takenAt: string; shots: { label: string; width: number; height: number; url: string }[] } | null
+  screenshot: {
+    takenAt: string
+    /** The Screenshot or Wake request it follows. */
+    answers: string | null
+    shots: { label: string; width: number; height: number; url: string }[]
+  } | null
 }
 
 /** Everything Sleeper-Cell has reported, across every series and phone (the Sleeper Cells page). */
@@ -2686,8 +2718,8 @@ export interface RelayStatus {
   lastReceiptAt: string | null
 }
 
-/** Image Clipper's start or stop, as sent: to each phone, or to every phone (device "*"). */
-export interface PhoneClipperSent extends PhoneUpdateRequest {
+/** A run's start or stop, as sent: to each phone, or to every phone (device "*"). */
+export interface PhoneAutomationSent extends PhoneUpdateRequest {
   targets?: { device: string; name: string; chapters: string[] | null; reached: boolean }[]
 }
 
@@ -2781,16 +2813,21 @@ export const r2Api = {
     fetchApi<PhoneUpdateRequest>('/r2/phone/request', { method: 'POST' }),
 
   /**
-   * Starts Image Clipper on the phone, through the relay: on `seriesId` in
-   * `tabs` ChatGPT tabs, or without them the phone's last run. Or stops it.
-   * `device` sends it to that phone only; `split` shares the series' chapters
-   * left out between the phones that can be started.
+   * Starts a run on the phone, through the relay: `kind` (Image Clipper when
+   * left out) on `seriesId`, with the options that run takes; Image Clipper
+   * without a series goes on with the phone's last run. Or stops whichever run
+   * is going. `device` sends it to that phone only; `split` (Image Clipper)
+   * shares the series' chapters left out between the phones that can be started.
    */
-  sendPhoneClipper: (command: 'start' | 'stop', options: { seriesId?: string; tabs?: number; device?: string; split?: boolean } = {}) =>
-    fetchApi<PhoneClipperSent>('/r2/phone/clipper', { method: 'POST', body: JSON.stringify({ command, ...options }) }),
+  sendPhoneAutomation: (command: 'start' | 'stop', options: PhoneAutomationOptions = {}) =>
+    fetchApi<PhoneAutomationSent>('/r2/phone/automation', { method: 'POST', body: JSON.stringify({ command, ...options }) }),
 
   /** Each phone's screen state and last screenshot, from the relay. */
   getPhoneScreens: () => fetchApi<{ phones: PhoneScreen[] }>('/r2/phone/screens'),
+
+  /** Forgets a phone's screenshot on the server, once its viewer closes. */
+  dropPhoneScreenshot: (device: string) =>
+    fetchApi<{ ok: true; dropped: boolean }>(`/r2/phone/screens/${encodeURIComponent(device)}/screenshot`, { method: 'DELETE' }),
 
   /** Wake (`on`, kept on until `off`), Screen off, or Screenshot (`shot`) on one phone. */
   sendPhoneScreen: (command: 'on' | 'off' | 'shot', device: string) =>

@@ -8,11 +8,14 @@
  *   screen       { device, deviceId, updatedAt, answers?, on, locked, appOpen, keptOn, canLock, remoteStart,
  *                  last?: { action, ok, note, at } }
  *   screenshot   { device, deviceId, takenAt, answers?, shots: [{ label, width, height, jpeg (base64) }] }
- * A screenshot is posted only when there is one, so a failed one (its note is
- * in `screen.last`) leaves the previous one in place.
+ *   (`answers` on a screenshot is the Screenshot or Wake request it follows.)
+ * A screenshot is posted only when there is one; a failed one's note is in
+ * `screen.last`. Screenshots are kept nowhere: the relay only passes them on,
+ * and phoneRelay.ts holds the last one in memory until Phone Status has shown
+ * it and asks for it to be dropped (dropPhoneScreenshot), or for 10 minutes.
  */
 
-import { relayConfigured, relayPhones, relayScreens, sendPhoneRequest, type PhoneAction } from './phoneRelay.js'
+import { dropScreenshot, relayConfigured, relayPhones, relayScreens, sendPhoneRequest, type PhoneAction } from './phoneRelay.js'
 
 export type ScreenCommand = 'on' | 'off' | 'shot'
 
@@ -32,6 +35,7 @@ interface ScreenReceipt {
 
 interface ScreenshotReceipt {
   takenAt?: unknown
+  answers?: unknown
   shots?: { label?: unknown; width?: unknown; height?: unknown; jpeg?: unknown }[]
 }
 
@@ -55,6 +59,8 @@ export interface PhoneScreenState {
 
 export interface PhoneScreenshot {
   takenAt: string
+  /** The Screenshot or Wake request it follows. */
+  answers: string | null
   /** Where each image is served: GET /r2/phone/screens/:device/:index (with ?v= to bust the cache). */
   shots: { label: string; width: number; height: number; url: string }[]
 }
@@ -103,7 +109,8 @@ export function getPhoneScreens(): PhoneScreen[] {
         height: Number(shot.height) || 0,
         url: `/api/r2/phone/screens/${encodeURIComponent(device)}/${index}?v=${Date.parse(takenAt) || at}`
       }))
-    if (shots.length) entry(device).screenshot = { takenAt, shots }
+    const answers = typeof body.answers === 'string' && body.answers ? body.answers : null
+    if (shots.length) entry(device).screenshot = { takenAt, answers, shots }
   }
   return [...byDevice.values()]
 }
@@ -113,6 +120,11 @@ export function phoneScreenshotImage(device: string, index: number): Buffer | nu
   const receipt = relayScreens<ScreenshotReceipt>('screenshot').find(r => r.device === device)
   const jpeg = receipt?.body.shots?.[index]?.jpeg
   return typeof jpeg === 'string' && jpeg ? Buffer.from(jpeg, 'base64') : null
+}
+
+/** Forgets a phone's screenshot: Phone Status showed it and its viewer closed. */
+export function dropPhoneScreenshot(device: string): boolean {
+  return dropScreenshot(device)
 }
 
 /**
