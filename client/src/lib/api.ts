@@ -1135,8 +1135,36 @@ export interface Clipper3ChapterImages {
     missing: number
     /** Files no done page accounts for — the next cut removes them. */
     extra: number
+    /** Done pages whose crop boxes changed after they were cut (same names, old pixels). */
+    changed: number
   }
+  /** Whether the whole chapter is reviewed — Crop Sections waits for it. */
+  review: Clipper3ChapterReview
   neighbours: ChapterNeighbours
+}
+
+/**
+ * A whole chapter's review (server services/clipper3/chapterReview.ts):
+ * marked on the Master phone (arrives with Sync json) or in Preview.
+ */
+export interface Clipper3ChapterReview {
+  reviewed: boolean
+  reviewedAt: string | null
+  by: 'phone' | 'desktop' | null
+  /** The phone's name, for phone reviews. */
+  device?: string
+  etag?: string
+  editedPages?: string[]
+  movedCrops?: number
+  deletedCrops?: number
+}
+
+/** Crop Sections refused because the chapter isn't reviewed yet (409 CHAPTER_NOT_REVIEWED). */
+export class Clipper3NotReviewedError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'Clipper3NotReviewedError'
+  }
 }
 
 export interface Clipper3Point {
@@ -1473,8 +1501,12 @@ export interface Clipper3SyncedPage {
   folder: string
   /** The source image it resolved to, when it resolved to one. */
   filename: string | null
-  status: 'imported' | 'ready' | 'skipped' | 'failed'
-  /** Why, for 'skipped' and 'failed'. Empty for 'imported'/'ready'. */
+  /**
+   * 'replaced': an attached page overwritten by the Master phone's review of
+   * it — or, from the preview, about to be.
+   */
+  status: 'imported' | 'ready' | 'replaced' | 'skipped' | 'failed'
+  /** Why, for 'replaced', 'skipped' and 'failed'. Empty for 'imported'/'ready'. */
   reason: string
   cropCount: number
 }
@@ -1485,6 +1517,8 @@ export interface Clipper3ChapterSyncResult {
   imported: number
   /** Attachable, on a preview. Always 0 once the sync has actually run. */
   ready: number
+  /** Attached pages replaced by a phone review (or to be, on a preview). */
+  replaced: number
   skipped: number
   failed: number
   pages: Clipper3SyncedPage[]
@@ -1500,7 +1534,7 @@ export interface Clipper3PhoneCropsFetch {
   /** Chapter zips in R2 for this series. */
   found: number
   /** Chapters unpacked by this run: new, or re-uploaded by the phone. */
-  fetched: { chapterId: string; chapterNumber: number; folder: string; pages: number }[]
+  fetched: { chapterId: string; chapterNumber: number; folder: string; pages: number; reviewed: boolean }[]
   /** Chapters already unpacked from the same zip before. */
   upToDate: number
   /** Zips with no desktop chapter folder of that name. */
@@ -1512,6 +1546,7 @@ export interface Clipper3PhoneCropsFetch {
 export interface Clipper3SyncPreview {
   chapters: number
   ready: number
+  replaced: number
   skipped: number
   failed: number
   results: Clipper3ChapterSyncResult[]
@@ -1559,6 +1594,7 @@ export interface Clipper3ChapterSummary {
   chopped: boolean
   /** Every page is done and crops3/ holds exactly the files they cut to. */
   cropComplete: boolean
+  review: Clipper3ChapterReview
 }
 
 /** Crop rules document state (Settings → Crop Pointers). */
@@ -1617,6 +1653,18 @@ export const clipper3Api = {
 
   getImages: (chapterId: string) =>
     fetchApi<Clipper3ChapterImages>(`/clipper3/chapters/${chapterId}/images`),
+
+  // Named apart from getReview/saveReview below, which are Crop Studio's
+  // per-page review; this is the whole chapter's reviewed flag.
+  getChapterReview: (chapterId: string) =>
+    fetchApi<Clipper3ChapterReview>(`/clipper3/chapters/${chapterId}/review`),
+
+  // The desktop's Mark reviewed / Unmark (Preview); Crop Sections needs it.
+  setChapterReview: (chapterId: string, reviewed: boolean) =>
+    fetchApi<Clipper3ChapterReview>(`/clipper3/chapters/${chapterId}/review`, {
+      method: 'PUT',
+      body: JSON.stringify({ reviewed })
+    }),
 
   getSeriesSummary: (seriesId: string) =>
     fetchApi<{ chapters: Clipper3ChapterSummary[] }>(`/clipper3/series/${seriesId}/summary`),
@@ -1859,10 +1907,23 @@ export const clipper3Api = {
     ),
 
   // Cuts every image that has its own artifact; progress over 'clipper3:crop-*'.
-  crop: (chapterId: string) =>
-    fetchApi<{ started: boolean; images: number }>(`/clipper3/chapters/${chapterId}/crop`, {
-      method: 'POST'
-    }),
+  // Not fetchApi: an unreviewed chapter answers 409 with a code in `error` and
+  // the sentence in `message`, and the caller needs to tell that case apart.
+  crop: async (chapterId: string): Promise<{ started: boolean; images: number }> => {
+    const response = await fetch(`${API_BASE}/clipper3/chapters/${chapterId}/crop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    })
+    const payload = await response.json().catch(() => null) as
+      ({ started: boolean; images: number } & { error?: string; message?: string }) | null
+    if (response.status === 409 && payload?.error === 'CHAPTER_NOT_REVIEWED') {
+      throw new Clipper3NotReviewedError(payload.message || 'Mark this chapter reviewed before cropping.')
+    }
+    if (!response.ok || !payload) {
+      throw new Error(payload?.error || payload?.message || `Request failed (${response.status} ${response.statusText})`)
+    }
+    return payload
+  },
 
   getOutputs: (chapterId: string) =>
     fetchApi<{ exportDir: string | null; files: Clipper3Output[] }>(

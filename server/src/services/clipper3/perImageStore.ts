@@ -631,27 +631,68 @@ export interface ChapterCropOutputs {
   missing: number
   /** Files no done page accounts for — left over from older pointers. */
   extra: number
+  /**
+   * Done pages whose pointers were rewritten after their files were cut.
+   * Names alone can't show this: moving or resizing a crop keeps its
+   * exportedFilename, so the old PNG still "matches" while showing the wrong
+   * part of the page.
+   */
+  changed: number
+}
+
+/** A file's modification time, or null when it can't be read. */
+async function mtimeOf(file: string): Promise<number | null> {
+  try {
+    return (await fs.stat(file)).mtimeMs
+  } catch {
+    return null
+  }
 }
 
 /**
  * `expected` is every exported name of the chapter's done pages. Read from disk
  * each time rather than remembered from the last run, so re-pasting a page
  * after cropping shows the chapter as needing another cut.
+ *
+ * `donePages` (the done images' filenames, and the series slug the cutter
+ * prefixes them with) adds the `changed` check: a page whose crop_points3 file
+ * is newer than the oldest of its cut files was edited — by hand, by an
+ * export, or by Sync json applying a phone review — since it was cut. Only
+ * the cutter writes crops3/, so the two times are directly comparable.
  */
 export async function chapterCropOutputs(
   folderPath: string,
   expected: string[],
-  allPagesDone: boolean
+  allPagesDone: boolean,
+  donePages?: { slug: string; filenames: string[] }
 ): Promise<ChapterCropOutputs> {
   const onDisk = new Set((await listOutputs(folderPath)).map(f => f.filename))
   const wanted = new Set(expected)
   const missing = [...wanted].filter(name => !onDisk.has(name)).length
   const extra = [...onDisk].filter(name => !wanted.has(name)).length
+
+  let changed = 0
+  if (donePages) {
+    const dir = getOutputDir(folderPath)
+    for (const filename of donePages.filenames) {
+      // The cutter's own naming (perImageCrop.ts): `<slug>_<stem>_NN…png`.
+      const prefix = `${donePages.slug}_${stemOf(filename)}_`
+      const cut = [...onDisk].filter(name => name.startsWith(prefix) && wanted.has(name))
+      if (cut.length === 0) continue // not cut yet: `missing` already says so
+      const pointsTime = await mtimeOf(getPointsFilePathFor(folderPath, filename))
+      if (pointsTime == null) continue
+      const cutTimes = (await Promise.all(cut.map(name => mtimeOf(path.join(dir, name)))))
+        .filter((t): t is number => t != null)
+      if (cutTimes.length > 0 && pointsTime > Math.min(...cutTimes)) changed++
+    }
+  }
+
   return {
-    complete: allPagesDone && wanted.size > 0 && missing === 0 && extra === 0,
+    complete: allPagesDone && wanted.size > 0 && missing === 0 && extra === 0 && changed === 0,
     files: onDisk.size,
     missing,
-    extra
+    extra,
+    changed
   }
 }
 

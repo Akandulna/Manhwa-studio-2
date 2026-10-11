@@ -10,14 +10,16 @@
  *   GET    /series                                 series with downloaded chapters
  *   GET    /chapters                               every downloaded chapter
  *   GET    /chapters/:id/image/:filename           one source page image
- *   GET    /chapters/:id/images                    every image + its own status, prev/next chapter
+ *   GET    /chapters/:id/images                    every image + its own status, prev/next chapter, review
+ *   GET    /chapters/:id/review                    whether the whole chapter is reviewed (cropping needs it)
+ *   PUT    /chapters/:id/review                    the desktop's Mark reviewed / Unmark
  *   GET    /chapters/:id/images/:filename/points   that image's crop artifact
  *   PUT    /chapters/:id/images/:filename/points   store that image's crop artifact
  *   DELETE /chapters/:id/images/:filename/points   drop it
  *   GET    /chapters/:id/images/:filename/metadata that image's metadata document
  *   PUT    /chapters/:id/images/:filename/metadata store that image's metadata
  *   DELETE /chapters/:id/images/:filename/metadata drop it
- *   POST   /chapters/:id/crop                      cut every done image, replacing the previous cut
+ *   POST   /chapters/:id/crop                      cut every done image, replacing the previous cut (reviewed chapters only)
  *   GET    /chapters/:id/outputs                   what was cut
  *   GET    /chapters/:id/output/:filename          one cut image
  *   POST   /chapters/:id/images/:filename/slices      cut that page into parts
@@ -110,6 +112,7 @@ import {
   updateOpenAiConfig
 } from '../services/clipper3/openaiAuto.js'
 import { fetchPhoneCrops } from '../services/phoneCropImport.js'
+import { readChapterReview, setDesktopReview } from '../services/clipper3/chapterReview.js'
 import { reconcileQuietly } from '../services/diskReconcile.js'
 import { doneNeighbours } from '../services/pageStitch.js'
 import {
@@ -370,6 +373,7 @@ export function initClipper3Routes(io: Server): Router {
       const described = await listMetadataImageStems(chapter.folderPath)
 
       const expectedOutputs: string[] = []
+      const doneFiles: string[] = []
       const images = await Promise.all(
         manifest.images.map(async img => {
           const stem = stemOf(img.filename)
@@ -409,7 +413,10 @@ export function initClipper3Routes(io: Server): Router {
           // the result, and an image is only finished once it has both AND
           // the metadata actually still matches those crops.
           const status: 'done' | 'pending' = parseable && hasMetadata && metadataValid ? 'done' : 'pending'
-          if (status === 'done') expectedOutputs.push(...exportedNames)
+          if (status === 'done') {
+            expectedOutputs.push(...exportedNames)
+            doneFiles.push(img.filename)
+          }
 
           return {
             filename: img.filename,
@@ -438,8 +445,10 @@ export function initClipper3Routes(io: Server): Router {
         cropOutputs: await chapterCropOutputs(
           chapter.folderPath,
           expectedOutputs,
-          images.length > 0 && images.every(img => img.status === 'done')
+          images.length > 0 && images.every(img => img.status === 'done'),
+          { slug: seriesSlug(chapter.series.title), filenames: doneFiles }
         ),
+        review: await readChapterReview(chapter.folderPath),
         neighbours: await doneNeighbours(chapter.seriesId, chapter.number)
       })
     } catch (error) {
@@ -738,12 +747,59 @@ export function initClipper3Routes(io: Server): Router {
     }
   })
 
+  // ============ Chapter review ============
+
+  /**
+   * GET /chapters/:id/review
+   *
+   * Whether the whole chapter has been looked over — on the Master phone (it
+   * arrives with Sync json's R2 fetch) or in Preview — which is what cropping
+   * waits for. `reviewed: false` when it never was.
+   */
+  router.get('/chapters/:id/review', async (req: Request, res: Response) => {
+    try {
+      const chapter = await findChapter(req.params.id)
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+      res.json(await readChapterReview(chapter.folderPath))
+    } catch (error) {
+      console.error('[clipper3] reading chapter review failed:', error)
+      res.status(500).json({ error: 'Failed to read the chapter review' })
+    }
+  })
+
+  /**
+   * PUT /chapters/:id/review   body: { reviewed: boolean }
+   *
+   * The desktop's Mark reviewed / Unmark. Marking replaces a phone review
+   * with the desktop's own (now, by: 'desktop'); unmarking clears either.
+   */
+  router.put('/chapters/:id/review', async (req: Request, res: Response) => {
+    try {
+      const chapter = await findChapter(req.params.id)
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+      const reviewed: unknown = req.body?.reviewed
+      if (typeof reviewed !== 'boolean') {
+        return res.status(400).json({ error: 'reviewed (boolean) is required' })
+      }
+      res.json(await setDesktopReview(chapter.folderPath, reviewed))
+    } catch (error) {
+      console.error('[clipper3] saving chapter review failed:', error)
+      res.status(500).json({ error: 'Failed to save the chapter review' })
+    }
+  })
+
   /**
    * POST /chapters/:id/crop
    *
    * Cuts every image that has its own artifact — that is exactly the set the UI
    * shows as Done, because both answer the same question of the filesystem.
    * Runs in the background; progress arrives over `clipper3:crop-*`.
+   *
+   * Only for a reviewed chapter (409 CHAPTER_NOT_REVIEWED otherwise): phone
+   * crops are a draft until somebody has looked at the whole chapter, and a
+   * cut made from the draft would feed the editor boxes nobody checked. Crop
+   * Studio's per-page export and the API auto run are not gated — they are
+   * the desktop's own clipping flow, and produce the JSON being reviewed.
    */
   router.post('/chapters/:id/crop', async (req: Request, res: Response) => {
     try {
@@ -752,6 +808,12 @@ export function initClipper3Routes(io: Server): Router {
       if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
       if (cropping.has(chapterId)) {
         return res.status(409).json({ error: 'This chapter is already being cropped' })
+      }
+      if (!(await readChapterReview(chapter.folderPath)).reviewed) {
+        return res.status(409).json({
+          error: 'CHAPTER_NOT_REVIEWED',
+          message: 'Mark this chapter reviewed before cropping — on the Master phone or in Preview.'
+        })
       }
 
       const manifest = await getChapterManifest(chapter.folderPath)
@@ -919,6 +981,7 @@ export function initClipper3Routes(io: Server): Router {
           const totalImages = manifest.images.length
           let attachedImages = 0
           const expectedOutputs: string[] = []
+          const doneFiles: string[] = []
           for (const img of manifest.images) {
             const stem = stemOf(img.filename)
             if (!pointed.has(stem) || !described.has(stem)) continue
@@ -941,6 +1004,7 @@ export function initClipper3Routes(io: Server): Router {
             ) {
               attachedImages++
               expectedOutputs.push(...exportedNames)
+              doneFiles.push(img.filename)
             }
           }
 
@@ -954,9 +1018,11 @@ export function initClipper3Routes(io: Server): Router {
               await chapterCropOutputs(
                 chapter.folderPath,
                 expectedOutputs,
-                totalImages > 0 && attachedImages === totalImages
+                totalImages > 0 && attachedImages === totalImages,
+                { slug: seriesSlug(chapter.series.title), filenames: doneFiles }
               )
-            ).complete
+            ).complete,
+            review: await readChapterReview(chapter.folderPath)
           }
         })
       )
@@ -1720,6 +1786,7 @@ export function initClipper3Routes(io: Server): Router {
       void (async () => {
         const results: ChapterSyncResult[] = []
         let imported = 0
+        let replaced = 0
         let skipped = 0
         let failed = 0
 
@@ -1757,6 +1824,7 @@ export function initClipper3Routes(io: Server): Router {
               })
 
               imported += result.imported
+              replaced += result.replaced
               skipped += result.skipped
               failed += result.failed
               // Only chapters that actually had something in Processed/ are
@@ -1773,6 +1841,7 @@ export function initClipper3Routes(io: Server): Router {
                 chapterNumber: chapter.number,
                 imported: 0,
                 ready: 0,
+                replaced: 0,
                 skipped: 0,
                 failed: 1,
                 pages: [{
@@ -1790,6 +1859,7 @@ export function initClipper3Routes(io: Server): Router {
             seriesId,
             chapters: chapters.length,
             imported,
+            replaced,
             skipped,
             failed,
             results
@@ -1858,6 +1928,7 @@ export function initClipper3Routes(io: Server): Router {
 
       const results: ChapterSyncResult[] = []
       let ready = 0
+      let replaced = 0
       let skipped = 0
       let failed = 0
 
@@ -1884,6 +1955,7 @@ export function initClipper3Routes(io: Server): Router {
           })
 
           ready += result.ready
+          replaced += result.replaced
           skipped += result.skipped
           failed += result.failed
           if (result.pages.length > 0) results.push(result)
@@ -1896,6 +1968,7 @@ export function initClipper3Routes(io: Server): Router {
             chapterNumber: chapter.number,
             imported: 0,
             ready: 0,
+            replaced: 0,
             skipped: 0,
             failed: 1,
             pages: [{
@@ -1909,7 +1982,7 @@ export function initClipper3Routes(io: Server): Router {
         }
       }
 
-      res.json({ chapters: chapters.length, ready, skipped, failed, results })
+      res.json({ chapters: chapters.length, ready, replaced, skipped, failed, results })
     } catch (error) {
       console.error('[clipper3] previewing sync failed:', error)
       res.status(500).json({ error: 'Failed to preview the sync' })

@@ -34,6 +34,11 @@
  * through the same helpers, so a synced page is indistinguishable from a
  * pasted one. Anything else is skipped and reported; a bad file in one folder
  * never stops the rest of the chapter.
+ *
+ * One exception to "already attached pages are left alone": a chapter the
+ * Master phone reviewed (its FETCH_MARKER says `reviewed: true` and not yet
+ * `applied`) has its attached pages REPLACED where the review changed them,
+ * once — see `syncChapterProcessed`.
  */
 
 import fs from 'fs/promises'
@@ -42,6 +47,8 @@ import {
   deleteImageMetadata,
   deleteImagePoints,
   extractCrops,
+  readImageMetadata,
+  readImagePoints,
   expectedExportedFilenames,
   getSourceFolderPath,
   listMetadataImageStems,
@@ -51,11 +58,105 @@ import {
   writeImageMetadata,
   canonicalizeExportedFilenames,
   writeImagePoints,
+  type Clipper3CropEntry,
   type Clipper3ImageCropFile
 } from './perImageStore.js'
 
 const FORMAT = 'four-point-crop'
 const VERSION = '1.0'
+
+/**
+ * In each `Processed/<Chapter>/`: which R2 zip it was unpacked from
+ * (phoneCropImport.ts writes it). Kept here rather than there because Sync
+ * json reads it too, and phoneCropImport already depends on this module.
+ * Sync json ignores plain files, so it is never mistaken for a page.
+ */
+export const FETCH_MARKER = '.r2-crops.json'
+
+/** What phoneCropImport records about the zip a Processed folder came from. */
+export interface FetchMarker {
+  key?: string
+  etag?: string
+  fetchedAt?: string
+  pages?: number
+  /** The zip's chapter.json said the Master phone reviewed it. */
+  reviewed?: boolean
+  /** A sync has already put that review into the store; back to the skip rule. */
+  applied?: boolean
+  appliedAt?: string
+}
+
+/** The chapter's FETCH_MARKER, or null when it was not fetched from R2 (or is unreadable). */
+export async function readFetchMarker(folderPath: string): Promise<FetchMarker | null> {
+  try {
+    const marker = JSON.parse(await fs.readFile(path.join(getProcessedDir(folderPath), FETCH_MARKER), 'utf-8'))
+    return marker && typeof marker === 'object' ? marker : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Records that a reviewed chapter's pages are now in the store, so the next
+ * Sync json goes back to skipping attached pages. Without this every later
+ * sync would put the phone's review back over edits made on the desktop
+ * since — the review is applied once, not enforced.
+ */
+async function markReviewApplied(folderPath: string, marker: FetchMarker): Promise<void> {
+  const next = { ...marker, applied: true, appliedAt: new Date().toISOString() }
+  await fs.writeFile(path.join(getProcessedDir(folderPath), FETCH_MARKER), JSON.stringify(next, null, 2) + '\n', 'utf-8')
+}
+
+/**
+ * JSON with every object's keys sorted, so two documents that differ only in
+ * key order or whitespace compare equal. The phone re-serializes what it
+ * uploads; byte equality would call an untouched page "changed".
+ */
+function canonicalJson(value: unknown): string {
+  const sort = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(sort)
+    if (v && typeof v === 'object') {
+      return Object.fromEntries(Object.keys(v as object).sort().map(k => [k, sort((v as Record<string, unknown>)[k])]))
+    }
+    return v
+  }
+  return JSON.stringify(sort(value))
+}
+
+/** Just what decides the cut: id, reason (it names the file), mode and the four points. */
+function cropsKey(crops: Clipper3CropEntry[]): string {
+  return canonicalJson(crops.map(c => ({
+    id: c.id,
+    reason: c.reason ?? '',
+    mode: c.crop.mode,
+    points: c.crop.points.map(p => ({ id: p.id, x: p.x, y: p.y }))
+  })))
+}
+
+function metadataKey(text: string): string {
+  try {
+    return canonicalJson(JSON.parse(text))
+  } catch {
+    return text.trim()
+  }
+}
+
+/**
+ * Whether the store already holds exactly this page — same crops, same
+ * metadata — by content, not bytes. A page the review didn't touch must stay
+ * "skipped", not be rewritten (which would also mark its cut out of date).
+ */
+async function storeMatches(
+  folderPath: string,
+  imageFilename: string,
+  crops: Clipper3CropEntry[],
+  metadataText: string
+): Promise<boolean> {
+  const stored = await readImagePoints(folderPath, imageFilename)
+  const storedMeta = await readImageMetadata(folderPath, imageFilename)
+  if (!stored?.file || storedMeta == null) return false
+  return cropsKey(extractCrops(stored.file)) === cropsKey(crops) && metadataKey(storedMeta) === metadataKey(metadataText)
+}
 
 /**
  * Where this chapter's drop-off files live: ONE `Processed/` folder per series,
@@ -100,14 +201,18 @@ export function pageNumberOf(name: string): number | null {
  * What happened to one `Processed/page_###` folder — or, on a dry run, what
  * WOULD happen: 'ready' is the preview's form of 'imported', reached by every
  * check the real run makes and stopping only at the write itself.
+ *
+ * 'replaced' is an attached page overwritten by the Master phone's review of
+ * it; on a dry run it means "would be replaced" (the same word in both, since
+ * the preview dialog shows it either way).
  */
 export interface SyncedPage {
   /** The folder as it appears on disk, e.g. "page_007". */
   folder: string
   /** The source image it resolved to, when it resolved to one. */
   filename: string | null
-  status: 'imported' | 'ready' | 'skipped' | 'failed'
-  /** Why, for 'skipped' and 'failed'. Empty for 'imported'/'ready'. */
+  status: 'imported' | 'ready' | 'replaced' | 'skipped' | 'failed'
+  /** Why, for 'replaced', 'skipped' and 'failed'. Empty for 'imported'/'ready'. */
   reason: string
   cropCount: number
 }
@@ -119,6 +224,8 @@ export interface ChapterSyncResult {
   imported: number
   /** Pages a dry run found attachable. Always 0 on a real run. */
   ready: number
+  /** Attached pages overwritten (or, on a dry run, to be overwritten) by a phone review. */
+  replaced: number
   /** Already done, or no Processed folder to read. */
   skipped: number
   /** Present but unusable — the ones worth showing the user. */
@@ -267,6 +374,14 @@ export interface SyncChapterInput {
  * re-written. Sync fills gaps; it is not a restore, and silently replacing a
  * page that was hand-corrected in the workspace with an older drop-off file
  * would lose that work with nothing on screen to show for it.
+ *
+ * Except once after a Master phone review. When the chapter's FETCH_MARKER
+ * says the zip was reviewed and that review has not been applied yet, an
+ * attached page whose Processed files differ from the store is replaced and
+ * reported as 'replaced' — the review is newer than the draft that was
+ * attached, and is the version the user asked to be cut. Pages that match
+ * stay 'skipped'. A real run then marks the review applied, so desktop edits
+ * made after it are protected by the normal rule again.
  */
 export async function syncChapterProcessed(input: SyncChapterInput): Promise<ChapterSyncResult> {
   const result: ChapterSyncResult = {
@@ -274,6 +389,7 @@ export async function syncChapterProcessed(input: SyncChapterInput): Promise<Cha
     chapterNumber: input.chapterNumber,
     imported: 0,
     ready: 0,
+    replaced: 0,
     skipped: 0,
     failed: 0,
     pages: []
@@ -281,6 +397,9 @@ export async function syncChapterProcessed(input: SyncChapterInput): Promise<Cha
 
   const processed = await readProcessedDir(input.folderPath)
   if (processed === null || processed.length === 0) return result
+
+  const marker = await readFetchMarker(input.folderPath)
+  const applyReview = marker?.reviewed === true && marker.applied !== true
 
   // Images indexed by page number, so a Processed folder resolves to a real
   // file regardless of how that file is named. A number claimed by two images
@@ -320,18 +439,24 @@ export async function syncChapterProcessed(input: SyncChapterInput): Promise<Cha
 
     const stem = stemOf(image.filename)
 
-    // Already finished — see the note above.
-    if (pointed.has(stem) && described.has(stem)) {
+    // Already finished — see the note above. A phone review goes on through
+    // the same checks and is compared with the store before anything is
+    // written.
+    const attached = pointed.has(stem) && described.has(stem)
+    if (attached && !applyReview) {
       record('skipped', 'Already attached.', image.filename)
       continue
     }
+    // A reviewed page that fails a check keeps what is attached: the reason
+    // says the review was the problem, not the page on screen.
+    const failPrefix = attached ? 'Reviewed on the phone, but not applied: ' : ''
 
     if (!page.pointersText || !page.metadataText) {
       const missing = [
         !page.pointersText ? 'crop-pointers' : null,
         !page.metadataText ? 'crop-metadata' : null
       ].filter(Boolean).join(' and ')
-      record('failed', `Missing ${missing} file.`, image.filename)
+      record('failed', `${failPrefix}Missing ${missing} file.`, image.filename)
       continue
     }
 
@@ -339,14 +464,14 @@ export async function syncChapterProcessed(input: SyncChapterInput): Promise<Cha
     try {
       parsed = JSON.parse(page.pointersText)
     } catch (err) {
-      record('failed', `Pointers file is not valid JSON: ${err instanceof Error ? err.message : 'could not parse'}`, image.filename)
+      record('failed', `${failPrefix}Pointers file is not valid JSON: ${err instanceof Error ? err.message : 'could not parse'}`, image.filename)
       continue
     }
 
     const artifact = toArtifact(parsed, image)
     const crops = extractCrops(artifact)
     if (crops.length === 0) {
-      record('failed', 'No usable four-point crop in the pointers file.', image.filename)
+      record('failed', `${failPrefix}No usable four-point crop in the pointers file.`, image.filename)
       continue
     }
     artifact.crops = crops
@@ -380,14 +505,20 @@ export async function syncChapterProcessed(input: SyncChapterInput): Promise<Cha
       input.seriesSlug
     )
     if (!validation.isValid) {
-      record('failed', validation.errors.join(' '), image.filename, crops.length)
+      record('failed', failPrefix + validation.errors.join(' '), image.filename, crops.length)
+      continue
+    }
+
+    if (attached && (await storeMatches(input.folderPath, image.filename, crops, metadataText))) {
+      record('skipped', 'Already attached.', image.filename, crops.length)
       continue
     }
 
     // Everything above is a read, so a dry run reaches here having proven the
     // page attachable by exactly the checks the real run applies.
     if (input.dryRun) {
-      record('ready', '', image.filename, crops.length)
+      if (attached) record('replaced', 'Reviewed on the phone — replaces the attached crops.', image.filename, crops.length)
+      else record('ready', '', image.filename, crops.length)
       continue
     }
 
@@ -395,12 +526,18 @@ export async function syncChapterProcessed(input: SyncChapterInput): Promise<Cha
       await writeImagePoints(input.folderPath, image.filename, artifact)
       await writeImageMetadata(input.folderPath, image.filename, metadataText)
     } catch (err) {
-      record('failed', `Could not write: ${err instanceof Error ? err.message : String(err)}`, image.filename, crops.length)
+      record('failed', `${failPrefix}Could not write: ${err instanceof Error ? err.message : String(err)}`, image.filename, crops.length)
       continue
     }
 
-    record('imported', '', image.filename, crops.length)
+    if (attached) record('replaced', 'Reviewed on the phone.', image.filename, crops.length)
+    else record('imported', '', image.filename, crops.length)
   }
+
+  // Applied even when some page failed: those failures are in this run's
+  // report, and leaving the review pending would have every later sync keep
+  // overwriting whatever the desktop changes afterwards.
+  if (applyReview && !input.dryRun && marker) await markReviewApplied(input.folderPath, marker)
 
   return result
 }

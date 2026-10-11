@@ -58,8 +58,8 @@ async function zipOf(files: Record<string, string>): Promise<Buffer> {
   return Buffer.concat(chunks)
 }
 
-const chapterZip = (chapter: string, pages: number[], tag = 'v1') => zipOf({
-  [`Solo Hero/${chapter}/chapter.json`]: JSON.stringify({ chapter, tag }),
+const chapterZip = (chapter: string, pages: number[], tag = 'v1', review?: object) => zipOf({
+  [`Solo Hero/${chapter}/chapter.json`]: JSON.stringify({ chapter, tag, ...(review ? { review } : {}) }),
   ...Object.fromEntries(pages.flatMap(p => {
     const n = String(p).padStart(3, '0')
     return [
@@ -130,7 +130,7 @@ describe('fetchPhoneCrops', () => {
 
     const first = await fetchPhoneCrops('s1')
     expect(first).toMatchObject({ configured: true, found: 2, upToDate: 0, unmatched: ['Chapter 404'], failed: [] })
-    expect(first.fetched).toEqual([{ chapterId: 'c9', chapterNumber: 9, folder: 'Chapter 009', pages: 2 }])
+    expect(first.fetched).toEqual([{ chapterId: 'c9', chapterNumber: 9, folder: 'Chapter 009', pages: 2, reviewed: false }])
     expect((await fs.readdir(processed('Chapter 009'))).sort()).toEqual([FETCH_MARKER, 'chapter.json', 'page_001', 'page_002'])
     // The zip itself is never written to disk.
     expect(await fs.readdir(path.join(root, 'Solo Hero', 'Processed'))).toEqual(['Chapter 009'])
@@ -148,6 +148,47 @@ describe('fetchPhoneCrops', () => {
     expect(third.fetched.map(c => c.folder)).toEqual(['Chapter 009'])
     expect(await fs.readFile(path.join(processed('Chapter 009'), 'page_002', 'crop-pointers-ch009-p002.json'), 'utf-8'))
       .toBe('{"tag":"v2"}')
+  })
+
+  it('records a Master phone review from chapter.json, and drops it when unreviewed crops replace it', async () => {
+    const key = 'crops/Solo Hero/Chapter 009.zip'
+    const reviewFile = path.join(root, 'Solo Hero', 'Chapter 009', '.clipper3-review.json')
+    const marker = async () => JSON.parse(await fs.readFile(path.join(processed('Chapter 009'), FETCH_MARKER), 'utf-8'))
+
+    zips.set(key, await chapterZip('Chapter 009', [1, 2], 'v2', {
+      reviewed: true,
+      reviewed_at: '2026-10-11T10:00:00.000Z',
+      device: 'Redmi Note 10 Pro',
+      by: 'master',
+      edited_pages: ['page_002'],
+      moved_crops: 3,
+      deleted_crops: 1
+    }))
+    etags.set(key, 'r1')
+    const reviewed = await fetchPhoneCrops('s1')
+    expect(reviewed.fetched).toEqual([{ chapterId: 'c9', chapterNumber: 9, folder: 'Chapter 009', pages: 2, reviewed: true }])
+    expect(JSON.parse(await fs.readFile(reviewFile, 'utf-8'))).toEqual({
+      reviewed: true,
+      reviewedAt: '2026-10-11T10:00:00.000Z',
+      by: 'phone',
+      device: 'Redmi Note 10 Pro',
+      etag: 'r1',
+      editedPages: ['page_002'],
+      movedCrops: 3,
+      deletedCrops: 1
+    })
+    // Sync json is told to put the review over pages already attached.
+    expect(await marker()).toMatchObject({ etag: 'r1', reviewed: true, applied: false })
+
+    // A clipping phone re-clips the chapter: new content, so it needs review again.
+    zips.set(key, await chapterZip('Chapter 009', [1, 2], 'v3', { reviewed: false }))
+    etags.set(key, 'r2')
+    const redone = await fetchPhoneCrops('s1')
+    expect(redone.fetched[0].reviewed).toBe(false)
+    expect(JSON.parse(await fs.readFile(reviewFile, 'utf-8'))).toEqual({ reviewed: false, reviewedAt: null, by: null })
+    const after = await marker()
+    expect(after).toMatchObject({ etag: 'r2', reviewed: false })
+    expect(after.applied).toBeUndefined()
   })
 
   it('finds zips under our prefix as well, and narrows to the chosen chapters', async () => {

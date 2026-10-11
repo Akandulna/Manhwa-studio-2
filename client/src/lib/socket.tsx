@@ -151,6 +151,8 @@ interface Clipper3SyncComplete {
   seriesId: string
   chapters?: number
   imported?: number
+  /** Attached pages overwritten by a Master phone review. */
+  replaced?: number
   skipped?: number
   failed?: number
   results?: {
@@ -158,12 +160,13 @@ interface Clipper3SyncComplete {
     chapterNumber: number
     imported: number
     ready: number
+    replaced: number
     skipped: number
     failed: number
     pages: {
       folder: string
       filename: string | null
-      status: 'imported' | 'ready' | 'skipped' | 'failed'
+      status: 'imported' | 'ready' | 'replaced' | 'skipped' | 'failed'
       reason: string
       cropCount: number
     }[]

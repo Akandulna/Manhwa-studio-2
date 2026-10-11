@@ -14,6 +14,10 @@
  * per-image dialog in Clipper3ImageList) — this page just stacks one per
  * image, tracks which one is currently being edited so the rest can dim, and
  * keeps its own crop count in sync after a save.
+ *
+ * It is also where the desktop reviews a chapter: the footer under the last
+ * page marks the whole chapter reviewed (Crop Sections waits for that, as it
+ * does for a Master phone review) and moves on to the next chapter.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
@@ -21,8 +25,26 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { ArrowLeft, Loader2, AlertTriangle, ZoomIn, ZoomOut, Pencil, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
-import { clipper3Api, type Clipper3ChapterImages, type Clipper3ImageCropFile } from '@/lib/api'
+import {
+  ArrowLeft,
+  Loader2,
+  AlertTriangle,
+  ZoomIn,
+  ZoomOut,
+  Pencil,
+  PanelLeftClose,
+  PanelLeftOpen,
+  ShieldCheck,
+  ShieldAlert,
+  ChevronRight
+} from 'lucide-react'
+import {
+  clipper3Api,
+  type Clipper3ChapterImages,
+  type Clipper3ChapterReview,
+  type Clipper3ImageCropFile
+} from '@/lib/api'
+import { useToast } from '@/components/ui/use-toast'
 import { CropPointerEditor, type CropMetadataEntry } from '@/components/clipper3/CropPointerEditor'
 import ChapterSwitcher from '@/components/ChapterSwitcher'
 
@@ -56,6 +78,34 @@ function parseMetadataByCropId(content: string): Record<string, CropMetadataEntr
   return out
 }
 
+/** "on phone (Redmi Note 10 Pro)" / "on desktop", plus when. */
+function describeReview(review: Clipper3ChapterReview): string {
+  const where = review.by === 'phone'
+    ? `on phone${review.device ? ` (${review.device})` : ''}`
+    : review.by === 'desktop' ? 'on desktop' : null
+  const when = review.reviewedAt ? new Date(review.reviewedAt).toLocaleString() : null
+  return ['Reviewed', where, when].filter(Boolean).join(' · ')
+}
+
+/** Header chip beside the crop count. */
+function ReviewBadge({ review }: { review: Clipper3ChapterReview }) {
+  return review.reviewed ? (
+    <Badge variant="success" className="flex items-center gap-1 flex-shrink-0" title={describeReview(review)}>
+      <ShieldCheck className="h-3 w-3" />
+      Reviewed
+    </Badge>
+  ) : (
+    <Badge
+      variant="outline"
+      className="flex items-center gap-1 flex-shrink-0 text-amber-500 border-amber-500/50"
+      title="Crop Sections waits until the chapter is marked reviewed — at the bottom of this page, or on the Master phone"
+    >
+      <ShieldAlert className="h-3 w-3" />
+      Not reviewed
+    </Badge>
+  )
+}
+
 // Keyed by chapter so Previous/Next remounts the page with fresh per-file state.
 export default function Clipper3Preview() {
   const { id } = useParams<{ id: string }>()
@@ -65,6 +115,8 @@ export default function Clipper3Preview() {
 function Clipper3ChapterPreview() {
   const { id: chapterId } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const { toast } = useToast()
+  const [savingReview, setSavingReview] = useState(false)
 
   const [data, setData] = useState<Clipper3ChapterImages | null>(null)
   const [filesByFile, setFilesByFile] = useState<Record<string, Clipper3ImageCropFile | null>>({})
@@ -173,6 +225,30 @@ function Clipper3ChapterPreview() {
     return () => observer.disconnect()
   }, [data])
 
+  /** The footer's Mark reviewed / Unmark. */
+  const setReviewed = useCallback(async (reviewed: boolean) => {
+    if (!chapterId) return
+    setSavingReview(true)
+    try {
+      const review = await clipper3Api.setChapterReview(chapterId, reviewed)
+      setData(prev => prev && { ...prev, review })
+    } catch (err) {
+      toast({
+        title: reviewed ? 'Could not mark reviewed' : 'Could not unmark',
+        description: err instanceof Error ? err.message : 'Failed to save the review',
+        variant: 'destructive'
+      })
+    } finally {
+      setSavingReview(false)
+    }
+  }, [chapterId, toast])
+
+  // Same guard ChapterSwitcher uses: an open editor holds unsaved drags.
+  const canLeave = useCallback(
+    () => !editingFile || confirm(`Leave this chapter? Unsaved pointer edits on ${editingFile} will be lost.`),
+    [editingFile]
+  )
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -220,6 +296,7 @@ function Clipper3ChapterPreview() {
         <Badge variant="secondary" className="flex-shrink-0">
           {totalCrops} crop{totalCrops === 1 ? '' : 's'}
         </Badge>
+        {data.review && <ReviewBadge review={data.review} />}
 
         {editingFile && (
           <span className="text-xs text-amber-500 flex items-center gap-1">
@@ -256,7 +333,7 @@ function Clipper3ChapterPreview() {
           <ChapterSwitcher
             neighbours={data.neighbours}
             to={id => `/clipper3/chapter/${id}/preview`}
-            canLeave={() => !editingFile || confirm(`Leave this chapter? Unsaved pointer edits on ${editingFile} will be lost.`)}
+            canLeave={canLeave}
           />
         </div>
       </div>
@@ -434,6 +511,56 @@ function Clipper3ChapterPreview() {
               </div>
             )
           })}
+
+          {/* The end of the chapter is where a review finishes, so the mark
+              lives here rather than in the header: reaching it means every
+              page above was scrolled past. */}
+          <div className="w-full max-w-xl mx-auto rounded-md border border-neutral-800 bg-card p-4 flex flex-wrap items-center gap-3">
+            {data.review?.reviewed ? (
+              <>
+                <span className="text-sm flex items-center gap-1.5 text-green-500 min-w-0">
+                  <ShieldCheck className="h-4 w-4 flex-shrink-0" />
+                  <span className="truncate">{describeReview(data.review)}</span>
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setReviewed(false)}
+                  disabled={savingReview}
+                  title="Crop Sections is blocked again until the chapter is re-marked"
+                >
+                  Unmark
+                </Button>
+              </>
+            ) : (
+              <>
+                <span className="text-sm text-muted-foreground">End of chapter {data.number}.</span>
+                <Button
+                  size="sm"
+                  onClick={() => setReviewed(true)}
+                  disabled={savingReview || editingFile != null}
+                  title={editingFile ? `Save or cancel the edit on ${editingFile} first` : 'Allow Crop Sections for this chapter'}
+                >
+                  {savingReview ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <ShieldCheck className="h-4 w-4 mr-1" />}
+                  Mark reviewed
+                </Button>
+              </>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              className="ml-auto"
+              disabled={!data.neighbours.next}
+              title={data.neighbours.next ? `Chapter ${data.neighbours.next.number}` : 'No later downloaded chapter'}
+              onClick={() => {
+                const next = data.neighbours.next
+                if (next && canLeave()) navigate(`/clipper3/chapter/${next.id}/preview`)
+              }}
+            >
+              Next chapter
+              <ChevronRight className="h-4 w-4 ml-1" />
+            </Button>
+          </div>
         </div>
         </ScrollArea>
       </div>

@@ -66,6 +66,7 @@ import {
 } from 'lucide-react'
 import {
   clipper3Api,
+  Clipper3NotReviewedError,
   type Clipper3ChapterImages,
   type Clipper3Image,
   type Clipper3SliceResult,
@@ -1209,6 +1210,14 @@ function Clipper3ChapterImageList() {
       await clipper3Api.crop(chapterId)
     } catch (error) {
       setIsCropping(false)
+      if (error instanceof Clipper3NotReviewedError) {
+        // The button is disabled for this already; reaching here means the
+        // review was unmarked elsewhere (or a phone fetch reset it) since the
+        // list loaded, so the list is re-read to match.
+        clipper3Api.getImages(chapterId).then(setData).catch(() => { /* the old list stays */ })
+        toast({ title: 'Chapter not reviewed yet', description: error.message, variant: 'destructive' })
+        return
+      }
       toast({
         title: 'Could not start cropping',
         description: error instanceof Error ? error.message : 'Unknown error',
@@ -1287,20 +1296,32 @@ function Clipper3ChapterImageList() {
           Preview
         </Button>
 
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={startCropSections}
-          disabled={isCropping || doneCount === 0}
-          title={doneCount === 0 ? 'No image has crop pointers yet' : 'Cut every Done image into its sections'}
+        {/* Wrapped so the reason shows on hover: a disabled button gets no
+            pointer events, so its own title never appears. Cropping waits
+            for the whole chapter to be reviewed (Preview or Master phone). */}
+        <span
+          title={
+            doneCount === 0
+              ? 'No image has crop pointers yet'
+              : !data.review?.reviewed
+                ? 'Mark reviewed first (Preview or Master phone)'
+                : 'Cut every Done image into its sections'
+          }
         >
-          {isCropping ? (
-            <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-          ) : (
-            <Scissors className="h-4 w-4 mr-1" />
-          )}
-          Crop Sections
-        </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={startCropSections}
+            disabled={isCropping || doneCount === 0 || !data.review?.reviewed}
+          >
+            {isCropping ? (
+              <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+            ) : (
+              <Scissors className="h-4 w-4 mr-1" />
+            )}
+            Crop Sections
+          </Button>
+        </span>
 
         <Button
           variant="outline"
@@ -2264,7 +2285,8 @@ function CropOutputsBadge({ outputs }: { outputs: Clipper3ChapterImages['cropOut
 
   const reasons = [
     outputs.missing > 0 && `${outputs.missing} crop${outputs.missing === 1 ? '' : 's'} not cut yet`,
-    outputs.extra > 0 && `${outputs.extra} old file${outputs.extra === 1 ? '' : 's'} the next cut will remove`
+    outputs.extra > 0 && `${outputs.extra} old file${outputs.extra === 1 ? '' : 's'} the next cut will remove`,
+    outputs.changed > 0 && `${outputs.changed} page${outputs.changed === 1 ? '' : 's'} edited since ${outputs.changed === 1 ? 'it was' : 'they were'} cut`
   ].filter(Boolean)
   return (
     <Badge

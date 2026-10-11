@@ -30,7 +30,10 @@ import {
   Rows3,
   RefreshCw,
   Unlink,
-  DownloadCloud
+  DownloadCloud,
+  ShieldCheck,
+  ShieldAlert,
+  Replace
 } from 'lucide-react'
 import {
   clipper3Api,
@@ -73,6 +76,43 @@ function AttachedStatusBadge({ summary }: { summary: Clipper3ChapterSummary | un
 }
 
 /**
+ * Whether the whole chapter has been reviewed — Crop Sections waits for it.
+ * Shown once the chapter has crops at all; "Not reviewed" on a chapter with
+ * nothing attached would be noise.
+ */
+function ReviewStatusBadge({ summary }: { summary: Clipper3ChapterSummary | undefined }) {
+  if (!summary) return null
+  const review = summary.review
+  if (review?.reviewed) {
+    const onPhone = review.by === 'phone'
+    return (
+      <Badge
+        variant="success"
+        className="flex items-center gap-1"
+        title={[
+          onPhone ? `Reviewed on ${review.device || 'the Master phone'}` : 'Reviewed in Preview',
+          review.reviewedAt ? new Date(review.reviewedAt).toLocaleString() : null
+        ].filter(Boolean).join(' · ')}
+      >
+        <ShieldCheck className="h-3 w-3" />
+        {onPhone ? 'Reviewed on phone' : 'Reviewed'}
+      </Badge>
+    )
+  }
+  if (summary.attachedImages === 0) return null
+  return (
+    <Badge
+      variant="outline"
+      className="flex items-center gap-1 text-muted-foreground"
+      title="Review the chapter on the Master phone or in Preview before Crop Sections"
+    >
+      <ShieldAlert className="h-3 w-3" />
+      Not reviewed
+    </Badge>
+  )
+}
+
+/**
  * What Sync json pulled from R2 before scanning: which finished chapters were
  * downloaded from the phone's uploads, and any it couldn't place.
  */
@@ -91,7 +131,7 @@ function R2FetchSummary({ result }: { result: Clipper3PhoneCropsFetch }) {
       </p>
       {fetched.length > 0 && (
         <p className="text-xs text-muted-foreground">
-          {fetched.map(c => `Chapter ${c.chapterNumber}`).join(', ')}
+          {fetched.map(c => `Ch ${c.chapterNumber}${c.reviewed ? ' · reviewed on phone' : ''}`).join(', ')}
         </p>
       )}
       {upToDate > 0 && (
@@ -316,7 +356,15 @@ export default function Clipper3SeriesView() {
     // still be attached, and the toast says R2 was not reached.
     setFetchingR2(true)
     try {
-      setR2Fetch(await clipper3Api.fetchPhoneCrops(id))
+      const fetched = await clipper3Api.fetchPhoneCrops(id)
+      setR2Fetch(fetched)
+      // Every fetched zip rewrote its chapter's review, so the Reviewed chips
+      // are re-read now rather than after the sync the user may cancel.
+      if (fetched.fetched.length > 0) {
+        clipper3Api.getSeriesSummary(id)
+          .then(result => setSummaries(Object.fromEntries(result.chapters.map(c => [c.chapterId, c]))))
+          .catch(() => {})
+      }
     } catch (err) {
       toast({
         title: 'Could not fetch from R2',
@@ -381,12 +429,13 @@ export default function Clipper3SeriesView() {
       return
     }
 
-    const { imported = 0, skipped = 0, failed = 0, results = [] } = clipper3SyncComplete
+    const { imported = 0, replaced = 0, skipped = 0, failed = 0, results = [] } = clipper3SyncComplete
 
     // Newly attached pages change every Attached chip on the page, so the
     // rollup is re-fetched rather than patched from the result — the server
     // re-validates on read, which is the same check that decided the import.
-    if (imported > 0) {
+    // A replaced page can put a chapter's cut out of date, so it counts too.
+    if (imported > 0 || replaced > 0) {
       clipper3Api.getSeriesSummary(id)
         .then(result => setSummaries(Object.fromEntries(result.chapters.map(c => [c.chapterId, c]))))
         .catch(() => {})
@@ -399,11 +448,14 @@ export default function Clipper3SeriesView() {
     toast({
       title: imported > 0
         ? `Attached ${imported} page${imported === 1 ? '' : 's'}`
-        : 'Nothing new to attach',
+        : replaced > 0
+          ? `Applied the phone review to ${replaced} page${replaced === 1 ? '' : 's'}`
+          : 'Nothing new to attach',
       description: [
+        imported > 0 && replaced > 0 ? `${replaced} replaced by the phone review` : null,
         skipped > 0 ? `${skipped} already attached` : null,
         failed > 0 ? `${failed} could not be attached` : null,
-        imported === 0 && skipped === 0 && failed === 0
+        imported === 0 && replaced === 0 && skipped === 0 && failed === 0
           ? 'No Processed folders found in this series.'
           : null
       ].filter(Boolean).join(' · ') || undefined,
@@ -845,6 +897,7 @@ export default function Clipper3SeriesView() {
                       <>
                         <AttachedStatusBadge summary={summaries[chapter.id]} />
                         <ChoppedStatusBadge summary={summaries[chapter.id]} />
+                        <ReviewStatusBadge summary={summaries[chapter.id]} />
                         {isPublished(chapter.id) && <PublishedBadge />}
                       </>
                     )}
@@ -900,13 +953,19 @@ export default function Clipper3SeriesView() {
             <DialogTitle>
               {syncPreview && syncPreview.ready > 0
                 ? `Attach ${syncPreview.ready} page${syncPreview.ready === 1 ? '' : 's'}?`
-                : 'Nothing to attach'}
+                : syncPreview && syncPreview.replaced > 0
+                  ? `Apply the phone review to ${syncPreview.replaced} page${syncPreview.replaced === 1 ? '' : 's'}?`
+                  : 'Nothing to attach'}
             </DialogTitle>
             <DialogDescription>
-              {syncPreview && syncPreview.ready > 0 ? (
+              {syncPreview && (syncPreview.ready > 0 || syncPreview.replaced > 0) ? (
                 <>
                   Found in {syncPreview.chapters} chapter
-                  {syncPreview.chapters === 1 ? '' : 's'}. These pages will be marked done.
+                  {syncPreview.chapters === 1 ? '' : 's'}.
+                  {syncPreview.ready > 0 && <> {syncPreview.ready} page{syncPreview.ready === 1 ? '' : 's'} will be marked done.</>}
+                  {syncPreview.replaced > 0 && (
+                    <> {syncPreview.replaced} attached page{syncPreview.replaced === 1 ? '' : 's'} will be replaced by the Master phone&apos;s review.</>
+                  )}
                   {syncPreview.skipped > 0 && <> {syncPreview.skipped} already attached.</>}
                   {syncPreview.failed > 0 && <> {syncPreview.failed} cannot be attached.</>}
                 </>
@@ -928,7 +987,8 @@ export default function Clipper3SeriesView() {
               {(syncPreview?.results ?? []).map(chapter => {
                 // Already-attached pages are counted in the summary above but
                 // not listed: they are the bulk of a re-run and would bury the
-                // handful of pages this dialog exists to show.
+                // handful of pages this dialog exists to show. Replaced pages
+                // ARE listed — they overwrite what is on screen today.
                 const shown = chapter.pages.filter(page => page.status !== 'skipped')
                 if (shown.length === 0) return null
 
@@ -940,11 +1000,13 @@ export default function Clipper3SeriesView() {
                         <div
                           key={`${chapter.chapterId}-${page.folder}`}
                           className={`text-xs rounded p-2 flex items-start gap-2 ${
-                            page.status === 'ready' ? 'bg-muted' : 'bg-destructive/10'
+                            page.status === 'ready' ? 'bg-muted' : page.status === 'replaced' ? 'bg-sky-500/10' : 'bg-destructive/10'
                           }`}
                         >
                           {page.status === 'ready' ? (
                             <FileCheck2 className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-green-500" />
+                          ) : page.status === 'replaced' ? (
+                            <Replace className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-sky-500" />
                           ) : (
                             <AlertTriangle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-destructive" />
                           )}
@@ -953,6 +1015,10 @@ export default function Clipper3SeriesView() {
                             {page.status === 'ready' ? (
                               <span className="text-muted-foreground">
                                 {' '}— {page.cropCount} crop{page.cropCount === 1 ? '' : 's'}
+                              </span>
+                            ) : page.status === 'replaced' ? (
+                              <span className="text-muted-foreground">
+                                {' '}— {page.cropCount} crop{page.cropCount === 1 ? '' : 's'} · {page.reason}
                               </span>
                             ) : (
                               <span className="text-muted-foreground"> — {page.reason}</span>
@@ -971,7 +1037,7 @@ export default function Clipper3SeriesView() {
             <Button variant="ghost" onClick={() => setSyncPreview(null)}>
               Cancel
             </Button>
-            <Button onClick={confirmSync} disabled={!syncPreview || syncPreview.ready === 0}>
+            <Button onClick={confirmSync} disabled={!syncPreview || (syncPreview.ready === 0 && syncPreview.replaced === 0)}>
               Proceed
             </Button>
           </DialogFooter>

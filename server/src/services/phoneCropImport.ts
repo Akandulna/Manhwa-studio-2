@@ -20,6 +20,13 @@
  * chapter whose zip changed. A marker file in each chapter's Processed folder
  * remembers the ETag it was unpacked from, so a re-run downloads nothing new.
  * Nothing here runs on a timer; only the Sync json button calls it.
+ *
+ * Review: the Master phone re-uploads the SAME key after a whole-chapter
+ * review, with corrected JSON and a `review` object in chapter.json. Each
+ * fetch writes the chapter's review record (chapterReview.ts) from that
+ * object — reviewed, or not reviewed when a clipping phone's fresh zip
+ * replaced a reviewed one — and notes it in the marker, which is what tells
+ * Sync json to replace already-attached pages once (processedSync.ts).
  */
 
 import fs from 'fs/promises'
@@ -28,13 +35,14 @@ import { GetObjectCommand, ListObjectsV2Command, type S3Client } from '@aws-sdk/
 import { prisma } from '../index.js'
 import { readZip, type ZipEntry } from '../utils/zipReader.js'
 import { createClient, getR2Config, type R2Config } from './r2Service.js'
-import { getProcessedDir } from './clipper3/processedSync.js'
+import { FETCH_MARKER, getProcessedDir, type FetchMarker } from './clipper3/processedSync.js'
+import { notReviewed, parseManifestReview, writeChapterReview } from './clipper3/chapterReview.js'
 
 /** Folder the phone uploads chapter zips to, inside its R2 prefix. Keep in step with FOLDER in ChapterUpload.kt. */
 export const CROPS_FOLDER = 'crops/'
 
-/** In each Processed/<Chapter>/: which R2 zip it was unpacked from. Sync json ignores plain files. */
-export const FETCH_MARKER = '.r2-crops.json'
+/** In each Processed/<Chapter>/: which R2 zip it was unpacked from. Defined beside Sync json, which reads it too. */
+export { FETCH_MARKER }
 
 /** The chapter manifest the phone puts in each zip; kept alongside the pages. */
 const MANIFEST_FILE = 'chapter.json'
@@ -51,6 +59,8 @@ export interface FetchedChapter {
   folder: string
   /** Page folders unpacked. */
   pages: number
+  /** The zip's chapter.json carries a Master phone review; cropping is now allowed. */
+  reviewed: boolean
 }
 
 export interface PhoneCropsFetch {
@@ -114,6 +124,25 @@ export async function unpackChapterZip(entries: ZipEntry[], processedDir: string
   }
   if (manifest) await fs.writeFile(path.join(processedDir, MANIFEST_FILE), manifest)
   return pages.size
+}
+
+/**
+ * The zip's chapter.json, parsed, or null when it has none or it isn't JSON.
+ * Read from the zip rather than from disk: unpacking only writes chapter.json
+ * when the zip has one, so the copy on disk can be an earlier upload's.
+ */
+export function readZipManifest(entries: ZipEntry[]): unknown {
+  for (const { name, data } of entries) {
+    const rel = name.split('/').filter(Boolean).slice(2)
+    if (rel.length !== 1 || rel[0] !== MANIFEST_FILE) continue
+    try {
+      const text = data.toString('utf-8')
+      return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text)
+    } catch {
+      return null
+    }
+  }
+  return null
 }
 
 // ============ Finding the zips ============
@@ -233,15 +262,39 @@ export async function fetchPhoneCrops(seriesId: string, chapterIds?: string[]): 
       if (zip.size > MAX_ZIP_BYTES) throw new Error(`The zip is unexpectedly large (${zip.size} bytes)`)
       const res = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: zip.key }))
       const body = Buffer.from(await res.Body!.transformToByteArray())
-      const pages = await unpackChapterZip(readZip(body), processedDir)
-      const marker = {
+      const entries = readZip(body)
+      const pages = await unpackChapterZip(entries, processedDir)
+      const etag = (res.ETag ?? zip.etag).replace(/"/g, '')
+      const review = parseManifestReview(readZipManifest(entries))
+
+      // A new zip always rewrites the review record. An unreviewed one means
+      // the crops changed since any earlier review, so that review no longer
+      // describes what would be cut.
+      await writeChapterReview(chapter.folderPath, review
+        ? {
+            reviewed: true,
+            reviewedAt: review.reviewedAt,
+            by: 'phone',
+            ...(review.device ? { device: review.device } : {}),
+            etag,
+            editedPages: review.editedPages,
+            movedCrops: review.movedCrops,
+            deletedCrops: review.deletedCrops
+          }
+        : notReviewed())
+
+      // `applied: false` asks the next Sync json to put the review over pages
+      // already attached from the clipping phone's draft (processedSync.ts).
+      const marker: FetchMarker = {
         key: zip.key,
-        etag: (res.ETag ?? zip.etag).replace(/"/g, ''),
+        etag,
         fetchedAt: new Date().toISOString(),
-        pages
+        pages,
+        reviewed: review != null,
+        ...(review ? { applied: false } : {})
       }
       await fs.writeFile(path.join(processedDir, FETCH_MARKER), JSON.stringify(marker, null, 2) + '\n', 'utf-8')
-      result.fetched.push({ chapterId: chapter.id, chapterNumber: chapter.number, folder: zip.folder, pages })
+      result.fetched.push({ chapterId: chapter.id, chapterNumber: chapter.number, folder: zip.folder, pages, reviewed: review != null })
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
       console.error(`[clipper3] fetching ${zip.key} failed:`, reason)
