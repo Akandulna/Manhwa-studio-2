@@ -1,6 +1,14 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { Toaster } from '@/components/ui/toaster'
 import Layout from '@/components/Layout'
+import Library from '@/pages/Library'
+import AddSeries from '@/pages/AddSeries'
+import ManualUpload from '@/pages/ManualUpload'
+import SeriesDetail from '@/pages/SeriesDetail'
+import DownloadQueue from '@/pages/DownloadQueue'
+import StitchLibrary from '@/pages/stitch/StitchLibrary'
+import StitchWorkspace from '@/pages/stitch/StitchWorkspace'
+import ChapterPreview from '@/pages/ChapterPreview'
 import Settings from '@/pages/Settings'
 import { SocketProvider } from '@/lib/socket'
 
@@ -29,8 +37,16 @@ function App() {
     <SocketProvider>
       <Layout>
         <Routes>
-          {/* Pages come from the phones (Image Clipper → Get from phones), so the app opens on Narration */}
-          <Route path="/" element={<Navigate to="/narration" replace />} />
+          {/* Module 1: Library & Downloader */}
+          <Route path="/" element={<Library />} />
+          <Route path="/add" element={<AddSeries />} />
+          <Route path="/add/manual" element={<ManualUpload />} />
+          <Route path="/series/:id" element={<SeriesDetail />} />
+          <Route path="/queue" element={<DownloadQueue />} />
+          <Route path="/stitch" element={<StitchLibrary />} />
+          <Route path="/stitch/series/:seriesId" element={<StitchLibrary />} />
+          <Route path="/stitch/chapter/:id" element={<StitchWorkspace />} />
+          <Route path="/chapter/:id/preview" element={<ChapterPreview />} />
 
           {/* Module 2: Narration Studio */}
           <Route path="/narration" element={<NarrationLibrary />} />

@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { settingsApi, Settings as SettingsType } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Separator } from '@/components/ui/separator'
@@ -15,7 +16,7 @@ import { archiveVersion, readHistory, type DocVersion } from '@/lib/docHistory'
 import { phoneEditorApi } from '@/pages/editor2/phoneEditor'
 import StorageManager from '@/pages/storage/StorageManager'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, Save, RotateCcw, Wand2, FileText, Film, Moon, Sun, Monitor, Palette, Cloud, HardDrive } from 'lucide-react'
+import { Loader2, Save, RotateCcw, FolderOpen, Gauge, UserCircle, ImageIcon, Download, Wand2, FileText, Film, Moon, Sun, Monitor, Palette, Cloud, HardDrive } from 'lucide-react'
 
 // Vertical sidebar tab: full-width, left-aligned, active state as a muted pill.
 const settingsTabTrigger =
@@ -48,6 +49,11 @@ export default function Settings() {
     }
   }
   
+  const updateSetting = (key: keyof SettingsType, value: string) => {
+    if (!settings) return
+    setSettings({ ...settings, [key]: value })
+  }
+
   const handleSave = async () => {
     if (!settings) return
     
@@ -113,7 +119,7 @@ export default function Settings() {
           <div>
             <h1 className="text-3xl font-bold">Settings</h1>
             <p className="text-muted-foreground">
-              Appearance, prompts, Cloudflare and storage
+              Appearance, downloads, the Editor 2.0 prompt, Cloudflare and storage
             </p>
           </div>
 
@@ -145,6 +151,10 @@ export default function Settings() {
             <TabsTrigger value="appearance" className={settingsTabTrigger}>
               <Palette className="h-4 w-4" />
               <span>Appearance</span>
+            </TabsTrigger>
+            <TabsTrigger value="download" className={settingsTabTrigger}>
+              <Download className="h-4 w-4" />
+              <span>Download & Performance</span>
             </TabsTrigger>
             <TabsTrigger value="editor2" className={settingsTabTrigger}>
               <Film className="h-4 w-4" />
@@ -233,6 +243,160 @@ export default function Settings() {
                 </div>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          {/* Download & Performance Tab */}
+          <TabsContent value="download" className="mt-0 p-6 max-w-4xl space-y-6">
+            {/* Download settings */}
+            <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <FolderOpen className="h-5 w-5" />
+            Download Settings
+          </CardTitle>
+          <CardDescription>
+            Configure where and how files are downloaded
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="downloadRoot">Download Root Folder</Label>
+            <Input
+              id="downloadRoot"
+              value={settings.downloadRoot}
+              onChange={(e) => updateSetting('downloadRoot', e.target.value)}
+              placeholder="./downloads"
+            />
+            <p className="text-xs text-muted-foreground">
+              All series will be downloaded under this folder. Can also be set via DOWNLOAD_ROOT env var.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Performance settings */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Gauge className="h-5 w-5" />
+            Performance
+          </CardTitle>
+          <CardDescription>
+            Control download speed and resource usage
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="concurrency">Max Concurrent Downloads</Label>
+            <Input
+              id="concurrency"
+              type="number"
+              min="1"
+              max="10"
+              value={settings.concurrency}
+              onChange={(e) => updateSetting('concurrency', e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              How many images to download at once (1-10). Higher values are faster but may trigger rate limits.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="requestDelay">Request Delay (ms)</Label>
+            <Input
+              id="requestDelay"
+              type="number"
+              min="0"
+              max="5000"
+              value={settings.requestDelayMs}
+              onChange={(e) => updateSetting('requestDelayMs', e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Delay between image downloads in milliseconds. Helps avoid rate limiting.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Request settings */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <UserCircle className="h-5 w-5" />
+            Request Headers
+          </CardTitle>
+          <CardDescription>
+            Configure how requests appear to servers
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="userAgent">User Agent</Label>
+            <Input
+              id="userAgent"
+              value={settings.userAgent}
+              onChange={(e) => updateSetting('userAgent', e.target.value)}
+              placeholder="Mozilla/5.0..."
+            />
+            <p className="text-xs text-muted-foreground">
+              Browser user agent string sent with requests. Some CDNs require a valid browser UA.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Image filtering */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <ImageIcon className="h-5 w-5" />
+            Image Detection
+          </CardTitle>
+          <CardDescription>
+            Control which images are detected as manhwa pages
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="minWidth">Minimum Image Width (px)</Label>
+            <Input
+              id="minWidth"
+              type="number"
+              min="100"
+              max="1000"
+              value={settings.minImageWidth}
+              onChange={(e) => updateSetting('minImageWidth', e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Images narrower than this will be ignored (helps filter icons/thumbnails).
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="minAspect">Minimum Aspect Ratio (height/width)</Label>
+            <Input
+              id="minAspect"
+              type="number"
+              min="0.1"
+              max="3"
+              step="0.1"
+              value={settings.minAspectRatio}
+              onChange={(e) => updateSetting('minAspectRatio', e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Images with lower aspect ratios will be ignored unless they meet the minimum width.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="bg-muted/50">
+        <CardContent className="py-4">
+          <p className="text-sm text-muted-foreground">
+            <strong>Note:</strong> DOWNLOAD_ROOT and CONCURRENCY can also be set via environment variables in your .env file. Environment variables take precedence over database settings.
+          </p>
+        </CardContent>
+      </Card>
           </TabsContent>
 
           {/* Storage Tab — what each manhwa holds on disk, and cleaning it up */}

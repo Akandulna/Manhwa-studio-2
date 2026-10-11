@@ -74,7 +74,7 @@ import {
 import { fetchPhoneCrops, publishAllCroppedMarkers, publishChapterCropped } from '../services/phoneCropImport.js'
 import { readEffectiveReview, setDesktopReview } from '../services/clipper3/chapterReview.js'
 import { reconcileQuietly } from '../services/diskReconcile.js'
-import { doneNeighbours } from '../services/chapterNeighbours.js'
+import { doneNeighbours } from '../services/pageStitch.js'
 import {
   syncChapterProcessed,
   unsyncChapterProcessed,

@@ -1,12 +1,25 @@
 # Manhwa Studio
 
-A local desktop app that turns manhwa chapters into narrated videos. The
-**Sleeper-Cell** Android phones do the production work — downloading chapters,
-writing narration scripts, recording voiceovers and marking crop boxes — and
-upload it to Cloudflare R2. Manhwa Studio brings that work onto the Mac, aligns
-the voiceover, cuts the crops and renders the video.
+A local desktop app that turns manhwa chapters into narrated videos. It
+downloads chapters itself; the **Sleeper-Cell** Android phones do the rest of
+the production work — writing narration scripts, recording voiceovers and
+marking crop boxes — and upload it to Cloudflare R2. Manhwa Studio brings that
+work onto the Mac, aligns the voiceover, cuts the crops and renders the video.
 
 ## Modules
+
+### Library & Downloader
+- **Add Series**: paste 3 seed URLs to detect the chapter URL pattern and
+  discover chapters, or upload pages by hand (manual mode).
+- **Library / Series detail**: download chapters (Playwright headless browser,
+  concurrent queue, resume and retry), preview a chapter's pages and delete
+  unwanted ones into a restorable bin.
+- **Downloads**: the live queue — pause, resume, retry failed.
+- **Page Stitcher**: joins chapters of 200–300 short pages into tall pages;
+  auto-stitch cuts at blank rows and drops repeated intro/outro pages.
+- **Send to phone** zips chapters to R2 for the phones (optionally on its own
+  after downloads); **Get from phones** brings in what the Master phone
+  downloaded.
 
 ### Narration Library
 Manhwa → English / Hindi → chapters.
@@ -20,7 +33,7 @@ Manhwa → English / Hindi → chapters.
 
 ### Image Clipper 3.0
 Manhwa → chapters → pages.
-- **Get from phones** brings in the pages the Master phone downloaded.
+- **Get from phones** brings in the pages the Master phone downloaded (also on the Library).
 - **Sync json** pulls the phones' crop JSON for each chapter.
 - **Preview** shows every page's crop boxes, lets you move/resize/delete them,
   and marks the chapter reviewed.
@@ -48,7 +61,8 @@ Manhwa → chapters, per language.
 - **Live Progress** — what every phone is working on.
 
 ### Settings
-Appearance (light / dark / system), the Editor 2.0 prompt (also synced to R2
+Appearance (light / dark / system), Download & Performance (concurrency,
+request delay, user agent, image thresholds), the Editor 2.0 prompt (also synced to R2
 for the phone), Cloudflare R2 + phone relay, and **Storage** — disk usage per
 manhwa, cleanup of exported chapters, and "Complete & delete" per Part.
 
@@ -56,6 +70,7 @@ manhwa, cleanup of exported chapters, and "Complete & delete" per Part.
 
 - **Frontend**: React + Vite + TypeScript + Tailwind CSS + shadcn/ui
 - **Backend**: Node.js + Express + TypeScript, Socket.io for live progress
+- **Scraping**: Playwright (headless Chromium) + p-queue
 - **Database**: SQLite via Prisma
 - **Images**: sharp · **Audio / video**: FFmpeg
 - **Alignment**: WhisperX (wav2vec2) through a Python sidecar (`server/scripts/align.py`)
@@ -72,6 +87,7 @@ manhwa, cleanup of exported chapters, and "Complete & delete" per Part.
 
 ```bash
 npm install               # root, server and client
+npx playwright install chromium   # for the downloader
 cp server/.env.example server/.env
 npm run db:push           # create / update the SQLite database
 npm run dev               # API on :3002 + client on http://localhost:5173
@@ -104,7 +120,7 @@ just attaches to it; otherwise it starts one and stops it on quit.
 <DOWNLOAD_ROOT>/
 └── <Series Title>/
     ├── Chapter 001/
-    │   ├── page_001.jpg …             # pages (Get from phones)
+    │   ├── page_001.jpg …             # pages (downloaded or Get from phones)
     │   ├── script.md, script.hi.md    # narration scripts (Fetch from phone)
     │   ├── audio/, audio_hi/          # voiceover sections
     │   ├── script-timeline.md, script-timeline.hi.md   # alignment documents
@@ -120,6 +136,7 @@ just attaches to it; otherwise it starts one and stops it on quit.
 | `DOWNLOAD_ROOT` | Folder every series lives under | `./downloads` |
 | `DATABASE_URL` | SQLite database | `file:./dev.db` |
 | `PORT` | Server port (the client expects 3002) | `3001` |
+| `CONCURRENCY`, `REQUEST_DELAY_MS` | Downloader concurrency and delay between pages | `3`, `500` |
 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_PREFIX` | Cloudflare R2 (set from Settings → Cloudflare) | — |
 | `RELAY_URL`, `RELAY_TOKEN` | Phone relay Worker (live phone status) | — |
 | `WHISPERX_PYTHON_PATH` | Python with WhisperX, for alignment | `server/.venv-whisperx` |

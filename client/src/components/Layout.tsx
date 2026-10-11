@@ -4,7 +4,10 @@ import { cn } from '@/lib/utils'
 import { useSocket } from '@/lib/socket'
 import { usePhoneRelay } from '@/hooks/usePhoneRelay'
 import {
+  Library,
+  Download,
   Settings,
+  Plus,
   Mic,
   Target,
   Clapperboard,
@@ -13,9 +16,11 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Smartphone,
+  Layers,
   Users,
   Activity
 } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
 
@@ -27,6 +32,7 @@ interface NavItem {
   icon: React.ReactNode
   label: string
   href: string
+  badge?: number
   /** A status dot on the icon (a bg-* class). */
   dot?: string
   dotTitle?: string
@@ -36,7 +42,7 @@ const SIDEBAR_STORAGE_KEY = 'sidebarCollapsed'
 
 export default function Layout({ children }: LayoutProps) {
   const location = useLocation()
-  const { isConnected } = useSocket()
+  const { isConnected, queueStatus } = useSocket()
   const relay = usePhoneRelay()
 
   const [collapsed, setCollapsed] = useState<boolean>(
@@ -50,6 +56,33 @@ export default function Layout({ children }: LayoutProps) {
       return next
     })
   }
+
+  const activeDownloads = queueStatus.pending + queueStatus.active
+
+  // Library & Downloader module items
+  const libraryModuleItems: NavItem[] = [
+    {
+      icon: <Plus className="h-5 w-5" />,
+      label: 'Add Series',
+      href: '/add'
+    },
+    {
+      icon: <Library className="h-5 w-5" />,
+      label: 'Library',
+      href: '/'
+    },
+    {
+      icon: <Download className="h-5 w-5" />,
+      label: 'Downloads',
+      href: '/queue',
+      badge: activeDownloads > 0 ? activeDownloads : undefined
+    },
+    {
+      icon: <Layers className="h-5 w-5" />,
+      label: 'Page Stitcher',
+      href: '/stitch'
+    }
+  ]
 
   // Narration Studio module items
   const narrationModuleItems: NavItem[] = [
@@ -125,8 +158,23 @@ export default function Layout({ children }: LayoutProps) {
         {item.dot && (
           <span className={cn("absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-card", item.dot)} />
         )}
+        {/* Collapsed: surface the badge as a small dot on the icon */}
+        {collapsed && item.badge && (
+          <span className="absolute -top-1.5 -right-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
+            {item.badge}
+          </span>
+        )}
       </span>
-      {!collapsed && <span className="flex-1">{item.label}</span>}
+      {!collapsed && (
+        <>
+          <span className="flex-1">{item.label}</span>
+          {item.badge && (
+            <Badge variant="secondary" className="ml-auto">
+              {item.badge}
+            </Badge>
+          )}
+        </>
+      )}
     </Link>
   )
 
@@ -174,8 +222,25 @@ export default function Layout({ children }: LayoutProps) {
 
         {/* Modules Navigation */}
         <ScrollArea className="flex-1">
-          {/* Narration Studio */}
+          {/* Library & Downloader */}
           <div className="p-4">
+            {renderSectionLabel('LIBRARY & DOWNLOADER')}
+            <nav className="space-y-2">
+              {libraryModuleItems.map((item) =>
+                renderNavLink(
+                  item,
+                  (location.pathname === item.href ||
+                    (item.href === '/stitch' && location.pathname.startsWith('/stitch/'))) &&
+                    !isInNarration
+                )
+              )}
+            </nav>
+          </div>
+
+          <Separator className="my-2" />
+
+          {/* Narration Studio */}
+          <div className="px-4 pb-4">
             {renderSectionLabel('NARRATION STUDIO')}
             <nav className="space-y-2">
               {narrationModuleItems.map((item) => renderNavLink(item, isInNarration))}

@@ -1,6 +1,35 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
 import { io, Socket } from 'socket.io-client'
 
+interface QueueStatus {
+  isPaused: boolean
+  pending: number
+  active: number
+  completed: number
+  failed: number
+  currentChapter?: string
+}
+
+interface ChapterProgress {
+  chapterId: string
+  downloaded: number
+  total: number
+  percent: number
+}
+
+interface ChapterStatus {
+  chapterId: string
+  status: string
+  error?: string
+}
+
+interface DiscoveryProgress {
+  currentNumber: number
+  discovered: number
+  total: number
+  status: 'checking' | 'found' | 'miss' | 'stopped'
+}
+
 // Module 3: Image Clipper 3.0 cuts image by image, so progress counts images
 // rather than crops and names the one being cut. `auto` marks a cut Sync json
 // started for a chapter reviewed on the Master phone; `seriesId` lets the
@@ -137,6 +166,11 @@ interface Clipper3UnsyncComplete {
 interface SocketContextType {
   socket: Socket | null
   isConnected: boolean
+  queueStatus: QueueStatus
+  chapterProgress: Record<string, ChapterProgress>
+  chapterStatuses: Record<string, ChapterStatus>
+  discoveryProgress: DiscoveryProgress | null
+  lastStatusUpdate: number
   // Module 3: Image Clipper 3.0
   clipper3CropProgress: Clipper3CropProgress | null
   clipper3CropComplete: Clipper3CropComplete | null
@@ -151,6 +185,17 @@ interface SocketContextType {
 const SocketContext = createContext<SocketContextType>({
   socket: null,
   isConnected: false,
+  queueStatus: {
+    isPaused: false,
+    pending: 0,
+    active: 0,
+    completed: 0,
+    failed: 0
+  },
+  chapterProgress: {},
+  chapterStatuses: {},
+  discoveryProgress: null,
+  lastStatusUpdate: 0,
   clipper3CropProgress: null,
   clipper3CropComplete: null,
   clipper3SliceProgress: null,
@@ -164,6 +209,18 @@ const SocketContext = createContext<SocketContextType>({
 export function SocketProvider({ children }: { children: ReactNode }) {
   const [socket, setSocket] = useState<Socket | null>(null)
   const [isConnected, setIsConnected] = useState(false)
+  const [queueStatus, setQueueStatus] = useState<QueueStatus>({
+    isPaused: false,
+    pending: 0,
+    active: 0,
+    completed: 0,
+    failed: 0
+  })
+  const [chapterProgress, setChapterProgress] = useState<Record<string, ChapterProgress>>({})
+  const [chapterStatuses, setChapterStatuses] = useState<Record<string, ChapterStatus>>({})
+  const [discoveryProgress, setDiscoveryProgress] = useState<DiscoveryProgress | null>(null)
+  const [lastStatusUpdate, setLastStatusUpdate] = useState(0)
+
   // Module 3: Image Clipper 3.0
   const [clipper3CropProgress, setClipper3CropProgress] = useState<Clipper3CropProgress | null>(null)
   const [clipper3CropComplete, setClipper3CropComplete] = useState<Clipper3CropComplete | null>(null)
@@ -187,6 +244,38 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     socketInstance.on('disconnect', () => {
       setIsConnected(false)
       console.log('Socket disconnected')
+    })
+
+    socketInstance.on('queue:status', (status: QueueStatus) => {
+      setQueueStatus(status)
+    })
+
+    socketInstance.on('chapter:progress', (progress: ChapterProgress) => {
+      setChapterProgress(prev => ({
+        ...prev,
+        [progress.chapterId]: progress
+      }))
+    })
+
+    socketInstance.on('chapter:status', (status: ChapterStatus) => {
+      // Update chapter status
+      setChapterStatuses(prev => ({
+        ...prev,
+        [status.chapterId]: status
+      }))
+      setLastStatusUpdate(Date.now())
+      
+      // Clear progress when chapter completes
+      if (status.status === 'done' || status.status === 'failed') {
+        setChapterProgress(prev => {
+          const { [status.chapterId]: _, ...rest } = prev
+          return rest
+        })
+      }
+    })
+
+    socketInstance.on('discovery:progress', (progress: DiscoveryProgress) => {
+      setDiscoveryProgress(progress)
     })
 
     socketInstance.on('clipper3:crop-progress', (progress: Clipper3CropProgress) => {
@@ -236,6 +325,11 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     <SocketContext.Provider value={{ 
       socket, 
       isConnected, 
+      queueStatus, 
+      chapterProgress,
+      chapterStatuses,
+      discoveryProgress,
+      lastStatusUpdate,
       clipper3CropProgress,
       clipper3CropComplete,
       clipper3SliceProgress,

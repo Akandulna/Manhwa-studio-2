@@ -202,8 +202,8 @@ export default function Clipper3Library() {
           <Locate className="h-16 w-16 mx-auto text-muted-foreground mb-4 opacity-30" />
           <h2 className="text-xl font-semibold mb-2">No Chapters Yet</h2>
           <p className="text-muted-foreground max-w-md mx-auto">
-            Download chapters on the Master phone, then use Get from phones to bring
-            their pages here.
+            Download chapters in the Library, or on the Master phone and bring them
+            here with Get from phones.
           </p>
         </div>
       )}

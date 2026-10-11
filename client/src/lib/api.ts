@@ -31,13 +31,7 @@ async function fetchApi<T>(
   return response.json()
 }
 
-/** The downloaded chapters either side of this one in its series. */
-export interface ChapterNeighbours {
-  prev: { id: string; number: number } | null
-  next: { id: string; number: number } | null
-}
-
-// Series API — read-only; series arrive from the phones (Get from phones)
+// Series API
 export interface Series {
   id: string
   title: string
@@ -74,10 +68,169 @@ export interface Chapter {
   missingPages?: number
 }
 
+export interface PatternResult {
+  template: string
+  confidence: 'high' | 'medium' | 'low'
+  startNumber: number
+  increment: number
+  padding: number
+  message?: string
+  suggestedTitle?: string
+  sourceSite?: string
+}
+
+export interface DiscoveredChapter {
+  number: number
+  url: string
+  title?: string
+  pageCount: number
+  exists: boolean
+}
+
+export interface QuickValidationResult {
+  isValid: boolean
+  firstChapter?: number
+  lastValidated?: number
+  message?: string
+}
+
 export const seriesApi = {
   getAll: () => fetchApi<Series[]>('/series'),
   
-  getById: (id: string) => fetchApi<Series>(`/series/${id}`)
+  getById: (id: string) => fetchApi<Series>(`/series/${id}`),
+  
+  inferPattern: (seedUrls: string[]) => 
+    fetchApi<PatternResult>('/series/infer-pattern', {
+      method: 'POST',
+      body: JSON.stringify({ seedUrls })
+    }),
+  
+  validatePattern: (params: {
+    template: string
+    startNumber?: number
+    padding?: number
+  }) =>
+    fetchApi<QuickValidationResult>('/series/validate-pattern', {
+      method: 'POST',
+      body: JSON.stringify(params)
+    }),
+  
+  discoverChapters: (params: { 
+    template?: string
+    fromChapter?: number
+    toChapter?: number
+    padding?: number
+    manualUrls?: string[] 
+  }) =>
+    fetchApi<{ chapters: DiscoveredChapter[] }>('/series/discover-chapters', {
+      method: 'POST',
+      body: JSON.stringify(params)
+    }),
+  
+  create: (data: {
+    title: string
+    sourceSite?: string
+    urlTemplate?: string
+    chapters: { number: number; url: string; title?: string }[]
+    coverPath?: string
+  }) =>
+    fetchApi<Series>('/series', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    }),
+  
+  update: (id: string, data: Partial<Series>) =>
+    fetchApi<Series>(`/series/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data)
+    }),
+  
+  delete: (id: string) =>
+    fetchApi<void>(`/series/${id}`, {
+      method: 'DELETE'
+    }),
+  
+  addChapters: (id: string, chapters: { number: number; url: string; title?: string }[]) =>
+    fetchApi<Chapter[]>(`/series/${id}/chapters`, {
+      method: 'POST',
+      body: JSON.stringify({ chapters })
+    })
+}
+
+// Chapters API
+export const chaptersApi = {
+  getById: (id: string) => fetchApi<Chapter>(`/chapters/${id}`),
+  
+  update: (id: string, data: Partial<Chapter>) =>
+    fetchApi<Chapter>(`/chapters/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data)
+    }),
+  
+  bulkUpdate: (chapterIds: string[], status: string) =>
+    fetchApi<Chapter[]>('/chapters/bulk-update', {
+      method: 'POST',
+      body: JSON.stringify({ chapterIds, status })
+    }),
+  
+  delete: (id: string) =>
+    fetchApi<void>(`/chapters/${id}`, {
+      method: 'DELETE'
+    })
+}
+
+// Downloads API
+export interface QueueStatus {
+  isPaused: boolean
+  pending: number
+  active: number
+  completed: number
+  failed: number
+  currentChapter?: string
+}
+
+export interface DownloadStats {
+  completed: number
+  failed: number
+  pending: number
+  downloading: number
+  queued: number
+  totalBytes: number
+}
+
+export const downloadsApi = {
+  getStatus: () => fetchApi<QueueStatus>('/downloads/status'),
+  
+  queueChapters: (chapterIds: string[]) =>
+    fetchApi<{ message: string; status: QueueStatus }>('/downloads/queue', {
+      method: 'POST',
+      body: JSON.stringify({ chapterIds })
+    }),
+  
+  pause: () =>
+    fetchApi<{ message: string; status: QueueStatus }>('/downloads/pause', {
+      method: 'POST'
+    }),
+  
+  resume: () =>
+    fetchApi<{ message: string; status: QueueStatus }>('/downloads/resume', {
+      method: 'POST'
+    }),
+  
+  clear: () =>
+    fetchApi<{ message: string; status: QueueStatus }>('/downloads/clear', {
+      method: 'POST'
+    }),
+  
+  retryFailed: (seriesId?: string) =>
+    fetchApi<{ message: string; status: QueueStatus }>('/downloads/retry-failed', {
+      method: 'POST',
+      body: JSON.stringify({ seriesId })
+    }),
+  
+  openFolder: (path: string) => openFolder(path),
+  
+  getStats: () => fetchApi<DownloadStats>('/downloads/stats')
 }
 
 /** Opens a folder under the library root in Finder. */
@@ -90,6 +243,11 @@ export const openFolder = (path: string) =>
 // Settings API
 export interface Settings {
   downloadRoot: string
+  concurrency: string
+  requestDelayMs: string
+  userAgent: string
+  minImageWidth: string
+  minAspectRatio: string
 }
 
 export const settingsApi = {
@@ -1114,7 +1272,7 @@ export const storageApi = {
     )
 }
 
-// ============ Cloudflare R2: the phones' status and chapters ============
+// ============ Cloudflare R2: sending chapters to the phone ============
 
 /**
  * new:         never sent
@@ -1126,11 +1284,84 @@ export const storageApi = {
  */
 export type PhoneChapterState = 'new' | 'changed' | 'sent' | 'downloading' | 'on_phone' | 'cleared'
 
+export interface PhoneSendChapter {
+  chapterId: string
+  number: number
+  folder: string
+  pages: number
+  bytes: number
+  state: PhoneChapterState
+  sentAt: string | null
+  clearedAt: string | null
+  /** When the phone unpacked this copy. */
+  phoneAt: string | null
+  /** Over the page limit: stitch it before sending (auto-send skips it). */
+  needsStitch: boolean
+  /** What the phone's "Clear done chapters" ticks: published, or crops and script. */
+  desktop: { crops: boolean; script: boolean; scriptHi: boolean; published: boolean; done: boolean }
+}
+
+export interface PhoneSendSeries {
+  seriesId: string
+  title: string
+  folder: string
+  autoSend: boolean
+  chapters: PhoneSendChapter[]
+  /** New or changed: what a send picks by default. */
+  toSend: number
+  onPhone: number
+  /** Sent, not on the phone yet. */
+  waiting: number
+  cleared: number
+  /** The phone's chapter index is behind the desktop (chapters finished since). */
+  indexStale: boolean
+}
+
+export interface PhoneSendPlan {
+  configured: boolean
+  missing: string[]
+  device: string | null
+  reportedAt: string | null
+  series: PhoneSendSeries[]
+}
+
+export type PhoneSendSeriesState = 'queued' | 'sending' | 'done' | 'skipped' | 'failed' | 'cancelled'
+
+export interface PhoneSendSeriesProgress {
+  seriesId: string
+  title: string
+  state: PhoneSendSeriesState
+  chaptersTotal: number
+  chaptersSent: number
+  current?: { folder: string; phase: 'zipping' | 'uploading' }
+  bytesTotal: number
+  bytesDone: number
+  /** The series' folder in R2, once known. */
+  folder?: string
+  note?: string
+  error?: string
+}
+
+export interface PhoneSendJob {
+  id: string
+  state: 'running' | 'done' | 'cancelled'
+  bucket: string
+  /** Started by auto-send after downloads. */
+  auto: boolean
+  startedAt: string
+  finishedAt?: string
+  /** How the phone was asked to fetch the new chapters. */
+  phone: PhoneUpdateRequest | null
+  phoneError?: string
+  series: PhoneSendSeriesProgress[]
+}
+
 export interface R2Status {
   configured: boolean
   missing: string[]
   bucket: string | null
   prefix: string
+  job: PhoneSendJob | null
 }
 
 export interface R2Config {
@@ -1836,6 +2067,26 @@ export const r2Api = {
 
   test: () => fetchApi<{ ok: true; bucket: string }>('/r2/test', { method: 'POST' }),
 
+  /** Per series: chapters to send, on the phone, cleared there. Reads disk only, plus the phone's receipt. */
+  getSendPlan: (fresh = false) =>
+    fetchApi<PhoneSendPlan>(`/r2/phone-send/plan${fresh ? '?fresh=1' : ''}`),
+
+  /** Sends each series' new and changed chapters, or exactly `chapterIds`. Progress comes as `phone-send:progress`. */
+  sendToPhone: (series: { seriesId: string; chapterIds?: string[] }[]) =>
+    fetchApi<PhoneSendJob>('/r2/phone-send', {
+      method: 'POST',
+      body: JSON.stringify({ series })
+    }),
+
+  setAutoSend: (seriesId: string, enabled: boolean) =>
+    fetchApi<{ ok: true }>('/r2/phone-send/auto', { method: 'PUT', body: JSON.stringify({ seriesId, enabled }) }),
+
+  /** Writes the phone's chapter index where it is behind, so its clear dialog ticks newly finished chapters. */
+  updatePhoneIndex: (seriesId?: string) =>
+    fetchApi<{ written: number }>('/r2/phone-send/index', { method: 'POST', body: JSON.stringify({ seriesId }) }),
+
+  cancel: () => fetchApi<{ job: PhoneSendJob | null }>('/r2/cancel', { method: 'POST' }),
+
   /** Chapters the Master phone downloaded and sent that this library doesn't have. One bucket list + a GET per series index. */
   getPhonePull: () => fetchApi<PhonePullOffer>('/r2/phone-pull'),
 
@@ -1866,4 +2117,152 @@ export interface PhonePullOffer {
 export interface PhonePullResult {
   pulled: { folder: string; chapter: string; pages: number }[]
   failed: { folder: string; chapter: string; reason: string }[]
+}
+
+// ============ Page Stitcher ============
+
+/** A chapter with more pages than this is flagged for stitching; normal chapters run 14–20. */
+export const LARGE_CHAPTER_PAGES = 40
+
+export interface StitchChapterRow {
+  id: string
+  number: number
+  title: string | null
+  seriesId: string
+  seriesTitle: string
+  pageCount: number
+  /** Set while the originals are still backed up, so the stitch can be undone. */
+  stitched: { originalPages: number; stitchedAt: string } | null
+}
+
+export interface StitchPage {
+  filename: string
+  width: number
+  height: number
+  format: string
+  bytes: number
+}
+
+export interface StitchRecord {
+  stitchedAt: string
+  originals: string[]
+  excluded: string[]
+  outputs: { filename: string; sources: string[]; width: number; height: number; bytes: number }[]
+}
+
+/** One page's rows for Auto stitch: base64, one byte per row, 0 = blank. */
+export interface StitchProfile {
+  filename: string
+  rows: number
+  ink: string
+}
+
+/** Repeated intro ends / outro starts at `row` of `file`; seen in chapter `referenceNumber` too. */
+export interface StitchEdges {
+  intro: { file: string; row: number; referenceNumber: number } | null
+  outro: { file: string; row: number; referenceNumber: number } | null
+}
+
+/** A band of one page's source rows, [top, bottom). */
+export interface StitchPieceSpec {
+  file: string
+  top: number
+  bottom: number
+}
+
+/** The downloaded chapters either side of this one in its series. */
+export interface ChapterNeighbours {
+  prev: { id: string; number: number } | null
+  next: { id: string; number: number } | null
+}
+
+export interface StitchChapterState {
+  chapterId: string
+  number: number
+  title: string | null
+  seriesId: string
+  seriesTitle: string
+  /** Tallest page a multi-page group may produce. */
+  maxHeight: number
+  pages: StitchPage[]
+  record: StitchRecord | null
+  backupBytes: number
+  blockers: string[]
+  neighbours: ChapterNeighbours
+}
+
+export const stitchApi = {
+  getChapters: () => fetchApi<StitchChapterRow[]>('/stitch/chapters'),
+
+  getChapter: (id: string) => fetchApi<StitchChapterState>(`/stitch/chapters/${id}`),
+
+  /** `version` busts the cache: file names are reused across a stitch and its undo. */
+  thumbUrl: (id: string, filename: string, version: string) =>
+    `${API_BASE}/stitch/chapters/${id}/thumb/${encodeURIComponent(filename)}?v=${encodeURIComponent(version)}`,
+
+  imageUrl: (id: string, filename: string, version: string) =>
+    `${API_BASE}/stitch/chapters/${id}/image/${encodeURIComponent(filename)}?v=${encodeURIComponent(version)}`,
+
+  /** Row profiles, plus where art repeated from nearby chapters (intro / outro) ends and starts. */
+  profiles: (id: string) =>
+    fetchApi<{ profileWidth: number; profiles: StitchProfile[]; edges: StitchEdges }>(
+      `/stitch/chapters/${id}/profiles`
+    ),
+
+  /** Each group is one output page: whole pages by name, cut pages as row pieces. */
+  stitch: (id: string, groups: (string | StitchPieceSpec)[][]) =>
+    fetchApi<{ originalPages: number; stitchedPages: number; excluded: number }>(`/stitch/chapters/${id}`, {
+      method: 'POST',
+      body: JSON.stringify({ groups })
+    }),
+
+  undo: (id: string) => fetchApi<{ ok: true }>(`/stitch/chapters/${id}/undo`, { method: 'POST' }),
+
+  discardBackup: (id: string) =>
+    fetchApi<{ ok: true }>(`/stitch/chapters/${id}/backup`, { method: 'DELETE' })
+}
+
+// ============ Chapter page preview ============
+
+export interface DeletedPage {
+  filename: string
+  deletedAt: string
+  width: number
+  height: number
+  bytes: number
+}
+
+export interface ChapterPagesState {
+  chapterId: string
+  number: number
+  title: string | null
+  seriesId: string
+  seriesTitle: string
+  pages: StitchPage[]
+  /** Pages in the chapter's bin, restorable until the bin is emptied. */
+  deleted: DeletedPage[]
+  blockers: string[]
+  neighbours: ChapterNeighbours
+}
+
+export const pagePreviewApi = {
+  getChapter: (id: string) => fetchApi<ChapterPagesState>(`/page-preview/chapters/${id}`),
+
+  deletePages: (id: string, filenames: string[]) =>
+    fetchApi<{ deleted: number }>(`/page-preview/chapters/${id}/delete`, {
+      method: 'POST',
+      body: JSON.stringify({ filenames })
+    }),
+
+  restorePages: (id: string, filenames: string[]) =>
+    fetchApi<{ restored: number }>(`/page-preview/chapters/${id}/restore`, {
+      method: 'POST',
+      body: JSON.stringify({ filenames })
+    }),
+
+  emptyBin: (id: string) => fetchApi<{ removed: number }>(`/page-preview/chapters/${id}/bin`, { method: 'DELETE' }),
+
+  /** Live pages use the stitcher's thumb/image endpoints; this one reads the bin. */
+  binThumbUrl: (id: string, filename: string) =>
+    `${API_BASE}/page-preview/chapters/${id}/bin/${encodeURIComponent(filename)}/thumb`
 }
