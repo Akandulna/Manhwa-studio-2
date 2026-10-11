@@ -6,6 +6,7 @@ import { seriesApi, r2Api, stitchApi, Series, PhoneSendJob, PhoneSyncStatus, LAR
 import { useSocket } from '@/lib/socket'
 import { PhoneSendStatusBar } from '@/components/PhoneSendStatusBar'
 import { PhoneSendDialog } from '@/components/PhoneSendDialog'
+import { PhonePullDialog } from '@/components/PhonePullDialog'
 import { PhoneSyncBadge } from '@/components/PhoneSyncBadge'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -21,7 +22,7 @@ import {
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Plus, BookOpen, Globe, Loader2, FolderInput, RefreshCw, Smartphone, Layers } from 'lucide-react'
+import { Plus, BookOpen, Globe, Loader2, FolderInput, RefreshCw, Smartphone, Layers, Download } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 
 const API_BASE = 'http://localhost:3002/api'
@@ -53,6 +54,8 @@ export default function Library() {
   const { socket } = useSocket()
   const navigate = useNavigate()
   const [sendOpen, setSendOpen] = useState(false)
+  // Chapters the Master phone downloaded and sent, to bring in.
+  const [pullOpen, setPullOpen] = useState(false)
   const [sendJob, setSendJob] = useState<PhoneSendJob | null>(null)
   const [dismissedJobId, setDismissedJobId] = useState<string | null>(null)
 
@@ -324,6 +327,10 @@ export default function Library() {
             <Smartphone className="h-4 w-4 mr-2" />
             Send to phone
           </Button>
+          <Button variant="outline" onClick={() => setPullOpen(true)} title="Chapters the Master phone downloaded and sent to R2">
+            <Download className="h-4 w-4 mr-2" />
+            Get from phones
+          </Button>
           <Link to="/stitch">
             <Button variant="outline" title={`Chapters with more than ${LARGE_CHAPTER_PAGES} pages need stitching`}>
               <Layers className="h-4 w-4 mr-2" />
@@ -347,6 +354,8 @@ export default function Library() {
           </Link>
         </div>
       </div>
+
+      <PhonePullDialog open={pullOpen} onOpenChange={setPullOpen} onPulled={() => { loadSeries(); loadPhoneSync() }} />
 
       <PhoneSendDialog
         open={sendOpen}

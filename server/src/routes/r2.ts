@@ -33,6 +33,8 @@
  *   PUT  /phone-send/auto   { seriesId, enabled } — send new chapters by itself after downloads
  *   POST /phone-send/index   { seriesId? } — write the phone's chapter index where it is behind
  *   POST /cancel   stop the running send
+ *   GET  /phone-pull   chapters the Master phone downloaded and sent that this library doesn't have (or has with other pages)
+ *   POST /phone-pull   { series: [{ folder, chapters: [name] }] } — bring them into the library (Get chapters from phones)
  *
  * Progress is pushed as `phone-send:progress` on the socket; /status is there
  * for a page that mounts mid-send or after it finished.
@@ -65,6 +67,7 @@ import {
   updatePhoneIndexes,
   type PhoneSendRequest
 } from '../services/phoneSend.js'
+import { listPhoneChapters, pullPhoneChapters } from '../services/phonePull.js'
 import { getPhoneScriptsZip, importPhoneScripts, previewPhoneScripts } from '../services/phoneScriptImport.js'
 import { requestLanguage } from '../services/narrationLanguage.js'
 import { forgetPhone, relayStatus, testRelay, updateRelayConfig } from '../services/phoneRelay.js'
@@ -378,6 +381,33 @@ export function initR2Routes(io: Server): Router {
     } catch (error) {
       console.error('Updating the phone index failed:', error)
       res.status(400).json({ error: message(error, 'Could not update the phone') })
+    }
+  })
+
+  router.get('/phone-pull', async (_req: Request, res: Response) => {
+    try {
+      res.json(await listPhoneChapters())
+    } catch (error) {
+      console.error('Listing the phones’ chapters failed:', error)
+      res.status(400).json({ error: message(error, 'Could not list the phones’ chapters') })
+    }
+  })
+
+  router.post('/phone-pull', async (req: Request, res: Response) => {
+    try {
+      const raw = req.body?.series
+      if (!Array.isArray(raw)) throw new Error('series must be an array')
+      const requests = raw.map(item => {
+        if (typeof item?.folder !== 'string' || !item.folder) throw new Error('Each series needs a folder')
+        if (!Array.isArray(item.chapters) || !item.chapters.every((c: unknown) => typeof c === 'string')) throw new Error('chapters must be an array of names')
+        return { folder: item.folder as string, chapters: item.chapters as string[] }
+      })
+      const result = await pullPhoneChapters(requests)
+      if (result.pulled.length > 0) io.emit('chapters:updated', [])
+      res.json(result)
+    } catch (error) {
+      console.error('Getting chapters from the phones failed:', error)
+      res.status(400).json({ error: message(error, 'Could not get the chapters') })
     }
   })
 

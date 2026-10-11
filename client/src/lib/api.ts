@@ -2977,7 +2977,38 @@ export const r2Api = {
   updatePhoneIndex: (seriesId?: string) =>
     fetchApi<{ written: number }>('/r2/phone-send/index', { method: 'POST', body: JSON.stringify({ seriesId }) }),
 
-  cancel: () => fetchApi<{ job: PhoneSendJob | null }>('/r2/cancel', { method: 'POST' })
+  cancel: () => fetchApi<{ job: PhoneSendJob | null }>('/r2/cancel', { method: 'POST' }),
+
+  /** Chapters the Master phone downloaded and sent that this library doesn't have. One bucket list + a GET per series index. */
+  getPhonePull: () => fetchApi<PhonePullOffer>('/r2/phone-pull'),
+
+  /** Brings the picked chapters into the library (Get chapters from phones). */
+  pullFromPhones: (series: { folder: string; chapters: string[] }[]) =>
+    fetchApi<PhonePullResult>('/r2/phone-pull', { method: 'POST', body: JSON.stringify({ series }) })
+}
+
+/** A chapter the Master phone sent (server/src/services/phonePull.ts). */
+export interface PhonePullChapter {
+  name: string
+  number: number
+  key: string
+  etag: string | null
+  sentAt: string
+  files: number
+  bytes: number
+  fingerprint: string | null
+  /** new: not here (or no pages here); changed: here, with other pages. */
+  state: 'new' | 'changed'
+}
+
+export interface PhonePullOffer {
+  configured: boolean
+  series: { folder: string; seriesId: string | null; title: string; chapters: PhonePullChapter[] }[]
+}
+
+export interface PhonePullResult {
+  pulled: { folder: string; chapter: string; pages: number }[]
+  failed: { folder: string; chapter: string; reason: string }[]
 }
 
 // ============ Page Stitcher ============

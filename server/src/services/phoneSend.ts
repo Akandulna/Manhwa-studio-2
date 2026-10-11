@@ -39,7 +39,7 @@ import path from 'path'
 import { createHash, randomUUID } from 'crypto'
 import type { Server } from 'socket.io'
 import archiver from 'archiver'
-import { DeleteObjectCommand, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3'
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
 import { prisma } from '../index.js'
 import { getPublishedChapters } from './storageService.js'
@@ -47,6 +47,7 @@ import { getImageFiles } from './chapterManifest.js'
 import { listMetadataImageStems, listPointedImageStems, stemOf } from './clipper3/perImageStore.js'
 import { phoneName, relayConfigured, relayReceipts } from './phoneRelay.js'
 import { mergeSyncReceipts } from './phoneReceipts.js'
+import { mergeIndex, type IndexChapter } from './phoneIndexMerge.js'
 import {
   PART_SIZE,
   assertWithinFreePlan,
@@ -54,6 +55,7 @@ import {
   getR2Config,
   invalidateStorage,
   measureBucket,
+  isNotFound,
   missingR2Env,
   phoneFolders,
   readPolledReceipt,
@@ -187,6 +189,11 @@ async function phoneFolder(client: S3Client, config: R2Config, receipt: SyncRece
   }
   const folders = await phoneFolders(client, config).catch(() => [])
   return `${folders[0] ?? config.prefix}${PHONE_FOLDER}`
+}
+
+/** Where the phones' chapter zips are (`<prefix>manhwa/`): for Get chapters from phones (phonePull.ts). */
+export async function phoneZipFolder(client: S3Client, config: R2Config): Promise<string> {
+  return phoneFolder(client, config, await readSyncReceipt(config, false))
 }
 
 type Ledger = Awaited<ReturnType<typeof prisma.phoneChapterSend.findMany>>[number]
@@ -330,23 +337,6 @@ interface SeriesRow {
   title: string
   rootFolder: string
   chapters: { id: string; number: number; folderPath: string }[]
-}
-
-interface IndexChapter {
-  name: string
-  number: number
-  key: string | null
-  etag: string | null
-  sentAt: string
-  files: number
-  bytes: number
-  fingerprint: string | null
-  done: boolean
-  crops: boolean
-  script: boolean
-  scriptHi: boolean
-  published: boolean
-  cleared: boolean
 }
 
 interface SeriesState {
@@ -495,10 +485,22 @@ export async function setAutoSend(seriesId: string, enabled: boolean): Promise<v
 
 // ============ Index and clean-up ============
 
-/** Writes the series' index for the phone (one PUT) and remembers what was written. */
+/**
+ * Writes the series' index for the phone and remembers what was written: one
+ * GET of the index there, merged with ours (the Master phone writes it too,
+ * see phoneIndexMerge.ts), and one PUT.
+ */
 async function writeIndex(client: S3Client, config: R2Config, folder: string, seriesId: string, state: SeriesState): Promise<void> {
   const key = `${folder}${state.index.series}/${INDEX_NAME}`
-  const body = JSON.stringify({ schema: INDEX_SCHEMA, ...state.index, updatedAt: new Date().toISOString() }, null, 2)
+  let existing: unknown = null
+  try {
+    const res = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: key }))
+    existing = JSON.parse((await res.Body?.transformToString()) ?? 'null')
+  } catch (error) {
+    if (!isNotFound(error) && !(error instanceof SyntaxError)) throw error
+  }
+  const chapters = mergeIndex(existing, state.index.chapters)
+  const body = JSON.stringify({ schema: INDEX_SCHEMA, series: state.index.series, chapters, updatedAt: new Date().toISOString() }, null, 2)
   await client.send(new PutObjectCommand({ Bucket: config.bucket, Key: key, Body: body, ContentType: 'application/json' }))
   const previous = await prisma.setting.findUnique({ where: { key: indexStateKey(seriesId) } })
   const previousKey = previous ? (JSON.parse(previous.value) as { key?: string }).key : undefined
@@ -515,10 +517,14 @@ async function writeIndex(client: S3Client, config: R2Config, folder: string, se
  * and the whole-series zips from before chapters were sent one by one.
  */
 async function cleanUp(client: S3Client, config: R2Config, storage: BucketStorage, folder: string, state: SeriesState): Promise<void> {
-  const present = new Set(storage.objects.map(o => o.key))
+  const present = new Map(storage.objects.map(o => [o.key, o.etag]))
   for (const row of state.ledger.values()) {
     if (!row.clearedAt || !row.key) continue
-    if (present.has(row.key)) await client.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: row.key }))
+    // Only our own copy: the Master phone may have sent the chapter again under the same key since.
+    const etag = present.get(row.key)
+    if (present.has(row.key) && (!etag || !row.etag || etag === row.etag)) {
+      await client.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: row.key }))
+    }
     const saved = await prisma.phoneChapterSend.update({ where: { chapterId: row.chapterId }, data: { key: null, etag: null } })
     state.ledger.set(row.chapterId, saved)
   }
