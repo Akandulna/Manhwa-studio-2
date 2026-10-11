@@ -11,6 +11,11 @@
  *   <phone prefix>editor/<Series>/<Chapter>.package.json     this → phone
  *   <phone prefix>editor/<Series>/<Chapter>.timeline.json    phone → this
  *
+ * A chapter goes up by itself once it's ready for its timeline JSON
+ * (voiceover, alignment, reviewed crops cut, no JSON yet): see
+ * publishReadyEditorPackages and editorAutoPublish.ts. Send to phone still
+ * sends a series' chapters at once, whether or not they changed.
+ *
  * The Editor 2.0 prompt goes up on its own whenever it's saved in Settings
  * (and again with each send), so the phone always pastes the latest one; a
  * package holds only the chapter's script with timeline and crop metadata.
@@ -37,14 +42,16 @@
  * Nothing here runs on a timer.
  */
 
+import { createHash } from 'crypto'
 import fs from 'fs/promises'
 import path from 'path'
 import { GetObjectCommand, ListObjectsV2Command, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3'
 import { prisma } from '../index.js'
 import { createClient, getR2Config, phoneFolders, requestPhoneUpdate, type R2Config } from './r2Service.js'
-import { getChapterCropMetadataBundle, getChapterTimelineBundle } from './videoEditor2Service.js'
-import { getOutputDir } from './clipper3/perImageStore.js'
-import type { NarrationLanguage } from './narrationLanguage.js'
+import { getChapterBlockers, getChapterCropMetadataBundle, getChapterTimelineBundle } from './videoEditor2Service.js'
+import { getOutputDir, getSourceFolderPath } from './clipper3/perImageStore.js'
+import { readEffectiveReview } from './clipper3/chapterReview.js'
+import { NARRATION_LANGUAGES, type NarrationLanguage } from './narrationLanguage.js'
 
 /** Inside the phone's prefix. Keep in step with FOLDER in EditorSync.kt. */
 export const EDITOR_FOLDER = 'editor/'
@@ -128,6 +135,117 @@ export interface EditorSendResult {
   phoneNotified: boolean
 }
 
+interface PackageChapter { id: string; number: number; title: string | null; folderPath: string }
+
+/** One chapter's package, ready to PUT; `sha256` covers everything but `sentAt`, so an unchanged chapter reads the same. */
+interface BuiltPackage { name: string; body: string; sha256: string }
+
+/**
+ * Builds `chapter`'s package in `language`, or says why it can't: a chapter
+ * without a script with timeline or crop metadata has nothing to make one from.
+ */
+async function buildPackage(
+  seriesFolder: string,
+  chapter: PackageChapter,
+  language: NarrationLanguage
+): Promise<BuiltPackage | { skip: string }> {
+  const [timeline, metadata] = await Promise.all([
+    getChapterTimelineBundle(chapter.id, language),
+    getChapterCropMetadataBundle(chapter.id)
+  ])
+  if (!timeline?.text) return { skip: 'no script with timeline' }
+  if (!metadata?.text) return { skip: 'no crop metadata' }
+
+  const audioSections = await prisma.audioSection.findMany({
+    where: { chapterId: chapter.id, language },
+    orderBy: { index: 'asc' },
+    include: { audioFile: true }
+  })
+  // The sections the bundle includes, numbered as its "## Section N" headings are.
+  const sections = audioSections
+    .filter(s => !!s.timelineScript?.trim())
+    .map(s => ({
+      number: s.index + 1,
+      durationSec: s.audioFile?.durationMs && s.audioFile.durationMs > 0
+        ? s.audioFile.durationMs / 1000
+        : lastTimestamp(s.timelineScript ?? '')
+    }))
+
+  let images: string[] = []
+  try {
+    images = (await fs.readdir(getOutputDir(chapter.folderPath))).filter(n => IMAGE_EXT.test(n)).sort()
+  } catch {
+    // No crops3 folder: the phone then can't check image names, only the rest.
+  }
+
+  const chapterFolder = path.basename(chapter.folderPath)
+  const content = {
+    schema: PACKAGE_SCHEMA,
+    series: seriesFolder,
+    chapter: chapterFolder,
+    chapterId: chapter.id,
+    number: chapter.number,
+    title: chapter.title,
+    language,
+    sections,
+    images,
+    timeline: timeline.text,
+    metadata: metadata.text
+  }
+  return {
+    name: `${seriesFolder}/${chapterFolder}${languageSuffix(language)}${PACKAGE_SUFFIX}`,
+    body: JSON.stringify({ ...content, sentAt: new Date().toISOString() }),
+    sha256: createHash('sha256').update(JSON.stringify(content)).digest('hex')
+  }
+}
+
+async function putPackage(client: S3Client, config: R2Config, folders: string[], pkg: BuiltPackage): Promise<void> {
+  for (const folder of folders) {
+    await client.send(new PutObjectCommand({
+      Bucket: config.bucket,
+      Key: `${folder}${EDITOR_FOLDER}${pkg.name}`,
+      Body: pkg.body,
+      ContentType: 'application/json'
+    }))
+  }
+}
+
+/**
+ * What was last sent of a chapter, per language, kept in its folder: so the
+ * automatic send ([publishReadyEditorPackages]) puts a package up only when it
+ * changed. Only ever a hint: a missing or unreadable record means a resend.
+ */
+const SENT_RECORD = '.editor2-phone.json'
+type SentRecord = Partial<Record<NarrationLanguage, { sha256: string; sentAt: string }>>
+
+async function readSentRecord(folderPath: string): Promise<SentRecord> {
+  try {
+    return JSON.parse(await fs.readFile(path.join(getSourceFolderPath(folderPath), SENT_RECORD), 'utf-8')) ?? {}
+  } catch {
+    return {}
+  }
+}
+
+async function recordSent(folderPath: string, language: NarrationLanguage, sha256: string): Promise<void> {
+  try {
+    const record = await readSentRecord(folderPath)
+    record[language] = { sha256, sentAt: new Date().toISOString() }
+    await fs.writeFile(path.join(getSourceFolderPath(folderPath), SENT_RECORD), JSON.stringify(record, null, 2), 'utf-8')
+  } catch {
+    // The chapter folder is gone; the next automatic send just sends it again.
+  }
+}
+
+async function nudgePhone(): Promise<boolean> {
+  try {
+    await requestPhoneUpdate('sync')
+    return true
+  } catch (error) {
+    console.warn('[phoneEditor] could not ask the phone to check R2:', errorMessage(error))
+    return false
+  }
+}
+
 /**
  * Sends each of `chapterIds` (in `language`) to the phone as a package,
  * replacing any sent before. `prompt` is the Editor 2.0 prompt, which lives in
@@ -163,73 +281,105 @@ export async function sendEditorPackages(
   for (const chapter of series.chapters) {
     const skip = (reason: string) => result.skipped.push({ chapterId: chapter.id, number: chapter.number, reason })
     try {
-      const [timeline, metadata] = await Promise.all([
-        getChapterTimelineBundle(chapter.id, language),
-        getChapterCropMetadataBundle(chapter.id)
-      ])
-      if (!timeline?.text) { skip('no script with timeline'); continue }
-      if (!metadata?.text) { skip('no crop metadata'); continue }
-
-      const audioSections = await prisma.audioSection.findMany({
-        where: { chapterId: chapter.id, language },
-        orderBy: { index: 'asc' },
-        include: { audioFile: true }
-      })
-      // The sections the bundle includes, numbered as its "## Section N" headings are.
-      const sections = audioSections
-        .filter(s => !!s.timelineScript?.trim())
-        .map(s => ({
-          number: s.index + 1,
-          durationSec: s.audioFile?.durationMs && s.audioFile.durationMs > 0
-            ? s.audioFile.durationMs / 1000
-            : lastTimestamp(s.timelineScript ?? '')
-        }))
-
-      let images: string[] = []
-      try {
-        images = (await fs.readdir(getOutputDir(chapter.folderPath))).filter(n => IMAGE_EXT.test(n)).sort()
-      } catch {
-        // No crops3 folder: the phone then can't check image names, only the rest.
-      }
-
-      const chapterFolder = path.basename(chapter.folderPath)
-      const body = JSON.stringify({
-        schema: PACKAGE_SCHEMA,
-        series: seriesFolder,
-        chapter: chapterFolder,
-        chapterId: chapter.id,
-        number: chapter.number,
-        title: chapter.title,
-        language,
-        sentAt: new Date().toISOString(),
-        sections,
-        images,
-        timeline: timeline.text,
-        metadata: metadata.text
-      })
-      for (const folder of folders) {
-        await client.send(new PutObjectCommand({
-          Bucket: config.bucket,
-          Key: `${folder}${EDITOR_FOLDER}${seriesFolder}/${chapterFolder}${languageSuffix(language)}${PACKAGE_SUFFIX}`,
-          Body: body,
-          ContentType: 'application/json'
-        }))
-      }
+      const pkg = await buildPackage(seriesFolder, chapter, language)
+      if ('skip' in pkg) { skip(pkg.skip); continue }
+      await putPackage(client, config, folders, pkg)
+      await recordSent(chapter.folderPath, language, pkg.sha256)
       result.sent.push({ chapterId: chapter.id, number: chapter.number })
     } catch (error) {
       skip(errorMessage(error))
     }
   }
 
-  if (result.sent.length > 0) {
-    try {
-      await requestPhoneUpdate('sync')
-      result.phoneNotified = true
-    } catch (error) {
-      console.warn('[phoneEditor] could not ask the phone to check R2:', errorMessage(error))
+  if (result.sent.length > 0) result.phoneNotified = await nudgePhone()
+  return result
+}
+
+// ============ Automatic send ============
+
+export interface EditorPublishResult {
+  sent: { chapterId: string; number: number; language: NarrationLanguage }[]
+  failed: { chapterId: string; language: NarrationLanguage; error: string }[]
+}
+
+/**
+ * Sends every chapter that's ready for its timeline JSON straight to the
+ * phone, without a Send to phone: voiceover audio, alignment, reviewed crops
+ * cut to crops3/ (the checklist's inputsReady) and no timeline JSON here yet.
+ * Each language goes on its own, as Send to phone does from its tab. A
+ * package already up with the same content is left alone, unless it's no
+ * longer in R2. `chapterIds` narrows it to those chapters; null checks all.
+ *
+ * Run from editorAutoPublish.ts after an alignment or a cut, and at startup.
+ * R2 cost: one LIST per phone folder when there's something to check, one PUT
+ * per changed package, and one nudge when anything went up.
+ */
+export async function publishReadyEditorPackages(chapterIds: string[] | null): Promise<EditorPublishResult> {
+  const result: EditorPublishResult = { sent: [], failed: [] }
+  const config = getR2Config()
+  if (!config) return result
+  let r2: { client: S3Client; folders: string[]; keys: Set<string> } | null = null
+
+  for (const language of NARRATION_LANGUAGES) {
+    const chapters = await prisma.chapter.findMany({
+      where: {
+        ...(chapterIds ? { id: { in: chapterIds } } : {}),
+        completedAt: null,
+        audioSections: { some: { language } }
+      },
+      orderBy: [{ seriesId: 'asc' }, { number: 'asc' }],
+      select: { id: true, number: true, title: true, folderPath: true, series: { select: { rootFolder: true } } }
+    })
+    const withJson = new Set(
+      (await prisma.editor2Timeline.findMany({
+        where: { chapterId: { in: chapters.map(c => c.id) }, language },
+        select: { chapterId: true, json: true }
+      })).filter(r => r.json.trim()).map(r => r.chapterId)
+    )
+
+    for (const chapter of chapters) {
+      if (withJson.has(chapter.id)) continue
+      try {
+        const blockers = await getChapterBlockers(chapter.id, language)
+        if (blockers === null || blockers.length > 0) continue
+        if (!(await readEffectiveReview(chapter.folderPath)).reviewed) continue
+        const pkg = await buildPackage(path.basename(chapter.series.rootFolder), chapter, language)
+        if ('skip' in pkg) continue
+
+        if (!r2) {
+          const client = createClient(config)
+          const folders = await phoneFolders(client, config)
+          r2 = { client, folders, keys: await listEditorKeys(client, config, folders) }
+        }
+        const { client, folders, keys } = r2
+        const upEverywhere = folders.every(folder => keys.has(`${folder}${EDITOR_FOLDER}${pkg.name}`))
+        if (upEverywhere && (await readSentRecord(chapter.folderPath))[language]?.sha256 === pkg.sha256) continue
+
+        await putPackage(client, config, folders, pkg)
+        await recordSent(chapter.folderPath, language, pkg.sha256)
+        result.sent.push({ chapterId: chapter.id, number: chapter.number, language })
+      } catch (error) {
+        result.failed.push({ chapterId: chapter.id, language, error: errorMessage(error) })
+      }
     }
   }
+
+  if (result.sent.length > 0) await nudgePhone()
   return result
+}
+
+/** Every key under the phone folders' editor/, to tell a package that's gone from one that's up. */
+async function listEditorKeys(client: S3Client, config: R2Config, folders: string[]): Promise<Set<string>> {
+  const keys = new Set<string>()
+  for (const folder of folders) {
+    let token: string | undefined
+    do {
+      const page = await client.send(new ListObjectsV2Command({ Bucket: config.bucket, Prefix: `${folder}${EDITOR_FOLDER}`, ContinuationToken: token }))
+      for (const object of page.Contents ?? []) if (object.Key) keys.add(object.Key)
+      token = page.IsTruncated ? page.NextContinuationToken : undefined
+    } while (token)
+  }
+  return keys
 }
 
 // ============ Fetch ============

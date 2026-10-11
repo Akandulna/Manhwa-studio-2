@@ -17,6 +17,7 @@ import fs from 'fs/promises'
 import path from 'path'
 import { prisma } from '../../index.js'
 import { NARRATION_LANGUAGES, alignmentFileName, type NarrationLanguage } from '../narrationLanguage.js'
+import { queueEditorPublish } from '../editorAutoPublish.js'
 
 function chapterDir(folderPath: string): string {
   return path.join(process.env.DOWNLOAD_ROOT || './downloads', folderPath)
@@ -72,6 +73,8 @@ export async function writeAlignmentDocument(chapterId: string, language: Narrat
     return false
   }
   await fs.writeFile(alignmentDocumentPath(chapter.folderPath, language), document, 'utf-8')
+  // The chapter may now be ready for its timeline JSON: Editor 2.0 sends it to the phone.
+  queueEditorPublish(chapterId)
   return true
 }
 

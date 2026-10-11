@@ -23,6 +23,7 @@ import { DownloadManager } from './services/downloadManager.js';
 import { startPhoneRelay } from './services/phoneRelay.js';
 import { reconcileQuietly } from './services/diskReconcile.js';
 import { backfillAlignmentDocumentsQuietly } from './services/alignment/alignmentDocument.js';
+import { publishEditorPackagesAtStartup } from './services/editorAutoPublish.js';
 
 dotenv.config();
 
@@ -105,6 +106,9 @@ reconcileQuietly();
 
 // Fully aligned chapters missing their alignment document (script-timeline.md) get it.
 backfillAlignmentDocumentsQuietly();
+
+// Chapters that got ready for their timeline JSON while the server was down go to the phone's Editor 2.0.
+publishEditorPackagesAtStartup();
 
 // Live phone status through the relay Worker, when Settings → Cloudflare has it set up.
 startPhoneRelay(io);

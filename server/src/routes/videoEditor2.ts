@@ -34,6 +34,7 @@ import {
 } from '../services/editor2Export.js'
 import { NarrationLanguage, requestLanguage } from '../services/narrationLanguage.js'
 import { fetchPhoneTimelines, saveEditorPrompt, sendEditorPackages } from '../services/phoneEditor.js'
+import { queueEditorPublish } from '../services/editorAutoPublish.js'
 
 export function initVideoEditor2Routes(io: Server): Router {
   const router = Router()
@@ -208,6 +209,8 @@ export function initVideoEditor2Routes(io: Server): Router {
         create: { chapterId, language, ...data },
         update: data
       })
+      // A cleared paste needs a timeline JSON again, which the phone can make.
+      if (!json.trim()) queueEditorPublish(chapterId)
       res.json(toStored(row))
     } catch (error) {
       console.error('[videoEditor2] saving stored timeline failed:', error)

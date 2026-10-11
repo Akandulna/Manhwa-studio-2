@@ -74,6 +74,7 @@ import {
 import { fetchPhoneCrops, publishAllCroppedMarkers, publishChapterCropped } from '../services/phoneCropImport.js'
 import { readEffectiveReview, setDesktopReview } from '../services/clipper3/chapterReview.js'
 import { reconcileQuietly } from '../services/diskReconcile.js'
+import { queueEditorPublish } from '../services/editorAutoPublish.js'
 import { doneNeighbours } from '../services/pageStitch.js'
 import {
   syncChapterProcessed,
@@ -128,6 +129,8 @@ export function initClipper3Routes(io: Server): Router {
   // Every finished cut (Crop Sections or auto) tells the phones the chapter is
   // cropped, so the Master shows it as such and clipping phones leave it be.
   onChapterCropped(chapter => publishChapterCropped(chapter.id))
+  // A cut chapter may be ready for its timeline JSON: Editor 2.0 sends it to the phone.
+  onChapterCropped(async chapter => queueEditorPublish(chapter.id))
 
   // ============ Series & chapter listing ============
 

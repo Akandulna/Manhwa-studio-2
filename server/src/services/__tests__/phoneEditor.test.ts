@@ -1,3 +1,6 @@
+import fs from 'fs'
+import os from 'os'
+import path from 'path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { GetObjectCommand, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3'
 
@@ -13,8 +16,20 @@ const chapters = [
   { id: 'c3', number: 3, title: null, folderPath: 'Demo/Chapter 003' }
 ]
 
+// Each chapter's folder, where the automatic send keeps what it last sent.
+const folders = fs.mkdtempSync(path.join(os.tmpdir(), 'phone-editor-'))
+for (const c of chapters) fs.mkdirSync(path.join(folders, c.folderPath), { recursive: true })
+
+// The automatic send's view of each chapter: what still blocks it and whether it's reviewed.
+let blockers: Record<string, string[]> = {}
+let unreviewed = new Set<string>()
+
 vi.mock('../../index.js', () => ({
   prisma: {
+    chapter: {
+      findMany: async ({ where }: { where: { id?: { in: string[] } } }) =>
+        chapters.filter(c => !where.id || where.id.in.includes(c.id)).map(c => ({ ...c, series: { rootFolder: '/library/Demo' } }))
+    },
     series: {
       findUnique: async ({ select }: { select: { chapters: { where?: { id: { in: string[] } } } } }) => ({
         title: 'Demo',
@@ -29,6 +44,7 @@ vi.mock('../../index.js', () => ({
       ]
     },
     editor2Timeline: {
+      findMany: async ({ where }: { where: { language: string } }) => rows.filter(r => r.language === where.language),
       findUnique: async ({ where }: { where: { chapterId_language: { chapterId: string; language: string } } }) =>
         rows.find(r => r.chapterId === where.chapterId_language.chapterId && r.language === where.chapterId_language.language) ?? null,
       upsert: async ({ where, create, update }: { where: { chapterId_language: { chapterId: string; language: string } }; create: TimelineRow; update: Partial<TimelineRow> }) => {
@@ -66,12 +82,20 @@ vi.mock('../r2Service.js', () => ({
 
 vi.mock('../videoEditor2Service.js', () => ({
   getChapterTimelineBundle: async (id: string) => ({ text: id === 'c3' ? '' : `## Section 1\n\ntimeline of ${id}` }),
-  getChapterCropMetadataBundle: async (id: string) => ({ text: `## page_001.webp\n\nmetadata of ${id}` })
+  getChapterCropMetadataBundle: async (id: string) => ({ text: `## page_001.webp\n\nmetadata of ${id}` }),
+  getChapterBlockers: async (id: string) => blockers[id] ?? []
 }))
 
-vi.mock('../clipper3/perImageStore.js', () => ({ getOutputDir: () => '/nowhere/crops3' }))
+vi.mock('../clipper3/perImageStore.js', () => ({
+  getOutputDir: () => '/nowhere/crops3',
+  getSourceFolderPath: (folderPath: string) => path.join(folders, folderPath)
+}))
 
-const { copyAllText, fetchPhoneTimelines, saveEditorPrompt, sendEditorPackages } = await import('../phoneEditor.js')
+vi.mock('../clipper3/chapterReview.js', () => ({
+  readEffectiveReview: async (folderPath: string) => ({ reviewed: !unreviewed.has(folderPath) })
+}))
+
+const { copyAllText, fetchPhoneTimelines, publishReadyEditorPackages, saveEditorPrompt, sendEditorPackages } = await import('../phoneEditor.js')
 
 function timelineBody(chapter: string, timeline: string, madeAt: string, language = 'en') {
   return JSON.stringify({ schema: 'sleeper-cell-editor-timeline/1', series: 'Demo', chapter, language, madeAt, review: [], timeline })
@@ -80,6 +104,9 @@ function timelineBody(chapter: string, timeline: string, madeAt: string, languag
 beforeEach(() => {
   bucket.clear()
   rows = []
+  blockers = {}
+  unreviewed = new Set()
+  for (const c of chapters) fs.rmSync(path.join(folders, c.folderPath, '.editor2-phone.json'), { force: true })
 })
 
 describe('sendEditorPackages', () => {
@@ -105,6 +132,35 @@ describe('sendEditorPackages', () => {
 
   it('needs the prompt', async () => {
     await expect(sendEditorPackages('s1', 'en', ['c1'], '  ')).rejects.toThrow(/prompt/)
+  })
+})
+
+describe('publishReadyEditorPackages', () => {
+  it('sends each ready, reviewed chapter without a timeline JSON, in each language', async () => {
+    blockers = { c2: ['Crops'] }
+    rows.push({ chapterId: 'c1', language: 'en', json: '{"made":1}', processedJson: null, updatedAt: new Date() })
+    const result = await publishReadyEditorPackages(null)
+    // c1 has its English JSON, c2 isn't cut, c3 has no script with timeline.
+    expect(result.sent.map(s => `${s.chapterId}:${s.language}`)).toEqual(['c1:hi'])
+    expect([...bucket.keys()]).toEqual(['Phone/editor/Demo/Chapter 001.hi.package.json'])
+    expect(JSON.parse(bucket.get('Phone/editor/Demo/Chapter 001.hi.package.json')!).schema).toBe('manhwa-studio-editor-package/2')
+  })
+
+  it('leaves out a chapter whose crops aren\'t reviewed', async () => {
+    unreviewed.add('Demo/Chapter 001')
+    expect((await publishReadyEditorPackages(['c1'])).sent).toEqual([])
+  })
+
+  it('sends an unchanged package once, and again only when it\'s gone from R2', async () => {
+    expect((await publishReadyEditorPackages(['c1'])).sent).toHaveLength(2)
+    expect((await publishReadyEditorPackages(['c1'])).sent).toHaveLength(0)
+    bucket.delete('Phone/editor/Demo/Chapter 001.package.json')
+    expect((await publishReadyEditorPackages(['c1'])).sent.map(s => s.language)).toEqual(['en'])
+  })
+
+  it('counts a Send to phone as sent', async () => {
+    await sendEditorPackages('s1', 'en', ['c1'], 'P')
+    expect((await publishReadyEditorPackages(['c1'])).sent.map(s => s.language)).toEqual(['hi'])
   })
 })
 
