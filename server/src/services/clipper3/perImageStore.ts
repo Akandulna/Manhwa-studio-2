@@ -622,6 +622,24 @@ export async function listOutputs(folderPath: string): Promise<{ filename: strin
   return files
 }
 
+/**
+ * When the chapter was last cut: the newest modification time in crops3/, or
+ * null when nothing has been cut. Only the cutter writes there.
+ */
+export async function latestOutputTime(folderPath: string): Promise<number | null> {
+  const dir = getOutputDir(folderPath)
+  let latest: number | null = null
+  for (const { filename } of await listOutputs(folderPath)) {
+    try {
+      const time = (await fs.stat(path.join(dir, filename))).mtimeMs
+      if (latest == null || time > latest) latest = time
+    } catch {
+      // Vanished since the listing — not part of the cut any more.
+    }
+  }
+  return latest
+}
+
 /** How the chapter's crops3/ compares with what its pages say should be cut. */
 export interface ChapterCropOutputs {
   /** Every page is done and crops3/ holds exactly the files those pages cut to. */

@@ -32,6 +32,7 @@ import {
   ShieldAlert
 } from 'lucide-react'
 import {
+  openFolder,
   storageApi,
   type StorageOverview,
   type SeriesStorage,
@@ -149,7 +150,8 @@ function ExportBadge({ chapter }: { chapter: ChapterStorage }) {
 
 // ============ Page ============
 
-export default function StorageManager() {
+/** Settings → Storage. `libraryRoot` is where every series lives (DOWNLOAD_ROOT). */
+export default function StorageManager({ libraryRoot }: { libraryRoot?: string }) {
   const { toast } = useToast()
 
   const [overview, setOverview] = useState<StorageOverview | null>(null)
@@ -189,6 +191,14 @@ export default function StorageManager() {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  const openLibraryFolder = async () => {
+    try {
+      await openFolder('.')
+    } catch (e) {
+      toast({ title: 'Could not open the folder', description: e instanceof Error ? e.message : String(e), variant: 'destructive' })
+    }
+  }
 
   const toggleCategory = (key: StorageCategoryKey) => {
     setSelected(prev => {
@@ -364,13 +374,21 @@ export default function StorageManager() {
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <HardDrive className="h-7 w-7 text-primary" />
-            <h1 className="text-3xl font-bold">Storage</h1>
+            <HardDrive className="h-6 w-6 text-primary" />
+            <h2 className="text-2xl font-bold">Storage</h2>
           </div>
           <p className="mt-1 text-muted-foreground">
             What each manhwa is consuming on this machine, and which chapters have already been
             exported to video — so the material behind them can be safely deleted.
           </p>
+          {libraryRoot && (
+            <p className="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
+              Library folder: <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">{libraryRoot}</code>
+              <Button variant="link" size="sm" className="h-auto p-0" onClick={() => openLibraryFolder()}>
+                Open in Finder
+              </Button>
+            </p>
+          )}
         </div>
         <Button variant="outline" onClick={() => load(true)} disabled={scanning}>
           {scanning

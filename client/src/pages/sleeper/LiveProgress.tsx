@@ -111,9 +111,8 @@ function RunSection({ run, now }: { run: PhoneOverviewRun; now: number }) {
           : run.kind === 'editor' ? 'timeline' : `${LANGUAGE_LABEL[tab.language]} script`
         const where = <><span className="text-muted-foreground">{chapterLabel(tab)} · </span>{what}</>
         const tabLang = tab.language === 'hi' ? '?lang=hi' : ''
-        const link = !tab.chapterId || run.kind === 'editor'
-          ? null
-          : run.kind === 'voiceover' ? `/narration/voiceover/${tab.chapterId}${tabLang}` : `/narration/chapter/${tab.chapterId}${tabLang}`
+        // Narration has no chapter page: its series page shows each chapter's script and voiceover.
+        const link = !run.seriesId || run.kind === 'editor' ? null : `/narration/series/${run.seriesId}${tabLang}`
         return (
           <div key={`${tab.chapter}/${tab.language}/${tab.split ?? ''}`} className="flex items-center gap-2 pl-5 text-sm">
             {run.paused ? <Pause className="h-3.5 w-3.5 text-amber-500" /> : <Light tone="good" live size="h-2 w-2" />}

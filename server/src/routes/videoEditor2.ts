@@ -1,8 +1,11 @@
 /**
  * Video Editor 2.0 routes — Module 4v2
  *
- * Phase 1: series → chapter readiness only. The compile/timeline/render
- * workspace lands in a later phase.
+ * Series → chapters with a four-item readiness checklist (voiceover audio,
+ * alignment, timeline JSON, cropped images; videoEditor2Service.ts), the two
+ * ways a chapter's timeline JSON arrives (Copy All → ChatGPT → paste, or the
+ * phone through R2), Check Images, Preview and Export. Preview and Export
+ * refuse a chapter whose checklist isn't complete.
  */
 
 import { Router, Request, Response } from 'express'
@@ -12,6 +15,7 @@ import path from 'path'
 import { Server } from 'socket.io'
 import { prisma } from '../index.js'
 import {
+  getChapterBlockers,
   getChapterCropMetadataBundle,
   getChapterTimelineBundle,
   getEditableChapters2
@@ -43,6 +47,22 @@ export function initVideoEditor2Routes(io: Server): Router {
     } catch (error) {
       console.error('[videoEditor2] listing editable chapters failed:', error)
       res.status(500).json({ error: 'Failed to list editable chapters' })
+    }
+  })
+
+  /**
+   * GET /series/:seriesId/readiness
+   *
+   * Just which chapters have a complete checklist, for the library's
+   * "4/12 ready" count. Same scan as editable-chapters, smaller answer.
+   */
+  router.get('/series/:seriesId/readiness', async (req: Request, res: Response) => {
+    try {
+      const chapters = await getEditableChapters2(req.params.seriesId, requestLanguage(req))
+      res.json({ chapters: chapters.map(ch => ({ id: ch.id, ready: ch.ready })) })
+    } catch (error) {
+      console.error('[videoEditor2] series readiness failed:', error)
+      res.status(500).json({ error: 'Failed to check series readiness' })
     }
   })
 
@@ -92,6 +112,12 @@ export function initVideoEditor2Routes(io: Server): Router {
       const { json } = req.body
       if (typeof json !== 'string' || json.trim().length === 0) {
         return res.status(400).json({ error: 'json (non-empty string) is required' })
+      }
+      // The JSON is in hand; the other three checklist items have to be too.
+      const blockers = await getChapterBlockers(req.params.id, requestLanguage(req))
+      if (!blockers) return res.status(404).json({ error: 'Chapter not found' })
+      if (blockers.length > 0) {
+        return res.status(409).json({ error: `This chapter isn't ready to preview — missing: ${blockers.join(', ')}.` })
       }
       const plan = await processTimelineJson(req.params.id, json, requestLanguage(req))
       res.json(plan)
@@ -394,6 +420,18 @@ export function initVideoEditor2Routes(io: Server): Router {
           return res.status(400).json({ error: `Chapter ${chapterId} has no timeline JSON to export` })
         }
         inputs.push({ chapterId, json })
+      }
+
+      // Same gate as Preview: the request carries the JSON, so the other
+      // three checklist items decide.
+      const notReady: string[] = []
+      for (const input of inputs) {
+        const blockers = await getChapterBlockers(input.chapterId, requestLanguage(req))
+        if (!blockers) notReady.push(`${input.chapterId} (not found)`)
+        else if (blockers.length > 0) notReady.push(`${input.chapterId} (missing: ${blockers.join(', ')})`)
+      }
+      if (notReady.length > 0) {
+        return res.status(409).json({ error: `Not ready to export: ${notReady.join('; ')}` })
       }
 
       const jobId = await startBatchExport(

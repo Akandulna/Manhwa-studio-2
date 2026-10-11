@@ -17,7 +17,8 @@
  * from the sections already there), and each split's audio is written to
  * `audio/section_NN.<ext>` and attached as generated audio, then aligned like
  * any other. The phone's splits win over the desktop's: the audio was made from
- * them.
+ * them. New audio clears the sections' old timelines and the chapter's
+ * alignment document; alignment writes them again once it finishes.
  *
  * Hinglish voiceovers (the Hindi tab) sit in the same folder as
  * `<Chapter>.hi.zip`, laid out the same way, with `"language": "hi"` in the
@@ -28,7 +29,8 @@
  * R2 cost per fetch: one or two LISTs (Class A), plus one GET (Class B) per
  * chapter whose zip changed. A marker file in each chapter's audio folder
  * remembers the ETag it was attached from, so a re-run downloads nothing new.
- * Nothing here runs on a timer; only the Fetch button calls it.
+ * `previewPhoneVoiceover` is the LIST alone, to show what a fetch would bring.
+ * Nothing here runs on a timer; only Narration's "Fetch from phone" calls it.
  */
 
 import crypto from 'crypto'
@@ -42,6 +44,7 @@ import { createClient, getR2Config, type R2Config } from './r2Service.js'
 import { backupAudioFile, initializeSections } from './voiceoverService.js'
 import { validateAudioFile, type AudioMetadata } from './audioProcessor.js'
 import { alignSectionInBackground } from './alignment/alignmentService.js'
+import { removeAlignmentDocument } from './alignment/alignmentDocument.js'
 import { LANGUAGE_NAMES, audioFolderName, scriptFileName, type NarrationLanguage } from './narrationLanguage.js'
 
 /** Folder the phone uploads chapter zips to, inside its R2 prefix. Keep in step with FOLDER in VoiceoverUpload.kt. */
@@ -89,6 +92,27 @@ export interface FetchedVoiceover {
   resplit: boolean
   /** Whether the desktop's script file is the one the phone split; null when either side doesn't say. */
   scriptMatches: boolean | null
+}
+
+/** Each chapter as it starts downloading, for live progress. */
+export type VoiceoverFetchProgress = (step: { chapterNumber: number; current: number; total: number }) => void
+
+/** One chapter zip in R2 as a fetch would see it, before anything is downloaded. */
+export interface PhoneVoiceoverPreviewChapter {
+  chapterId: string
+  number: number
+  folder: string
+  /** new: never attached · changed: re-uploaded since it was attached · same: already attached from this zip */
+  state: 'new' | 'changed' | 'same'
+  bytes: number
+  uploadedAt: string | null
+}
+
+export interface PhoneVoiceoverPreview {
+  configured: boolean
+  chapters: PhoneVoiceoverPreviewChapter[]
+  /** Zips in R2 with no desktop chapter folder of that name. */
+  unmatched: string[]
 }
 
 export interface PhoneVoiceoverFetch {
@@ -233,6 +257,9 @@ export async function attachVoiceover(
       include: { audioFile: true },
       orderBy: { index: 'asc' }
     })
+    // The old timelines were measured on the old audio.
+    await removeAlignmentDocument(folderPath, language)
+    const aligning: string[] = []
     for (const { section, path: stagedPath, metadata } of staged) {
       const row = rows[section.index]
       const dest = path.join(audioDir, `section_${String(section.index + 1).padStart(2, '0')}.${section.format}`)
@@ -260,9 +287,11 @@ export async function attachVoiceover(
           status: 'done'
         }
       })
-      await prisma.audioSection.update({ where: { id: row.id }, data: { status: 'done', error: null } })
-      alignSectionInBackground(row.id, io)
+      await prisma.audioSection.update({ where: { id: row.id }, data: { status: 'done', error: null, timelineScript: null } })
+      aligning.push(row.id)
     }
+    // Queued once every section is attached, so the last one to finish writes the document.
+    for (const id of aligning) alignSectionInBackground(id, io)
     return !sameSplits
   } finally {
     await fs.rm(staging, { recursive: true, force: true })
@@ -277,6 +306,7 @@ interface ListedZip {
   base: string
   etag: string
   size: number
+  uploadedAt: string | null
 }
 
 /**
@@ -314,7 +344,8 @@ async function listFolder(client: S3Client, config: R2Config, folder: string): P
         key: obj.Key!,
         base: rest.slice(0, -'.zip'.length),
         etag: (obj.ETag ?? '').replace(/"/g, ''),
-        size: obj.Size ?? 0
+        size: obj.Size ?? 0,
+        uploadedAt: obj.LastModified?.toISOString() ?? null
       })
     }
     token = page.IsTruncated ? page.NextContinuationToken : undefined
@@ -340,13 +371,83 @@ async function listSeriesZips(client: S3Client, config: R2Config, seriesId: stri
   return []
 }
 
-async function readMarkerEtag(audioDir: string): Promise<string | null> {
+async function readMarker(audioDir: string): Promise<{ etag?: unknown; fetchedAt?: unknown } | null> {
   try {
-    const marker = JSON.parse(await fs.readFile(path.join(audioDir, FETCH_MARKER), 'utf-8'))
-    return typeof marker?.etag === 'string' ? marker.etag : null
+    return JSON.parse(await fs.readFile(path.join(audioDir, FETCH_MARKER), 'utf-8'))
   } catch {
     return null
   }
+}
+
+async function readMarkerEtag(audioDir: string): Promise<string | null> {
+  const marker = await readMarker(audioDir)
+  return typeof marker?.etag === 'string' ? marker.etag : null
+}
+
+/** When the chapter's voiceover in `language` was last fetched from the phone; null if never. */
+export async function voiceoverFetchedAt(folderPath: string, language: NarrationLanguage): Promise<string | null> {
+  const marker = await readMarker(path.join(chapterDir(folderPath), audioFolderName(language)))
+  return typeof marker?.fetchedAt === 'string' ? marker.fetchedAt : null
+}
+
+// ============ Preview ============
+
+interface SeriesZips {
+  client: S3Client
+  config: R2Config
+  /** This language's zips, sorted by chapter folder. */
+  zips: (ListedZip & { folder: string; language: NarrationLanguage })[]
+  byFolder: Map<string, { id: string; number: number; folderPath: string }>
+}
+
+/** Lists the series' chapter zips in R2 in one language (one or two LISTs); null when R2 isn't set up. */
+async function listLanguageZips(seriesId: string, language: NarrationLanguage): Promise<SeriesZips | null> {
+  const config = getR2Config()
+  if (!config) return null
+  const series = await prisma.series.findUnique({
+    where: { id: seriesId },
+    select: {
+      rootFolder: true,
+      chapters: { select: { id: true, number: true, folderPath: true }, orderBy: { number: 'asc' } }
+    }
+  })
+  if (!series) throw new Error('Series not found')
+
+  const client = createClient(config)
+  const byFolder = new Map(series.chapters.map(c => [path.basename(c.folderPath), c]))
+  const folders = new Set(byFolder.keys())
+  // The other language's zips share the folder; they are not this fetch's.
+  const zips = (await listSeriesZips(client, config, seriesId, path.basename(series.rootFolder)))
+    .map(zip => ({ ...zip, ...zipChapter(zip.base, folders) }))
+    .filter(zip => zip.language === language)
+    .sort((a, b) => a.folder.localeCompare(b.folder, undefined, { numeric: true }))
+  return { client, config, zips, byFolder }
+}
+
+/** What a fetch would bring in `language`, from the LIST alone: nothing is downloaded. */
+export async function previewPhoneVoiceover(seriesId: string, language: NarrationLanguage = 'en'): Promise<PhoneVoiceoverPreview> {
+  const listed = await listLanguageZips(seriesId, language)
+  if (!listed) return { configured: false, chapters: [], unmatched: [] }
+
+  const chapters: PhoneVoiceoverPreviewChapter[] = []
+  const unmatched: string[] = []
+  for (const zip of listed.zips) {
+    const chapter = listed.byFolder.get(zip.folder)
+    if (!chapter) {
+      unmatched.push(zip.folder)
+      continue
+    }
+    const attached = await readMarkerEtag(path.join(chapterDir(chapter.folderPath), audioFolderName(language)))
+    chapters.push({
+      chapterId: chapter.id,
+      number: chapter.number,
+      folder: zip.folder,
+      state: !attached ? 'new' : zip.etag && attached === zip.etag ? 'same' : 'changed',
+      bytes: zip.size,
+      uploadedAt: zip.uploadedAt
+    })
+  }
+  return { configured: true, chapters, unmatched }
 }
 
 // ============ Fetch ============
@@ -358,44 +459,31 @@ const fetching = new Set<string>()
  * Downloads and attaches every chapter voiceover in `language` the phone has
  * uploaded for this series that isn't attached yet (or was re-uploaded since).
  * `chapterIds` narrows it to those chapters. A chapter that fails is reported
- * and the rest carry on.
+ * and the rest carry on. `onProgress` hears each chapter as it starts.
  */
 export async function fetchPhoneVoiceover(
   seriesId: string,
   chapterIds?: string[],
   io?: Server | null,
-  language: NarrationLanguage = 'en'
+  language: NarrationLanguage = 'en',
+  onProgress?: VoiceoverFetchProgress
 ): Promise<PhoneVoiceoverFetch> {
   const result: PhoneVoiceoverFetch = { configured: false, found: 0, fetched: [], upToDate: 0, unmatched: [], failed: [] }
-  const config = getR2Config()
-  if (!config) return result
+  if (!getR2Config()) return result
   result.configured = true
   const lock = `${seriesId}:${language}`
   if (fetching.has(lock)) throw new Error('A fetch for this series is already running')
   fetching.add(lock)
 
   try {
-    const series = await prisma.series.findUnique({
-      where: { id: seriesId },
-      select: {
-        rootFolder: true,
-        chapters: { select: { id: true, number: true, folderPath: true }, orderBy: { number: 'asc' } }
-      }
-    })
-    if (!series) throw new Error('Series not found')
-
-    const client = createClient(config)
-    const byFolder = new Map(series.chapters.map(c => [path.basename(c.folderPath), c]))
-    const folders = new Set(byFolder.keys())
-    // The other language's zips share the folder; they are not this fetch's.
-    const zips = (await listSeriesZips(client, config, seriesId, path.basename(series.rootFolder)))
-      .map(zip => ({ ...zip, ...zipChapter(zip.base, folders) }))
-      .filter(zip => zip.language === language)
+    const listed = await listLanguageZips(seriesId, language)
+    if (!listed) return { ...result, configured: false }
+    const { client, config, zips, byFolder } = listed
     result.found = zips.length
 
     const wanted = chapterIds ? new Set(chapterIds) : null
-    zips.sort((a, b) => a.folder.localeCompare(b.folder, undefined, { numeric: true }))
-
+    // Matched, wanted and not attached from this very zip already.
+    const todo: { zip: (typeof zips)[number]; chapter: { id: string; number: number; folderPath: string }; audioDir: string }[] = []
     for (const zip of zips) {
       const chapter = byFolder.get(zip.folder)
       if (!chapter) {
@@ -409,7 +497,11 @@ export async function fetchPhoneVoiceover(
         result.upToDate++
         continue
       }
+      todo.push({ zip, chapter, audioDir })
+    }
 
+    for (const [i, { zip, chapter, audioDir }] of todo.entries()) {
+      onProgress?.({ chapterNumber: chapter.number, current: i + 1, total: todo.length })
       try {
         if (zip.size > MAX_ZIP_BYTES) throw new Error(`The zip is unexpectedly large (${zip.size} bytes)`)
         const res = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: zip.key }))

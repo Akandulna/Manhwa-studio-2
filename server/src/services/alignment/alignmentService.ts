@@ -10,6 +10,10 @@
  * spawned per job and exiting when done, so no model stays resident between
  * jobs. Jobs are serialized (concurrency 1) to keep peak memory predictable on
  * small machines.
+ *
+ * Every finished section also refreshes the chapter's alignment document on
+ * disk (see alignmentDocument.ts), which is written once all its sections are
+ * aligned.
  */
 
 import { spawn } from 'child_process'
@@ -20,6 +24,7 @@ import { Server } from 'socket.io'
 import { prisma } from '../../index.js'
 import { buildTimelineScript, type AlignedWord } from './beatFormatter.js'
 import { cachedProbe, isAvailable } from '../../utils/cachedProbe.js'
+import { writeAlignmentDocument } from './alignmentDocument.js'
 import { NarrationLanguage, parseLanguage } from '../narrationLanguage.js'
 
 /** Serialized: one alignment at a time, so peak memory stays predictable. */
@@ -56,8 +61,7 @@ function getScriptPath(): string {
 }
 
 /**
- * Check whether the alignment sidecar can run. Mirrors the voice-analysis
- * sidecar's --check contract.
+ * Check whether the alignment sidecar can run (`align.py --check` prints "ok").
  */
 async function probeAlignmentAvailable(): Promise<{
   available: boolean
@@ -178,6 +182,14 @@ function runAligner(audioPath: string, text: string, language: NarrationLanguage
   })
 }
 
+/** Sections queued or aligning, per `chapterId:language`, so a page opened mid-run shows it. */
+const pending = new Map<string, number>()
+
+/** How many of this chapter's sections are queued or aligning right now. */
+export function pendingAlignments(chapterId: string, language: NarrationLanguage): number {
+  return pending.get(`${chapterId}:${language}`) ?? 0
+}
+
 /**
  * Align one section's audio against its script text and save the resulting
  * timeline to the section. Queued: only one alignment runs at a time.
@@ -186,6 +198,24 @@ export async function alignSection(
   sectionId: string,
   io?: Server
 ): Promise<AlignmentResult> {
+  const owner = await prisma.audioSection.findUnique({
+    where: { id: sectionId },
+    select: { chapterId: true, language: true }
+  })
+  const key = owner ? `${owner.chapterId}:${parseLanguage(owner.language)}` : null
+  if (key) pending.set(key, (pending.get(key) ?? 0) + 1)
+  try {
+    return await alignQueued(sectionId, io)
+  } finally {
+    if (key) {
+      const left = (pending.get(key) ?? 1) - 1
+      if (left > 0) pending.set(key, left)
+      else pending.delete(key)
+    }
+  }
+}
+
+function alignQueued(sectionId: string, io?: Server): Promise<AlignmentResult> {
   return alignQueue.add(async () => {
     const section = await prisma.audioSection.findUnique({
       where: { id: sectionId },
@@ -227,6 +257,7 @@ export async function alignSection(
       })
 
       const beatCount = timelineScript ? timelineScript.split('\n').length : 0
+      const documentWritten = await refreshDocument(section.chapterId, parseLanguage(section.language))
 
       io?.emit('alignment:progress', {
         chapterId: section.chapterId,
@@ -234,7 +265,8 @@ export async function alignSection(
         sectionId,
         index: section.index,
         stage: 'done',
-        beatCount
+        beatCount,
+        documentWritten
       })
 
       return { sectionId, timelineScript, beatCount, durationSec }
@@ -256,6 +288,19 @@ export async function alignSection(
 }
 
 /**
+ * Rewrites the chapter's alignment document after a section is aligned. A disk
+ * error is logged, never thrown: the timeline itself is already saved.
+ */
+async function refreshDocument(chapterId: string, language: NarrationLanguage): Promise<boolean> {
+  try {
+    return await writeAlignmentDocument(chapterId, language)
+  } catch (error) {
+    console.error(`[alignment] writing the document for chapter ${chapterId} failed:`, error instanceof Error ? error.message : error)
+    return false
+  }
+}
+
+/**
  * Fire-and-forget alignment used by the auto-trigger after generation/upload.
  *
  * Deliberately never throws: a failed alignment must not fail the audio
@@ -269,17 +314,21 @@ export function alignSectionInBackground(sectionId: string, io?: Server | null):
   })
 }
 
-/** Align every section of a chapter that has audio, in reading order. */
+/**
+ * Align every section of a chapter that has audio, in reading order.
+ * `onlyMissing` skips sections that already have a timeline.
+ */
 export async function alignChapter(
   chapterId: string,
   io?: Server,
-  language: NarrationLanguage = 'en'
+  language: NarrationLanguage = 'en',
+  { onlyMissing = false }: { onlyMissing?: boolean } = {}
 ): Promise<{ aligned: number; failed: number; errors: string[] }> {
-  const sections = await prisma.audioSection.findMany({
+  const sections = (await prisma.audioSection.findMany({
     where: { chapterId, language, audioFile: { isNot: null } },
     orderBy: { index: 'asc' },
-    include: { audioFile: true }
-  })
+    select: { id: true, index: true, timelineScript: true }
+  })).filter(section => !onlyMissing || !section.timelineScript?.trim())
 
   let aligned = 0
   let failed = 0
@@ -296,7 +345,8 @@ export async function alignChapter(
     }
   }
 
-  io?.emit('alignment:chapter-complete', { chapterId, language, aligned, failed })
+  const documentWritten = await refreshDocument(chapterId, language)
+  io?.emit('alignment:chapter-complete', { chapterId, language, aligned, failed, documentWritten })
 
   return { aligned, failed, errors }
 }

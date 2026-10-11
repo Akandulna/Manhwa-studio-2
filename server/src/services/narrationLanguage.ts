@@ -36,9 +36,13 @@ export function scriptFileName(lang: NarrationLanguage): string {
   return lang === 'en' ? 'script.md' : 'script.hi.md'
 }
 
-/** Chapter-folder file holding a part-end outro. */
-export function outroFileName(lang: NarrationLanguage): string {
-  return lang === 'en' ? 'outro.md' : 'outro.hi.md'
+/**
+ * Chapter-folder file holding the alignment document: every voiceover section's
+ * "Script with Timeline", in section order. Narration writes it once the whole
+ * chapter is aligned; Editor 2.0's checklist reads it.
+ */
+export function alignmentFileName(lang: NarrationLanguage): string {
+  return lang === 'en' ? 'script-timeline.md' : 'script-timeline.hi.md'
 }
 
 /** Chapter sub-folder holding voiceover audio. */

@@ -13,13 +13,20 @@
  *
  *     <chapter folder>/.clipper3-review.json
  *
- * Not to be confused with Crop Studio's per-page `review-state.json`
- * (reviewState.ts), which is the working copy of one page's crops.
+ * A review marked on the Master phone (`by: 'phone'`) also lets Sync json cut
+ * the chapter straight away (chapterCrop.ts queueAutoCrop).
+ *
+ * Cropped counts as reviewed. Chapters cut in Manhwa Studio before reviews
+ * existed were looked over by the user as they were cut, so a chapter with
+ * crops3/ output is reviewed (`by: 'cropped'`) unless its record says "not
+ * reviewed" and was written AFTER the newest cut — new phone crops arrived
+ * since, and those haven't been looked at. `readEffectiveReview` is that
+ * rule; it is what the UI and the crop gate use.
  */
 
 import fs from 'fs/promises'
 import path from 'path'
-import { getSourceFolderPath } from './perImageStore.js'
+import { getSourceFolderPath, latestOutputTime } from './perImageStore.js'
 
 export const CHAPTER_REVIEW_FILE = '.clipper3-review.json'
 
@@ -31,8 +38,11 @@ const MAX_EDITED_PAGES = 2000
 export interface ChapterReview {
   reviewed: boolean
   reviewedAt: string | null
-  /** Where it was marked: the Master phone (via its zip) or the desktop's Preview. */
-  by: 'phone' | 'desktop' | null
+  /**
+   * Where it was marked: the Master phone (via its zip), the desktop's
+   * Preview, or — effective review only — implied by the chapter being cut.
+   */
+  by: 'phone' | 'desktop' | 'cropped' | null
   /** The phone's name, for "reviewed on <device>". Phone reviews only. */
   device?: string
   /** The R2 zip ETag the phone review arrived in, so it can be traced to one upload. */
@@ -40,6 +50,10 @@ export interface ChapterReview {
   editedPages?: string[]
   movedCrops?: number
   deletedCrops?: number
+  /** Effective review only: crops3/ holds output for this chapter. */
+  cropped?: boolean
+  /** Effective review only: when the newest file in crops3/ was cut. */
+  croppedAt?: string | null
 }
 
 /** A fresh copy each time, so no caller can mutate the shared default. */
@@ -108,12 +122,29 @@ function reviewFilePath(folderPath: string): string {
  * record that doesn't say `reviewed: true` in so many words is not a review.
  */
 export async function readChapterReview(folderPath: string): Promise<ChapterReview> {
+  return (await readReviewRecord(folderPath)).review
+}
+
+/**
+ * The record plus when it was written: its own `updatedAt` stamp, or the
+ * file's modification time for a record written before the stamp existed.
+ * `writtenAt` is null when there is no record.
+ */
+async function readReviewRecord(folderPath: string): Promise<{ review: ChapterReview; writtenAt: number | null }> {
   let raw: any
+  let writtenAt: number | null = null
   try {
-    raw = JSON.parse(await fs.readFile(reviewFilePath(folderPath), 'utf-8'))
+    const file = reviewFilePath(folderPath)
+    raw = JSON.parse(await fs.readFile(file, 'utf-8'))
+    const stamped = typeof raw?.updatedAt === 'string' ? Date.parse(raw.updatedAt) : NaN
+    writtenAt = Number.isNaN(stamped) ? (await fs.stat(file)).mtimeMs : stamped
   } catch {
-    return notReviewed()
+    return { review: notReviewed(), writtenAt }
   }
+  return { review: shapeRecord(raw), writtenAt }
+}
+
+function shapeRecord(raw: any): ChapterReview {
   if (raw?.reviewed !== true) return notReviewed()
 
   const review: ChapterReview = {
@@ -132,6 +163,31 @@ export async function readChapterReview(folderPath: string): Promise<ChapterRevi
 }
 
 /**
+ * The review that counts, from the record, when it was written and when the
+ * chapter was last cut (null: never). Pure, so the rule is tested on its own.
+ *
+ *  - an explicit review stands, whether or not the chapter is cut;
+ *  - a cut chapter is reviewed (`by: 'cropped'`, reviewed when it was cut)…
+ *  - …unless the record says not reviewed and is newer than the cut: a
+ *    clipping phone's fresh zip reset it, so the cut shows old content.
+ *
+ * `cropped` / `croppedAt` are set on every result.
+ */
+export function effectiveReview(record: ChapterReview, writtenAt: number | null, croppedAtMs: number | null): ChapterReview {
+  const croppedAt = croppedAtMs != null ? new Date(croppedAtMs).toISOString() : null
+  const base: ChapterReview = { ...record, cropped: croppedAt != null, croppedAt }
+  if (record.reviewed || croppedAtMs == null) return base
+  if (writtenAt != null && writtenAt > croppedAtMs) return base
+  return { ...base, reviewed: true, reviewedAt: croppedAt, by: 'cropped' }
+}
+
+/** The chapter's effective review (see `effectiveReview`): what the UI shows and the crop gate checks. */
+export async function readEffectiveReview(folderPath: string): Promise<ChapterReview> {
+  const { review, writtenAt } = await readReviewRecord(folderPath)
+  return effectiveReview(review, writtenAt, await latestOutputTime(folderPath))
+}
+
+/**
  * Replaces the chapter's review record. Written to a temp file and renamed,
  * so a crash mid-write can't leave half a record that reads as "not
  * reviewed" (or worse, parses as something else).
@@ -140,7 +196,10 @@ export async function writeChapterReview(folderPath: string, review: ChapterRevi
   const target = reviewFilePath(folderPath)
   await fs.mkdir(path.dirname(target), { recursive: true })
   const temp = `${target}.${process.pid}.tmp`
-  await fs.writeFile(temp, JSON.stringify(review, null, 2) + '\n', 'utf-8')
+  // Stamped so the effective review can tell a reset written after a cut
+  // from one written before it; not part of the returned review.
+  const stamped = { ...review, updatedAt: new Date().toISOString() }
+  await fs.writeFile(temp, JSON.stringify(stamped, null, 2) + '\n', 'utf-8')
   await fs.rename(temp, target)
   return review
 }

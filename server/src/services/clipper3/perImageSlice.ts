@@ -142,8 +142,7 @@ export async function sliceImage(opts: {
 
     const info = await sharp(sourcePath)
       .extract({ left: rect.left, top: rect.top, width: rect.width, height: rect.height })
-      // Lossless, so a slice decodes to the original's visible pixels (the
-      // handoff checks it). Only the hidden RGB of fully transparent pixels
+      // Lossless, so a slice decodes to the original's visible pixels. Only the hidden RGB of fully transparent pixels
       // may change: sharp does not expose libwebp's `exact` flag.
       .webp({ lossless: true, effort: 4 })
       .toFile(outputPath)

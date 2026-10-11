@@ -28,10 +28,11 @@
  * Each imported chapter gets its script file in its folder and a ChapterScript
  * row of that language (status done, rolling summary + closing paragraph from
  * the continuity file; for Hinglish also the English source hash and the
- * phone's review issues), the same shape a submit leaves, so voiceover works as
- * usual after.
+ * phone's review issues). Both steps run from Narration's "Fetch from phone",
+ * together with the voiceover fetch (see routes/narration.ts).
  */
 
+import { createHash } from 'crypto'
 import fs from 'fs/promises'
 import path from 'path'
 import { GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3'
@@ -40,8 +41,6 @@ import { readZip } from '../utils/zipReader.js'
 import { createClient, getR2Config, isNotFound } from './r2Service.js'
 import { getPublishedChapters } from './storageService.js'
 import { scriptFileName, type NarrationLanguage } from './narrationLanguage.js'
-import { encodeReview } from './hinglishConvert.js'
-import { englishSha256 } from './hinglishService.js'
 
 /** Folder the phone uploads script zips to, inside its R2 prefix. Keep in step with FOLDER in ScriptUpload.kt. */
 const SCRIPTS_FOLDER = 'scripts/'
@@ -51,6 +50,21 @@ const MAX_ZIP_BYTES = 64 * 1024 * 1024
 
 function getFullFolderPath(relativePath: string): string {
   return path.join(process.env.DOWNLOAD_ROOT || './downloads', relativePath)
+}
+
+/** A Hinglish script's review issues as stored on its ChapterScript row: a JSON array, or null when it passed. */
+function encodeReview(issues: string[] | null | undefined): string | null {
+  return issues && issues.length > 0 ? JSON.stringify(issues) : null
+}
+
+/**
+ * SHA-256 of the chapter's trimmed English script, the way the phone records
+ * the English a Hinglish script was converted from; null while there is none.
+ */
+async function englishSha256(english: { status: string; scriptPath: string | null } | null | undefined): Promise<string | null> {
+  if (!english || !['done', 'edited', 'stale'].includes(english.status)) return null
+  const text = await readScript(english.scriptPath)
+  return text ? createHash('sha256').update(text, 'utf8').digest('hex') : null
 }
 
 // ============ Parsing ============
@@ -146,14 +160,6 @@ export interface PhoneScriptsZip {
   uploadedAt: string | null
 }
 
-export interface PhoneScriptsZipStatus {
-  configured: boolean
-  /** The phone's script zip for this series; null if it hasn't uploaded one. */
-  zip: PhoneScriptsZip | null
-  /** The zip last imported into this series, if any. */
-  lastImport: { etag: string; at: string; chapters: number } | null
-}
-
 const importSettingKey = (seriesId: string, language: NarrationLanguage) =>
   language === 'en' ? `phoneScriptsImport:${seriesId}` : `phoneScriptsImport:${language}:${seriesId}`
 
@@ -203,32 +209,15 @@ async function findZip(seriesId: string, language: NarrationLanguage): Promise<P
   return null
 }
 
-async function readLastImport(seriesId: string, language: NarrationLanguage): Promise<PhoneScriptsZipStatus['lastImport']> {
-  const row = await prisma.setting.findUnique({ where: { key: importSettingKey(seriesId, language) } })
-  if (!row) return null
-  try {
-    return JSON.parse(row.value)
-  } catch {
-    return null
-  }
-}
-
-export async function getPhoneScriptsZip(seriesId: string, language: NarrationLanguage = 'en'): Promise<PhoneScriptsZipStatus> {
-  if (!getR2Config()) return { configured: false, zip: null, lastImport: null }
-  const [zip, lastImport] = await Promise.all([findZip(seriesId, language), readLastImport(seriesId, language)])
-  return { configured: true, zip, lastImport }
-}
-
 /** Parsed zips by series and language, so the import right after a preview doesn't download again. */
 const parsedCache = new Map<string, { etag: string; parsed: ParsedScriptsZip }>()
 
-async function downloadZip(seriesId: string, language: NarrationLanguage): Promise<{ zip: PhoneScriptsZip; parsed: ParsedScriptsZip }> {
+/** The phone's zip, downloaded and parsed (or from the cache); null when it hasn't uploaded one. */
+async function downloadZip(seriesId: string, language: NarrationLanguage): Promise<{ zip: PhoneScriptsZip; parsed: ParsedScriptsZip } | null> {
   const config = getR2Config()
   if (!config) throw new Error('Cloudflare R2 is not configured')
   const zip = await findZip(seriesId, language)
-  if (!zip) {
-    throw new Error(`The phone has not uploaded a ${language === 'en' ? '' : 'Hinglish '}script zip for this series yet`)
-  }
+  if (!zip) return null
 
   const cached = parsedCache.get(cacheKey(seriesId, language))
   if (cached?.etag === zip.etag) return { zip, parsed: cached.parsed }
@@ -366,9 +355,10 @@ async function buildPreview(
   return { zip, chapters, unmatched, about }
 }
 
-export async function previewPhoneScripts(seriesId: string, language: NarrationLanguage = 'en'): Promise<PhoneImportPreview> {
-  const { zip, parsed } = await downloadZip(seriesId, language)
-  return buildPreview(seriesId, zip, parsed, language)
+/** What importing the phone's zip would do per chapter; null when the phone hasn't uploaded one. */
+export async function previewPhoneScripts(seriesId: string, language: NarrationLanguage = 'en'): Promise<PhoneImportPreview | null> {
+  const downloaded = await downloadZip(seriesId, language)
+  return downloaded && buildPreview(seriesId, downloaded.zip, downloaded.parsed, language)
 }
 
 // ============ Import ============
@@ -388,7 +378,9 @@ export async function importPhoneScripts(
   chapterIds: string[],
   language: NarrationLanguage = 'en'
 ): Promise<PhoneImportResult> {
-  const { zip, parsed } = await downloadZip(seriesId, language)
+  const downloaded = await downloadZip(seriesId, language)
+  if (!downloaded) throw new Error('The phone\'s script zip is no longer in R2')
+  const { zip, parsed } = downloaded
   if (zip.etag !== etag) throw new Error('The phone uploaded a newer zip since the preview — review it again')
 
   const preview = await buildPreview(seriesId, zip, parsed, language)
@@ -432,6 +424,7 @@ export async function importPhoneScripts(
     await fs.writeFile(path.join(getFullFolderPath(series.rootFolder), 'about.md'), parsed.about!, 'utf-8')
   }
 
+  // Remembered for reference: which zip each series last imported.
   const record = JSON.stringify({ etag: zip.etag, at: new Date().toISOString(), chapters: imported })
   await prisma.setting.upsert({
     where: { key: importSettingKey(seriesId, language) },

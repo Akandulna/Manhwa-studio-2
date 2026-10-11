@@ -3,18 +3,16 @@
  */
 
 import { Router, Request, Response } from 'express';
+import { execFile } from 'child_process';
+import * as os from 'os';
+import * as path from 'path';
 import { prisma } from '../index.js';
 
 const router = Router();
 
 // Default settings
 const DEFAULT_SETTINGS: Record<string, string> = {
-  downloadRoot: './downloads',
-  concurrency: '3',
-  requestDelayMs: '500',
-  userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-  minImageWidth: '400',
-  minAspectRatio: '0.8'
+  downloadRoot: './downloads'
 };
 
 // Get all settings
@@ -30,8 +28,6 @@ router.get('/', async (req: Request, res: Response) => {
     
     // Override with env vars if present
     if (process.env.DOWNLOAD_ROOT) settings.downloadRoot = process.env.DOWNLOAD_ROOT;
-    if (process.env.CONCURRENCY) settings.concurrency = process.env.CONCURRENCY;
-    if (process.env.REQUEST_DELAY_MS) settings.requestDelayMs = process.env.REQUEST_DELAY_MS;
     
     res.json(settings);
   } catch (error) {
@@ -98,6 +94,21 @@ router.post('/reset', async (req: Request, res: Response) => {
     console.error('Error resetting settings:', error);
     res.status(500).json({ error: 'Failed to reset settings' });
   }
+});
+
+// Open a folder under the library root in Finder (or the platform's file manager)
+router.post('/open-folder', (req: Request, res: Response) => {
+  const { path: folderPath } = req.body;
+  const fullPath = path.resolve(process.env.DOWNLOAD_ROOT || './downloads', folderPath);
+  const platform = os.platform();
+  const command = platform === 'darwin' ? 'open' : platform === 'win32' ? 'explorer' : 'xdg-open';
+  execFile(command, [fullPath], (error) => {
+    if (error) {
+      console.error('Error opening folder:', error);
+      return res.status(500).json({ error: 'Failed to open folder' });
+    }
+    res.json({ message: 'Folder opened' });
+  });
 });
 
 export default router;

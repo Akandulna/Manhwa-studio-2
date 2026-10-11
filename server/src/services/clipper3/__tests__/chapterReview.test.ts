@@ -5,6 +5,7 @@
  * - Sync json replacing attached pages once after a phone review, and only
  *   where the review actually changed them
  * - crops3/ reported out of date when a page's pointers change after its cut
+ * - cropped counts as reviewed, unless a "not reviewed" reset came after the cut
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
@@ -13,7 +14,10 @@ import os from 'os'
 import path from 'path'
 import {
   CHAPTER_REVIEW_FILE,
+  effectiveReview,
+  notReviewed,
   parseManifestReview,
+  readEffectiveReview,
   readChapterReview,
   setDesktopReview,
   writeChapterReview
@@ -224,5 +228,52 @@ describe('chapterCropOutputs', () => {
     const future = new Date(Date.now() + 60_000)
     await fs.utimes(path.join(getOutputDir(FOLDER), name), future, future)
     expect(await chapterCropOutputs(FOLDER, [name], true, pages)).toMatchObject({ complete: true, changed: 0 })
+  })
+})
+
+describe('effective review (cropped counts as reviewed)', () => {
+  const CUT = Date.parse('2026-10-01T12:00:00.000Z')
+  const phone = { reviewed: true, reviewedAt: '2026-09-30T00:00:00.000Z', by: 'phone' as const, device: 'Redmi' }
+
+  it('is the record as-is, with cropped flags, when the chapter was never cut', () => {
+    expect(effectiveReview(notReviewed(), null, null)).toEqual({ reviewed: false, reviewedAt: null, by: null, cropped: false, croppedAt: null })
+    expect(effectiveReview(phone, CUT - 1, null)).toEqual({ ...phone, cropped: false, croppedAt: null })
+  })
+
+  it('counts a cut chapter with no record, or a reset older than the cut, as reviewed by cropping', () => {
+    const cropped = { reviewed: true, reviewedAt: '2026-10-01T12:00:00.000Z', by: 'cropped', cropped: true, croppedAt: '2026-10-01T12:00:00.000Z' }
+    expect(effectiveReview(notReviewed(), null, CUT)).toEqual(cropped)
+    expect(effectiveReview(notReviewed(), CUT - 1000, CUT)).toEqual(cropped)
+  })
+
+  it('needs review again when a "not reviewed" reset was written after the cut', () => {
+    expect(effectiveReview(notReviewed(), CUT + 1000, CUT)).toEqual({
+      reviewed: false, reviewedAt: null, by: null, cropped: true, croppedAt: '2026-10-01T12:00:00.000Z'
+    })
+  })
+
+  it('keeps an explicit review over the cut', () => {
+    expect(effectiveReview(phone, CUT + 1000, CUT)).toEqual({ ...phone, cropped: true, croppedAt: '2026-10-01T12:00:00.000Z' })
+  })
+
+  it('reads the record stamp and crops3/ times off disk', async () => {
+    expect(await readEffectiveReview(FOLDER)).toMatchObject({ reviewed: false, cropped: false })
+
+    // Cut a minute ago, no record: cropped, so reviewed.
+    const out = path.join(getOutputDir(FOLDER), 'solo_page_001_01_panel.png')
+    await fs.mkdir(path.dirname(out), { recursive: true })
+    await fs.writeFile(out, 'png')
+    const cutAt = new Date(Math.floor(Date.now() / 1000) * 1000 - 60_000)
+    await fs.utimes(out, cutAt, cutAt)
+    expect(await readEffectiveReview(FOLDER)).toMatchObject({ reviewed: true, by: 'cropped', cropped: true, croppedAt: cutAt.toISOString() })
+
+    // A phone sends new unreviewed crops now (after the cut): review again.
+    await writeChapterReview(FOLDER, notReviewed())
+    expect(await readEffectiveReview(FOLDER)).toMatchObject({ reviewed: false, cropped: true })
+
+    // Re-cut afterwards: cropped again.
+    const recut = new Date(Math.floor(Date.now() / 1000) * 1000 + 60_000)
+    await fs.utimes(out, recut, recut)
+    expect(await readEffectiveReview(FOLDER)).toMatchObject({ reviewed: true, by: 'cropped', croppedAt: recut.toISOString() })
   })
 })

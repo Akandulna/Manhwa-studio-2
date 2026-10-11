@@ -1,0 +1,126 @@
+/**
+ * Tests for cutting a chapter after Sync json:
+ * - only chapters reviewed on the Master phone are queued, and only once
+ *   every page is attached
+ * - a chapter whose crops3/ already matches is not cut again
+ * - the cut reports over clipper3:crop-* with `auto: true`
+ */
+
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import fs from 'fs/promises'
+import os from 'os'
+import path from 'path'
+import sharp from 'sharp'
+import type { Server } from 'socket.io'
+import { queueAutoCrop, readChapterCropState, type CropChapter } from '../chapterCrop.js'
+import { setDesktopReview, writeChapterReview } from '../chapterReview.js'
+import { listOutputs, writeImageMetadata, writeImagePoints } from '../perImageStore.js'
+
+const FOLDER = 'Solo/Chapter 001'
+const SLUG = 'solo'
+const CHAPTER: CropChapter = { id: 'ch1', number: 1, folderPath: FOLDER, seriesId: 's1', series: { title: 'Solo' } }
+const PAGES = ['page_001.png', 'page_002.png']
+
+let root: string
+let previousRoot: string | undefined
+
+/** Collects every event, and resolves `done` on the first crop-complete. */
+function fakeIo() {
+  const events: { name: string; payload: any }[] = []
+  let finish: (payload: any) => void = () => {}
+  const done = new Promise<any>(resolve => { finish = resolve })
+  const io = {
+    emit: (name: string, payload: any) => {
+      events.push({ name, payload })
+      if (name === 'clipper3:crop-complete') finish(payload)
+      return true
+    }
+  } as unknown as Server
+  return { io, events, done }
+}
+
+async function attach(filename: string) {
+  const stem = path.parse(filename).name
+  await writeImagePoints(FOLDER, filename, {
+    format: 'four-point-crop',
+    version: '1.0',
+    image: { filename, width: 100, height: 200 },
+    coordinateSystem: 'normalized',
+    crops: [{
+      id: 'c1',
+      reason: 'panel',
+      crop: {
+        mode: 'rectangle',
+        points: [
+          { id: 'tl', x: 0, y: 0 },
+          { id: 'tr', x: 1, y: 0 },
+          { id: 'br', x: 1, y: 0.5 },
+          { id: 'bl', x: 0, y: 0.5 }
+        ]
+      }
+    }]
+  })
+  await writeImageMetadata(FOLDER, filename, JSON.stringify({
+    crops: [{ id: 'c1', exportedFilename: `${SLUG}_${stem}_01_panel.png`, description: 'A panel.' }]
+  }))
+}
+
+const phoneReview = () => writeChapterReview(FOLDER, {
+  reviewed: true,
+  reviewedAt: '2026-10-11T10:00:00.000Z',
+  by: 'phone',
+  device: 'Master'
+})
+
+beforeEach(async () => {
+  previousRoot = process.env.DOWNLOAD_ROOT
+  root = await fs.mkdtemp(path.join(os.tmpdir(), 'chapter-crop-'))
+  process.env.DOWNLOAD_ROOT = root
+  const dir = path.join(root, FOLDER)
+  await fs.mkdir(dir, { recursive: true })
+  for (const page of PAGES) {
+    await sharp({ create: { width: 100, height: 200, channels: 3, background: '#336699' } }).png().toFile(path.join(dir, page))
+  }
+})
+
+afterEach(async () => {
+  if (previousRoot === undefined) delete process.env.DOWNLOAD_ROOT
+  else process.env.DOWNLOAD_ROOT = previousRoot
+  await fs.rm(root, { recursive: true, force: true })
+})
+
+describe('queueAutoCrop', () => {
+  it('cuts a chapter reviewed on the phone once every page is attached', async () => {
+    await phoneReview()
+    await attach('page_001.png')
+
+    // One page still pending: not cut.
+    const early = fakeIo()
+    expect(await queueAutoCrop(early.io, [CHAPTER])).toEqual([])
+
+    await attach('page_002.png')
+    const { io, events, done } = fakeIo()
+    expect(await queueAutoCrop(io, [CHAPTER])).toEqual([{ chapterId: 'ch1', chapterNumber: 1 }])
+
+    const complete = await done
+    expect(complete).toMatchObject({ chapterId: 'ch1', seriesId: 's1', auto: true, images: 2, exported: 2, failed: 0 })
+    expect(events.filter(e => e.name === 'clipper3:crop-progress').map(e => e.payload.filename)).toEqual(PAGES)
+    expect((await listOutputs(FOLDER)).map(f => f.filename)).toEqual([
+      `${SLUG}_page_001_01_panel.png`,
+      `${SLUG}_page_002_01_panel.png`
+    ])
+    expect((await readChapterCropState(CHAPTER)).outputs.complete).toBe(true)
+
+    // Already matching: a second sync queues nothing.
+    expect(await queueAutoCrop(fakeIo().io, [CHAPTER])).toEqual([])
+  })
+
+  it('leaves chapters reviewed on the desktop, or not at all, for Crop', async () => {
+    for (const page of PAGES) await attach(page)
+    expect(await queueAutoCrop(fakeIo().io, [CHAPTER])).toEqual([])
+
+    await setDesktopReview(FOLDER, true)
+    expect(await queueAutoCrop(fakeIo().io, [CHAPTER])).toEqual([])
+    expect(await listOutputs(FOLDER)).toEqual([])
+  })
+})

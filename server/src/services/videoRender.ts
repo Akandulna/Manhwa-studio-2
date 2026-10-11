@@ -39,7 +39,6 @@ export interface VideoCapabilities {
   ffmpegAvailable: boolean
   ffmpegVersion?: string
   hasZoompan: boolean
-  hasDrawtext: boolean
   blurFilter: 'gblur' | 'boxblur' | null // preferred blur, null if neither
   /** Apple's hardware H.264 encoder — frees the CPU for the filter graph. */
   hasVideoToolbox: boolean
@@ -71,7 +70,6 @@ export function getVideoCapabilities(force = false): VideoCapabilities {
       ffmpegAvailable: true,
       ffmpegVersion: version,
       hasZoompan: has('zoompan'),
-      hasDrawtext: has('drawtext'),
       blurFilter: hasGblur ? 'gblur' : hasBoxblur ? 'boxblur' : null,
       hasVideoToolbox: /\sh264_videotoolbox\s/.test(encodersOut)
     }
@@ -79,7 +77,6 @@ export function getVideoCapabilities(force = false): VideoCapabilities {
     capabilitiesCache = {
       ffmpegAvailable: false,
       hasZoompan: false,
-      hasDrawtext: false,
       blurFilter: null,
       hasVideoToolbox: false,
       error: error instanceof Error ? error.message : 'FFmpeg not found on PATH'
@@ -97,7 +94,7 @@ function even(n: number): number {
   return r % 2 === 0 ? r : r + 1
 }
 
-// ---------- Per-image filter chunk (reused by full render + proxy preview) ----------
+// ---------- Per-image filter chunk ----------
 
 export interface ImageRenderSpec {
   inputIndex: number          // ffmpeg input index within the part's render call
@@ -108,15 +105,8 @@ export interface ImageRenderSpec {
   isFiller: boolean
   imgW?: number               // source pixel dims (omitted for filler)
   imgH?: number
-  motionMode: string          // drift | focus
-  motionEffect: string        // gentle set (drift); zoom-in|zoom-out direction (focus)
+  motionEffect: string        // one of the gentle drift set
   motionIntensity: number
-  anchorX?: number | null
-  anchorY?: number | null
-  // Manual foreground transform overrides (null = auto)
-  scale?: number | null       // multiplier on the fit-height size (1 = touch top/bottom)
-  offsetX?: number | null     // fraction of frame width to shift (0 = centered)
-  offsetY?: number | null     // fraction of frame height to shift
   blurFilter: 'gblur' | 'boxblur' | null
   hasZoompan: boolean
 }
@@ -142,17 +132,11 @@ export function buildImageFilterChunk(spec: ImageRenderSpec): { filter: string; 
   const f1 = Math.max(1, frames - 1) // denominator for linear interpolation
   const blur = spec.blurFilter === 'boxblur' ? 'boxblur=20:1' : spec.blurFilter === 'gblur' ? 'gblur=sigma=20' : null
 
-  // Foreground size: fit frame height (a 4:3 crop → ~75% of a 16:9 frame),
-  // multiplied by the manual scale override (1 = touch top/bottom; >1 = beyond).
+  // Foreground size: fit frame height (a 4:3 crop → ~75% of a 16:9 frame).
   const imgW = spec.imgW || W
   const imgH = spec.imgH || H
-  const scaleMul = spec.scale && spec.scale > 0 ? spec.scale : 1
-  const fgH = even(H * scaleMul)
+  const fgH = even(H)
   const fgW = even(fgH * (imgW / imgH))
-
-  // Manual position offsets (fraction of frame; 0 = centered).
-  const ox = spec.offsetX ?? 0
-  const oy = spec.offsetY ?? 0
 
   // --- Background sub-graph (cover 1.15×, blur, darken, hold for `frames`) ---
   const bgScale = `scale=${even(W * 1.15)}:${even(H * 1.15)}:force_original_aspect_ratio=increase:flags=${SCALE_FLAGS},crop=${W}:${H}`
@@ -166,7 +150,7 @@ export function buildImageFilterChunk(spec: ImageRenderSpec): { filter: string; 
     : `loop=loop=${frames - 1}:size=1:start=0,fps=${fps}`
   bgStages.push(bgHold)
 
-  // --- Foreground sub-graph (fit height × scale, gentle/focus motion) ---
+  // --- Foreground sub-graph (fit height, gentle drift motion) ---
   // Supersample the motion buffer so zoompan's per-frame integer rounding lands
   // on sub-pixels of the final frame (smooth drift) and zoom-in samples detail.
   const ss = spec.hasZoompan ? FG_SUPERSAMPLE : 1
@@ -183,9 +167,9 @@ export function buildImageFilterChunk(spec: ImageRenderSpec): { filter: string; 
     fgMotion = `loop=loop=${frames - 1}:size=1:start=0,fps=${fps}`
   }
 
-  // Overlay centered + manual offset; clipped to the frame when scaled beyond it.
-  const overlayX = `(W-w)/2+(${ox})*W`
-  const overlayY = `(H-h)/2+(${oy})*H`
+  // Overlay centered.
+  const overlayX = '(W-w)/2'
+  const overlayY = '(H-h)/2'
 
   const filter =
     `[${i}:v]split=2[bs${i}][fs${i}];` +
@@ -196,26 +180,11 @@ export function buildImageFilterChunk(spec: ImageRenderSpec): { filter: string; 
   return { filter, outLabel }
 }
 
-/** zoompan z/x/y expression for the gentle drift/focus motion of one image. */
+/** zoompan z/x/y expression for the gentle drift motion of one image. */
 function motionExpr(spec: ImageRenderSpec, f1: number): string {
   const k = Math.max(0, spec.motionIntensity)
   const effect = GENTLE_EFFECTS.includes(spec.motionEffect as any) ? spec.motionEffect : 'zoom-in'
 
-  // Focus mode: zoom toward (or out from) an anchor point, kept fixed in frame.
-  // motionEffect picks the direction (zoom-out reverses); default zoom-in.
-  if (spec.motionMode === 'focus') {
-    const ax = clamp01(spec.anchorX ?? 0.5)
-    const ay = clamp01(spec.anchorY ?? 0.5)
-    const z = spec.motionEffect === 'zoom-out'
-      ? `1+${k}*(1-on/${f1})`
-      : `1+${k}*on/${f1}`
-    // Window top-left so the anchor stays centered, clamped inside the image.
-    const x = `max(0,min(iw*${ax}-(iw/zoom/2),iw-iw/zoom))`
-    const y = `max(0,min(ih*${ay}-(ih/zoom/2),ih-ih/zoom))`
-    return `z='${z}':x='${x}':y='${y}'`
-  }
-
-  // Drift mode.
   const centerX = `iw/2-(iw/zoom/2)`
   const centerY = `ih/2-(ih/zoom/2)`
   switch (effect) {
@@ -233,8 +202,4 @@ function motionExpr(spec: ImageRenderSpec, f1: number): string {
     default:
       return `z='1+${k}*on/${f1}':x='${centerX}':y='${centerY}'`
   }
-}
-
-function clamp01(n: number): number {
-  return Math.max(0, Math.min(1, n))
 }

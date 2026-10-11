@@ -4,11 +4,14 @@ import os from 'os'
 import path from 'path'
 import { PassThrough } from 'stream'
 import archiver from 'archiver'
+import sharp from 'sharp'
 
 // Chapter zips as Sleeper-Cell's ChapterUpload.kt uploads them, at the bucket root (the phone's prefix differs).
 const zips = new Map<string, Buffer>()
 const etags = new Map<string, string>()
-const send = vi.fn(async (command: { constructor: { name: string }; input: { Key?: string; Prefix?: string } }) => {
+/** Objects the desktop wrote (cropped markers), by key. */
+const puts = new Map<string, string>()
+const send = vi.fn(async (command: { constructor: { name: string }; input: { Key?: string; Prefix?: string; Body?: unknown } }) => {
   if (command.constructor.name === 'ListObjectsV2Command') {
     const prefix = command.input.Prefix!
     const contents = [...zips].filter(([key]) => key.startsWith(prefix))
@@ -18,6 +21,10 @@ const send = vi.fn(async (command: { constructor: { name: string }; input: { Key
   if (command.constructor.name === 'GetObjectCommand') {
     const body = zips.get(command.input.Key!)!
     return { ETag: `"${etags.get(command.input.Key!)}"`, Body: { transformToByteArray: async () => new Uint8Array(body) } }
+  }
+  if (command.constructor.name === 'PutObjectCommand') {
+    puts.set(command.input.Key!, String(command.input.Body))
+    return { ETag: '"put"' }
   }
   throw new Error(`unexpected ${command.constructor.name}`)
 })
@@ -32,6 +39,7 @@ vi.mock('../../index.js', () => ({
     series: {
       findUnique: async () => ({
         rootFolder: 'Solo Hero',
+        title: 'Solo Hero',
         chapters: [
           { id: 'c9', number: 9, folderPath: 'Solo Hero/Chapter 009' },
           { id: 'c10', number: 10, folderPath: 'Solo Hero/Chapter 010' }
@@ -79,6 +87,7 @@ beforeEach(async () => {
   process.env.DOWNLOAD_ROOT = root
   zips.clear()
   etags.clear()
+  puts.clear()
   send.mockClear()
 })
 
@@ -167,7 +176,7 @@ describe('fetchPhoneCrops', () => {
     etags.set(key, 'r1')
     const reviewed = await fetchPhoneCrops('s1')
     expect(reviewed.fetched).toEqual([{ chapterId: 'c9', chapterNumber: 9, folder: 'Chapter 009', pages: 2, reviewed: true }])
-    expect(JSON.parse(await fs.readFile(reviewFile, 'utf-8'))).toEqual({
+    expect(JSON.parse(await fs.readFile(reviewFile, 'utf-8'))).toMatchObject({
       reviewed: true,
       reviewedAt: '2026-10-11T10:00:00.000Z',
       by: 'phone',
@@ -185,10 +194,45 @@ describe('fetchPhoneCrops', () => {
     etags.set(key, 'r2')
     const redone = await fetchPhoneCrops('s1')
     expect(redone.fetched[0].reviewed).toBe(false)
-    expect(JSON.parse(await fs.readFile(reviewFile, 'utf-8'))).toEqual({ reviewed: false, reviewedAt: null, by: null })
+    expect(JSON.parse(await fs.readFile(reviewFile, 'utf-8'))).toMatchObject({ reviewed: false, reviewedAt: null, by: null })
     const after = await marker()
     expect(after).toMatchObject({ etag: 'r2', reviewed: false })
     expect(after.applied).toBeUndefined()
+  })
+
+  it('backfills a cropped marker beside the zips for each cut chapter R2 has none for', async () => {
+    zips.set('crops/Solo Hero/Chapter 009.zip', await chapterZip('Chapter 009', [1]))
+    etags.set('crops/Solo Hero/Chapter 009.zip', 'e9')
+    // Chapter 009 already has its marker; Chapter 010 was cut before markers existed.
+    zips.set('crops/Solo Hero/Chapter 009.cropped.json', Buffer.from('{}'))
+    etags.set('crops/Solo Hero/Chapter 009.cropped.json', 'm9')
+
+    for (const chapter of ['Chapter 009', 'Chapter 010']) {
+      const dir = path.join(root, 'Solo Hero', chapter)
+      await fs.mkdir(path.join(dir, 'crops3'), { recursive: true })
+      for (const page of ['page_001.png', 'page_002.png']) {
+        await sharp({ create: { width: 4, height: 4, channels: 3, background: '#fff' } }).png().toFile(path.join(dir, page))
+      }
+      await fs.writeFile(path.join(dir, 'crops3', 'solo_hero_page_001_01_panel.png'), 'png')
+      await fs.writeFile(path.join(dir, 'crops3', 'solo_hero_page_001_02.png'), 'png')
+    }
+    const cutAt = new Date('2026-10-01T12:00:00.000Z')
+    await fs.utimes(path.join(root, 'Solo Hero', 'Chapter 010', 'crops3', 'solo_hero_page_001_02.png'), cutAt, cutAt)
+    await fs.utimes(path.join(root, 'Solo Hero', 'Chapter 010', 'crops3', 'solo_hero_page_001_01_panel.png'), cutAt, cutAt)
+
+    const result = await fetchPhoneCrops('s1')
+    expect(result.cropped).toEqual({ published: ['Chapter 010'], failed: [] })
+    expect([...puts.keys()]).toEqual(['crops/Solo Hero/Chapter 010.cropped.json'])
+    const body = puts.get('crops/Solo Hero/Chapter 010.cropped.json')!
+    expect(body.endsWith('\n')).toBe(true)
+    expect(JSON.parse(body)).toEqual({
+      schema: 'manhwa-studio-cropped/1',
+      series: 'Solo Hero',
+      chapter: 'Chapter 010',
+      cropped_at: '2026-10-01T12:00:00.000Z',
+      pages: 1,
+      crops: 2
+    })
   })
 
   it('finds zips under our prefix as well, and narrows to the chosen chapters', async () => {

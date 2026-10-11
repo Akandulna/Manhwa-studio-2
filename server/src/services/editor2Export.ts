@@ -445,15 +445,8 @@ async function renderSection(
       isFiller: useFiller,
       imgW,
       imgH,
-      // Editor 2.0 has no focus/anchor editing, so every image drifts.
-      motionMode: 'drift',
       motionEffect: img.motionEffect,
       motionIntensity: img.motionIntensity,
-      anchorX: null,
-      anchorY: null,
-      scale: null,
-      offsetX: null,
-      offsetY: null,
       blurFilter: caps.blurFilter,
       hasZoompan: caps.hasZoompan
     })

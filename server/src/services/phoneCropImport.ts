@@ -27,14 +27,27 @@
  * object — reviewed, or not reviewed when a clipping phone's fresh zip
  * replaced a reviewed one — and notes it in the marker, which is what tells
  * Sync json to replace already-attached pages once (processedSync.ts).
+ *
+ * Cropped: a chapter cut here (crops3/ has output) is finished, and counts as
+ * reviewed. The phones are told with a marker beside the chapter's zip,
+ *
+ *     <same folder as the zips>/<Chapter>.cropped.json
+ *
+ * so the Master shows it as Cropped (no review) and clipping phones hold
+ * their uploads over it. It is written after every cut, backfilled by Sync
+ * json for chapters cut before the marker existed, and by the Library's
+ * "Publish cropped chapters" for every series. Markers are never deleted here.
  */
 
 import fs from 'fs/promises'
 import path from 'path'
-import { GetObjectCommand, ListObjectsV2Command, type S3Client } from '@aws-sdk/client-s3'
+import { GetObjectCommand, ListObjectsV2Command, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3'
 import { prisma } from '../index.js'
 import { readZip, type ZipEntry } from '../utils/zipReader.js'
-import { createClient, getR2Config, type R2Config } from './r2Service.js'
+import { createClient, getR2Config, phoneFolders, type R2Config } from './r2Service.js'
+import { getChapterManifest } from './chapterManifest.js'
+import { getOutputDir, listOutputs, stemOf } from './clipper3/perImageStore.js'
+import { seriesSlug } from './clipper3/chapterCrop.js'
 import { FETCH_MARKER, getProcessedDir, type FetchMarker } from './clipper3/processedSync.js'
 import { notReviewed, parseManifestReview, writeChapterReview } from './clipper3/chapterReview.js'
 
@@ -43,6 +56,10 @@ export const CROPS_FOLDER = 'crops/'
 
 /** In each Processed/<Chapter>/: which R2 zip it was unpacked from. Defined beside Sync json, which reads it too. */
 export { FETCH_MARKER }
+
+/** Beside `<Chapter>.zip`: the desktop has cut this chapter. Keep in step with the phones. */
+export const CROPPED_SUFFIX = '.cropped.json'
+export const CROPPED_SCHEMA = 'manhwa-studio-cropped/1'
 
 /** The chapter manifest the phone puts in each zip; kept alongside the pages. */
 const MANIFEST_FILE = 'chapter.json'
@@ -74,6 +91,15 @@ export interface PhoneCropsFetch {
   upToDate: number
   /** Zips in R2 with no desktop chapter folder of that name. */
   unmatched: string[]
+  failed: { folder: string; reason: string }[]
+  /** Cropped markers this run put in R2 for chapters cut before they existed. */
+  cropped: CroppedPublish
+}
+
+/** What a cropped-marker backfill wrote. */
+export interface CroppedPublish {
+  /** Chapter folders whose `.cropped.json` was written. */
+  published: string[]
   failed: { folder: string; reason: string }[]
 }
 
@@ -155,11 +181,20 @@ interface ListedZip {
   size: number
 }
 
+/** One series folder in R2: its chapter zips and which chapters carry a cropped marker. */
+interface SeriesListing {
+  /** The folder they were found in (`<prefix>crops/<Series>/`), or null when neither place has anything. */
+  folder: string | null
+  zips: ListedZip[]
+  cropped: Set<string>
+}
+
 /** Where each series' zips were found last time, so a re-run tries that folder first. */
 const foundFolders = new Map<string, string>()
 
-async function listFolder(client: S3Client, config: R2Config, folder: string): Promise<ListedZip[]> {
+async function listFolder(client: S3Client, config: R2Config, folder: string): Promise<Omit<SeriesListing, 'folder'>> {
   const zips: ListedZip[] = []
+  const cropped = new Set<string>()
   let token: string | undefined
   do {
     const page = await client.send(new ListObjectsV2Command({
@@ -169,8 +204,13 @@ async function listFolder(client: S3Client, config: R2Config, folder: string): P
     }))
     for (const obj of page.Contents ?? []) {
       const rest = obj.Key?.slice(folder.length) ?? ''
-      // Only `<Chapter>.zip` directly in the folder.
-      if (!rest.toLowerCase().endsWith('.zip') || rest.includes('/')) continue
+      if (rest.includes('/')) continue
+      if (rest.endsWith(CROPPED_SUFFIX)) {
+        cropped.add(rest.slice(0, -CROPPED_SUFFIX.length))
+        continue
+      }
+      // Otherwise only `<Chapter>.zip` directly in the folder.
+      if (!rest.toLowerCase().endsWith('.zip')) continue
       zips.push({
         key: obj.Key!,
         folder: rest.slice(0, -'.zip'.length),
@@ -180,28 +220,237 @@ async function listFolder(client: S3Client, config: R2Config, folder: string): P
     }
     token = page.IsTruncated ? page.NextContinuationToken : undefined
   } while (token)
-  return zips
+  return { zips, cropped }
 }
 
 /**
  * The phone uploads under its own prefix setting, which may not match ours
- * (see readPolledReceipt), so the bucket root is tried too.
+ * (see readPolledReceipt), so the bucket root is tried too. The first of the
+ * two holding anything (a zip or a cropped marker) is the series' folder.
  */
-async function listSeriesZips(client: S3Client, config: R2Config, seriesId: string, seriesName: string): Promise<ListedZip[]> {
+async function listSeries(client: S3Client, config: R2Config, seriesId: string, seriesName: string): Promise<SeriesListing> {
   const rel = `${CROPS_FOLDER}${seriesName}/`
   const candidates = [...new Set([`${config.prefix}${rel}`, rel])]
   const last = foundFolders.get(seriesId)
   if (last) candidates.sort((a, b) => Number(b === last) - Number(a === last))
 
   for (const folder of candidates) {
-    const zips = await listFolder(client, config, folder)
-    if (zips.length > 0) {
+    const listed = await listFolder(client, config, folder)
+    if (listed.zips.length > 0 || listed.cropped.size > 0) {
       foundFolders.set(seriesId, folder)
-      return zips
+      return { folder, ...listed }
     }
   }
   foundFolders.delete(seriesId)
-  return []
+  return { folder: null, zips: [], cropped: new Set() }
+}
+
+// ============ Cropped markers ============
+
+/** The marker's body: pretty JSON, read by the phones. */
+export interface CroppedMarker {
+  schema: typeof CROPPED_SCHEMA
+  series: string
+  chapter: string
+  cropped_at: string
+  /** Pages with at least one cut file. */
+  pages: number
+  /** Files in crops3/. */
+  crops: number
+}
+
+/** `<folder><Chapter>.cropped.json`, where `folder` is a series folder ending in '/'. */
+export function croppedMarkerKey(seriesFolder: string, chapter: string): string {
+  return `${seriesFolder}${chapter}${CROPPED_SUFFIX}`
+}
+
+/**
+ * What crops3/ says about a chapter's cut, or null when it was never cut.
+ * `croppedAt` is the newest file's time — the same time the effective review
+ * uses (chapterReview.ts), so the marker and the desktop agree.
+ */
+export async function chapterCropStats(
+  folderPath: string,
+  seriesTitle: string
+): Promise<{ croppedAt: string; pages: number; crops: number } | null> {
+  const outputs = await listOutputs(folderPath)
+  if (outputs.length === 0) return null
+
+  let latest = 0
+  for (const { filename } of outputs) {
+    try {
+      latest = Math.max(latest, (await fs.stat(path.join(getOutputDir(folderPath), filename))).mtimeMs)
+    } catch {
+      // Gone since the listing.
+    }
+  }
+
+  // Pages are counted against the manifest by the cutter's own prefix
+  // (`<slug>_<stem>_`), since a stem can't be read back out of a file name.
+  let pages = 0
+  try {
+    const slug = seriesSlug(seriesTitle)
+    for (const img of (await getChapterManifest(folderPath)).images) {
+      const prefix = `${slug}_${stemOf(img.filename)}_`
+      if (outputs.some(o => o.filename.startsWith(prefix))) pages++
+    }
+  } catch {
+    // No readable manifest (pages deleted): the crop count still says it was cut.
+  }
+  return { croppedAt: new Date(latest || Date.now()).toISOString(), pages, crops: outputs.length }
+}
+
+export function buildCroppedMarker(
+  series: string,
+  chapter: string,
+  stats: { croppedAt: string; pages: number; crops: number }
+): CroppedMarker {
+  return { schema: CROPPED_SCHEMA, series, chapter, cropped_at: stats.croppedAt, pages: stats.pages, crops: stats.crops }
+}
+
+/**
+ * The series folders a marker goes in: the one the series' zips are in, or —
+ * when R2 holds nothing for it yet — `crops/<Series>/` in every folder the
+ * phone keeps its receipts in (both our prefix and the root when it has
+ * never written one), so the phone finds it whatever its prefix setting.
+ */
+async function markerFolders(client: S3Client, config: R2Config, folder: string | null, seriesName: string): Promise<string[]> {
+  if (folder) return [folder]
+  return (await phoneFolders(client, config)).map(f => `${f}${CROPS_FOLDER}${seriesName}/`)
+}
+
+async function putCroppedMarker(client: S3Client, config: R2Config, folders: string[], marker: CroppedMarker): Promise<void> {
+  for (const folder of folders) {
+    await client.send(new PutObjectCommand({
+      Bucket: config.bucket,
+      Key: croppedMarkerKey(folder, marker.chapter),
+      Body: JSON.stringify(marker, null, 2) + '\n',
+      ContentType: 'application/json'
+    }))
+  }
+}
+
+interface MarkerSeries {
+  rootFolder: string
+  title: string
+  chapters: { id: string; number: number; folderPath: string }[]
+}
+
+/**
+ * Writes a marker for every cut chapter of the series that R2 doesn't list
+ * one for. Never throws: a failure is reported per chapter, and cropping or
+ * syncing carries on regardless.
+ */
+async function backfillCropped(
+  client: S3Client,
+  config: R2Config,
+  series: MarkerSeries,
+  listing: SeriesListing
+): Promise<CroppedPublish> {
+  const result: CroppedPublish = { published: [], failed: [] }
+  const seriesName = path.basename(series.rootFolder)
+  let folders: string[] | null = null
+
+  for (const chapter of series.chapters) {
+    const folder = path.basename(chapter.folderPath)
+    if (listing.cropped.has(folder)) continue
+    try {
+      const stats = await chapterCropStats(chapter.folderPath, series.title)
+      if (!stats) continue
+      folders ??= await markerFolders(client, config, listing.folder, seriesName)
+      await putCroppedMarker(client, config, folders, buildCroppedMarker(seriesName, folder, stats))
+      result.published.push(folder)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      console.error(`[clipper3] publishing the cropped marker for ${seriesName}/${folder} failed:`, reason)
+      result.failed.push({ folder, reason })
+    }
+  }
+  return result
+}
+
+/**
+ * After a cut: (re)writes that chapter's marker with the new cropped_at.
+ * Resolves to null when R2 is not set up or the chapter has no output; never
+ * throws, so a failed PUT can't fail the cut that triggered it.
+ */
+export async function publishChapterCropped(chapterId: string): Promise<{ keys: string[] } | { error: string } | null> {
+  const config = getR2Config()
+  if (!config) return null
+  try {
+    const chapter = await prisma.chapter.findUnique({
+      where: { id: chapterId },
+      select: { folderPath: true, seriesId: true, series: { select: { rootFolder: true, title: true } } }
+    })
+    if (!chapter) return null
+    const stats = await chapterCropStats(chapter.folderPath, chapter.series.title)
+    if (!stats) return null
+
+    const client = createClient(config)
+    const seriesName = path.basename(chapter.series.rootFolder)
+    // The folder found by the last Sync json, else one LIST to find it.
+    const known = foundFolders.get(chapter.seriesId)
+    const folder = known ?? (await listSeries(client, config, chapter.seriesId, seriesName)).folder
+    const folders = await markerFolders(client, config, folder, seriesName)
+    const chapterName = path.basename(chapter.folderPath)
+    await putCroppedMarker(client, config, folders, buildCroppedMarker(seriesName, chapterName, stats))
+    return { keys: folders.map(f => croppedMarkerKey(f, chapterName)) }
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    console.error(`[clipper3] publishing the cropped marker for chapter ${chapterId} failed:`, reason)
+    return { error: reason }
+  }
+}
+
+/** What the Library's "Publish cropped chapters" did. */
+export interface CroppedPublishAll {
+  configured: boolean
+  /** Series that had at least one cut chapter, and so were listed. */
+  series: number
+  published: { series: string; chapter: string }[]
+  failed: { series: string; folder: string; reason: string }[]
+}
+
+/**
+ * The backfill for every series: one LIST per series with a cut chapter, plus
+ * a PUT per marker R2 doesn't have yet. Series with nothing cut cost nothing.
+ */
+export async function publishAllCroppedMarkers(): Promise<CroppedPublishAll> {
+  const result: CroppedPublishAll = { configured: false, series: 0, published: [], failed: [] }
+  const config = getR2Config()
+  if (!config) return result
+  result.configured = true
+
+  const client = createClient(config)
+  const allSeries = await prisma.series.findMany({
+    select: {
+      id: true,
+      rootFolder: true,
+      title: true,
+      chapters: { select: { id: true, number: true, folderPath: true }, orderBy: { number: 'asc' } }
+    }
+  })
+
+  for (const series of allSeries) {
+    const seriesName = path.basename(series.rootFolder)
+    const cut = []
+    for (const chapter of series.chapters) {
+      if ((await listOutputs(chapter.folderPath)).length > 0) cut.push(chapter)
+    }
+    if (cut.length === 0) continue
+    result.series++
+    try {
+      const listing = await listSeries(client, config, series.id, seriesName)
+      const done = await backfillCropped(client, config, { ...series, chapters: cut }, listing)
+      result.published.push(...done.published.map(chapter => ({ series: seriesName, chapter })))
+      result.failed.push(...done.failed.map(f => ({ series: seriesName, ...f })))
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      console.error(`[clipper3] listing ${seriesName} for cropped markers failed:`, reason)
+      result.failed.push({ series: seriesName, folder: '—', reason })
+    }
+  }
+  return result
 }
 
 async function readMarkerEtag(processedDir: string): Promise<string | null> {
@@ -222,7 +471,15 @@ async function readMarkerEtag(processedDir: string): Promise<string | null> {
  * carry on.
  */
 export async function fetchPhoneCrops(seriesId: string, chapterIds?: string[]): Promise<PhoneCropsFetch> {
-  const result: PhoneCropsFetch = { configured: false, found: 0, fetched: [], upToDate: 0, unmatched: [], failed: [] }
+  const result: PhoneCropsFetch = {
+    configured: false,
+    found: 0,
+    fetched: [],
+    upToDate: 0,
+    unmatched: [],
+    failed: [],
+    cropped: { published: [], failed: [] }
+  }
   const config = getR2Config()
   if (!config) return result
   result.configured = true
@@ -231,13 +488,15 @@ export async function fetchPhoneCrops(seriesId: string, chapterIds?: string[]): 
     where: { id: seriesId },
     select: {
       rootFolder: true,
+      title: true,
       chapters: { select: { id: true, number: true, folderPath: true }, orderBy: { number: 'asc' } }
     }
   })
   if (!series) throw new Error('Series not found')
 
   const client = createClient(config)
-  const zips = await listSeriesZips(client, config, seriesId, path.basename(series.rootFolder))
+  const listing = await listSeries(client, config, seriesId, path.basename(series.rootFolder))
+  const zips = listing.zips
   result.found = zips.length
 
   const wanted = chapterIds ? new Set(chapterIds) : null
@@ -301,6 +560,12 @@ export async function fetchPhoneCrops(seriesId: string, chapterIds?: string[]): 
       result.failed.push({ folder: zip.folder, reason })
     }
   }
+
+  // Chapters cut before cropped markers existed (or whose marker PUT failed
+  // after a cut) get one now, from the listing already made above. The whole
+  // series, not just `chapterIds`: it costs no extra LIST, and a phone
+  // clipping an already-cut chapter is exactly what the marker prevents.
+  result.cropped = await backfillCropped(client, config, series, listing)
 
   return result
 }

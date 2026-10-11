@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 
-// voiceoverService pulls in the Prisma client through ../index.js; the
+// alignmentDocument pulls in the Prisma client through ../index.js; the
 // functions under test are pure, so an empty stand-in is enough.
 vi.mock('../../index.js', () => ({ prisma: {} }))
 
 import { buildTimelineScript, splitIntoSentences } from '../alignment/beatFormatter.js'
-import { splitScriptIntoSections } from '../voiceoverService.js'
+import { buildAlignmentDocument } from '../alignment/alignmentDocument.js'
 import {
+  alignmentFileName,
   audioFolderName,
   parseLanguage,
   requestLanguage,
@@ -32,6 +33,8 @@ describe('narration language helpers', () => {
     expect(audioFolderName('hi')).toBe('audio_hi')
     expect(video2FolderName('en')).toBe('_video2')
     expect(video2FolderName('hi')).toBe('_video2_hi')
+    expect(alignmentFileName('en')).toBe('script-timeline.md')
+    expect(alignmentFileName('hi')).toBe('script-timeline.hi.md')
   })
 })
 
@@ -50,18 +53,6 @@ describe('Hindi sentence splitting', () => {
       'The door opens!'
     ])
   })
-
-  it('groups Hindi sentences into voice sections under the target length', () => {
-    const sentence = 'यह एक लंबा वाक्य है जो कहानी को आगे बढ़ाता है।'
-    const script = Array.from({ length: 30 }, () => sentence).join(' ')
-    const sections = splitScriptIntoSections(script, 200)
-    expect(sections.length).toBeGreaterThan(1)
-    for (const section of sections) {
-      expect(section.text.length).toBeLessThanOrEqual(200)
-      expect(section.text.endsWith('।')).toBe(true)
-    }
-    expect(sections.map(s => s.text).join(' ')).toBe(script)
-  })
 })
 
 describe('Hindi timeline beats', () => {
@@ -79,5 +70,26 @@ describe('Hindi timeline beats', () => {
       '00:00.00 - 00:01.50: "वह आगे बढ़ा।"\n' +
       '00:01.50 - 00:03.20: "दरवाज़ा खुला था।"'
     )
+  })
+})
+
+describe('alignment document', () => {
+  it('joins every section\'s timeline in section order', () => {
+    expect(buildAlignmentDocument([
+      { index: 1, timelineScript: '00:00.00 - 00:02.00: "Two."\n' },
+      { index: 0, timelineScript: '00:00.00 - 00:01.00: "One."' }
+    ])).toBe(
+      '## Section 1\n\n00:00.00 - 00:01.00: "One."\n\n' +
+      '## Section 2\n\n00:00.00 - 00:02.00: "Two."\n'
+    )
+  })
+
+  it('is not written until every section is aligned', () => {
+    expect(buildAlignmentDocument([])).toBeNull()
+    expect(buildAlignmentDocument([
+      { index: 0, timelineScript: '00:00.00 - 00:01.00: "One."' },
+      { index: 1, timelineScript: null }
+    ])).toBeNull()
+    expect(buildAlignmentDocument([{ index: 0, timelineScript: '  ' }])).toBeNull()
   })
 })

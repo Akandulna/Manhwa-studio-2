@@ -2,31 +2,20 @@ import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { useSocket } from '@/lib/socket'
-import { useTheme } from '@/lib/theme'
 import { usePhoneRelay } from '@/hooks/usePhoneRelay'
 import {
-  Library,
-  Download,
   Settings,
-  Plus,
   Mic,
   Target,
   Clapperboard,
-  Music,
-  SplitSquareHorizontal,
   Wifi,
   WifiOff,
   PanelLeftClose,
   PanelLeftOpen,
-  Moon,
-  Sun,
-  HardDrive,
   Smartphone,
-  Layers,
   Users,
   Activity
 } from 'lucide-react'
-import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
 
@@ -38,19 +27,16 @@ interface NavItem {
   icon: React.ReactNode
   label: string
   href: string
-  badge?: number
   /** A status dot on the icon (a bg-* class). */
   dot?: string
   dotTitle?: string
-  disabled?: boolean
 }
 
 const SIDEBAR_STORAGE_KEY = 'sidebarCollapsed'
 
 export default function Layout({ children }: LayoutProps) {
   const location = useLocation()
-  const { isConnected, queueStatus } = useSocket()
-  const { resolvedTheme, toggleTheme } = useTheme()
+  const { isConnected } = useSocket()
   const relay = usePhoneRelay()
 
   const [collapsed, setCollapsed] = useState<boolean>(
@@ -64,33 +50,6 @@ export default function Layout({ children }: LayoutProps) {
       return next
     })
   }
-
-  const activeDownloads = queueStatus.pending + queueStatus.active
-
-  // Library & Downloader module items
-  const libraryModuleItems: NavItem[] = [
-    {
-      icon: <Plus className="h-5 w-5" />,
-      label: 'Add Series',
-      href: '/add'
-    },
-    {
-      icon: <Library className="h-5 w-5" />,
-      label: 'Library',
-      href: '/'
-    },
-    {
-      icon: <Download className="h-5 w-5" />,
-      label: 'Downloads',
-      href: '/queue',
-      badge: activeDownloads > 0 ? activeDownloads : undefined
-    },
-    {
-      icon: <Layers className="h-5 w-5" />,
-      label: 'Page Stitcher',
-      href: '/stitch'
-    }
-  ]
 
   // Narration Studio module items
   const narrationModuleItems: NavItem[] = [
@@ -116,11 +75,6 @@ export default function Layout({ children }: LayoutProps) {
       icon: <Clapperboard className="h-5 w-5" />,
       label: 'Editor 2.0',
       href: '/editor2'
-    },
-    {
-      icon: <Music className="h-5 w-5" />,
-      label: 'Music',
-      href: '/music'
     }
   ]
 
@@ -147,21 +101,10 @@ export default function Layout({ children }: LayoutProps) {
     }
   ]
 
-  // Future modules (disabled)
-  const futureModules: NavItem[] = [
-    {
-      icon: <SplitSquareHorizontal className="h-5 w-5" />,
-      label: 'Panel Splitter',
-      href: '#',
-      disabled: true
-    }
-  ]
-
   // Check if current path is in narration module
   const isInNarration = location.pathname.startsWith('/narration')
   const isInClipper3 = location.pathname.startsWith('/clipper3')
   const isInEditor2 = location.pathname.startsWith('/editor2')
-  const isInMusic = location.pathname.startsWith('/music')
 
   // Renders a single nav link, collapsing to an icon-only button when needed.
   const renderNavLink = (item: NavItem, active: boolean) => (
@@ -182,23 +125,8 @@ export default function Layout({ children }: LayoutProps) {
         {item.dot && (
           <span className={cn("absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-card", item.dot)} />
         )}
-        {/* Collapsed: surface the badge as a small dot on the icon */}
-        {collapsed && item.badge && (
-          <span className="absolute -top-1.5 -right-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
-            {item.badge}
-          </span>
-        )}
       </span>
-      {!collapsed && (
-        <>
-          <span className="flex-1">{item.label}</span>
-          {item.badge && (
-            <Badge variant="secondary" className="ml-auto">
-              {item.badge}
-            </Badge>
-          )}
-        </>
-      )}
+      {!collapsed && <span className="flex-1">{item.label}</span>}
     </Link>
   )
 
@@ -246,25 +174,8 @@ export default function Layout({ children }: LayoutProps) {
 
         {/* Modules Navigation */}
         <ScrollArea className="flex-1">
-          {/* Module 1: Library & Downloader */}
+          {/* Narration Studio */}
           <div className="p-4">
-            {renderSectionLabel('LIBRARY & DOWNLOADER')}
-            <nav className="space-y-2">
-              {libraryModuleItems.map((item) =>
-                renderNavLink(
-                  item,
-                  (location.pathname === item.href ||
-                    (item.href === '/stitch' && location.pathname.startsWith('/stitch/'))) &&
-                    !isInNarration
-                )
-              )}
-            </nav>
-          </div>
-
-          <Separator className="my-2" />
-
-          {/* Module 2: Narration Studio */}
-          <div className="px-4 pb-4">
             {renderSectionLabel('NARRATION STUDIO')}
             <nav className="space-y-2">
               {narrationModuleItems.map((item) => renderNavLink(item, isInNarration))}
@@ -273,7 +184,7 @@ export default function Layout({ children }: LayoutProps) {
 
           <Separator className="my-2" />
 
-          {/* Module 3: Image Clipper */}
+          {/* Image Clipper */}
           <div className="px-4 pb-4">
             {renderSectionLabel('IMAGE CLIPPER')}
             <nav className="space-y-2">
@@ -283,13 +194,11 @@ export default function Layout({ children }: LayoutProps) {
 
           <Separator className="my-2" />
 
-          {/* Module 4: Video Editor */}
+          {/* Video Editor */}
           <div className="px-4 pb-4">
             {renderSectionLabel('VIDEO EDITOR')}
             <nav className="space-y-2">
-              {editorModuleItems.map((item) =>
-                renderNavLink(item, item.href === '/music' ? isInMusic : isInEditor2)
-              )}
+              {editorModuleItems.map((item) => renderNavLink(item, isInEditor2))}
             </nav>
           </div>
 
@@ -302,70 +211,10 @@ export default function Layout({ children }: LayoutProps) {
               {sleeperModuleItems.map((item) => renderNavLink(item, location.pathname === item.href))}
             </nav>
           </div>
-
-          <Separator className="my-2" />
-
-          {/* Future Modules */}
-          <div className="px-4 pb-4">
-            {renderSectionLabel('COMING SOON')}
-            <nav className="space-y-2">
-              {futureModules.map((item) => (
-                <div
-                  key={item.label}
-                  title={collapsed ? item.label : undefined}
-                  className={cn(
-                    "flex items-center gap-3 px-3 py-2 rounded-lg",
-                    collapsed && "justify-center px-0",
-                    "text-muted-foreground cursor-not-allowed opacity-50"
-                  )}
-                >
-                  {item.icon}
-                  {!collapsed && <span>{item.label}</span>}
-                </div>
-              ))}
-            </nav>
-          </div>
         </ScrollArea>
 
         {/* Bottom Section: Settings & Connection Status */}
         <div className="border-t">
-          {/* Theme quick-toggle */}
-          <button
-            type="button"
-            onClick={toggleTheme}
-            title={collapsed
-              ? `Switch to ${resolvedTheme === 'dark' ? 'light' : 'dark'} mode`
-              : undefined}
-            aria-label={`Switch to ${resolvedTheme === 'dark' ? 'light' : 'dark'} mode`}
-            className={cn(
-              "flex w-full items-center gap-3 py-3 transition-colors hover:bg-accent text-foreground",
-              collapsed ? "justify-center px-0" : "px-7"
-            )}
-          >
-            {resolvedTheme === 'dark'
-              ? <Sun className="h-5 w-5 shrink-0" />
-              : <Moon className="h-5 w-5 shrink-0" />}
-            {!collapsed && (
-              <span>{resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
-            )}
-          </button>
-
-          {/* Storage — housekeeping across every module, so it lives with Settings */}
-          <Link
-            to="/storage"
-            title={collapsed ? 'Storage' : undefined}
-            className={cn(
-              "flex items-center gap-3 py-3 transition-colors",
-              collapsed ? "justify-center px-0" : "px-7",
-              location.pathname === '/storage'
-                ? "bg-primary text-primary-foreground"
-                : "hover:bg-accent text-foreground"
-            )}
-          >
-            <HardDrive className="h-5 w-5" />
-            {!collapsed && <span>Storage</span>}
-          </Link>
-
           {/* Universal Settings */}
           <Link
             to="/settings"

@@ -1,10 +1,10 @@
 /**
  * Image Clipper 3.0 — importing hand-produced crop JSON from `Processed/`.
  *
- * The pointers and metadata for a page are written by hand (a chat model reads
- * the page's slices and emits them), then dropped into ONE `Processed/` folder
- * per SERIES. This module is the bridge from that drop-off layout into the
- * store the app actually reads:
+ * The pointers and metadata for a page are made on the Sleeper-Cell phones
+ * (phoneCropImport.ts unpacks their chapter zips) or dropped in by hand, into
+ * ONE `Processed/` folder per SERIES. This module is the bridge from that
+ * drop-off layout into the store the app actually reads:
  *
  *   <Series>/Processed/<Chapter>/page_###/crop-pointers-ch###-p###.json
  *                                       ->  <Chapter>/crop_points3/<stem>.json

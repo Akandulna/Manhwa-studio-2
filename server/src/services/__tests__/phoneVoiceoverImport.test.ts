@@ -63,7 +63,7 @@ vi.mock('../../index.js', () => ({
 }))
 
 Object.assign(process.env, { R2_ACCOUNT_ID: 'a', R2_ACCESS_KEY_ID: 'k', R2_SECRET_ACCESS_KEY: 's', R2_BUCKET: 'b', R2_PREFIX: 'Manhwa' })
-const { fetchPhoneVoiceover, parseVoiceoverZip, zipChapter, FETCH_MARKER } = await import('../phoneVoiceoverImport.js')
+const { fetchPhoneVoiceover, previewPhoneVoiceover, parseVoiceoverZip, zipChapter, FETCH_MARKER } = await import('../phoneVoiceoverImport.js')
 const { readZip } = await import('../../utils/zipReader.js')
 
 async function zipOf(entries: Record<string, string | Buffer>): Promise<Buffer> {
@@ -223,12 +223,18 @@ describe('fetchPhoneVoiceover', () => {
     expect(send.mock.calls.map(([c]) => c.constructor.name)).toEqual(['ListObjectsV2Command'])
 
     // Re-voiced with the same splits: the sections stay, the audio is replaced and the old kept in backup/.
+    // The old timelines and the alignment document go with the old audio.
     const ids = sections.map(s => s.id)
+    for (const s of sections) s.timelineScript = '00:00.00 - 00:00.50: "x"'
+    const document = path.join(root, 'Solo Hero', 'Chapter 009', 'script-timeline.md')
+    await fs.writeFile(document, 'old')
     zips.set('voiceover/Solo Hero/Chapter 009.zip', await chapterZip('Chapter 009', ['One.', 'Two.'], 7))
     etags.set('voiceover/Solo Hero/Chapter 009.zip', 'e9b')
     const third = await fetchPhoneVoiceover('s1')
     expect(third.fetched.map(c => c.resplit)).toEqual([false])
     expect(sections.map(s => s.id)).toEqual(ids)
+    expect(sections.map(s => s.timelineScript)).toEqual([null, null])
+    await expect(fs.access(document)).rejects.toThrow()
     expect(files).toHaveLength(2)
     expect((await fs.readdir(path.join(audioDir('Chapter 009'), 'backup'))).length).toBe(2)
     expect((await fs.readFile(path.join(audioDir('Chapter 009'), 'section_01.wav'))).equals(wav(7))).toBe(true)
@@ -240,6 +246,23 @@ describe('fetchPhoneVoiceover', () => {
     expect(fourth.fetched.map(c => c.resplit)).toEqual([true])
     expect(sections.map(s => s.text)).toEqual(['One. Two.'])
     expect(files.map(f => path.basename(f.filePath))).toEqual(['section_01.wav'])
+  })
+
+  it('previews from the LIST alone: new, changed and already attached chapters', async () => {
+    zips.set('voiceover/Solo Hero/Chapter 009.zip', await chapterZip('Chapter 009', ['One.']))
+    etags.set('voiceover/Solo Hero/Chapter 009.zip', 'p9')
+    zips.set('voiceover/Solo Hero/Chapter 404.zip', await chapterZip('Chapter 404', ['Lost.']))
+    etags.set('voiceover/Solo Hero/Chapter 404.zip', 'p404')
+
+    const before = await previewPhoneVoiceover('s4')
+    expect(before.chapters.map(c => [c.number, c.state])).toEqual([[9, 'new']])
+    expect(before.unmatched).toEqual(['Chapter 404'])
+    expect(send.mock.calls.every(([c]) => c.constructor.name === 'ListObjectsV2Command')).toBe(true)
+
+    await fetchPhoneVoiceover('s4', ['c9'])
+    expect((await previewPhoneVoiceover('s4')).chapters.map(c => c.state)).toEqual(['same'])
+    etags.set('voiceover/Solo Hero/Chapter 009.zip', 'p9b')
+    expect((await previewPhoneVoiceover('s4')).chapters.map(c => c.state)).toEqual(['changed'])
   })
 
   it('leaves the chapter as it was when a file isn\'t audio', async () => {

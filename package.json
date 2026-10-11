@@ -1,7 +1,7 @@
 {
   "name": "manhwa-studio",
   "version": "1.0.0",
-  "description": "Local full-stack desktop-style web app for manhwa library management and downloading",
+  "description": "Local desktop app that turns the Sleeper-Cell phones' manhwa chapters into narrated videos",
   "scripts": {
     "dev": "concurrently -n server,client -c blue,green \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "cd server && npm run dev",
@@ -10,11 +10,8 @@
     "build": "cd server && npm run build && cd ../client && npm run build",
     "db:push": "cd server && npx prisma db push",
     "db:studio": "cd server && npx prisma studio",
-    "ml:setup": "cd server && npm run ml:setup",
     "test": "cd server && npm test",
     "postinstall": "cd server && npm install && cd ../client && npm install",
-    "dev:kokoro": "node scripts/start-kokoro.mjs",
-    "dev:with-kokoro": "concurrently -n server,client,kokoro -c blue,green,magenta \"npm run dev:server\" \"npm run dev:client\" \"npm run dev:kokoro\"",
     "app": "cd desktop && npm install && npm run app"
   },
   "devDependencies": {

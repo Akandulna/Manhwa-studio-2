@@ -63,7 +63,7 @@ export const CATEGORIES: CategoryMeta[] = [
   {
     key: 'pages',
     label: 'Source pages',
-    description: 'Downloaded manhwa page images — re-downloadable from the source site.',
+    description: 'Manhwa page images — re-fetchable from the phones (Get from phones) while still in R2.',
     reclaimable: true
   },
   {
@@ -81,7 +81,7 @@ export const CATEGORIES: CategoryMeta[] = [
   {
     key: 'audio',
     label: 'Voiceover audio',
-    description: 'Generated narration audio — regenerable from the script, at the cost of TTS time.',
+    description: 'Voiceover audio fetched from the phones — re-fetchable while still in R2.',
     reclaimable: true
   },
   {

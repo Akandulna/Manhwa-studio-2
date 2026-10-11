@@ -1,7 +1,7 @@
 /**
- * Cloudflare R2 API: settings, sending chapters to the Sleeper-Cell phone, and its status.
+ * Cloudflare R2 API: settings, the Sleeper-Cell phones' status, and getting their chapters.
  *
- *   GET  /status   is R2 configured, and the current/last send
+ *   GET  /status   is R2 configured
  *   GET  /config   saved settings for Settings → Cloudflare (no secret)
  *   PUT  /config   save settings; blank key fields keep the saved keys
  *   POST /test     check the credentials can reach the bucket
@@ -24,20 +24,9 @@
  *   PUT  /relay          { url, token, clearToken } — save; a blank token keeps the saved one
  *   POST /relay/test     ask the relay what it holds, to check the URL and token
  *     (the GETs answer from the server's last copy; fresh=1 re-reads R2)
- *   GET  /phone/scripts/zip?seriesId=…   the phone's uploaded script zip for a series, and the last import
- *   POST /phone/scripts/preview   { seriesId } — download + parse that zip, say what each chapter would get
- *   POST /phone/scripts/import    { seriesId, etag, chapterIds } — attach the previewed scripts
  *   DELETE /objects?key=…   delete one object (free) to make room
- *   GET  /phone-send/plan?fresh=1   per series: chapters to send, on the phone, cleared there
- *   POST /phone-send   { series: [{ seriesId, chapterIds? }] } — send new/changed chapters, or exactly those
- *   PUT  /phone-send/auto   { seriesId, enabled } — send new chapters by itself after downloads
- *   POST /phone-send/index   { seriesId? } — write the phone's chapter index where it is behind
- *   POST /cancel   stop the running send
  *   GET  /phone-pull   chapters the Master phone downloaded and sent that this library doesn't have (or has with other pages)
  *   POST /phone-pull   { series: [{ folder, chapters: [name] }] } — bring them into the library (Get chapters from phones)
- *
- * Progress is pushed as `phone-send:progress` on the socket; /status is there
- * for a page that mounts mid-send or after it finished.
  */
 
 import { Router, Request, Response } from 'express'
@@ -57,19 +46,8 @@ import {
   testR2Connection,
   updateR2Config
 } from '../services/r2Service.js'
-import {
-  cancelPhoneSend,
-  getPhoneSync,
-  getSendJob,
-  getSendPlan,
-  setAutoSend,
-  startPhoneSend,
-  updatePhoneIndexes,
-  type PhoneSendRequest
-} from '../services/phoneSend.js'
+import { getPhoneSync } from '../services/phoneSend.js'
 import { listPhoneChapters, pullPhoneChapters } from '../services/phonePull.js'
-import { getPhoneScriptsZip, importPhoneScripts, previewPhoneScripts } from '../services/phoneScriptImport.js'
-import { requestLanguage } from '../services/narrationLanguage.js'
 import { forgetPhone, relayStatus, testRelay, updateRelayConfig } from '../services/phoneRelay.js'
 import { parseChatGptSettings, sendProfileCommand } from '../services/phoneProfiles.js'
 import { dropPhoneScreenshot, getPhoneScreens, phoneScreenshotImage, sendScreenCommand } from '../services/phoneScreen.js'
@@ -87,8 +65,7 @@ export function initR2Routes(io: Server): Router {
       configured: config !== null,
       missing: missingR2Env(),
       bucket: config?.bucket ?? null,
-      prefix: config?.prefix ?? '',
-      job: getSendJob()
+      prefix: config?.prefix ?? ''
     })
   })
 
@@ -289,43 +266,6 @@ export function initR2Routes(io: Server): Router {
     }
   })
 
-  router.get('/phone/scripts/zip', async (req: Request, res: Response) => {
-    try {
-      const seriesId = typeof req.query.seriesId === 'string' ? req.query.seriesId : ''
-      if (!seriesId) throw new Error('seriesId is required')
-      res.json(await getPhoneScriptsZip(seriesId, requestLanguage(req)))
-    } catch (error) {
-      console.error('R2 phone script zip lookup failed:', error)
-      res.status(400).json({ error: message(error, 'Could not look for the phone script zip') })
-    }
-  })
-
-  router.post('/phone/scripts/preview', async (req: Request, res: Response) => {
-    try {
-      const seriesId = req.body?.seriesId
-      if (typeof seriesId !== 'string' || !seriesId) throw new Error('seriesId is required')
-      res.json(await previewPhoneScripts(seriesId, requestLanguage(req)))
-    } catch (error) {
-      console.error('Phone script preview failed:', error)
-      res.status(400).json({ error: message(error, 'Could not read the phone script zip') })
-    }
-  })
-
-  router.post('/phone/scripts/import', async (req: Request, res: Response) => {
-    try {
-      const { seriesId, etag, chapterIds } = req.body ?? {}
-      if (typeof seriesId !== 'string' || !seriesId) throw new Error('seriesId is required')
-      if (typeof etag !== 'string' || !etag) throw new Error('etag is required')
-      if (!Array.isArray(chapterIds) || !chapterIds.every(id => typeof id === 'string')) {
-        throw new Error('chapterIds must be an array of strings')
-      }
-      res.json(await importPhoneScripts(seriesId, etag, chapterIds, requestLanguage(req)))
-    } catch (error) {
-      console.error('Phone script import failed:', error)
-      res.status(400).json({ error: message(error, 'Could not import the phone scripts') })
-    }
-  })
-
   router.delete('/objects', async (req: Request, res: Response) => {
     try {
       const key = typeof req.query.key === 'string' ? req.query.key : ''
@@ -334,53 +274,6 @@ export function initR2Routes(io: Server): Router {
       res.json({ ok: true })
     } catch (error) {
       res.status(400).json({ error: message(error, 'Could not delete the object') })
-    }
-  })
-
-  router.get('/phone-send/plan', async (req: Request, res: Response) => {
-    try {
-      res.json(await getSendPlan(req.query.fresh === '1'))
-    } catch (error) {
-      console.error('Phone send plan failed:', error)
-      res.status(400).json({ error: message(error, 'Could not work out what to send') })
-    }
-  })
-
-  router.post('/phone-send', async (req: Request, res: Response) => {
-    try {
-      const raw = req.body?.series
-      if (!Array.isArray(raw)) throw new Error('series must be an array')
-      const requests: PhoneSendRequest[] = raw.map(item => {
-        if (typeof item?.seriesId !== 'string' || !item.seriesId) throw new Error('Each series needs a seriesId')
-        if (item.chapterIds !== undefined && (!Array.isArray(item.chapterIds) || !item.chapterIds.every((id: unknown) => typeof id === 'string'))) {
-          throw new Error('chapterIds must be an array of strings')
-        }
-        return { seriesId: item.seriesId, chapterIds: item.chapterIds }
-      })
-      res.json(await startPhoneSend(requests, io))
-    } catch (error) {
-      res.status(400).json({ error: message(error, 'Failed to start sending') })
-    }
-  })
-
-  router.put('/phone-send/auto', async (req: Request, res: Response) => {
-    try {
-      const { seriesId, enabled } = req.body ?? {}
-      if (typeof seriesId !== 'string' || !seriesId) throw new Error('seriesId is required')
-      await setAutoSend(seriesId, enabled === true)
-      res.json({ ok: true })
-    } catch (error) {
-      res.status(400).json({ error: message(error, 'Could not save auto-send') })
-    }
-  })
-
-  router.post('/phone-send/index', async (req: Request, res: Response) => {
-    try {
-      const seriesId = typeof req.body?.seriesId === 'string' ? req.body.seriesId : undefined
-      res.json(await updatePhoneIndexes(seriesId))
-    } catch (error) {
-      console.error('Updating the phone index failed:', error)
-      res.status(400).json({ error: message(error, 'Could not update the phone') })
     }
   })
 
@@ -409,11 +302,6 @@ export function initR2Routes(io: Server): Router {
       console.error('Getting chapters from the phones failed:', error)
       res.status(400).json({ error: message(error, 'Could not get the chapters') })
     }
-  })
-
-  router.post('/cancel', async (_req: Request, res: Response) => {
-    await cancelPhoneSend()
-    res.json({ job: getSendJob() })
   })
 
   return router

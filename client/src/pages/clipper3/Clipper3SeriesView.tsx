@@ -2,7 +2,12 @@
  * Clipper3SeriesView — Module 3 v3: Image Clipper 3.0
  *
  * Chapter list for one series, reached from Clipper3Library after picking a
- * series. Clicking a chapter opens the pointer workspace (Clipper3Workspace).
+ * series. Clicking a chapter opens its pages (Clipper3ImageList).
+ *
+ * Sync json pulls the phones' finished-chapter zips from R2 and attaches them.
+ * Every chapter the Master phone reviewed is then cut straight away on the
+ * server, one chapter at a time — its progress shows here over the same
+ * crop events Crop Sections uses. The other chapters wait for Preview → Crop.
  */
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
@@ -83,6 +88,23 @@ function AttachedStatusBadge({ summary }: { summary: Clipper3ChapterSummary | un
 function ReviewStatusBadge({ summary }: { summary: Clipper3ChapterSummary | undefined }) {
   if (!summary) return null
   const review = summary.review
+  // Cut already: done, and counts as reviewed (the Master phone shows it as
+  // Cropped and won't review it).
+  if (review?.reviewed && review.cropped) {
+    return (
+      <Badge
+        variant="success"
+        className="flex items-center gap-1"
+        title={[
+          'Cropped — counts as reviewed',
+          review.croppedAt ? new Date(review.croppedAt).toLocaleString() : null
+        ].filter(Boolean).join(' · ')}
+      >
+        <Scissors className="h-3 w-3" />
+        Cropped
+      </Badge>
+    )
+  }
   if (review?.reviewed) {
     const onPhone = review.by === 'phone'
     return (
@@ -117,7 +139,7 @@ function ReviewStatusBadge({ summary }: { summary: Clipper3ChapterSummary | unde
  * downloaded from the phone's uploads, and any it couldn't place.
  */
 function R2FetchSummary({ result }: { result: Clipper3PhoneCropsFetch }) {
-  const { found, fetched, upToDate, unmatched, failed } = result
+  const { found, fetched, upToDate, unmatched, failed, cropped } = result
   const pages = fetched.reduce((sum, c) => sum + c.pages, 0)
   return (
     <div className="rounded-md border p-3 text-sm space-y-1.5">
@@ -144,6 +166,17 @@ function R2FetchSummary({ result }: { result: Clipper3PhoneCropsFetch }) {
           No chapter folder named {unmatched.map(f => `"${f}"`).join(', ')} in this series — not fetched.
         </p>
       )}
+      {cropped && cropped.published.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          Told the phones {cropped.published.length} chapter{cropped.published.length === 1 ? ' is' : 's are'} already
+          cropped: {cropped.published.join(', ')}.
+        </p>
+      )}
+      {cropped?.failed.map(f => (
+        <p key={`cropped-${f.folder}`} className="text-xs text-destructive">
+          {f.folder}: could not mark as cropped in R2 — {f.reason}
+        </p>
+      ))}
       {failed.map(f => (
         <p key={f.folder} className="text-xs text-destructive">
           {f.folder}: {f.reason}
@@ -154,8 +187,16 @@ function R2FetchSummary({ result }: { result: Clipper3PhoneCropsFetch }) {
 }
 
 /** Whether the chapter's crop/cut step has been run and produced output. */
-function ChoppedStatusBadge({ summary }: { summary: Clipper3ChapterSummary | undefined }) {
+function ChoppedStatusBadge({ summary, cropping }: { summary: Clipper3ChapterSummary | undefined; cropping: boolean }) {
   if (!summary) return null
+  if (cropping) {
+    return (
+      <Badge variant="outline" className="flex items-center gap-1 text-sky-500 border-sky-500/50">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        Cropping…
+      </Badge>
+    )
+  }
   if (summary.cropComplete) {
     return (
       <Badge variant="success" className="flex items-center gap-1" title="Every page is cut and crops3/ matches them">
@@ -202,6 +243,8 @@ export default function Clipper3SeriesView() {
 
   const { toast } = useToast()
   const {
+    clipper3CropProgress,
+    clipper3CropComplete,
     clipper3SliceProgress,
     clipper3SliceComplete,
     clipper3SyncProgress,
@@ -266,9 +309,11 @@ export default function Clipper3SeriesView() {
   const handledSliceComplete = useRef<unknown>(undefined)
   const handledSyncComplete = useRef<unknown>(undefined)
   const handledUnsyncComplete = useRef<unknown>(undefined)
+  const handledCropComplete = useRef<unknown>(undefined)
   if (handledSliceComplete.current === undefined) handledSliceComplete.current = clipper3SliceComplete
   if (handledSyncComplete.current === undefined) handledSyncComplete.current = clipper3SyncComplete
   if (handledUnsyncComplete.current === undefined) handledUnsyncComplete.current = clipper3UnsyncComplete
+  if (handledCropComplete.current === undefined) handledCropComplete.current = clipper3CropComplete
 
   // Picking chapters is a mode rather than an always-on column: the cards are
   // links, and a stray click should open a chapter, not silently select it.
@@ -429,13 +474,14 @@ export default function Clipper3SeriesView() {
       return
     }
 
-    const { imported = 0, replaced = 0, skipped = 0, failed = 0, results = [] } = clipper3SyncComplete
+    const { imported = 0, replaced = 0, skipped = 0, failed = 0, results = [], autoCrop = [] } = clipper3SyncComplete
 
     // Newly attached pages change every Attached chip on the page, so the
     // rollup is re-fetched rather than patched from the result — the server
     // re-validates on read, which is the same check that decided the import.
-    // A replaced page can put a chapter's cut out of date, so it counts too.
-    if (imported > 0 || replaced > 0) {
+    // A replaced page can put a chapter's cut out of date, so it counts too,
+    // and a chapter sent to crop shows its Cropping chip from the same read.
+    if (imported > 0 || replaced > 0 || autoCrop.length > 0) {
       clipper3Api.getSeriesSummary(id)
         .then(result => setSummaries(Object.fromEntries(result.chapters.map(c => [c.chapterId, c]))))
         .catch(() => {})
@@ -457,11 +503,44 @@ export default function Clipper3SeriesView() {
         failed > 0 ? `${failed} could not be attached` : null,
         imported === 0 && replaced === 0 && skipped === 0 && failed === 0
           ? 'No Processed folders found in this series.'
+          : null,
+        // Reviewed on the Master phone, so they need no Preview here.
+        autoCrop.length > 0
+          ? `Reviewed on phone, sent to crop automatically: ${autoCrop.map(c => `Ch ${c.chapterNumber}`).join(', ')}`
           : null
       ].filter(Boolean).join(' · ') || undefined,
       variant: failed > 0 ? 'destructive' : undefined
     })
   }, [clipper3SyncComplete, id, toast])
+
+  // A cut of one of this series' chapters finished — usually the auto crop
+  // after Sync json. Its Cropped chip is re-read from disk.
+  useEffect(() => {
+    const event = clipper3CropComplete
+    if (!event || event.seriesId !== id) return
+    if (handledCropComplete.current === event) return
+    handledCropComplete.current = event
+
+    clipper3Api.getSeriesSummary(id!)
+      .then(result => setSummaries(Object.fromEntries(result.chapters.map(c => [c.chapterId, c]))))
+      .catch(() => {})
+
+    const label = `Chapter ${event.chapterNumber ?? ''}`.trim()
+    if (event.error) {
+      toast({ title: `Cropping ${label} failed`, description: event.error, variant: 'destructive' })
+      return
+    }
+    const failed = event.failed ?? 0
+    toast({
+      title: event.auto ? `${label} cropped automatically` : `${label} cropped`,
+      description:
+        `${event.exported ?? 0} section${event.exported === 1 ? '' : 's'} from ` +
+        `${event.images ?? 0} image${event.images === 1 ? '' : 's'}` +
+        `${failed > 0 ? `, ${failed} failed` : ''}` +
+        (event.auto ? ' · reviewed on the Master phone.' : '.'),
+      variant: failed > 0 ? 'destructive' : undefined
+    })
+  }, [clipper3CropComplete, id, toast])
 
   // Same reasoning as slicing: a run already underway owns the button.
   useEffect(() => {
@@ -644,6 +723,12 @@ export default function Clipper3SeriesView() {
     ? Math.round((syncProgress.current / syncProgress.total) * 100)
     : 0
 
+  // A cut of one of this series' chapters, usually the auto crop after Sync json.
+  const cropProgress = clipper3CropProgress?.seriesId === id ? clipper3CropProgress : null
+  const cropPercent = cropProgress && cropProgress.total > 0
+    ? Math.round((cropProgress.current / cropProgress.total) * 100)
+    : 0
+
   const unsyncProgress = clipper3UnsyncProgress?.seriesId === id ? clipper3UnsyncProgress : null
   const unsyncPercent = unsyncProgress && unsyncProgress.total > 0
     ? Math.round((unsyncProgress.current / unsyncProgress.total) * 100)
@@ -665,7 +750,7 @@ export default function Clipper3SeriesView() {
           <div className="flex-1 min-w-0">
             <h1 className="text-2xl font-bold truncate">{seriesTitle}</h1>
             <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground mt-1">
-              <span>{seriesChapters.length} chapters ready for pointer detection</span>
+              <span>{seriesChapters.length} chapters</span>
               <span>•</span>
               <span>{attachedCount} fully attached</span>
               {phoneSeries && (
@@ -716,6 +801,22 @@ export default function Clipper3SeriesView() {
                   <span className="flex-shrink-0">{syncPercent}%</span>
                 </div>
                 <Progress value={syncPercent} className="h-2" />
+              </div>
+            )}
+
+            {cropProgress && (
+              <div className="max-w-md mt-3">
+                <div className="flex items-center justify-between text-sm mb-1">
+                  <span className="truncate mr-2">
+                    {cropProgress.auto ? 'Auto crop' : 'Cropping'} chapter {cropProgress.chapterNumber} ·{' '}
+                    {cropProgress.current}/{cropProgress.total}
+                    {cropProgress.auto && (
+                      <span className="text-xs text-muted-foreground"> · reviewed on phone</span>
+                    )}
+                  </span>
+                  <span className="flex-shrink-0">{cropPercent}%</span>
+                </div>
+                <Progress value={cropPercent} className="h-2" />
               </div>
             )}
 
@@ -896,7 +997,10 @@ export default function Clipper3SeriesView() {
                     ) : (
                       <>
                         <AttachedStatusBadge summary={summaries[chapter.id]} />
-                        <ChoppedStatusBadge summary={summaries[chapter.id]} />
+                        <ChoppedStatusBadge
+                          summary={summaries[chapter.id]}
+                          cropping={cropProgress?.chapterId === chapter.id || (summaries[chapter.id]?.cropping ?? false)}
+                        />
                         <ReviewStatusBadge summary={summaries[chapter.id]} />
                         {isPublished(chapter.id) && <PublishedBadge />}
                       </>

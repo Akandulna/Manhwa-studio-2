@@ -15,9 +15,12 @@
  * image, tracks which one is currently being edited so the rest can dim, and
  * keeps its own crop count in sync after a save.
  *
- * It is also where the desktop reviews a chapter: the footer under the last
- * page marks the whole chapter reviewed (Crop Sections waits for that, as it
- * does for a Master phone review) and moves on to the next chapter.
+ * It is also where the desktop reviews a chapter the Master phone did not:
+ * the footer under the last page marks the whole chapter reviewed (Crop
+ * Sections waits for that, as it does for a Master phone review) and moves on
+ * to the next chapter. Chapters reviewed on the phone are cut by Sync json
+ * already; editing one here and pressing Crop Sections re-cuts it. A chapter
+ * already cut counts as reviewed, so its footer just says so.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
@@ -36,6 +39,7 @@ import {
   PanelLeftOpen,
   ShieldCheck,
   ShieldAlert,
+  Scissors,
   ChevronRight
 } from 'lucide-react'
 import {
@@ -87,8 +91,22 @@ function describeReview(review: Clipper3ChapterReview): string {
   return ['Reviewed', where, when].filter(Boolean).join(' · ')
 }
 
+/** "Cropped · <time> — counts as reviewed". */
+function describeCropped(review: Clipper3ChapterReview): string {
+  const when = review.croppedAt ? new Date(review.croppedAt).toLocaleString() : null
+  return ['Cropped', when].filter(Boolean).join(' · ') + ' — counts as reviewed'
+}
+
 /** Header chip beside the crop count. */
 function ReviewBadge({ review }: { review: Clipper3ChapterReview }) {
+  if (review.reviewed && review.cropped) {
+    return (
+      <Badge variant="success" className="flex items-center gap-1 flex-shrink-0" title={describeCropped(review)}>
+        <Scissors className="h-3 w-3" />
+        Cropped
+      </Badge>
+    )
+  }
   return review.reviewed ? (
     <Badge variant="success" className="flex items-center gap-1 flex-shrink-0" title={describeReview(review)}>
       <ShieldCheck className="h-3 w-3" />
@@ -454,20 +472,6 @@ function Clipper3ChapterPreview() {
                   {file.crops.length > 0 ? ` · ${file.crops.length} crop${file.crops.length === 1 ? '' : 's'}` : ''}
                 </span>
 
-                {(editingFile == null || isEditingThis) && file.crops.length === 0 && (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    className="absolute h-6 px-2 text-[11px]"
-                    style={{ top: 4, right: 4, zIndex: 40 }}
-                    onClick={() => navigate(`/clipper3/chapter/${chapterId}?file=${encodeURIComponent(img.filename)}`)}
-                    title="Paste this image's crop pointer JSON"
-                  >
-                    <Pencil className="h-3 w-3 mr-1" />
-                    Edit
-                  </Button>
-                )}
-
                 <div className="pt-8">
                   <CropPointerEditor
                     chapterId={chapterId!}
@@ -516,7 +520,14 @@ function Clipper3ChapterPreview() {
               lives here rather than in the header: reaching it means every
               page above was scrolled past. */}
           <div className="w-full max-w-xl mx-auto rounded-md border border-neutral-800 bg-card p-4 flex flex-wrap items-center gap-3">
-            {data.review?.reviewed ? (
+            {data.review?.reviewed && data.review.cropped ? (
+              // Cut already, which counts as reviewed: nothing to mark, and
+              // Crop Sections stays available for a re-cut.
+              <span className="text-sm flex items-center gap-1.5 text-green-500 min-w-0">
+                <Scissors className="h-4 w-4 flex-shrink-0" />
+                <span className="truncate">{describeCropped(data.review)}</span>
+              </span>
+            ) : data.review?.reviewed ? (
               <>
                 <span className="text-sm flex items-center gap-1.5 text-green-500 min-w-0">
                   <ShieldCheck className="h-4 w-4 flex-shrink-0" />
