@@ -1,8 +1,8 @@
 /**
  * Run automation — Phone Status's one way to start a run on a phone, in two
  * steps: which automation (Image Clipper, Narration scripts, Editor 2.0
- * timelines, Voiceover), then how (its series, and the choices that run has:
- * ChatGPT or Gemini, one prompt or four steps, ChatGPT's mode, model and
+ * timelines, Voiceover), then how (its series, the profile it starts in, and
+ * the choices that run has: ChatGPT or Gemini, one prompt or four steps, ChatGPT's mode, model and
  * effort on plans that have them (PhoneProfile.tsx), tabs, language, one phone
  * or split between them). The runs and their choices are AUTOMATIONS below; a new
  * phone run is one more entry there, plus its start on the phone
@@ -29,7 +29,7 @@ import type {
 } from '@/lib/api'
 import { LANGUAGE_LABEL, NARRATION_LANGUAGES, type NarrationLanguage } from '@/lib/narrationLanguage'
 import { cn } from '@/lib/utils'
-import { ChatGptChoices, hasChoices, NO_CHATGPT_CHOICES } from './PhoneProfile'
+import { ChatGptChoices, hasChoices, NO_CHATGPT_CHOICES, PhoneProfilePicker } from './PhoneProfile'
 import { clock } from './sleeperShared'
 
 /** Image Clipper's and the voiceover's most tabs at once (MAX_TABS in ClipperRun and VoiceoverRun on the phone). */
@@ -192,7 +192,7 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
   overview: PhoneOverview
   several: boolean
   startable: PhoneOverviewPhone[]
-  /** This phone's profiles: the selected one's plan and options give Image Clipper's ChatGPT choices. */
+  /** This phone's profiles: picked from in step 2; the selected one's plan and options give Image Clipper's ChatGPT choices. */
   profiles: PhoneUploadProfile[]
   relay: RelayStatus | null
   screen: PhoneScreen | null
@@ -215,6 +215,7 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
   const [language, setLanguage] = useState<NarrationLanguage>('en')
   const [split, setSplit] = useState(false)
   const [chatGpt, setChatGpt] = useState<PhoneChatGptSettings>(last?.chatGpt ?? NO_CHATGPT_CHOICES)
+  const [selectingProfile, setSelectingProfile] = useState(false)
   // Only builds that report the last choices (null from older ones) take them with the start.
   const choosesChatGpt = !!last?.chatGpt
 
@@ -309,6 +310,8 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
                 </Select>
               </div>
 
+              <PhoneProfilePicker phone={phone} profiles={profiles} relay={relay} screen={screen} onPending={setSelectingProfile} />
+
               {automation.clipper && (
                 <>
                   <Choices
@@ -373,7 +376,11 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
                 <Button variant="ghost" onClick={() => setKind(null)}>
                   <ArrowLeft className="mr-2 h-4 w-4" /> Back
                 </Button>
-                <Button onClick={start} disabled={sending || (!seriesId && !automation.clipper)}>
+                <Button
+                  onClick={start}
+                  disabled={sending || selectingProfile || (!seriesId && !automation.clipper)}
+                  title={selectingProfile ? 'Waiting for the phone to switch profile' : undefined}
+                >
                   {sending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
                   {splitting ? `Start on ${startable.length} phones` : 'Start'}
                 </Button>

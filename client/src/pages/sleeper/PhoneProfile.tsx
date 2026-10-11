@@ -1,10 +1,10 @@
 /**
  * A phone's browser profiles on Phone Status:
  *
- * - PhoneProfilePicker, at the top of each phone's card: the profile selected
- *   (the one the next run starts in) with its ChatGPT plan, changed only with
- *   no run going. Plans are what Sleeper-Cell's Tools → Profiles → Check last
- *   found there (each profile's `check`); nothing is checked from here.
+ * - PhoneProfilePicker, in Run automation's step 2 after the series: the
+ *   profile selected (the one the run starts in) with its ChatGPT plan. Plans
+ *   are what Sleeper-Cell's Tools → Profiles → Check last found there (each
+ *   profile's `check`); nothing is checked from here.
  * - ChatGptChoices, in Run automation's Image Clipper step: the ChatGPT mode,
  *   model and effort, offered only on plans that have them (Plus and up; Free
  *   and Go have neither the switch nor the model picker), from what the
@@ -16,7 +16,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { AlertTriangle, Loader2, RefreshCw, UserRound } from 'lucide-react'
+import { AlertTriangle, Loader2, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
@@ -149,38 +149,36 @@ function PlanBadge({ profile }: { profile: PhoneUploadProfile }) {
   )
 }
 
-/** The profile the phone is on, up front on its card, with its ChatGPT plan. */
-export function PhoneProfilePicker({ phone, profiles, relay, screen, busy }: {
+/** The profile the run starts in, picked in Run automation, with its ChatGPT plan. */
+export function PhoneProfilePicker({ phone, profiles, relay, screen, onPending }: {
   phone: PhoneOverviewPhone
   /** This phone's profiles. */
   profiles: PhoneUploadProfile[]
   relay: RelayStatus | null
   screen: PhoneScreen | null
-  /** A run is going on the phone: the profile can't be changed. */
-  busy: boolean
+  /** Whether a selection is on its way to the phone, so the run isn't started before it lands. */
+  onPending?: (pending: boolean) => void
 }) {
   const { send, pending, answer, late } = useProfileCommand(phone, screen)
   const selected = profiles.find(p => p.selected) ?? null
   const blocker = blockerOf(relay, phone)
+  const selecting = pending === 'select'
+  useEffect(() => { onPending?.(selecting) }, [selecting, onPending])
   if (!profiles.length) return null
 
   return (
     <div className="space-y-1.5">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
-          <UserRound className="h-4 w-4" /> Profile
-          <InfoTip text="The browser profile the phone is on, which the next run starts in (one ChatGPT account each). Change it with no run going. Plans are what Sleeper-Cell’s Tools → Profiles → Check last found: Free and Go have no mode or model choices; Plus and up do." />
-        </span>
+      <p className="flex items-center gap-1.5 text-sm font-medium">
+        Profile
+        <InfoTip text="The browser profile the run starts in (one ChatGPT account each); picking one switches the phone to it now. Plans are what Sleeper-Cell’s Tools → Profiles → Check last found: Free and Go have no mode or model choices; Plus and up do." />
+      </p>
+      <div className="flex items-center gap-2">
         <Select
           value={selected?.profileId ?? ''}
-          disabled={!!blocker || busy || pending !== null}
+          disabled={!!blocker || pending !== null}
           onValueChange={id => { if (id !== selected?.profileId) send('select', id) }}
         >
-          <SelectTrigger
-            className="h-8 w-auto min-w-[11rem] gap-2 font-medium"
-            aria-label="Profile"
-            title={busy ? 'A run is going: change the profile once it’s done' : undefined}
-          >
+          <SelectTrigger className="h-9 flex-1" aria-label="Profile">
             <SelectValue placeholder="Pick a profile" />
           </SelectTrigger>
           <SelectContent>
@@ -191,10 +189,10 @@ export function PhoneProfilePicker({ phone, profiles, relay, screen, busy }: {
             ))}
           </SelectContent>
         </Select>
-        {pending === 'select' && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+        {selecting && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
         {selected && <PlanBadge profile={selected} />}
       </div>
-      <Status answer={answer} late={late} blocker={null} />
+      <Status answer={answer} late={late} blocker={blocker} />
     </div>
   )
 }

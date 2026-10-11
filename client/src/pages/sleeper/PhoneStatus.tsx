@@ -42,7 +42,6 @@ import {
   useNow,
   type Tone
 } from './sleeperShared'
-import { PhoneProfilePicker } from './PhoneProfile'
 import { PhoneScreenControls } from './PhoneScreen'
 import { AUTOMATION_NAME, RunAutomationDialog } from './RunAutomation'
 import { stopAllChoice, stopChoice, StopRunDialog } from './StopRun'
@@ -211,9 +210,6 @@ function PhoneCard({ phone, overview, relay, screen, several, startable, now, se
             </Button>
           )}
         </div>
-
-        {/* The profile it's on, up front */}
-        <PhoneProfilePicker phone={phone} profiles={profiles} relay={relay} screen={screen} busy={busy} />
 
         {/* Pointers to the other two pages */}
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
