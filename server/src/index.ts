@@ -24,7 +24,7 @@ import { startPhoneRelay } from './services/phoneRelay.js';
 import { reconcileQuietly } from './services/diskReconcile.js';
 import { backfillAlignmentDocumentsQuietly } from './services/alignment/alignmentDocument.js';
 import { publishEditorPackagesAtStartup } from './services/editorAutoPublish.js';
-import { startLibrarySync } from './services/librarySync.js';
+import { publishLibrary, startLibrarySync } from './services/librarySync.js';
 import { getSeriesProcess, notifySeriesProcessChanged, startSeriesProcess } from './services/seriesProcess.js';
 
 dotenv.config();
@@ -61,6 +61,10 @@ app.use((req, res, next) => {
 app.get('/api/library/progress', async (_req, res) => {
   try { res.json(await getSeriesProcess()); }
   catch (error) { console.error('[series-process]', error); res.status(500).json({ error: 'Could not read series progress' }); }
+});
+app.post('/api/library/publish', async (_req, res) => {
+  try { await publishLibrary(); res.json({ published: true }); }
+  catch (error) { console.error('[library-sync]', error); res.status(500).json({ error: 'Could not publish the shared library' }); }
 });
 
 // Routes

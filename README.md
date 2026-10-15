@@ -19,6 +19,8 @@ work onto the Mac, aligns the voiceover, cuts the crops and renders the video.
 - **Library / Series detail**: download chapters (Playwright headless browser,
   concurrent queue, resume and retry), preview a chapter's pages and delete
   unwanted ones into a restorable bin.
+- **Production process**: expand a series in the Library and use **Run Sleeper-Cell automation**
+  to choose a phone and start scripts, voiceover, clipping or Editor 2.0 timelines for that series.
 - **Downloads**: the live queue — pause, resume, retry failed.
 - **Page Stitcher**: joins chapters of 200–300 short pages into tall pages;
   auto-stitch cuts at blank rows and drops repeated intro/outro pages.
@@ -58,6 +60,10 @@ Manhwa → chapters, per language.
   packages it needs; **Check Images** repairs missing image references.
 - Export renders one MP4 per chapter into the series' `_video2/` (or
   `_video2_hi/`) folder.
+- Series show **Done** in Editor 2.0 when the selected language's video folder
+  has a nonempty video in `compressed` (also `Compressed` or `Compress`). This
+  remains visible after cleaning up original renders. Use **Rescan** on the
+  series list after adding or removing a compressed video.
 
 ### Sleeper Cells
 - **Phone Status** — each phone's runs, with Run automation / Stop, Wake,
@@ -70,6 +76,11 @@ Appearance (light / dark / system), Download & Performance (concurrency,
 request delay, user agent, image thresholds), the Editor 2.0 prompt (also synced to R2
 for the phone), Cloudflare R2 + phone relay, and **Storage** — disk usage per
 manhwa, cleanup of exported chapters, and "Complete & delete" per Part.
+Storage also offers **Delete renders** for each `_video`, `_video2`, or
+`_video2_hi` folder once its `compressed` subfolder contains a nonempty video
+(`Compressed` and `Compress` are also supported). Click **Rescan** after adding
+the compressed video. Confirming deletes only the original MP4s directly in
+that render folder and keeps the compressed folder and its contents.
 
 ## Tech Stack
 
@@ -122,6 +133,18 @@ the combined snapshot to the relay and `<prefix>progress/<Mac device id>.json` i
 Phones receive live updates and cached relay receipts on reconnect, with R2 catch-up
 when Library sync reconnects. Alignment, final cropping, processing and exports are
 desktop facts. A stage completed on several devices counts once.
+
+Existing desktop series are registered for sharing automatically; phone imports keep their original owner.
+Catalogs use the phones' chapter-download prefix even when the Mac's production files use another prefix.
+Sleeper-Cell's Library automatically indexes `Workspace/Manhwa/<Series>/<Chapter>/`, including folders
+downloaded before shared catalogs existed. Discovering a folder does not make that phone its download owner.
+Legacy registration preserves upload preferences and does not prepare or rewrite existing pages.
+
+Each Library series has an actions menu with **Mark Part 1 done** (and undo) and **Delete series everywhere**.
+Part marks sync between devices and change the tracker without fabricating exports or deleting files.
+Global deletion requires confirmation, removes the series' files from all workspace areas and R2, and keeps
+a shared deletion record so an offline device cannot restore it from an old catalog. Offline phones apply
+deletion after updating Sleeper-Cell and reconnecting; failed cleanup retries automatically.
 
 ### Mac App (optional)
 

@@ -25,6 +25,7 @@ import { FROM_MASTER, indexEntries } from './phoneIndexMerge.js'
 import { chapterFingerprint, chapterPages, phoneZipFolder } from './phoneSend.js'
 import { createClient, getR2Config, invalidateStorage, isNotFound, measureBucket, type R2Config } from './r2Service.js'
 import type { LibraryChapter, LibrarySeries } from './libraryManifest.js'
+import { isLibraryDeleted } from './libraryControls.js'
 
 const PAGE_FILE = /\.(jpe?g|png|webp|gif)$/i
 /** A chapter zip bigger than this is refused rather than read into memory. */
@@ -63,6 +64,7 @@ export interface PullResult {
 
 /** Automatic import from a validated origin manifest; skip identical versions and completed Parts. */
 export async function importLibraryChapter(seriesId: string, series: LibrarySeries, chapter: LibraryChapter): Promise<void> {
+  if (await isLibraryDeleted(series.folder)) return
   if (!chapter.key) return
   const config = getR2Config()
   if (!config) throw new Error('Cloudflare R2 is not set up')
@@ -186,10 +188,13 @@ export async function pullPhoneChapters(requests: { folder: string; chapters: st
 }
 
 async function pullChapter(client: S3Client, config: R2Config, series: PullSeries, chapter: PullChapter): Promise<number> {
+  if (await isLibraryDeleted(series.folder)) throw new Error('This series was deleted everywhere')
   if (!isSafeSegment(series.folder) || !isSafeSegment(chapter.name)) throw new Error('Unsafe folder name')
+  try {
   const res = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: chapter.key }))
   if ((res.ContentLength ?? 0) > MAX_ZIP_BYTES) throw new Error(`The zip is unexpectedly large (${res.ContentLength} bytes)`)
   const zip = Buffer.from(await res.Body!.transformToByteArray())
+  if (await isLibraryDeleted(series.folder)) throw new Error('This series was deleted everywhere')
   // Entries are <Series>/<Chapter>/<page>: the page images, by their own names.
   const files = readZip(zip)
     .map(entry => ({ name: entry.name.split('/').filter(Boolean).pop() ?? '', data: entry.data }))
@@ -267,4 +272,10 @@ async function pullChapter(client: S3Client, config: R2Config, series: PullSerie
     update: send
   })
   return written.length
+  } finally {
+    if (await isLibraryDeleted(series.folder)) {
+      await fs.rm(path.resolve(downloadRoot(), series.folder), { recursive: true, force: true })
+      await prisma.series.deleteMany({ where: { rootFolder: series.folder } })
+    }
+  }
 }

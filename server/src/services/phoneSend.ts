@@ -42,6 +42,7 @@ import archiver from 'archiver'
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
 import { prisma } from '../index.js'
+import { isLibraryDeleted } from './libraryControls.js'
 import { getPublishedChapters } from './storageService.js'
 import { getImageFiles } from './chapterManifest.js'
 import { listMetadataImageStems, listPointedImageStems, stemOf } from './clipper3/perImageStore.js'
@@ -500,6 +501,7 @@ export async function setAutoSend(seriesId: string, enabled: boolean): Promise<v
  * see phoneIndexMerge.ts), and one PUT.
  */
 async function writeIndex(client: S3Client, config: R2Config, folder: string, seriesId: string, state: SeriesState): Promise<void> {
+  if (await isLibraryDeleted(state.index.series)) return
   const key = `${folder}${state.index.series}/${INDEX_NAME}`
   let existing: unknown = null
   try {
@@ -761,6 +763,7 @@ export async function startPhoneSend(requests: PhoneSendRequest[], io: Server, a
         emit(true)
         let doneBytes = 0
         for (const { chapter, key } of uploads) {
+          if (await isLibraryDeleted(state.index.series)) throw new Error('Series deleted')
           if (cancelRequested) throw new Error('Cancelled')
           const pages = await chapterPages(state.folderPaths.get(chapter.chapterId)!)
           const pageBytes = pages.reduce((sum, p) => sum + p.size, 0)
@@ -793,6 +796,10 @@ export async function startPhoneSend(requests: PhoneSendRequest[], io: Server, a
               etag = (result.ETag ?? '').replace(/"/g, '')
             } finally {
               activeUpload = null
+            }
+            if (await isLibraryDeleted(state.index.series)) {
+              await client.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: key }))
+              throw new Error('Series deleted')
             }
             const sentAt = new Date()
             const data = {

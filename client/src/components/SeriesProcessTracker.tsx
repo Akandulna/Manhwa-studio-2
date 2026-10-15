@@ -1,5 +1,9 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { BookOpen, CheckCircle2, ChevronDown, Circle, Loader2 } from 'lucide-react'
+import { BookOpen, CheckCircle2, ChevronDown, Circle, Loader2, MoreVertical, Play, Trash2 } from 'lucide-react'
+import { SeriesAutomationDialog } from './SeriesAutomationDialog'
+import { Button } from './ui/button'
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from './ui/dropdown-menu'
 import type { Series, ProcessSnapshot, ProcessSeries, ProcessPart, ProcessStage, StageCount, PhoneSyncStatus } from '@/lib/api'
 import { PhoneSyncBadge } from './PhoneSyncBadge'
 import { Badge } from './ui/badge'
@@ -26,17 +30,18 @@ function Count({ value, units }: { value: StageCount; units?: string }) {
   </span>
 }
 
-function Part({ part, active }: { part: ProcessPart; active: boolean }) {
+type Actions = { onDelete: (series: Series) => void; onMarkPart: (series: Series, part: number, done: boolean) => void }
+function Part({ part, active, onMark }: { part: ProcessPart; active: boolean; onMark: (done: boolean) => void }) {
   const both = part.chapters.filter(c => c.stages.export_en.state === 'done' && c.stages.export_hi.state === 'done').length
   return <details className="group/part rounded-lg border bg-background" open={active || undefined}>
     <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
       <ChevronDown className="h-4 w-4 shrink-0 -rotate-90 transition-transform group-open/part:rotate-0" />
       <div className="min-w-0 flex-1"><span className="text-sm font-semibold">Part {part.number}</span><span className="ml-2 text-xs text-muted-foreground">Ch. {part.firstChapter}–{part.lastChapter}</span></div>
       <span className="text-xs text-muted-foreground tabular-nums">{both}/{part.expected} exported in both languages</span>
-      {part.complete && <Badge className="bg-emerald-600 text-white hover:bg-emerald-600">Completed</Badge>}
+      {part.complete && <Badge className="bg-emerald-600 text-white hover:bg-emerald-600">{part.manualComplete ? 'Marked done' : 'Completed'}</Badge>}
     </summary>
     <div className="border-t px-4 pb-4 pt-3">
-      {part.present < 20 && <p className="mb-3 text-xs text-muted-foreground">{part.present} of 20 chapters added. The remaining chapters keep this part in progress.</p>}
+      <div className="mb-3 flex items-center justify-between gap-3"><p className="text-xs text-muted-foreground">{part.manualComplete ? 'Manually marked done. Stage counters still show the saved work.' : `${part.present} of ${part.expected} chapters added.`}</p><Button size="sm" variant="outline" onClick={() => onMark(!part.manualComplete)}>{part.manualComplete ? 'Undo manual completion' : 'Mark part done'}</Button></div>
       <Progress value={both * 100 / part.expected} className="mb-4 h-1" />
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {STEPS.map((step, index) => <div key={step.title} className="rounded-md border p-3">
@@ -48,7 +53,7 @@ function Part({ part, active }: { part: ProcessPart; active: boolean }) {
   </details>
 }
 
-function SeriesRow({ series, tracker, phoneSync }: { series: Series; tracker?: ProcessSeries; phoneSync: PhoneSyncStatus | null }) {
+function SeriesRow({ series, tracker, phoneSync, onDelete, onMarkPart, onRunAutomation }: { series: Series; tracker?: ProcessSeries; phoneSync: PhoneSyncStatus | null; onRunAutomation: (series: Series) => void } & Actions) {
   const current = tracker?.parts.find(p => !p.complete) ?? tracker?.parts.at(-1)
   const exported = tracker?.stages
   return <details className="group/series border-t first:border-t-0">
@@ -62,6 +67,12 @@ function SeriesRow({ series, tracker, phoneSync }: { series: Series; tracker?: P
           <span>Exported Hinglish {current.stages.export_hi.done}/{current.expected}</span>
         </div>}
       </div>
+      <DropdownMenu><DropdownMenuTrigger asChild><Button size="icon" variant="ghost" aria-label={`Actions for ${series.title}`} onClick={e => e.stopPropagation()}><MoreVertical className="h-4 w-4" /></Button></DropdownMenuTrigger>
+        <DropdownMenuContent align="end" onClick={e => e.stopPropagation()}>
+          <DropdownMenuItem onSelect={() => onMarkPart(series, 1, !tracker?.parts.find(p => p.number === 1)?.manualComplete)}>{tracker?.parts.find(p => p.number === 1)?.manualComplete ? 'Undo Part 1 completion' : 'Mark Part 1 done'}</DropdownMenuItem>
+          <DropdownMenuSeparator /><DropdownMenuItem className="text-destructive" onSelect={() => onDelete(series)}><Trash2 className="mr-2 h-4 w-4" />Delete series everywhere…</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
       <div className="hidden shrink-0 space-y-1 text-right text-xs text-muted-foreground sm:block">
         {exported && <p>Exports · EN {exported.export_en.done}/{exported.export_en.total} · Hinglish {exported.export_hi.done}/{exported.export_hi.total}</p>}
         {phoneSync?.series[series.id] && <PhoneSyncBadge sync={phoneSync.series[series.id]} device={phoneSync.device} />}
@@ -69,26 +80,33 @@ function SeriesRow({ series, tracker, phoneSync }: { series: Series; tracker?: P
       <ChevronDown className="h-4 w-4 shrink-0 -rotate-90 text-muted-foreground transition-transform group-open/series:rotate-0" />
     </summary>
     <div className="space-y-3 bg-muted/20 px-4 pb-4 pt-1">
-      <p className="text-xs text-muted-foreground">Each counter shows completed chapters. A part completes after all 20 chapters are exported in English and Hinglish.</p>
-      {tracker ? tracker.parts.length ? tracker.parts.map(p => <Part key={p.number} part={p} active={p.number === current?.number} />) : <p className="py-3 text-sm text-muted-foreground">No chapters added yet.</p> : <p className="py-3 text-sm text-muted-foreground">Checking process status…</p>}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-3">
+        <h3 className="text-sm font-semibold">Production process</h3>
+        <Button size="sm" onClick={() => onRunAutomation(series)}><Play className="mr-2 h-4 w-4" />Run Sleeper-Cell automation</Button>
+      </div>
+      <p className="text-xs text-muted-foreground">Each counter shows completed chapters. Parts complete after exports in both languages, or when you mark them done.</p>
+      {tracker ? tracker.parts.length ? tracker.parts.map(p => <Part key={p.number} part={p} active={p.number === current?.number} onMark={done => onMarkPart(series, p.number, done)} />) : <p className="py-3 text-sm text-muted-foreground">No chapters added yet.</p> : <p className="py-3 text-sm text-muted-foreground">Checking process status…</p>}
     </div>
   </details>
 }
 
-export function SeriesProcessTracker({ series, progress, phoneSync }: { series: Series[]; progress: ProcessSnapshot | null; phoneSync: PhoneSyncStatus | null }) {
+export function SeriesProcessTracker({ series, progress, phoneSync, ...actions }: { series: Series[]; progress: ProcessSnapshot | null; phoneSync: PhoneSyncStatus | null } & Actions) {
+  const [automationSeries, setAutomationSeries] = useState<Series | null>(null)
   const byId = new Map(progress?.series.map(s => [s.seriesId, s]))
   const groups = new Map<number, Series[]>()
   for (const s of series) {
     const key = byId.get(s.id)?.completedThrough ?? (progress ? 0 : -1)
     groups.set(key, [...(groups.get(key) ?? []), s])
   }
-  return <div className="space-y-4">{[...groups].sort(([a], [b]) => a - b).map(([completed, rows]) => <details key={completed} className="group/section overflow-hidden rounded-xl border bg-card shadow-sm" open={completed <= 0 || undefined}>
+  return <><div className="space-y-4">{[...groups].sort(([a], [b]) => a - b).map(([completed, rows]) => <details key={completed} className="group/section overflow-hidden rounded-xl border bg-card shadow-sm" open={completed <= 0 || undefined}>
     <summary className="flex cursor-pointer list-none items-center gap-3 bg-muted/30 px-4 py-4 [&::-webkit-details-marker]:hidden">
       <ChevronDown className="h-4 w-4 -rotate-90 transition-transform group-open/section:rotate-0" />
       <h2 className="flex-1 text-sm font-semibold">{completed < 0 ? 'Checking process status' : completed === 0 ? 'No parts completed' : `Part ${completed} completed`}</h2>
       {completed > 1 && <span className="text-xs text-muted-foreground">Parts 1–{completed} complete</span>}
       <Badge variant="secondary">{rows.length} series</Badge>
     </summary>
-    <div>{rows.map(s => <SeriesRow key={s.id} series={s} tracker={byId.get(s.id)} phoneSync={phoneSync} />)}</div>
+    <div>{rows.map(s => <SeriesRow key={s.id} series={s} tracker={byId.get(s.id)} phoneSync={phoneSync} onRunAutomation={setAutomationSeries} {...actions} />)}</div>
   </details>)}</div>
+    {automationSeries && <SeriesAutomationDialog series={automationSeries} onClose={() => setAutomationSeries(null)} />}
+  </>
 }

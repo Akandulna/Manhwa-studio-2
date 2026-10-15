@@ -11,13 +11,15 @@
 
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { seriesApi, videoApi2, type Series } from '@/lib/api'
+import { seriesApi, videoApi2, type Series, type Editor2SeriesReadiness } from '@/lib/api'
 import { Card } from '@/components/ui/card'
-import { Clapperboard, Globe, Loader2 } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Clapperboard, Globe, Loader2, RefreshCw } from 'lucide-react'
 import { LanguageTabs } from '@/components/LanguageTabs'
 import { LANGUAGE_LABEL, useNarrationLanguage, withLang } from '@/lib/narrationLanguage'
 import { usePublishedChapters } from '@/hooks/usePublishedChapters'
 import { SeriesCompletedBadge } from '@/components/PublishedBadge'
+import { SeriesDoneBadge } from './SeriesDoneBadge'
 
 /**
  * Series whose checklists are scanned at once. Each scan reads every page's
@@ -26,7 +28,7 @@ import { SeriesCompletedBadge } from '@/components/PublishedBadge'
  */
 const READINESS_CONCURRENCY = 3
 
-type SeriesReadiness = { chapters: { id: string; ready: boolean }[] } | 'error'
+type SeriesReadiness = Editor2SeriesReadiness | 'error'
 
 export default function EditorLibrary2() {
   const [language, setLanguage] = useNarrationLanguage('editor2')
@@ -36,6 +38,7 @@ export default function EditorLibrary2() {
   const [loading, setLoading] = useState(true)
   // Per series, in the current language; missing while its scan runs.
   const [readiness, setReadiness] = useState<Record<string, SeriesReadiness>>({})
+  const [scanTick, setScanTick] = useState(0)
 
   useEffect(() => {
     seriesApi.getAll()
@@ -61,7 +64,7 @@ export default function EditorLibrary2() {
     }
     for (let i = 0; i < READINESS_CONCURRENCY; i++) void worker()
     return () => { cancelled = true }
-  }, [series, language])
+  }, [series, language, scanTick])
 
   /** "4/12 ready", leaving out chapters of completed Parts (nothing left to edit). */
   function readinessLabel(seriesId: string): { text: string; allReady: boolean } | null {
@@ -112,56 +115,64 @@ export default function EditorLibrary2() {
           </p>
         </div>
         <div className="flex items-center gap-4">
+          <Button variant="outline" size="sm" onClick={() => setScanTick(t => t + 1)}>
+            <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+            Rescan
+          </Button>
           <span className="text-sm text-muted-foreground">{series.length} series</span>
           <LanguageTabs value={language} onChange={setLanguage} />
         </div>
       </div>
 
       <Card className="overflow-hidden divide-y">
-        {series.map((s) => (
-          <Link
-            key={s.id}
-            to={withLang(`/editor2/${s.id}`, language)}
-            className="flex items-center gap-4 px-4 py-3 hover:bg-accent/50 transition-colors"
-          >
-            <div className="h-10 w-10 shrink-0 rounded-md bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center">
-              <Clapperboard className="h-5 w-5 text-primary/40" />
-            </div>
+        {series.map((s) => {
+          const status = readiness[s.id]
+          return (
+            <Link
+              key={s.id}
+              to={withLang(`/editor2/${s.id}`, language)}
+              className="flex items-center gap-4 px-4 py-3 hover:bg-accent/50 transition-colors"
+            >
+              <div className="h-10 w-10 shrink-0 rounded-md bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center">
+                <Clapperboard className="h-5 w-5 text-primary/40" />
+              </div>
 
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 min-w-0">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 min-w-0">
                   <h3 className="font-semibold truncate">{s.title}</h3>
+                  <SeriesDoneBadge completion={status === 'error' ? null : status ?? null} />
                   <SeriesCompletedBadge parts={seriesCompletedParts(s.id)} done />
                 </div>
-              <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                <Globe className="h-3 w-3 shrink-0" />
-                <span className="truncate">{s.sourceSite}</span>
+                <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <Globe className="h-3 w-3 shrink-0" />
+                  <span className="truncate">{s.sourceSite}</span>
+                </div>
               </div>
-            </div>
 
-            {/* Chapters ready to edit: the whole checklist passes. */}
-            <span className="w-24 shrink-0 text-sm text-right tabular-nums">
-              {(() => {
-                const label = readinessLabel(s.id)
-                if (!label) return <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground inline" />
-                return (
-                  <span
-                    className={label.allReady ? 'text-green-600' : 'text-muted-foreground'}
-                    title="Chapters with voiceover audio, alignment, timeline JSON and cropped images all in place"
-                  >
-                    {label.text}
-                  </span>
-                )
-              })()}
-            </span>
-
-            {s.chapterCount !== undefined && (
-              <span className="w-24 shrink-0 text-sm text-muted-foreground text-right">
-                {s.chapterCount} chapters
+              {/* Chapters ready to edit: the whole checklist passes. */}
+              <span className="w-24 shrink-0 text-sm text-right tabular-nums">
+                {(() => {
+                  const label = readinessLabel(s.id)
+                  if (!label) return <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground inline" />
+                  return (
+                    <span
+                      className={label.allReady ? 'text-green-600' : 'text-muted-foreground'}
+                      title="Chapters with voiceover audio, alignment, timeline JSON and cropped images all in place"
+                    >
+                      {label.text}
+                    </span>
+                  )
+                })()}
               </span>
-            )}
-          </Link>
-        ))}
+
+              {s.chapterCount !== undefined && (
+                <span className="w-24 shrink-0 text-sm text-muted-foreground text-right">
+                  {s.chapterCount} chapters
+                </span>
+              )}
+            </Link>
+          )
+        })}
       </Card>
     </div>
   )

@@ -93,7 +93,7 @@ export const CATEGORIES: CategoryMeta[] = [
   {
     key: 'video',
     label: 'Rendered video',
-    description: 'Exported MP4s. The finished product — deleted only on its own.',
+    description: 'Exported MP4s — delete individually or delete renders after saving a compressed video.',
     reclaimable: false
   },
   {
@@ -291,6 +291,7 @@ export interface SeriesStorage {
   /** Rendered MP4s under _video / _video2, kept apart from chapter totals. */
   videoBytes: number
   videoFileCount: number
+  videoCleanupFolders: VideoCleanupFolder[]
   chapters: ChapterStorage[]
 }
 
@@ -398,10 +399,12 @@ export async function scanStorage(): Promise<StorageOverview> {
     // Series-level rendered video, which lives beside the chapters, not in them.
     let videoBytes = 0
     let videoFileCount = 0
+    const videoCleanupFolders: VideoCleanupFolder[] = []
     for (const dirName of VIDEO_DIRS) {
       const measured = await measureDir(path.join(getFullFolderPath(s.rootFolder), dirName))
       videoBytes += measured.bytes
       videoFileCount += measured.files
+      videoCleanupFolders.push(await scanVideoCleanupFolder(s.rootFolder, dirName))
     }
 
     const sizes = emptySizes()
@@ -436,6 +439,7 @@ export async function scanStorage(): Promise<StorageOverview> {
         .reduce((sum, c) => sum + c.reclaimableBytes, 0),
       videoBytes,
       videoFileCount,
+      videoCleanupFolders,
       chapters
     })
   }
@@ -678,6 +682,73 @@ export interface VideoFileInfo {
   chapterNumber: number | null
 }
 
+export interface VideoCleanupFolder {
+  dir: VideoDir
+  /** Nonempty videos inside a compressed/Compress subfolder, relative to dir. */
+  compressedVideos: string[]
+  renderedFileCount: number
+  renderedBytes: number
+}
+
+const COMPRESSED_FOLDER_NAMES = new Set(['compressed', 'compress'])
+const isVideoFile = (name: string) => /\.(mp4|mov|mkv|webm|m4v|avi)$/i.test(name)
+
+/** Only direct rendered MP4s are eligible; compressed folders are never targets. */
+export async function scanVideoCleanupFolder(rootFolder: string, dir: VideoDir): Promise<VideoCleanupFolder> {
+  const result: VideoCleanupFolder = { dir, compressedVideos: [], renderedFileCount: 0, renderedBytes: 0 }
+  const folder = path.join(getFullFolderPath(rootFolder), dir)
+  // Do not accept a symlink as either the render folder or its compressed copy.
+  if (!(await fs.lstat(folder).catch(() => null))?.isDirectory()) return result
+  const entries = await fs.readdir(folder, { withFileTypes: true }).catch(() => [])
+  for (const entry of entries) {
+    if (entry.isFile() && /\.mp4$/i.test(entry.name)) {
+      const stat = await fs.lstat(path.join(folder, entry.name)).catch(() => null)
+      if (!stat?.isFile()) continue
+      result.renderedFileCount++
+      result.renderedBytes += stat.size
+    } else if (entry.isDirectory() && COMPRESSED_FOLDER_NAMES.has(entry.name.toLowerCase())) {
+      for (const video of await fs.readdir(path.join(folder, entry.name), { withFileTypes: true }).catch(() => [])) {
+        if (!video.isFile() || !isVideoFile(video.name)) continue
+        const stat = await fs.lstat(path.join(folder, entry.name, video.name)).catch(() => null)
+        if (stat?.isFile() && stat.size > 0) result.compressedVideos.push(`${entry.name}/${video.name}`)
+      }
+    }
+  }
+  result.compressedVideos.sort()
+  return result
+}
+
+/** Delete direct renders only after rechecking a compressed video on disk. */
+export async function deleteCompressedSeriesVideos(
+  seriesId: string,
+  dirName: string
+): Promise<{ freedBytes: number; deletedFiles: number }> {
+  if (!(VIDEO_DIRS as string[]).includes(dirName)) throw new Error('Unknown video folder')
+  const series = await prisma.series.findUnique({ where: { id: seriesId }, select: { rootFolder: true } })
+  if (!series) throw new Error('Series not found')
+  const dir = dirName as VideoDir
+  const folder = path.join(getFullFolderPath(series.rootFolder), dir)
+  const root = await fs.realpath(process.env.DOWNLOAD_ROOT || './downloads')
+  const resolved = await fs.realpath(folder)
+  if (!resolved.startsWith(root + path.sep)) throw new Error('Video folder is outside the download root')
+  const state = await scanVideoCleanupFolder(series.rootFolder, dir)
+  if (state.compressedVideos.length === 0) {
+    throw new Error('Place a nonempty video in a compressed subfolder of this render folder before deleting renders')
+  }
+  let freedBytes = 0
+  let deletedFiles = 0
+  for (const entry of await fs.readdir(folder, { withFileTypes: true })) {
+    if (!entry.isFile() || !/\.mp4$/i.test(entry.name)) continue
+    const target = path.join(folder, entry.name)
+    const stat = await fs.lstat(target).catch(() => null)
+    if (!stat?.isFile()) continue
+    await removeWithin(target)
+    freedBytes += stat.size
+    deletedFiles++
+  }
+  return { freedBytes, deletedFiles }
+}
+
 /** Every rendered MP4 of a series, newest first. */
 export async function listSeriesVideos(seriesId: string): Promise<VideoFileInfo[]> {
   const series = await prisma.series.findUnique({
@@ -721,9 +792,8 @@ export async function listSeriesVideos(seriesId: string): Promise<VideoFileInfo[
 /**
  * Delete one rendered MP4.
  *
- * Deliberately one file at a time and addressed by name: these are the finished
- * videos, and a bulk "delete all exports" button is a mis-click away from
- * losing the only copy of a published chapter.
+ * Addressed by name for individual removal. Folder-wide deletion uses
+ * deleteCompressedSeriesVideos, which requires a saved compressed video.
  */
 export async function deleteSeriesVideo(
   seriesId: string,

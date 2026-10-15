@@ -8,6 +8,15 @@ const chapter = (number: number, en = true, hi = true): ProcessChapter => ({
 })
 
 describe('20-chapter series process parts', () => {
+  it('marks a part done without inventing chapter files or stage completions, and undo restores automatic progress', () => {
+    const chapters = [chapter(1, false, false)]
+    const manual = buildProcessSeries(series, chapters, [1])
+    expect(manual.completedThrough).toBe(1)
+    expect(manual.parts[0]).toMatchObject({ complete: true, manualComplete: true, present: 1 })
+    expect(manual.parts[0].stages.export_en.done).toBe(0)
+    expect(buildProcessSeries(series, chapters).completedThrough).toBe(0)
+    expect(buildProcessSeries(series, [], [1]).parts[0].chapters).toEqual([])
+  })
   it('completes a part only with every chapter exported in both languages', () => {
     const chapters = Array.from({ length: 20 }, (_, i) => chapter(i + 1))
     expect(buildProcessSeries(series, chapters).completedThrough).toBe(1)

@@ -98,6 +98,8 @@ export interface QuickValidationResult {
 }
 
 export const seriesApi = {
+  deleteEverywhere: (id: string) => fetchApi<{ deleting: boolean }>(`/series/${id}/delete-everywhere`, { method: 'POST' }),
+  markPart: (id: string, part: number, done: boolean) => fetchApi(`/series/${id}/parts/${part}/completion`, { method: 'PUT', body: JSON.stringify({ done }) }),
   getAll: () => fetchApi<Series[]>('/series'),
   
   getById: (id: string) => fetchApi<Series>(`/series/${id}`),
@@ -521,6 +523,16 @@ export interface StoredTimeline2 {
   updatedAt: number
 }
 
+export interface Editor2Completion {
+  done: boolean
+  /** Saved video paths relative to the series folder, in the selected language. */
+  compressedVideos: string[]
+}
+
+export interface Editor2SeriesReadiness extends Editor2Completion {
+  chapters: { id: string; ready: boolean }[]
+}
+
 export const videoApi2 = {
   /** Every stored Editor 2.0 paste for a series (see timelineHandoff). */
   getStoredTimelines: (seriesId: string, lang: NarrationLanguage) =>
@@ -540,7 +552,10 @@ export const videoApi2 = {
 
   /** Which chapters of a series have a complete checklist (the library's "N/M ready"). */
   getSeriesReadiness: (seriesId: string, lang: NarrationLanguage) =>
-    fetchApi<{ chapters: { id: string; ready: boolean }[] }>(`/video2/series/${seriesId}/readiness?lang=${lang}`),
+    fetchApi<Editor2SeriesReadiness>(`/video2/series/${seriesId}/readiness?lang=${lang}`),
+
+  getSeriesCompletion: (seriesId: string, lang: NarrationLanguage) =>
+    fetchApi<Editor2Completion>(`/video2/series/${seriesId}/completion?lang=${lang}`),
 
   /** Which chapters of this series have already been rendered to MP4 in this language. */
   getExportedChapters: (seriesId: string, lang: NarrationLanguage) =>
@@ -1134,6 +1149,7 @@ export interface SeriesStorage {
   safeToDeleteBytes: number
   videoBytes: number
   videoFileCount: number
+  videoCleanupFolders: StorageVideoCleanupFolder[]
   chapters: ChapterStorage[]
 }
 
@@ -1154,6 +1170,13 @@ export interface StorageDeleteResult {
   categories: StorageCategoryKey[]
   freedBytes: number
   skipped?: string
+}
+
+export interface StorageVideoCleanupFolder {
+  dir: '_video' | '_video2' | '_video2_hi'
+  compressedVideos: string[]
+  renderedFileCount: number
+  renderedBytes: number
 }
 
 export interface StorageVideoFile {
@@ -1266,6 +1289,12 @@ export const storageApi = {
     fetchApi<{ results: StorageDeleteResult[]; freedBytes: number }>(
       `/storage/series/${seriesId}/delete`,
       { method: 'POST', body: JSON.stringify({ categories, allowUnexported }) }
+    ),
+
+  deleteCompressedRenders: (seriesId: string, dir: string) =>
+    fetchApi<{ freedBytes: number; deletedFiles: number }>(
+      `/storage/series/${seriesId}/videos/${dir}`,
+      { method: 'DELETE' }
     ),
 
   deleteVideo: (seriesId: string, dir: string, fileName: string) =>

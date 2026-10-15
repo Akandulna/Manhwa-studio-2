@@ -23,6 +23,7 @@ import path from 'path'
 import { prisma } from '../index.js'
 import { alignmentFileName, type NarrationLanguage } from './narrationLanguage.js'
 import { getChapterManifest } from './chapterManifest.js'
+import { scanVideoCleanupFolder, videoDirsFor } from './storageService.js'
 import {
   chapterCropOutputs,
   expectedExportedFilenames,
@@ -246,6 +247,15 @@ async function buildChecklist(
 }
 
 // ============ Editable chapters ============
+
+/** A saved compressed video is the series-level completion marker, even after render cleanup. */
+export async function getSeriesCompletion2(seriesId: string, language: NarrationLanguage = 'en') {
+  const series = await prisma.series.findUnique({ where: { id: seriesId }, select: { rootFolder: true } })
+  if (!series) return { done: false, compressedVideos: [] as string[] }
+  const folders = await Promise.all(videoDirsFor(language).map(dir => scanVideoCleanupFolder(series.rootFolder, dir)))
+  const compressedVideos = folders.flatMap(folder => folder.compressedVideos.map(file => `${folder.dir}/${file}`))
+  return { done: compressedVideos.length > 0, compressedVideos }
+}
 
 /**
  * A series' chapters with their Editor 2.0 checklist. Audio, alignment and

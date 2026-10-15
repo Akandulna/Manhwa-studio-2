@@ -13,6 +13,7 @@ import { alignmentFileName, scriptFileName } from './narrationLanguage.js'
 import { relayReceipts } from './phoneRelay.js'
 import { createClient, getR2Config } from './r2Service.js'
 import { libraryDeviceId } from './librarySync.js'
+import { libraryControl } from './libraryControls.js'
 import { buildProcessSeries, emptyStages, mergeStage, PROCESS_STAGES, stage,
   type ChapterStages, type ProcessSnapshot } from './seriesProcessModel.js'
 
@@ -145,6 +146,8 @@ async function scan(): Promise<ProcessSnapshot> {
   const timelines = await prisma.editor2Timeline.findMany()
   const series = []
   for (const row of rows) {
+    const control = await libraryControl(path.basename(row.rootFolder))
+    if (control.deleted) continue
     const [en, hi] = await Promise.all([listExistingExports(row.rootFolder, 'en'), listExistingExports(row.rootFolder, 'hi')])
     const chapters = []
     for (const c of row.chapters) {
@@ -154,7 +157,8 @@ async function scan(): Promise<ProcessSnapshot> {
       stages.export_hi = { state: c.completedAt || hi.has(c.number) ? 'done' : 'pending' }
       chapters.push({ id: c.id, name: path.basename(c.folderPath), number: c.number, stages })
     }
-    series.push(buildProcessSeries({ ...row, rootFolder: path.basename(row.rootFolder) }, chapters))
+    series.push(buildProcessSeries({ ...row, rootFolder: path.basename(row.rootFolder) }, chapters,
+      Object.entries(control.parts ?? {}).filter(([, d]) => d.done).map(([n]) => Number(n))))
   }
   return { schema: 'series-process/1', deviceId: await libraryDeviceId(), updatedAt: new Date().toISOString(), series }
 }

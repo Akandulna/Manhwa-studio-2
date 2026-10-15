@@ -7,6 +7,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { prisma } from '../index.js';
 import { zeroPad } from '../utils/urlPattern.js';
+import { isLibraryDeleted } from './libraryControls.js';
 
 const DOWNLOAD_ROOT = process.env.DOWNLOAD_ROOT || './downloads';
 
@@ -149,6 +150,7 @@ export async function importExistingSeries(
   
   for (const seriesScan of seriesToImport) {
     try {
+      if (await isLibraryDeleted(path.basename(seriesScan.folderPath))) { result.skipped.push(seriesScan.name); continue; }
       // Check if series already exists by rootFolder
       const existingSeries = await prisma.series.findFirst({
         where: { rootFolder: seriesScan.folderPath }

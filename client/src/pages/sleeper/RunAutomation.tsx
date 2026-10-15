@@ -323,7 +323,7 @@ function SplitProfiles({ phones, overview, relay, screens, onPending }: {
  * it (the page toasts how that went) and resolves once sent, closing the dialog.
  * `startable` counts the phones that can be started now, for a split between them.
  */
-export function RunAutomationDialog({ open, onOpenChange, phone, overview, several, startable, profiles, relay, screen, screens, now, sending, onStart }: {
+export function RunAutomationDialog({ open, onOpenChange, phone, overview, several, startable, profiles, relay, screen, screens, now, sending, onStart, fixedSeries }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   phone: PhoneOverviewPhone
@@ -339,6 +339,8 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
   now: number
   sending: boolean
   onStart: (options: PhoneAutomationOptions) => Promise<boolean>
+  /** Starting from a series' production process keeps every run on that series. */
+  fixedSeries?: Pick<Series, 'id' | 'title'>
 }) {
   const runs = phoneRuns(phone)
   // Builds that say how Image Clipper last ran also take its AI and method.
@@ -370,18 +372,18 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
   // Every series in the library: one the phone hasn't got yet can be sent to it from here.
   const [library, setLibrary] = useState<Series[]>([])
   useEffect(() => {
-    if (!open) return
+    if (!open || fixedSeries) return
     let cancelled = false
     seriesApi.getAll()
       .then(all => { if (!cancelled) setLibrary(all) })
       .catch(() => { /* the phone's series are still offered */ })
     return () => { cancelled = true }
-  }, [open])
+  }, [open, fixedSeries])
   const onPhoneIds = new Set(overview.series.map(s => s.id))
   const notOnPhone = library.filter(s => !onPhoneIds.has(s.id)).sort((a, b) => a.title.localeCompare(b.title))
 
   const automation = AUTOMATIONS.find(a => a.kind === kind) ?? null
-  const seriesId = kind ? picked[kind] ?? preferredSeries(kind, overview, phone, several) : ''
+  const seriesId = kind ? fixedSeries?.id ?? picked[kind] ?? preferredSeries(kind, overview, phone, several) : ''
   // The voiceover's scripts come from a Narration scripts run: its fix switches to that, on the same series.
   const runNarration = useCallback(() => {
     if (!seriesId) return
@@ -478,6 +480,7 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
             {automation ? <><automation.icon className="h-5 w-5 text-muted-foreground" /> {automation.name}</> : 'Run automation'}
           </DialogTitle>
           <DialogDescription>
+            {fixedSeries && <span className="mb-1 block font-medium text-foreground">{fixedSeries.title}</span>}
             {automation ? `On ${splitting ? `${startable.length} phones` : phone.name}. ${automation.does}.` : `What should ${phone.name} run?`}
           </DialogDescription>
         </DialogHeader>
@@ -516,7 +519,7 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
             <div className="space-y-5">
               <div className="space-y-1.5">
                 <p className="text-sm font-medium">Series</p>
-                <Select value={seriesId} onValueChange={id => setPicked(p => ({ ...p, [automation.kind]: id }))} disabled={!overview.series.length && !notOnPhone.length}>
+                {fixedSeries ? <p className="rounded-md border bg-muted/30 px-3 py-2 text-sm">{fixedSeries.title}</p> : <Select value={seriesId} onValueChange={id => setPicked(p => ({ ...p, [automation.kind]: id }))} disabled={!overview.series.length && !notOnPhone.length}>
                   <SelectTrigger className="h-9" aria-label="Series">
                     <SelectValue placeholder={automation.clipper ? 'The phone’s last run' : 'Pick a series'} />
                   </SelectTrigger>
@@ -539,7 +542,7 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
                       </SelectGroup>
                     )}
                   </SelectContent>
-                </Select>
+                </Select>}
               </div>
 
               {seriesId && <RunReadinessPanel state={readiness} />}

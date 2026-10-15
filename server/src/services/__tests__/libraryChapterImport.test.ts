@@ -25,6 +25,7 @@ vi.mock('../phoneSend.js', () => ({
   }
 }))
 vi.mock('../../utils/zipReader.js', () => ({ readZip: () => [{ name: 'Demo/Chapter 001/page_001.jpg', data: Buffer.from('prepared pages') }] }))
+vi.mock('../libraryControls.js', () => ({ isLibraryDeleted: async () => false }))
 const { importLibraryChapter } = await import('../phonePull.js')
 const remote = { name: 'Chapter 001', number: 1, key: 'manhwa/Demo/Chapter 001.zip', etag: 'new', sentAt: '2026-10-15T10:00:00.000Z' }
 const series = { folder: 'Demo', title: 'Demo', chapters: [remote] }

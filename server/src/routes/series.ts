@@ -10,6 +10,10 @@ import { extractSiteDomain, getPageTitle } from '../services/scraper.js';
 import { validateManualChapters } from '../services/discovery.js';
 import { Server } from 'socket.io';
 import { reconcileQuietly } from '../services/diskReconcile.js';
+import path from 'path';
+import { libraryDeviceId, scheduleLibraryCleanup } from '../services/librarySync.js';
+import { libraryControl, libraryControls, saveLibraryControls } from '../services/libraryControls.js';
+import { notifySeriesProcessChanged } from '../services/seriesProcess.js';
 
 const router = Router();
 
@@ -17,7 +21,9 @@ const router = Router();
 router.get('/', async (req: Request, res: Response) => {
   try {
     await reconcileQuietly();
+    const deleted = (await libraryControls()).filter(c => c.deleted).map(c => c.folder);
     const series = await prisma.series.findMany({
+      where: { rootFolder: { notIn: deleted } },
       include: {
         _count: {
           select: { chapters: true }
@@ -294,6 +300,32 @@ router.patch('/:id', async (req: Request, res: Response) => {
 });
 
 // Delete series
+router.post('/:id/delete-everywhere', async (req: Request, res: Response) => {
+  try {
+    const series = await prisma.series.findUnique({ where: { id: req.params.id } });
+    if (!series) return res.status(404).json({ error: 'Series not found' });
+    await saveLibraryControls([{ folder: path.basename(series.rootFolder), deleted: { at: Date.now(), deviceId: await libraryDeviceId(), done: true } }]);
+    scheduleLibraryPublish(); scheduleLibraryCleanup(); notifySeriesProcessChanged(true);
+    req.app.get('io')?.emit('library:updated');
+    res.status(202).json({ deleting: true });
+  } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : 'Could not delete series' }); }
+});
+
+router.put('/:id/parts/:part/completion', async (req: Request, res: Response) => {
+  try {
+    const part = Number(req.params.part);
+    if (!Number.isInteger(part) || part < 1 || part > 99999 || typeof req.body.done !== 'boolean') return res.status(400).json({ error: 'Choose a valid part and completion state' });
+    const series = await prisma.series.findUnique({ where: { id: req.params.id } });
+    if (!series) return res.status(404).json({ error: 'Series not found' });
+    const folder = path.basename(series.rootFolder);
+    const prior = await libraryControl(folder);
+    if (prior.deleted) return res.status(409).json({ error: 'This series is being deleted' });
+    await saveLibraryControls([{ folder, parts: { [part]: { at: Math.max(Date.now(), (prior.parts?.[part]?.at ?? 0) + 1), deviceId: await libraryDeviceId(), done: req.body.done } } }]);
+    scheduleLibraryPublish(); notifySeriesProcessChanged();
+    res.json({ done: req.body.done });
+  } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : 'Could not update part completion' }); }
+});
+
 router.delete('/:id', async (req: Request, res: Response) => {
   try {
     await prisma.series.delete({

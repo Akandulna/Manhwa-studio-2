@@ -34,6 +34,8 @@ interface ScannedSeries {
 
 export default function Library() {
   const [series, setSeries] = useState<Series[]>([])
+  const [deleteTarget, setDeleteTarget] = useState<Series | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const { progress, error: progressError, reload: reloadProgress } = useSeriesProcess()
   const [loading, setLoading] = useState(true)
   const [importDialogOpen, setImportDialogOpen] = useState(false)
@@ -123,6 +125,24 @@ export default function Library() {
         variant: 'destructive'
       })
     }
+  }
+
+  const markPart = async (item: Series, part: number, done: boolean) => {
+    try {
+      await seriesApi.markPart(item.id, part, done)
+      reloadProgress()
+      toast({ title: done ? `Part ${part} marked done` : `Part ${part} manual completion removed`, description: item.title })
+    } catch (error) { toast({ title: 'Could not update part', description: error instanceof Error ? error.message : 'Please try again', variant: 'destructive' }) }
+  }
+  const deleteEverywhere = async () => {
+    if (!deleteTarget) return
+    setDeleting(true)
+    try {
+      await seriesApi.deleteEverywhere(deleteTarget.id)
+      setDeleteTarget(null); await loadSeries(); reloadProgress()
+      toast({ title: 'Deletion queued', description: 'The series will be removed from all synced devices and cloud storage.' })
+    } catch (error) { toast({ title: 'Could not delete series', description: error instanceof Error ? error.message : 'Please try again', variant: 'destructive' }) }
+    finally { setDeleting(false) }
   }
 
   const handleSend = async (picked: { seriesId: string; chapterIds: string[] }[]) => {
@@ -317,6 +337,11 @@ export default function Library() {
       {progressError && <div role="status" className="mb-4 flex items-center justify-between rounded-lg border border-amber-500/30 p-3 text-sm"><span>{progressError} Showing the last known status.</span><Button variant="ghost" size="sm" onClick={reloadProgress}>Retry</Button></div>}
 
       <PhonePullDialog open={pullOpen} onOpenChange={setPullOpen} onPulled={() => { loadSeries(); loadPhoneSync() }} />
+      <Dialog open={deleteTarget !== null} onOpenChange={open => { if (!open && !deleting) setDeleteTarget(null) }}>
+        <DialogContent><DialogHeader><DialogTitle>Delete “{deleteTarget?.title}” everywhere?</DialogTitle><DialogDescription>Permanently deletes this series, pages, scripts, audio, crops and exports from every synced device and cloud storage. Offline devices delete their copy when they reconnect with the updated app. This cannot be undone.</DialogDescription></DialogHeader>
+          <DialogFooter><Button variant="outline" disabled={deleting} onClick={() => setDeleteTarget(null)}>Cancel</Button><Button variant="destructive" disabled={deleting} onClick={deleteEverywhere}>{deleting ? 'Deleting…' : 'Delete everywhere'}</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <PhoneSendDialog
         open={sendOpen}
@@ -434,7 +459,7 @@ export default function Library() {
           </Link>
         </Card>
       ) : (
-        <SeriesProcessTracker series={series} progress={progress} phoneSync={phoneSync} />
+        <SeriesProcessTracker series={series} progress={progress} phoneSync={phoneSync} onDelete={setDeleteTarget} onMarkPart={markPart} />
       )}
     </div>
 

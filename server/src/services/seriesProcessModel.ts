@@ -12,7 +12,7 @@ export type ChapterStages = Record<ProcessStage, StageProgress>
 export interface ProcessChapter { id: string; name: string; number: number; stages: ChapterStages }
 export interface StageCount { done: number; total: number; active: number; attention: number; unitsDone: number; unitsTotal: number }
 export interface ProcessPart {
-  number: number; firstChapter: number; lastChapter: number; complete: boolean; present: number; expected: number
+  number: number; firstChapter: number; lastChapter: number; complete: boolean; manualComplete?: boolean; present: number; expected: number
   stages: Record<ProcessStage, StageCount>; chapters: ProcessChapter[]
 }
 export interface ProcessSeries {
@@ -44,20 +44,22 @@ function counts(chapters: ProcessChapter[], expected: number): Record<ProcessSta
   }])) as Record<ProcessStage, StageCount>
 }
 
-export function buildProcessSeries(series: { id: string; rootFolder: string; title: string }, chapters: ProcessChapter[]): ProcessSeries {
+export function buildProcessSeries(series: { id: string; rootFolder: string; title: string }, chapters: ProcessChapter[], manualParts: number[] = []): ProcessSeries {
   const groups = new Map<number, ProcessChapter[]>()
   for (const ch of chapters) {
     const part = Math.max(1, Math.ceil(ch.number / PART_CHAPTERS))
     groups.set(part, [...(groups.get(part) ?? []), ch])
   }
+  for (const number of manualParts) if (!groups.has(number)) groups.set(number, [])
   const parts: ProcessPart[] = [...groups].sort(([a], [b]) => a - b).map(([number, entries]) => {
     const firstChapter = (number - 1) * PART_CHAPTERS + 1
     const lastChapter = number * PART_CHAPTERS
     // A partial import or a hole in the chapter range must never appear completed.
     const allNumbersPresent = Array.from({ length: PART_CHAPTERS }, (_, i) => firstChapter + i).every(n => entries.some(c => c.number === n))
     const expected = Math.max(PART_CHAPTERS, entries.length)
-    const complete = allNumbersPresent && entries.every(c => c.stages.export_en.state === 'done' && c.stages.export_hi.state === 'done')
-    return { number, firstChapter, lastChapter, complete, present: entries.length, expected, stages: counts(entries, expected), chapters: entries.sort((a, b) => a.number - b.number) }
+    const manualComplete = manualParts.includes(number)
+    const complete = manualComplete || allNumbersPresent && entries.every(c => c.stages.export_en.state === 'done' && c.stages.export_hi.state === 'done')
+    return { number, firstChapter, lastChapter, complete, manualComplete, present: entries.length, expected, stages: counts(entries, expected), chapters: entries.sort((a, b) => a.number - b.number) }
   })
   const completedParts = parts.filter(p => p.complete).map(p => p.number)
   let completedThrough = 0

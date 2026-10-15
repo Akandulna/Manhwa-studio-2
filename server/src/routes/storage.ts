@@ -8,6 +8,7 @@
  *   POST   /chapters/:id/delete     clean one chapter's reclaimable data
  *   POST   /series/:id/delete       clean every exported chapter of a series
  *   DELETE /series/:id/videos/:dir/:file   remove one rendered MP4
+ *   DELETE /series/:id/videos/:dir   remove direct renders after compression
  *   GET    /series/:id/parts       narration Parts with export state (partArchive)
  *   POST   /series/:id/parts/:part/complete   delete a finished Part, keep its continuity
  *
@@ -24,6 +25,7 @@ import {
   deleteChapterData,
   deleteSeriesExportedData,
   deleteSeriesVideo,
+  deleteCompressedSeriesVideos,
   listSeriesVideos,
   scanStorage,
   type CategoryKey
@@ -126,6 +128,14 @@ export function initStorageRoutes(): Router {
       res.json(result)
     } catch (error) {
       fail(res, error, 'Failed to delete video')
+    }
+  })
+
+  router.delete('/series/:id/videos/:dir', async (req: Request, res: Response) => {
+    try {
+      res.json(await deleteCompressedSeriesVideos(req.params.id, req.params.dir))
+    } catch (error) {
+      fail(res, error, 'Failed to delete rendered videos')
     }
   })
 

@@ -44,6 +44,18 @@ export class DownloadManager {
   private failedCount: number = 0;
   private currentChapterId?: string;
   private scheduled = new Set<string>();
+  private cancelledSeries = new Set<string>();
+  private activeSeries = new Map<string, number>();
+
+  async cancelSeries(seriesId: string): Promise<void> {
+    this.cancelledSeries.add(seriesId);
+    await prisma.chapter.updateMany({ where: { seriesId, status: 'queued' }, data: { status: 'skipped' } });
+    const deadline = Date.now() + 60_000;
+    while (this.activeSeries.get(seriesId)) {
+      if (Date.now() > deadline) throw new Error('Waiting for the current page download to finish; deletion will retry');
+      await this.delay(100);
+    }
+  }
   
   constructor(io: Server) {
     this.io = io;
@@ -129,6 +141,7 @@ export class DownloadManager {
    * Download a single chapter
    */
   private async downloadChapter(task: DownloadTask): Promise<void> {
+    if (this.cancelledSeries.has(task.seriesId)) return;
     if (this.isPaused) {
       // Re-queue if paused
       await prisma.chapter.update({
@@ -139,6 +152,7 @@ export class DownloadManager {
     }
     
     this.currentChapterId = task.chapterId;
+    this.activeSeries.set(task.seriesId, (this.activeSeries.get(task.seriesId) ?? 0) + 1);
     
     try {
       // Update status to downloading
@@ -154,6 +168,7 @@ export class DownloadManager {
       
       // Get images from chapter page
       const { images, error } = await getChapterImages(task.sourceUrl);
+      if (this.cancelledSeries.has(task.seriesId)) return;
       
       if (error) {
         throw new Error(error);
@@ -176,6 +191,7 @@ export class DownloadManager {
       
       // Create/update page records
       for (let i = 0; i < images.length; i++) {
+        if (this.cancelledSeries.has(task.seriesId)) return;
         await prisma.page.upsert({
           where: {
             chapterId_index: {
@@ -227,6 +243,7 @@ export class DownloadManager {
           
           // Download the image, then store it in its smallest lossless form
           await this.downloadImage(image.src, partPath, task.sourceUrl);
+          if (this.cancelledSeries.has(task.seriesId)) { await fs.promises.unlink(partPath).catch(() => {}); return; }
           const result = await storePageImage(partPath, destBase);
           const localPath = path.join(task.folderPath, path.basename(result.path));
           
@@ -340,6 +357,8 @@ export class DownloadManager {
       });
       
     } finally {
+      this.activeSeries.set(task.seriesId, Math.max(0, (this.activeSeries.get(task.seriesId) ?? 1) - 1));
+      if (this.cancelledSeries.has(task.seriesId)) await prisma.chapter.updateMany({ where: { id: task.chapterId }, data: { status: 'skipped' } });
       this.currentChapterId = undefined;
       this.emitStatus();
     }

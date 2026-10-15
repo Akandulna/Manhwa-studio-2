@@ -9,7 +9,7 @@
  * explicit acknowledgement before it can be cleaned.
  *
  * Rendered videos are shown but never included in a cleanup: they are the
- * finished product, and they have their own per-file delete under the series.
+ * finished product, with explicit deletion after a compressed copy is saved.
  */
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
@@ -39,6 +39,7 @@ import {
   type ChapterStorage,
   type StorageCategoryKey,
   type StorageCategoryMeta,
+  type StorageVideoCleanupFolder,
   type StorageVideoFile
 } from '@/lib/api'
 import { CompletedBadge } from '@/components/PublishedBadge'
@@ -162,6 +163,7 @@ export default function StorageManager({ libraryRoot }: { libraryRoot?: string }
 
   const [expanded, setExpanded] = useState<string | null>(null)
   const [videos, setVideos] = useState<Record<string, StorageVideoFile[]>>({})
+  const [loadingVideos, setLoadingVideos] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
 
   // What a cleanup removes. Crops and audio are on by default because they are
@@ -191,6 +193,21 @@ export default function StorageManager({ libraryRoot }: { libraryRoot?: string }
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  // Rescan also refreshes renders after users add a compressed video in Finder.
+  useEffect(() => {
+    if (!expanded) return
+    let cancelled = false
+    setLoadingVideos(true)
+    storageApi.getSeriesVideos(expanded).then(list => {
+      if (!cancelled) setVideos(prev => ({ ...prev, [expanded]: list }))
+    }).catch(e => {
+      if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to list videos')
+    }).finally(() => {
+      if (!cancelled) setLoadingVideos(false)
+    })
+    return () => { cancelled = true }
+  }, [expanded, overview])
 
   const openLibraryFolder = async () => {
     try {
@@ -313,18 +330,27 @@ export default function StorageManager({ libraryRoot }: { libraryRoot?: string }
     }
   }
 
-  const toggleSeries = async (series: SeriesStorage) => {
-    const next = expanded === series.id ? null : series.id
-    setExpanded(next)
-    if (next && !videos[series.id]) {
-      try {
-        const list = await storageApi.getSeriesVideos(series.id)
-        setVideos(prev => ({ ...prev, [series.id]: list }))
-      } catch {
-        // A failed video listing must not collapse the chapter table, which is
-        // the part of the panel the user came for.
-        setVideos(prev => ({ ...prev, [series.id]: [] }))
-      }
+  const toggleSeries = (series: SeriesStorage) => {
+    setExpanded(prev => prev === series.id ? null : series.id)
+  }
+
+  const deleteCompressedRenders = async (series: SeriesStorage, folder: StorageVideoCleanupFolder) => {
+    if (!window.confirm(
+      `Delete ${folder.renderedFileCount} rendered MP4s from "${series.title}/${folder.dir}"?\n\n` +
+      `This frees about ${formatBytes(folder.renderedBytes)} and cannot be undone.\n\n` +
+      `Compressed video found:\n${folder.compressedVideos.join('\n')}\n\n` +
+      `Check that the compressed video contains the finished cut you need. The compressed folder and its contents will be kept.`
+    )) return
+
+    setBusy(`${series.id}/${folder.dir}`)
+    try {
+      const result = await storageApi.deleteCompressedRenders(series.id, folder.dir)
+      toast({ title: `Freed ${formatBytes(result.freedBytes)}`, description: `${result.deletedFiles} render${result.deletedFiles === 1 ? '' : 's'} deleted. Compressed videos kept.` })
+      await load(true)
+    } catch (e) {
+      toast({ title: 'Delete failed', description: e instanceof Error ? e.message : 'Unknown error', variant: 'destructive' })
+    } finally {
+      setBusy(null)
     }
   }
 
@@ -338,8 +364,6 @@ export default function StorageManager({ libraryRoot }: { libraryRoot?: string }
     try {
       const result = await storageApi.deleteVideo(series.id, video.dir, video.fileName)
       toast({ title: `Freed ${formatBytes(result.freedBytes)}`, description: video.fileName })
-      const list = await storageApi.getSeriesVideos(series.id)
-      setVideos(prev => ({ ...prev, [series.id]: list }))
       await load(true)
     } catch (e) {
       toast({
@@ -430,7 +454,7 @@ export default function StorageManager({ libraryRoot }: { libraryRoot?: string }
                 <div>
                   <p className="text-xs uppercase tracking-wide text-muted-foreground">Rendered video</p>
                   <p className="text-2xl font-bold tabular-nums">{formatBytes(overview.videoBytes)}</p>
-                  <p className="text-xs text-muted-foreground">never auto-deleted</p>
+                  <p className="text-xs text-muted-foreground">delete renders after saving a compressed video</p>
                 </div>
               </div>
 
@@ -526,6 +550,7 @@ export default function StorageManager({ libraryRoot }: { libraryRoot?: string }
                 ? Math.round((series.exportedChapterCount / series.chapterCount) * 100)
                 : 0
               const seriesVideos = videos[series.id] ?? []
+              const videoCleanupFolders = series.videoCleanupFolders.filter(folder => folder.renderedFileCount > 0)
               const completedParts = [...new Set(
                 series.chapters.flatMap(c => (c.completedPart !== null ? [c.completedPart] : []))
               )].sort((a, b) => a - b)
@@ -598,6 +623,39 @@ export default function StorageManager({ libraryRoot }: { libraryRoot?: string }
                         </span>
                       </div>
                     </div>
+
+                    {videoCleanupFolders.length > 0 && (
+                      <div className="mt-4 space-y-2 border-t pt-4">
+                        <p className="text-sm font-medium">Rendered video cleanup · Compressed copies are kept</p>
+                        {videoCleanupFolders.map(folder => {
+                          const ready = folder.compressedVideos.length > 0
+                          const busyKey = `${series.id}/${folder.dir}`
+                          return (
+                            <div key={folder.dir} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3">
+                              <div className="min-w-0 text-sm">
+                                <p className="font-medium">{folder.dir} · {folder.renderedFileCount} render{folder.renderedFileCount === 1 ? '' : 's'} · {formatBytes(folder.renderedBytes)}</p>
+                                <p className={`mt-1 break-words text-xs ${ready ? 'text-green-500' : 'text-muted-foreground'}`}>
+                                  {ready
+                                    ? `Compressed video found: ${folder.compressedVideos.join(', ')}`
+                                    : 'Add a video to a compressed subfolder to enable deleting renders.'}
+                                </p>
+                              </div>
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                disabled={!ready || busy !== null || scanning}
+                                onClick={() => deleteCompressedRenders(series, folder)}
+                              >
+                                {busy === busyKey
+                                  ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                  : <Trash2 className="mr-2 h-4 w-4" />}
+                                Delete renders
+                              </Button>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
 
                     {/* Chapters */}
                     {isOpen && (
@@ -673,7 +731,7 @@ export default function StorageManager({ libraryRoot }: { libraryRoot?: string }
                           </table>
                         </div>
 
-                        {/* Rendered videos — the product, deleted one at a time */}
+                        {/* Rendered videos — explicit deletion, compressed copies kept */}
                         <div className="mt-6">
                           <h3 className="flex items-center gap-2 font-semibold">
                             <Film className="h-4 w-4" />
@@ -687,11 +745,14 @@ export default function StorageManager({ libraryRoot }: { libraryRoot?: string }
                             <ShieldAlert className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
                             <span>
                               These are the finished exports and are never removed by a cleanup.
-                              Delete one only once you are sure it has been uploaded.
+                              Save the finished video in a compressed subfolder, then use Delete renders
+                              to free the original MP4s. Compressed videos are kept. Click Rescan after adding a video.
                             </span>
                           </p>
 
-                          {seriesVideos.length === 0 ? (
+                          {loadingVideos ? (
+                            <p className="mt-3 text-sm text-muted-foreground">Loading rendered videos…</p>
+                          ) : seriesVideos.length === 0 ? (
                             <p className="mt-3 text-sm text-muted-foreground">No rendered videos.</p>
                           ) : (
                             <ul className="mt-3 space-y-1">
@@ -701,7 +762,7 @@ export default function StorageManager({ libraryRoot }: { libraryRoot?: string }
                                   className="flex items-center justify-between gap-3 rounded px-2 py-1.5 text-sm hover:bg-accent/40"
                                 >
                                   <span className="flex min-w-0 items-center gap-2">
-                                    <code className="truncate text-xs">{video.fileName}</code>
+                                    <code className="truncate text-xs">{video.dir}/{video.fileName}</code>
                                     {video.chapterNumber !== null && (
                                       <Badge variant="outline" className="flex-shrink-0">
                                         Ch {video.chapterNumber}
@@ -716,7 +777,7 @@ export default function StorageManager({ libraryRoot }: { libraryRoot?: string }
                                       size="sm"
                                       variant="ghost"
                                       onClick={() => deleteVideo(series, video)}
-                                      disabled={busy === video.fileName}
+                                      disabled={busy !== null || scanning}
                                     >
                                       {busy === video.fileName
                                         ? <Loader2 className="h-4 w-4 animate-spin" />

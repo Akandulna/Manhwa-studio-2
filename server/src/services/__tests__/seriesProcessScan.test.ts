@@ -9,6 +9,7 @@ vi.mock('../../index.js', () => ({ prisma: {
   editor2Timeline: { findMany: async () => data.timelines }
 } }))
 vi.mock('../librarySync.js', () => ({ libraryDeviceId: async () => 'mac-test' }))
+vi.mock('../libraryControls.js', () => ({ libraryControl: async (folder: string) => ({ folder }) }))
 vi.mock('../phoneRelay.js', () => ({ relayReceipts: (kind: string) => kind === 'scripts' ? data.scripts : [] }))
 vi.mock('../r2Service.js', () => ({ createClient: vi.fn(), getR2Config: () => null }))
 vi.mock('../clipper3/chapterCrop.js', () => ({ readChapterCropState: vi.fn(), isChapterCropping: () => false }))

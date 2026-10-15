@@ -4,6 +4,7 @@ import { parseLibraryManifest } from '../libraryManifest.js'
 const state = vi.hoisted(() => ({ settings: new Map<string, string>(), series: [] as any[], chapters: [] as any[], events: [] as string[], pull: vi.fn() }))
 vi.mock('../../index.js', () => ({ prisma: {
   setting: {
+    findMany: async ({ where }: any) => [...state.settings].filter(([key]) => key.startsWith(where.key.startsWith)).map(([key, value]) => ({ key, value })),
     findUnique: async ({ where }: any) => state.settings.has(where.key) ? { key: where.key, value: state.settings.get(where.key) } : null,
     upsert: async ({ where, create, update }: any) => {
       const value = state.settings.has(where.key) ? update.value ?? state.settings.get(where.key) : create.value
@@ -12,6 +13,7 @@ vi.mock('../../index.js', () => ({ prisma: {
     }
   },
   series: {
+    findMany: async ({ where }: any) => state.series.filter(s => !where?.sourceSite?.notIn?.includes(s.sourceSite)),
     findFirst: async ({ where }: any) => state.series.find(s => s.rootFolder === where.rootFolder) ?? null,
     create: async ({ data }: any) => { const row = { id: `s${state.series.length}`, ...data }; state.series.push(row); return row }
   },
@@ -24,7 +26,8 @@ vi.mock('../../index.js', () => ({ prisma: {
 vi.mock('../r2Service.js', () => ({ getR2Config: () => null, createClient: vi.fn() }))
 vi.mock('../phoneSend.js', () => ({ setAutoSend: vi.fn(), noteChapterDownloaded: vi.fn(), flushAutoSend: vi.fn() }))
 vi.mock('../phonePull.js', () => ({ importLibraryChapter: state.pull }))
-const { receiveLibraryManifest, startLibrarySync } = await import('../librarySync.js')
+vi.mock('../libraryControls.js', async importOriginal => ({ ...await importOriginal<any>(), purgeDeletedLibrarySeries: vi.fn(async () => {}) }))
+const { receiveLibraryManifest, startLibrarySync, registerExistingLibrarySeries } = await import('../librarySync.js')
 const catalog = (at = '2026-10-15T10:00:00Z') => ({ schema: 'manhwa-library/1', deviceId: 'nord', device: 'Nord', updatedAt: at, series: [{
   folder: 'Demo', title: 'Demo', chapters: [{ name: 'Chapter 001', number: 1, key: 'manhwa/Demo/Chapter 001.zip', sentAt: at }, { name: 'Chapter 002', number: 2 }]
 }] })
@@ -36,6 +39,39 @@ beforeEach(() => {
 })
 
 describe('shared library catalog', () => {
+  it('does not resurrect a globally deleted series from an old offline catalog', async () => {
+    state.settings.set('libraryControl:Demo', JSON.stringify({ folder: 'Demo', deleted: { at: 1, deviceId: 'nord', done: true } }))
+    receiveLibraryManifest(catalog())
+    await vi.waitFor(() => expect(state.settings.has('libraryReceived:nord')).toBe(true))
+    expect(state.series).toHaveLength(0)
+    expect(state.pull).not.toHaveBeenCalled()
+  })
+  it('registers legacy desktop series but leaves phone imports and existing owners alone', async () => {
+    state.series.push(
+      { id: 'old-download', sourceSite: 'demonicscans.org' },
+      { id: 'old-import', sourceSite: 'imported' },
+      { id: 'phone-copy', sourceSite: 'phone' },
+      { id: 'shared-copy', sourceSite: 'shared' },
+      { id: 'already-owned', sourceSite: 'demonicscans.org' },
+    )
+    state.settings.set('libraryOwner:already-owned', 'nord')
+    await registerExistingLibrarySeries()
+    await registerExistingLibrarySeries()
+    expect(state.settings.get('libraryOwner:old-download')).toBe('mac-test')
+    expect(state.settings.get('libraryOwner:old-import')).toBe('mac-test')
+    expect(state.settings.has('libraryOwner:phone-copy')).toBe(false)
+    expect(state.settings.has('libraryOwner:shared-copy')).toBe(false)
+    expect(state.settings.get('libraryOwner:already-owned')).toBe('nord')
+  })
+
+  it('registers legacy local ownership before accepting a conflicting remote catalog', async () => {
+    state.series.push({ id: 'legacy', rootFolder: 'Demo', sourceSite: 'demonicscans.org' })
+    receiveLibraryManifest(catalog())
+    await vi.waitFor(() => expect(state.settings.has('libraryReceived:nord')).toBe(true))
+    expect(state.settings.get('libraryOwner:legacy')).toBe('mac-test')
+    expect(state.pull).not.toHaveBeenCalled()
+  })
+
   it('shows the complete listing before importing ready chapters, without giving replicas source URLs', async () => {
     state.pull.mockImplementation(async () => {
       expect(state.chapters).toHaveLength(2)

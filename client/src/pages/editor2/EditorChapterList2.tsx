@@ -19,6 +19,7 @@ import {
   seriesApi,
   videoApi2,
   type CropRepairResult,
+  type Editor2Completion,
   type Editable2Chapter,
   type Editor2ChecklistItem,
   type Editor2ChecklistKey,
@@ -70,6 +71,7 @@ import {
 import { useWakeLock } from '@/hooks/useWakeLock'
 import { usePublishedChapters } from '@/hooks/usePublishedChapters'
 import { CompletedBadge, completedRowClass } from '@/components/PublishedBadge'
+import { SeriesDoneBadge } from './SeriesDoneBadge'
 import { chapterList, phoneEditorApi, readSavedEditorPrompt as readSavedPrompt } from './phoneEditor'
 import { LanguageTabs } from '@/components/LanguageTabs'
 import { LANGUAGE_LABEL, useNarrationLanguage, withLang, type NarrationLanguage } from '@/lib/narrationLanguage'
@@ -184,6 +186,7 @@ export default function EditorChapterList2() {
   const [seriesTitle, setSeriesTitle] = useState('')
   const [chapters, setChapters] = useState<Editable2Chapter[]>([])
   const [loading, setLoading] = useState(true)
+  const [completion, setCompletion] = useState<Editor2Completion | null>(null)
 
   // Keyed by chapter id so each card's button tracks its own state and two
   // chapters' buttons never share a spinner.
@@ -847,6 +850,27 @@ export default function EditorChapterList2() {
       .finally(() => setLoading(false))
   }, [seriesId, language])
 
+  // Recheck compressed videos when returning from saving or cleaning up files.
+  useEffect(() => {
+    if (!seriesId) return
+    let cancelled = false
+    setCompletion(null)
+    const refresh = () => {
+      if (document.hidden) return
+      void videoApi2.getSeriesCompletion(seriesId, language)
+        .then(result => { if (!cancelled) setCompletion(result) })
+        .catch(() => { if (!cancelled) setCompletion(null) })
+    }
+    refresh()
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      cancelled = true
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [seriesId, language])
+
   // The preview screen records "processed" while this list is still mounted
   // behind it, so re-read those markers whenever this view is shown again.
   useEffect(() => {
@@ -914,7 +938,10 @@ export default function EditorChapterList2() {
         </Button>
         <Clapperboard className="h-5 w-5 text-primary" />
         <div className="flex-1 min-w-0">
-          <h1 className="text-lg font-bold truncate">{seriesTitle}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-lg font-bold truncate">{seriesTitle}</h1>
+            <SeriesDoneBadge completion={completion} />
+          </div>
           <p className="text-xs text-muted-foreground">
             Editor 2.0 — {LANGUAGE_LABEL[language]} · {readyChapters.length}/{chapters.filter(ch => completedPart(ch.id) === null).length} ready to edit
           </p>

@@ -18,7 +18,8 @@ import {
   getChapterBlockers,
   getChapterCropMetadataBundle,
   getChapterTimelineBundle,
-  getEditableChapters2
+  getEditableChapters2,
+  getSeriesCompletion2
 } from '../services/videoEditor2Service.js'
 import { processTimelineJson } from '../services/editor2Timeline.js'
 import {
@@ -59,11 +60,25 @@ export function initVideoEditor2Routes(io: Server): Router {
    */
   router.get('/series/:seriesId/readiness', async (req: Request, res: Response) => {
     try {
-      const chapters = await getEditableChapters2(req.params.seriesId, requestLanguage(req))
-      res.json({ chapters: chapters.map(ch => ({ id: ch.id, ready: ch.ready })) })
+      const language = requestLanguage(req)
+      const [chapters, completion] = await Promise.all([
+        getEditableChapters2(req.params.seriesId, language),
+        getSeriesCompletion2(req.params.seriesId, language)
+      ])
+      res.json({ chapters: chapters.map(ch => ({ id: ch.id, ready: ch.ready })), ...completion })
     } catch (error) {
       console.error('[videoEditor2] series readiness failed:', error)
       res.status(500).json({ error: 'Failed to check series readiness' })
+    }
+  })
+
+  /** GET /series/:seriesId/completion — saved compressed videos in this language. */
+  router.get('/series/:seriesId/completion', async (req: Request, res: Response) => {
+    try {
+      res.json(await getSeriesCompletion2(req.params.seriesId, requestLanguage(req)))
+    } catch (error) {
+      console.error('[videoEditor2] series completion failed:', error)
+      res.status(500).json({ error: 'Failed to check series completion' })
     }
   })
 
