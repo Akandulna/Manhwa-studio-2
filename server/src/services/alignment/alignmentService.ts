@@ -26,6 +26,7 @@ import { buildTimelineScript, type AlignedWord } from './beatFormatter.js'
 import { cachedProbe, isAvailable } from '../../utils/cachedProbe.js'
 import { writeAlignmentDocument } from './alignmentDocument.js'
 import { NarrationLanguage, parseLanguage } from '../narrationLanguage.js'
+import { notifySeriesProcessChanged } from '../seriesProcess.js'
 
 /** Serialized: one alignment at a time, so peak memory stays predictable. */
 const alignQueue = new PQueue({ concurrency: 1 })
@@ -268,6 +269,7 @@ function alignQueued(sectionId: string, io?: Server): Promise<AlignmentResult> {
         beatCount,
         documentWritten
       })
+      notifySeriesProcessChanged()
 
       return { sectionId, timelineScript, beatCount, durationSec }
     } catch (error) {

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { usePublishedChapters } from '@/hooks/usePublishedChapters'
 import { CompletedBadge, PublishedBadge, completedRowClass, publishedRowClass } from '@/components/PublishedBadge'
 import { useParams, useNavigate } from 'react-router-dom'
-import { seriesApi, downloadsApi, chaptersApi, Series, Chapter, LARGE_CHAPTER_PAGES } from '@/lib/api'
+import { seriesApi, downloadsApi, Series, Chapter, LARGE_CHAPTER_PAGES } from '@/lib/api'
 import { useSocket } from '@/lib/socket'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -15,8 +15,6 @@ import { useToast } from '@/components/ui/use-toast'
 import { 
   ArrowLeft, 
   Download, 
-  Pause, 
-  Play, 
   RotateCcw,
   FolderOpen,
   Loader2,

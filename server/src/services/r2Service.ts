@@ -677,6 +677,27 @@ export interface PhoneUploadProfile {
   chatGpt: PhoneChatGptProfile | null
   /** Sleeper-Cell's Tools → Profiles → Check of it, as last done there: sign-ins and plans; null when never checked. */
   check: PhoneProfileCheck | null
+  /** Its plan limits (5-hour and weekly), read in the check and during runs; null when never read or from older builds. */
+  usage: PhoneChatGptUsage | null
+}
+
+/** One plan-limit window of a ChatGPT account (Codex, Work and the like share it; chats don't count). */
+export interface PhoneUsageWindow {
+  /** Its length: 18000 is the 5-hour limit, 604800 the weekly one. */
+  seconds: number
+  /** 0–100. */
+  usedPercent: number
+  /** When it's back to 0; null when ChatGPT didn't say. */
+  resetAt: string | null
+}
+
+/** A ChatGPT account's plan limits as the phone last read them (ChatGptUsage.kt). */
+export interface PhoneChatGptUsage {
+  checkedAt: string
+  limitReached: boolean
+  /** Why the last read failed, when nothing better was kept (`windows` then empty). */
+  error: string | null
+  windows: PhoneUsageWindow[]
 }
 
 /** One site's part of a profile check. */
@@ -784,7 +805,7 @@ const PHONE_PAGE_STATES = new Set<string>(['done', 'in_progress', 'changed'])
  * never does. A page takes minutes, fix rounds included, so one still "working"
  * after this long is taken as a dead run rather than a slow one.
  */
-const WORKING_STALE_MS = 45 * 60_000
+export const WORKING_STALE_MS = 45 * 60_000
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
@@ -841,7 +862,8 @@ export function parseUploadProfiles(raw: unknown): PhoneUploadProfile[] {
       ...phoneOf(entry),
       profileId: typeof entry.profileId === 'string' && entry.profileId ? entry.profileId : entry.id,
       chatGpt: parseChatGptProfile(entry.chatGpt),
-      check: parseProfileCheck(entry.check)
+      check: parseProfileCheck(entry.check),
+      usage: parseChatGptUsage(entry.usage)
     })
   }
   return profiles
@@ -856,6 +878,24 @@ function parseProfileCheck(raw: unknown): PhoneProfileCheck | null {
     return { signedIn: value.signedIn === true, email: text(value.email), plan: text(value.plan), error: text(value.error) }
   }
   return { checkedAt: raw.checkedAt, chatGpt: site(raw.chatGpt), gemini: site(raw.gemini) }
+}
+
+/** A profile's `usage` (ChatGptUsage.kt on the phone), dropping anything malformed. */
+function parseChatGptUsage(raw: unknown): PhoneChatGptUsage | null {
+  if (!isObject(raw) || !isTime(raw.checkedAt)) return null
+  const windows = (Array.isArray(raw.windows) ? raw.windows : [])
+    .filter((w): w is Record<string, unknown> => isObject(w) && typeof w.usedPercent === 'number')
+    .map(w => ({
+      seconds: typeof w.seconds === 'number' ? w.seconds : 0,
+      usedPercent: Math.min(100, Math.max(0, w.usedPercent as number)),
+      resetAt: isTime(w.resetAt) ? w.resetAt : null
+    }))
+  return {
+    checkedAt: raw.checkedAt,
+    limitReached: raw.limitReached === true,
+    error: typeof raw.error === 'string' && raw.error ? raw.error : null,
+    windows
+  }
 }
 
 /** Run automation's ChatGPT choices as the phone reports them back: each a name or null. */
@@ -1065,6 +1105,15 @@ export interface PhoneAutomation {
   /** How Image Clipper last ran there, the choices to offer first; null from builds before it was sent. */
   /** How Image Clipper last ran; `chatGpt` is the mode, model and effort last picked in Run automation (older builds: null). */
   clipper: { ai: PhoneClipperAi; flow: PhoneClipperFlow; tabs: number; chatGpt: ChatGptRunSettings | null } | null
+  /** Editor 2.0's tabs last used there; null from builds whose Editor 2.0 run takes neither tabs nor chapters (no split). */
+  editor: { tabs: number } | null
+  /** The runs whose start takes a `chapters` list (a share of a split); empty from builds before it was said. */
+  chapterRuns: PhoneRunKind[]
+  /**
+   * A run going there takes a start of the same run on the same series with `chapters` as its new scope, keeping
+   * the chapters it's on, without starting over (a split around it). Builds before would start over.
+   */
+  rescope: boolean
   /** It can stop a run once what it's on is done (stop with `after`); builds before can only stop it now. */
   stopAfter: boolean
   /** Image Clipper ends once the pages it's on are done. */
@@ -1307,6 +1356,9 @@ function parseAutomation(raw: unknown, seriesFor: (folder: string) => { id: stri
           chatGpt: isObject(raw.clipper.chatGpt) ? runSettingsOf(raw.clipper.chatGpt) : null
         }
       : null,
+    editor: isObject(raw.editor) ? { tabs: Math.min(PHONE_MAX_TABS, Math.max(1, Number(raw.editor.tabs) || 1)) } : null,
+    chapterRuns: Array.isArray(raw.chapterRuns) ? PHONE_RUN_KINDS.filter(kind => (raw.chapterRuns as unknown[]).includes(kind)) : [],
+    rescope: raw.rescope === true,
     stopAfter: raw.stopAfter === true,
     clipperStopping: raw.clipperStopping === true
   }
@@ -1318,7 +1370,7 @@ function phoneRuns(automation: Record<string, unknown>): PhoneRunKind[] {
   return PHONE_RUN_KINDS.filter(kind => (automation.runs as unknown[]).includes(kind))
 }
 
-/** Image Clipper's most ChatGPT tabs at once (ClipperRun.MAX_TABS on the phone). */
+/** The most tabs a phone run takes at once (MAX_TABS in ClipperRun, EditorRun and VoiceoverRun on the phone). */
 export const PHONE_MAX_TABS = 4
 
 export interface PhoneAutomationTarget {
@@ -1328,11 +1380,15 @@ export interface PhoneAutomationTarget {
   chapters: string[] | null
   /** It was connected, so it got the command at once (else it acts on it if it connects within 10 minutes). */
   reached: boolean
+  /** A split's share: started, rescoped (a run already on it), or told to finish what it's on (see phoneSplit.ts). */
+  action?: 'start' | 'rescope' | 'finish'
 }
 
 export interface PhoneAutomationSent extends PhoneUpdateRequest {
   /** Each phone sent the command; one entry with device "*" when it went to every phone. */
   targets: PhoneAutomationTarget[]
+  /** A split's chapter numbers by folder, to show the shares. */
+  numbers?: Record<string, number>
 }
 
 export type ChatGptRunSettings = { mode: 'Chat' | 'Work' | null; model: string | null; effort: string | null }
@@ -1341,7 +1397,7 @@ export interface PhoneAutomationOptions {
   /** The run to start; Image Clipper when left out. A stop stops whichever run is going. */
   kind?: PhoneRunKind
   seriesId?: string
-  /** Image Clipper's and the voiceover's tabs. */
+  /** Image Clipper's, Editor 2.0's and the voiceover's tabs. */
   tabs?: number
   /** Image Clipper: ChatGPT or Gemini in AI Studio, and one prompt (classic) or four steps. */
   ai?: PhoneClipperAi
@@ -1352,6 +1408,12 @@ export interface PhoneAutomationOptions {
   language?: NarrationLanguage
   device?: string
   split?: boolean
+  /**
+   * A split as confirmed (planSplit, then Run automation's confirm): each phone's whole share, by device id. Sent
+   * as it is, not planned again; an empty share has a phone already on this run finish what it's on. Without it, a
+   * split is planned and sent at once.
+   */
+  assignments?: Record<string, string[]>
   /** A stop: once the pages, chapter or splits the run is on are done, as the phone's "Finish …, then stop". */
   after?: boolean
 }
@@ -1363,7 +1425,7 @@ const START_ACTION: Record<PhoneRunKind, PhoneAction> = {
   voiceover: 'voiceover_start'
 }
 
-const RUN_LABEL: Record<PhoneRunKind, string> = {
+export const RUN_LABEL: Record<PhoneRunKind, string> = {
   clipper: 'Image Clipper',
   narration: 'Narration scripts',
   editor: 'Editor 2.0 timelines',
@@ -1379,10 +1441,14 @@ const RUN_LABEL: Record<PhoneRunKind, string> = {
  * or only Image Clipper on builds that can't start the others; with `after`,
  * once what the run is on is done (builds that can't say so refuse it).
  *
- * `device` sends it to that phone only. `split` (Image Clipper, with a series)
- * shares the series' unfinished chapters out between the phones that can take
- * it (see splitChapters), each getting its own start with its chapters, so no
- * two phones clip the same page. Without either, every phone gets it.
+ * `device` sends it to that phone only. `split` (any run but Narration
+ * scripts, which one phone writes in order; with a series) sends
+ * each phone its share of the series' chapters, as `assignments` says (the plan
+ * planSplit made and Run automation confirmed), or as planned now without it:
+ * a start with its chapters, to a phone already on this run too (it takes them
+ * as its new scope). So no two phones work on the same page or chapter, and a
+ * phone busy with something else is left alone. Without either, every phone
+ * gets it.
  */
 export async function sendAutomationCommand(
   command: 'start' | 'stop',
@@ -1419,7 +1485,7 @@ export async function sendAutomationCommand(
     // The phone names series by their folder (see place() in getPhoneOverview).
     series = path.basename(row.rootFolder)
   }
-  const takesTabs = kind === 'clipper' || kind === 'voiceover'
+  const takesTabs = kind === 'clipper' || kind === 'editor' || kind === 'voiceover'
   if (options.tabs !== undefined && !(Number.isInteger(options.tabs) && options.tabs >= 1 && options.tabs <= PHONE_MAX_TABS)) {
     throw new Error(`tabs must be 1 to ${PHONE_MAX_TABS}`)
   }
@@ -1427,31 +1493,72 @@ export async function sendAutomationCommand(
     series,
     tabs: takesTabs ? options.tabs : undefined,
     ...(kind === 'clipper' ? { ai: options.ai, flow: options.flow, chatGpt: options.chatGpt } : {}),
+    // Narration's AI only when asked for: Run automation has no choice of it, so the phone keeps its own.
+    ...(kind === 'narration' && options.ai ? { ai: options.ai } : {}),
     ...(kind === 'editor' || kind === 'voiceover' ? { language: options.language ?? 'en' } : {})
   }
   if (!options.split) {
+    if (kind === 'narration' && series) assertNarrationFree(series, device)
     const sent = await sendPhoneRequest(START_ACTION[kind], { ...args, device })
     return { ...sent, via: 'relay', targets: [target(sent)] }
   }
 
-  if (kind !== 'clipper') throw new Error('Only Image Clipper can be split between the phones')
+  const split = await import('./phoneSplit.js')
+  if (kind === 'narration') throw new Error(split.NARRATION_ONE_PHONE)
   if (!options.seriesId || !series) throw new Error('Pick a series to split between the phones')
-  const phones = startablePhones()
-  if (phones.length < 2) throw new Error('Splitting needs two phones open with “Start from Manhwa Studio” on')
-  const shares = await splitChapters(options.seriesId, phones.map(p => p.id))
+  let assignments = options.assignments
+  let numbers: Record<string, number> | undefined
+  if (!assignments) {
+    const plan = await split.planSplit(kind, options.seriesId, options.language ?? 'en')
+    numbers = plan.numbers
+    assignments = Object.fromEntries(plan.targets.filter(t => t.action !== 'skip').map(t => [t.device, t.chapters]))
+  }
+  const known = new Set(relayPhones().map(p => p.id).filter(Boolean))
+  const given = new Set<string>()
+  for (const [phone, chapters] of Object.entries(assignments)) {
+    if (!known.has(phone)) throw new Error('A phone in the split is not known to the relay')
+    if (!Array.isArray(chapters) || chapters.some(c => typeof c !== 'string' || !c)) throw new Error('Each phone’s share must be a list of chapter folders')
+    for (const chapter of chapters) {
+      if (given.has(chapter)) throw new Error(`${chapter} is in two phones’ shares`)
+      given.add(chapter)
+    }
+  }
+  if (!given.size) throw new Error('The split gives no phone a chapter')
+  if (!numbers) {
+    const row = await prisma.series.findUnique({ where: { id: options.seriesId }, select: { chapters: { select: { folderPath: true, number: true } } } })
+    numbers = Object.fromEntries((row?.chapters ?? []).map(c => [path.basename(c.folderPath), c.number]).filter(([folder]) => given.has(folder as string)))
+  }
   const targets: PhoneAutomationTarget[] = []
   let first: (PhoneUpdateRequest & { phones: number }) | null = null
   let reached = 0
-  for (const phone of phones) {
-    const chapters = shares.get(phone.id) ?? []
-    if (!chapters.length) continue
-    const sent = await sendPhoneRequest('clipper_start', { ...args, chapters, device: phone.id })
+  for (const [phone, chapters] of Object.entries(assignments)) {
+    // A phone already on this run with nothing left for it finishes what it's on, rather than go on with its old scope.
+    const sent = chapters.length
+      ? await sendPhoneRequest(START_ACTION[kind], { ...args, chapters, device: phone })
+      : await sendPhoneRequest('run_finish', { device: phone })
     first ??= { ...sent, via: 'relay' }
     reached += sent.phones
-    targets.push({ device: phone.id, name: phone.name, chapters, reached: sent.phones > 0 })
+    const action = !chapters.length ? 'finish' : split.onThisRun(kind, series, options.language ?? 'en', phone) ? 'rescope' : 'start'
+    targets.push({ device: phone, name: phoneName(phone), chapters, reached: sent.phones > 0, action })
   }
-  if (!first) throw new Error('Every chapter of this series is clipped on the phones already')
-  return { ...first, phones: reached, targets }
+  return { ...first!, phones: reached, targets, numbers }
+}
+
+/**
+ * Narration scripts run on one phone at a time per series (each chapter's prompt goes on from the one before's
+ * summary): a start is refused while another phone has a narration run on `series` (paused or not; a run gone quiet
+ * past WORKING_STALE_MS is dead). The phone running it may be started again (it just resumes). Without `device`,
+ * the start goes to the one phone connected, or to every phone, when no phone may have it running.
+ */
+function assertNarrationFree(series: string, device: string | undefined): void {
+  const connected = relayPhones().filter(p => p.connected)
+  const target = device ?? (connected.length === 1 ? connected[0].id : null)
+  for (const receipt of relayReceipts<{ runs?: unknown }>('scripts') ?? []) {
+    if (target !== null && receipt.device === target) continue
+    if (parseScriptRuns(receipt.body.runs).some(r => r.kind === 'narration' && r.series === series)) {
+      throw new Error(`${phoneName(receipt.device)} is already writing ${series}'s scripts. Stop it there first.`)
+    }
+  }
 }
 
 /** The `automation` of each phone a command goes to, from its crops receipt: `device`'s, or every phone's. */
@@ -1467,53 +1574,13 @@ function automationRuns(device: string | undefined): PhoneRunKind[][] {
 }
 
 /** Phones the relay can start on their own now: connected, with an id, and "Start from Manhwa Studio" on. */
-function startablePhones(): { id: string; name: string }[] {
+export function startablePhones(): { id: string; name: string }[] {
   const remote = new Set(
     (relayReceipts<{ automation?: { remoteStart?: unknown } }>('crops') ?? [])
       .filter(r => r.body.automation?.remoteStart === true)
       .map(r => r.device)
   )
   return relayPhones().filter(p => p.id && p.connected && remote.has(p.id))
-}
-
-/**
- * Shares a series' chapters left to clip out between `devices`, in reading
- * order, each chapter to the phone with the fewest pages given so far, so the
- * phones finish about together and the early chapters are done first. Left
- * means not every page has its crop JSON on some phone. Only chapters the
- * phones have downloaded count, when they report downloads.
- */
-export async function splitChapters(seriesId: string, devices: string[]): Promise<Map<string, string[]>> {
-  const row = await prisma.series.findUnique({
-    where: { id: seriesId },
-    select: { rootFolder: true, chapters: { select: { folderPath: true, number: true, pageCount: true } } }
-  })
-  if (!row) throw new Error('Series not found')
-  const folder = path.basename(row.rootFolder)
-  const crops = mergeCropsReceipts((relayReceipts<Record<string, unknown>>('crops') ?? []).map(r => ({ ...r, name: r.device })))
-  const progress = (isObject(crops.series) && isObject(crops.series[folder]) && isObject(crops.series[folder].chapters)
-    ? crops.series[folder].chapters
-    : {}) as Record<string, { total?: unknown; done?: unknown }>
-  const downloaded = new Set<string>()
-  for (const receipt of relayReceipts<{ series?: Record<string, { chapters?: Record<string, unknown> }> }>('sync') ?? []) {
-    for (const chapter of Object.keys(receipt.body.series?.[folder]?.chapters ?? {})) downloaded.add(chapter)
-  }
-
-  const shares = new Map(devices.map(d => [d, [] as string[]]))
-  const load = new Map(devices.map(d => [d, 0]))
-  const chapters = [...row.chapters].sort((a, b) => a.number - b.number)
-  for (const chapter of chapters) {
-    const name = path.basename(chapter.folderPath)
-    if (downloaded.size && !downloaded.has(name)) continue
-    const phone = progress[name]
-    const total = count(phone?.total) || chapter.pageCount || 0
-    const done = count(phone?.done)
-    if (total > 0 && done >= total) continue
-    const lightest = devices.reduce((a, b) => (load.get(b)! < load.get(a)! ? b : a))
-    shares.get(lightest)!.push(name)
-    load.set(lightest, load.get(lightest)! + Math.max(1, total - done))
-  }
-  return shares
 }
 
 /**

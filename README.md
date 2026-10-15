@@ -9,6 +9,11 @@ work onto the Mac, aligns the voiceover, cuts the crops and renders the video.
 ## Modules
 
 ### Library & Downloader
+- **Shared library**: a newly added series is listed on the Mac and every Sleeper-Cell phone automatically.
+  The device that adds it owns the source downloads. Once its download batch finishes it detects repeated
+  intro/outro artwork, keeps the originals, and joins/splits the pages before sharing them through R2.
+  The other devices download those prepared chapters automatically; they do not fetch the original website.
+  Offline devices catch up when they reconnect. This requires the updated relay and Android app.
 - **Add Series**: paste 3 seed URLs to detect the chapter URL pattern and
   discover chapters, or upload pages by hand (manual mode).
 - **Library / Series detail**: download chapters (Playwright headless browser,
@@ -95,7 +100,28 @@ npm run dev               # API on :3002 + client on http://localhost:5173
 
 Set up Cloudflare R2 in **Settings → Cloudflare** (it writes the `R2_*` lines in
 `server/.env`, no restart needed). The bucket is on the free plan, so the app
-never polls it: R2 is read only when you press Fetch / Sync / Get from phones.
+never polls it: library changes arrive through the relay, with an R2 catch-up at startup.
+Other production files are read when you press Fetch / Sync / Get from phones.
+
+Shared library catalogs are stored as `<prefix>library/<origin device id>.json` and relayed as `library`
+receipts to desktops and phones, including on reconnect. Catalogs list chapters immediately and include ZIP
+versions only after preparation/upload. The Mac automatically imports them into its database and download
+folder; phones automatically import their Master Library rows and use ManhwaSync to fetch the pages.
+Clearing a local shared-library copy retains its R2 ZIP for devices that are offline.
+
+Library production tracking uses fixed 20-chapter parts: 1–20, 21–40, and so on.
+Its accordion groups show how many consecutive parts have completed. Every chapter in
+a part must have Editor 2.0 exports in **both English and Hinglish**; missing chapters
+keep the part open. The expanded tracker shows preparation, scripts, voiceover splits
+and audio, alignment, crop JSON/review/cropping, and timeline/processed/export counters.
+Completion only updates the tracker; Storage's separate archival action remains manual.
+
+Saved phone facts travel as `process` relay receipts. The Mac combines them with local
+file and database evidence, pushes changes to its Library over Socket.IO, and publishes
+the combined snapshot to the relay and `<prefix>progress/<Mac device id>.json` in R2.
+Phones receive live updates and cached relay receipts on reconnect, with R2 catch-up
+when Library sync reconnects. Alignment, final cropping, processing and exports are
+desktop facts. A stage completed on several devices counts once.
 
 ### Mac App (optional)
 

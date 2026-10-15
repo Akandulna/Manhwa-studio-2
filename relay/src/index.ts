@@ -47,9 +47,12 @@
  * `chapters` when given (the desktop splitting a series between phones),
  * waking it if need be; `ai` ("chatgpt" | "aistudio") and `flow` ("classic" |
  * "steps") pick where and how it prompts the pages. "narration_start" writes
- * `series`' scripts, "editor_start" makes its Editor 2.0 timelines in
- * `language` ("en" | "hi"), and "voiceover_start" voices its splits in
- * `language` in `tabs` tabs. "clipper_stop" stops Image Clipper, "run_stop"
+ * `series`' scripts (`ai`: "aistudio" | "gemini", when given), "editor_start"
+ * makes its Editor 2.0 timelines in `language` ("en" | "hi") in `tabs` ChatGPT
+ * tabs, and "voiceover_start" voices its splits in `language` in `tabs` tabs;
+ * those two only on `chapters` when given (a split, as for Image Clipper; a
+ * phone already running it on `series` takes them as its new scope). Narration
+ * is never split: one phone writes a series' chapters in order. "clipper_stop" stops Image Clipper, "run_stop"
  * whichever run is going, and "run_finish" has it stop once what it's on is done. The phone acts on those only
  * with its "Start from Manhwa Studio" setting on, and ignores ones older than
  * 10 minutes, as requests are handed over again whenever it connects.
@@ -80,7 +83,7 @@ export interface Env {
 type Role = 'desktop' | 'phone'
 
 /** `screen` is the phone's screen state; `screenshot` its browser tabs as JPEGs, posted when asked (see PASS_ONLY). */
-const KINDS = new Set(['sync', 'scripts', 'crops', 'screen', 'screenshot'])
+const KINDS = new Set(['sync', 'scripts', 'crops', 'screen', 'screenshot', 'library', 'process'])
 /** Kinds passed to the desktops connected now and never stored: the user wants screenshots kept nowhere. */
 const PASS_ONLY = new Set(['screenshot'])
 
@@ -124,7 +127,7 @@ interface StoredRequest {
   series?: string
   tabs?: number
   chapters?: string[]
-  /** Image Clipper's AI and prompt flow. */
+  /** Image Clipper's AI and prompt flow; the narration run's AI. */
   ai?: string
   flow?: string
   /** Editor 2.0's and the voiceover's narration language. */
@@ -176,15 +179,19 @@ function chatGptSettings(value: unknown): ChatGptSettings | null {
 /** The actions that start a run on `series`. */
 const START_ACTIONS = new Set(['clipper_start', 'narration_start', 'editor_start', 'voiceover_start'])
 /** The runs that take `tabs`. */
-const TAB_ACTIONS = new Set(['clipper_start', 'voiceover_start'])
+const TAB_ACTIONS = new Set(['clipper_start', 'editor_start', 'voiceover_start'])
+/** The runs that take `chapters`: a phone's share of a series split between phones (or a running one's new scope). */
+const CHAPTER_ACTIONS = new Set(['clipper_start', 'editor_start', 'voiceover_start'])
 /** The runs that take a `language`. */
 const LANGUAGE_ACTIONS = new Set(['editor_start', 'voiceover_start'])
 
 const AIS = new Set(['chatgpt', 'aistudio'])
+/** The narration run's AI: Gemini in AI Studio, or Gemini on the web. */
+const NARRATION_AIS = new Set(['aistudio', 'gemini'])
 const FLOWS = new Set(['classic', 'steps'])
 const LANGUAGES = new Set(['en', 'hi'])
 
-/** Image Clipper's and the voiceover's most tabs at once (ClipperRun.MAX_TABS and VoiceoverRun.MAX_TABS on the phone). */
+/** The most tabs a run takes at once (ClipperRun.MAX_TABS, EditorRun.MAX_TABS and VoiceoverRun.MAX_TABS on the phone). */
 const MAX_TABS = 4
 
 const DEVICE_TAG = 'device:'
@@ -299,6 +306,10 @@ export class Relay extends DurableObject<Env> {
       const name = (url.searchParams.get('name') ?? '').trim().slice(0, MAX_NAME)
       const at = Date.now()
       server.serializeAttachment({ device, name, at } satisfies PhoneAttachment)
+      // Shared library catalogs go to phones too. Replayed on reconnect, including when the origin is offline.
+      for (const row of this.sql.exec<{ device: string; kind: string; body: string; at: number }>("SELECT device, kind, body, at FROM phone_receipts WHERE kind IN ('library', 'process') AND device != ?", device)) {
+        server.send(receiptMessage(row.kind, row.device, row.body, row.at))
+      }
       if (device) {
         this.sql.exec(
           'INSERT INTO phone_seen (device, name, at, left) VALUES (?, ?, ?, NULL) ' +
@@ -425,6 +436,12 @@ export class Relay extends DurableObject<Env> {
     const message = receiptMessage(kind, device, text, at)
     const desktops = this.sockets('desktop')
     for (const ws of desktops) ws.send(message)
+    if (kind === 'library' || kind === 'process') {
+      for (const ws of this.sockets('phone')) {
+        const target = ws.deserializeAttachment() as PhoneAttachment | null
+        if (target?.device !== device) ws.send(message)
+      }
+    }
     // `device` tells the phone this relay keeps phones apart (one deployed before didn't, and ignored `replaces`).
     return Response.json({ ok: true, at, device, desktops: desktops.length })
   }
@@ -456,12 +473,12 @@ export class Relay extends DurableObject<Env> {
     if (TAB_ACTIONS.has(started)) {
       if (typeof tabs === 'number' && Number.isInteger(tabs) && tabs >= 1 && tabs <= MAX_TABS) request.tabs = tabs
     }
+    if (CHAPTER_ACTIONS.has(started) && Array.isArray(chapters)) {
+      const names = chapters.filter((c): c is string => typeof c === 'string' && !!c && c.length <= MAX_CHAPTER_NAME)
+      if (names.length > MAX_CHAPTERS) return null
+      if (names.length) request.chapters = names
+    }
     if (started === 'clipper_start') {
-      if (Array.isArray(chapters)) {
-        const names = chapters.filter((c): c is string => typeof c === 'string' && !!c && c.length <= MAX_CHAPTER_NAME)
-        if (names.length > MAX_CHAPTERS) return null
-        if (names.length) request.chapters = names
-      }
       if (typeof ai === 'string' && AIS.has(ai)) request.ai = ai
       if (typeof flow === 'string' && FLOWS.has(flow)) request.flow = flow
       if (chatGpt !== undefined) {
@@ -470,6 +487,7 @@ export class Relay extends DurableObject<Env> {
         request.chatGpt = parsed
       }
     }
+    if (started === 'narration_start' && typeof ai === 'string' && NARRATION_AIS.has(ai)) request.ai = ai
     if (LANGUAGE_ACTIONS.has(started) && typeof language === 'string' && LANGUAGES.has(language)) request.language = language
     if (PROFILE_ACTIONS.has(started)) {
       if (typeof profile !== 'string' || !profile || profile.length > MAX_PROFILE) return null

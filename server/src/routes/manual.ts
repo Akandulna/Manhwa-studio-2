@@ -5,6 +5,8 @@
 
 import { Router, Request, Response } from 'express';
 import { prisma } from '../index.js';
+import { ownLibrarySeries, scheduleLibraryPublish } from '../services/librarySync.js';
+import { noteChapterDownloaded, flushAutoSend } from '../services/phoneSend.js';
 import { sanitizeTitle, zeroPad } from '../utils/urlPattern.js';
 import multer from 'multer';
 import path from 'path';
@@ -124,6 +126,7 @@ router.post('/series', async (req: Request, res: Response) => {
       }
     });
     
+    await ownLibrarySeries(series.id);
     res.status(201).json(series);
   } catch (error) {
     console.error('Error creating manual series:', error);
@@ -197,6 +200,7 @@ router.post('/series/:seriesId/chapters', async (req: Request, res: Response) =>
         }
       }
     });
+    scheduleLibraryPublish();
     
     res.json({
       message: `Added ${newChapters.length} chapters`,
@@ -270,6 +274,8 @@ router.post(
           pageCount: totalPages
         }
       });
+      await noteChapterDownloaded(seriesId);
+      flushAutoSend(req.app.get('io'));
       
       res.json({
         message: `Uploaded ${files.length} images`,

@@ -4,8 +4,10 @@
  * is set up to run (its Automation settings), its screen (Wake, Screen off,
  * Screenshot; see PhoneScreen.tsx), and Run automation and Stop for it: any of
  * the phone's runs, picked and set up in RunAutomation.tsx. One card per
- * phone; with two or more, Image Clipper can be split between them there, and
- * a bar stops every phone at once.
+ * phone; with two or more, Image Clipper, Editor 2.0 and the voiceover can be
+ * split between them there (narration scripts run on one phone; a split is planned
+ * first, so no phone's chapters overlap another's or what one is already
+ * doing), and a bar stops every phone at once.
  *
  * What the runs are doing is on Live Progress, and the accounts' limits on
  * Accounts; each card links there in one line.
@@ -43,7 +45,7 @@ import {
   type Tone
 } from './sleeperShared'
 import { PhoneScreenControls } from './PhoneScreen'
-import { AUTOMATION_NAME, RunAutomationDialog } from './RunAutomation'
+import { AUTOMATION_NAME, chapterRanges, RunAutomationDialog } from './RunAutomation'
 import { stopAllChoice, stopChoice, StopRunDialog } from './StopRun'
 
 type Command = 'start' | 'stop'
@@ -144,11 +146,13 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 }
 
 /** One phone: its state, what it's on in a line, its Automation settings, its screen, and Run automation and Stop. */
-function PhoneCard({ phone, overview, relay, screen, several, startable, now, send, sending }: {
+function PhoneCard({ phone, overview, relay, screen, screens, several, startable, now, send, sending }: {
   phone: PhoneOverviewPhone
   overview: PhoneOverview | null
   relay: RelayStatus | null
   screen: PhoneScreen | null
+  /** Every phone's screen, by device id, for the profile pickers of a run split between phones. */
+  screens: Map<string, PhoneScreen>
   several: boolean
   startable: PhoneOverviewPhone[]
   now: number
@@ -311,6 +315,7 @@ function PhoneCard({ phone, overview, relay, screen, several, startable, now, se
               profiles={profiles}
               relay={relay}
               screen={screen}
+              screens={screens}
               now={now}
               sending={sending === `start:${key}` || sending === 'start:all'}
               onStart={options => send('start', options, options.split ? null : phone.name)}
@@ -328,10 +333,11 @@ function PhoneCard({ phone, overview, relay, screen, several, startable, now, se
   )
 }
 
-/** The chapters a phone was given, short: "Ch. 2, 5, 7" or "12 chapters". */
-function chaptersLabel(chapters: string[], numbers: Map<string, number>): string {
-  if (chapters.length > 6) return `${chapters.length} chapters`
-  return `Ch. ${chapters.map(c => numbers.get(c) ?? c).join(', ')}`
+/** What a phone of a split was sent, short: "Ch 2–5, 7", a rescope of the run it's on, or its finish. */
+function shareLabel(target: { chapters: string[] | null; action?: 'start' | 'rescope' | 'finish' }, numbers: Record<string, number>): string {
+  if (target.action === 'finish') return 'finishes what it’s on'
+  const chapters = chapterRanges(target.chapters ?? [], numbers)
+  return target.action === 'rescope' ? `goes on with ${chapters}` : chapters
 }
 
 /** With several phones that can be started: stops whatever runs on all of them at once, now or once what each is on is done. */
@@ -351,7 +357,7 @@ function StopAllBar({ phones, startable, overview, send, sending }: {
       <CardContent className="flex flex-wrap items-center gap-3 p-4">
         <p className="flex items-center gap-2 text-sm font-medium">
           {startable.length} phones ready
-          <InfoTip text="Run automation on a phone’s card. Image Clipper can split a series between the phones there: no page is clipped twice." />
+          <InfoTip text="Run automation on a phone’s card. Image Clipper, Editor 2.0 and Voiceover can split a series between the phones there (narration scripts run on one phone at a time): you see which phone takes which chapters first, so no chapter is done twice and a phone busy with something else is left alone." />
         </p>
         <Button
           className="ml-auto"
@@ -423,14 +429,14 @@ export default function PhoneStatus() {
     setSending(`${command}${options.after ? '-after' : ''}:${phone ? phone.id || phone.name : 'all'}`)
     try {
       const sent = await r2Api.sendPhoneAutomation(command, options)
-      const numbers = new Map<string, number>()
-      for (const w of overview?.working ?? []) if (w.chapterNumber !== null) numbers.set(w.chapter, w.chapterNumber)
+      const numbers: Record<string, number> = { ...sent.numbers }
+      for (const w of overview?.working ?? []) if (w.chapterNumber !== null) numbers[w.chapter] ??= w.chapterNumber
       const split = command === 'start' && options.split && sent.targets?.length
       const verb = command === 'start' ? AUTOMATION_NAME[options.kind ?? 'clipper'] : options.after ? 'Finish, then stop' : 'Stop'
       toast({
         title: split ? `${verb} sent to ${sent.targets!.length} phones` : `${verb} sent to ${several ? to ?? 'every phone' : 'the phone'}`,
         description: split
-          ? sent.targets!.map(t => `${t.name}: ${chaptersLabel(t.chapters ?? [], numbers)}${t.reached ? '' : ' (not connected)'}`).join(' · ')
+          ? sent.targets!.map(t => `${t.name}: ${shareLabel(t, numbers)}${t.reached ? '' : ' (not connected)'}`).join(' · ')
           : sent.phones
           ? 'Sleeper-Cell got it. Live Progress shows what it does.'
           : 'The phone isn’t connected right now. It acts on this if it connects within 10 minutes.'
@@ -469,6 +475,7 @@ export default function PhoneStatus() {
                       overview={overview}
                       relay={relay}
                       screen={screens.get(phone.id) ?? null}
+                      screens={screens}
                       several={several}
                       startable={startable}
                       now={now}

@@ -33,6 +33,7 @@ import { ensureFfmpegAvailable, normalizePartDurations } from './videoMath.js'
 import { processTimelineJson, type PlanSection, type TimelinePlan } from './editor2Timeline.js'
 import { prisma } from '../index.js'
 import { NarrationLanguage, video2FolderName } from './narrationLanguage.js'
+import { notifySeriesProcessChanged } from './seriesProcess.js'
 
 const DEFAULT_FPS = 30
 const DEFAULT_CRF = 18
@@ -497,6 +498,7 @@ async function renderChapter(
   if (total <= 0) throw new Error('This chapter has no runtime to render')
 
   const tmpDir = path.join(os.tmpdir(), `mhs_editor2_${plan.chapterId}_${Date.now()}`)
+  const pendingOutput = `${outputPath}.partial`
   await fs.mkdir(tmpDir, { recursive: true })
 
   try {
@@ -548,11 +550,15 @@ async function renderChapter(
       '-hide_banner', '-nostats',
       '-f', 'concat', '-safe', '0', '-i', listPath,
       '-c', 'copy', '-movflags', '+faststart',
-      '-y', outputPath
+      '-f', 'mp4', '-y', pendingOutput
     ])
+    // Publish only a finished render: live Library scans must never count a
+    // growing or interrupted MP4 as an exported chapter.
+    await fs.rename(pendingOutput, outputPath)
 
     onPercent(100)
   } finally {
+    await fs.rm(pendingOutput, { force: true }).catch(() => {})
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
   }
 }
@@ -641,6 +647,7 @@ export async function startBatchExport(
   // but that needs every plan processed up front — which would stall the UI
   // before the first frame is rendered.
   const emit = () => {
+    notifySeriesProcessChanged()
     const done = job.chapters.reduce((sum, c) => sum + c.percent, 0)
     job.percent = Math.round(done / job.chapters.length)
     io?.emit('editor2:export-progress', {

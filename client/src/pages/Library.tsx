@@ -1,17 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
-import { usePublishedChapters } from '@/hooks/usePublishedChapters'
-import { SeriesCompletedBadge, publishedRowClass } from '@/components/PublishedBadge'
+import { useSeriesProcess } from '@/hooks/useSeriesProcess'
+import { SeriesProcessTracker } from '@/components/SeriesProcessTracker'
 import { Link, useNavigate } from 'react-router-dom'
 import { seriesApi, r2Api, stitchApi, Series, PhoneSendJob, PhoneSyncStatus, LARGE_CHAPTER_PAGES } from '@/lib/api'
 import { useSocket } from '@/lib/socket'
 import { PhoneSendStatusBar } from '@/components/PhoneSendStatusBar'
 import { PhoneSendDialog } from '@/components/PhoneSendDialog'
 import { PhonePullDialog } from '@/components/PhonePullDialog'
-import { PhoneSyncBadge } from '@/components/PhoneSyncBadge'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Progress } from '@/components/ui/progress'
 import { 
   Dialog,
   DialogContent,
@@ -22,7 +20,7 @@ import {
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Plus, BookOpen, Globe, Loader2, FolderInput, RefreshCw, Smartphone, Layers, Download } from 'lucide-react'
+import { Plus, BookOpen, Loader2, FolderInput, RefreshCw, Smartphone, Layers, Download } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 
 const API_BASE = 'http://localhost:3002/api'
@@ -36,9 +34,7 @@ interface ScannedSeries {
 
 export default function Library() {
   const [series, setSeries] = useState<Series[]>([])
-  // How many chapters of each series are actually rendered to video — the
-  // disk's answer, read from Editor 2.0's _video2 folders.
-  const { seriesPublished, seriesCompletedParts } = usePublishedChapters()
+  const { progress, error: progressError, reload: reloadProgress } = useSeriesProcess()
   const [loading, setLoading] = useState(true)
   const [importDialogOpen, setImportDialogOpen] = useState(false)
   const [scanning, setScanning] = useState(false)
@@ -91,8 +87,10 @@ export default function Library() {
       if (event.kind === 'sync') loadPhoneSync()
     }
     socket.on('phone:receipt', onReceipt)
+    socket.on('library:updated', loadSeries)
     return () => {
       socket.off('phone:receipt', onReceipt)
+      socket.off('library:updated', loadSeries)
     }
   }, [socket, loadPhoneSync])
 
@@ -265,45 +263,6 @@ export default function Library() {
     }
   }
 
-  const getStatusInfo = (statusCounts: Series['statusCounts']) => {
-    if (!statusCounts) return { label: 'Unknown', variant: 'outline' as const, progress: 0 }
-    
-    const total = Object.values(statusCounts).reduce((a, b) => a + b, 0)
-    const done = statusCounts.done
-    const failed = statusCounts.failed
-    const downloading = statusCounts.downloading + statusCounts.queued
-    
-    if (downloading > 0) {
-      return {
-        label: `Downloading (${downloading})`,
-        variant: 'default' as const,
-        progress: Math.round((done / total) * 100)
-      }
-    }
-    
-    if (failed > 0) {
-      return {
-        label: `${failed} Failed`,
-        variant: 'destructive' as const,
-        progress: Math.round((done / total) * 100)
-      }
-    }
-    
-    if (done === total) {
-      return {
-        label: 'Complete',
-        variant: 'success' as const,
-        progress: 100
-      }
-    }
-    
-    return {
-      label: `${done}/${total} Done`,
-      variant: 'secondary' as const,
-      progress: Math.round((done / total) * 100)
-    }
-  }
-
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -354,6 +313,8 @@ export default function Library() {
           </Link>
         </div>
       </div>
+
+      {progressError && <div role="status" className="mb-4 flex items-center justify-between rounded-lg border border-amber-500/30 p-3 text-sm"><span>{progressError} Showing the last known status.</span><Button variant="ghost" size="sm" onClick={reloadProgress}>Retry</Button></div>}
 
       <PhonePullDialog open={pullOpen} onOpenChange={setPullOpen} onPulled={() => { loadSeries(); loadPhoneSync() }} />
 
@@ -473,71 +434,7 @@ export default function Library() {
           </Link>
         </Card>
       ) : (
-        <Card className="overflow-hidden divide-y">
-          {series.map((s) => {
-            const status = getStatusInfo(s.statusCounts)
-            // null until the lookup resolves, or when nothing is published yet.
-            const rollup = seriesPublished(s.id)
-            const published = rollup && rollup.published > 0 ? rollup : null
-            const onPhone = phoneSync?.series[s.id]
-
-            return (
-              <Link
-                to={`/series/${s.id}`}
-                key={s.id}
-                className={`flex items-center gap-4 px-4 py-3 hover:bg-accent/50 transition-colors ${
-                  published ? publishedRowClass : ''
-                }`}
-              >
-                <div className="h-10 w-10 shrink-0 rounded-md bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center">
-                  <BookOpen className="h-5 w-5 text-primary/40" />
-                </div>
-
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 min-w-0">
-                  <h3 className="font-semibold truncate">{s.title}</h3>
-                  <SeriesCompletedBadge parts={seriesCompletedParts(s.id)} />
-                </div>
-                  <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                    <Globe className="h-3 w-3 shrink-0" />
-                    <span className="truncate">{s.sourceSite}</span>
-                  </div>
-                </div>
-
-                <div className="hidden md:flex items-center gap-1.5 shrink-0">
-                  {published && (
-                    <Badge
-                      className={
-                        published.published === published.total
-                          ? 'border-transparent bg-fuchsia-600 text-white hover:bg-fuchsia-600/80'
-                          : 'border-transparent bg-fuchsia-600/80 text-white hover:bg-fuchsia-600/60'
-                      }
-                      title={`${published.published} of ${published.total} chapters rendered to video`}
-                    >
-                      🎬 {published.published === published.total
-                        ? 'Published'
-                        : `Published ${published.published}/${published.total}`}
-                    </Badge>
-                  )}
-                  {onPhone && <PhoneSyncBadge sync={onPhone} device={phoneSync?.device ?? null} />}
-                </div>
-
-                <span className="w-24 shrink-0 text-sm text-muted-foreground text-right">
-                  {s.chapterCount} chapters
-                </span>
-
-                <div className="hidden sm:flex w-36 shrink-0 items-center gap-2">
-                  <Progress value={status.progress} className="h-1 flex-1" />
-                  <span className="w-9 text-xs text-muted-foreground text-right">{status.progress}%</span>
-                </div>
-
-                <div className="w-32 shrink-0 flex justify-end">
-                  <Badge variant={status.variant}>{status.label}</Badge>
-                </div>
-              </Link>
-            )
-          })}
-        </Card>
+        <SeriesProcessTracker series={series} progress={progress} phoneSync={phoneSync} />
       )}
     </div>
 

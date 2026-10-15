@@ -1,6 +1,9 @@
 import type { NarrationLanguage } from './narrationLanguage'
 
 const API_BASE = '/api'
+import type { ProcessSnapshot } from '../../../server/src/services/seriesProcessModel'
+export type { ProcessSnapshot, ProcessSeries, ProcessPart, ProcessStage, StageCount } from '../../../server/src/services/seriesProcessModel'
+export const libraryProgressApi = { get: () => fetchApi<ProcessSnapshot>('/library/progress') }
 
 async function fetchApi<T>(
   endpoint: string, 
@@ -1620,6 +1623,27 @@ export interface PhoneUploadProfile {
   chatGpt: PhoneChatGptProfile | null
   /** Sleeper-Cell's Tools → Profiles → Check of it, as last done there: sign-ins and plans; null when never checked. */
   check: PhoneProfileCheck | null
+  /** Its plan limits (5-hour and weekly), read in the check and during runs; null when never read or from older builds. */
+  usage: PhoneChatGptUsage | null
+}
+
+/** One plan-limit window of a ChatGPT account (Codex, Work and the like share it; chats don't count). */
+export interface PhoneUsageWindow {
+  /** Its length: 18000 is the 5-hour limit, 604800 the weekly one. */
+  seconds: number
+  /** 0–100. */
+  usedPercent: number
+  /** When it's back to 0; null when ChatGPT didn't say. */
+  resetAt: string | null
+}
+
+/** A ChatGPT account's plan limits as the phone last read them (ChatGptUsage.kt). */
+export interface PhoneChatGptUsage {
+  checkedAt: string
+  limitReached: boolean
+  /** Why the last read failed, when nothing better was kept (`windows` then empty). */
+  error: string | null
+  windows: PhoneUsageWindow[]
 }
 
 /** One site's part of a profile check on the phone. */
@@ -1769,6 +1793,12 @@ export interface PhoneAutomation {
   runs?: PhoneRunKind[]
   /** How Image Clipper last ran there; null from builds before it was sent. */
   clipper?: { ai: PhoneClipperAi; flow: PhoneClipperFlow; tabs: number; chatGpt?: PhoneChatGptSettings | null } | null
+  /** Editor 2.0's tabs last used there; null from builds whose Editor 2.0 run takes neither tabs nor a share of a split. */
+  editor?: { tabs: number } | null
+  /** The runs that take a share of a split (a `chapters` list); empty or left out from builds before. */
+  chapterRuns?: PhoneRunKind[]
+  /** A run going there takes a split's start of it as its new scope, keeping what it's on; builds before would start over. */
+  rescope?: boolean
   /** It can stop a run once what it's on is done; builds before can only stop now. */
   stopAfter?: boolean
   /** Image Clipper ends once the pages it's on are done. */
@@ -1794,8 +1824,34 @@ export interface PhoneAutomationOptions {
   language?: NarrationLanguage
   device?: string
   split?: boolean
+  /** A split as confirmed from its plan (planPhoneSplit): each phone's whole share, by device id, sent as it is. */
+  assignments?: Record<string, string[]>
   /** A stop once the pages, chapter or splits the run is on are done ("Finish …, then stop" on the phone). */
   after?: boolean
+}
+
+/** One phone in a split's plan (server: phoneSplit.ts). */
+export interface PhoneSplitTarget {
+  device: string
+  name: string
+  /** Its whole share, in reading order: what it's on and what it's given. */
+  chapters: string[]
+  /** The chapters it's on now. */
+  inProgress: string[]
+  /** start: a free phone starts. rescope: already on this run, takes its share as its new scope. finish: already on it, nothing left: finishes what it's on. skip: left alone. */
+  action: 'start' | 'rescope' | 'finish' | 'skip'
+  reason?: string
+}
+
+/** Split across the phones, step 1: who takes what, before anything is sent. */
+export interface PhoneSplitPlan {
+  kind: PhoneRunKind
+  seriesId: string
+  series: string
+  language: NarrationLanguage
+  targets: PhoneSplitTarget[]
+  /** Chapter numbers by folder. */
+  numbers: Record<string, number>
 }
 
 /** One phone running Sleeper-Cell. */
@@ -1926,7 +1982,35 @@ export interface RelayStatus {
 
 /** A run's start or stop, as sent: to each phone, or to every phone (device "*"). */
 export interface PhoneAutomationSent extends PhoneUpdateRequest {
-  targets?: { device: string; name: string; chapters: string[] | null; reached: boolean }[]
+  targets?: { device: string; name: string; chapters: string[] | null; reached: boolean; action?: 'start' | 'rescope' | 'finish' }[]
+  /** A split's chapter numbers by folder (when planned and sent at once). */
+  numbers?: Record<string, number>
+}
+
+/** Run automation's checklist (server: phoneReadiness.ts): what a run needs of a series on the phone. */
+export type PhoneReadinessState = 'ready' | 'waiting' | 'missing' | 'blocked' | 'note'
+export type PhoneReadinessFixAction = 'send_pages' | 'ask_download' | 'send_editor' | 'send_prompt' | 'run_narration'
+
+export interface PhoneReadinessItem {
+  id: string
+  label: string
+  state: PhoneReadinessState
+  detail: string
+  fix?: { action: PhoneReadinessFixAction; label: string; chapterIds?: string[] }
+  link?: { to: string; label: string }
+}
+
+export interface PhoneRunReadiness {
+  seriesId: string
+  kind: PhoneRunKind
+  language: 'en' | 'hi'
+  /** Nothing missing, waiting or blocked. */
+  ready: boolean
+  /** The run has something to work on now, even if not everything is there. */
+  canWork: boolean
+  items: PhoneReadinessItem[]
+  /** A send to the phones is going; progress comes as `phone-send:progress`. */
+  sending: boolean
 }
 
 /** The script zip the phone uploads once every chapter of a series is done ("Zip and upload to R2"). */
@@ -2014,11 +2098,23 @@ export const r2Api = {
    * Starts a run on the phone, through the relay: `kind` (Image Clipper when
    * left out) on `seriesId`, with the options that run takes; Image Clipper
    * without a series goes on with the phone's last run. Or stops whichever run
-   * is going. `device` sends it to that phone only; `split` (Image Clipper)
-   * shares the series' chapters left out between the phones that can be started.
+   * is going. `device` sends it to that phone only; `split` with `assignments`
+   * sends each phone its share of the series, as planPhoneSplit planned it.
    */
   sendPhoneAutomation: (command: 'start' | 'stop', options: PhoneAutomationOptions = {}) =>
     fetchApi<PhoneAutomationSent>('/r2/phone/automation', { method: 'POST', body: JSON.stringify({ command, ...options }) }),
+
+  /** Split across the phones, step 1: which phone would take which chapters, sending nothing. */
+  planPhoneSplit: (kind: PhoneRunKind, seriesId: string, language: NarrationLanguage = 'en') =>
+    fetchApi<PhoneSplitPlan>('/r2/phone/automation/plan', { method: 'POST', body: JSON.stringify({ kind, seriesId, language }) }),
+
+  /** What `kind` needs of the series on the phone, and the fixes. Editor 2.0's costs one R2 LIST: ask on demand only. */
+  getRunReadiness: (kind: PhoneRunKind, seriesId: string, language: 'en' | 'hi' = 'en') =>
+    fetchApi<PhoneRunReadiness>(`/r2/phone/readiness?${new URLSearchParams({ kind, seriesId, language })}`),
+
+  /** One fix from that checklist; `prompt` (the Editor 2.0 prompt, kept in this browser) for send_prompt. */
+  fixRunReadiness: (fix: { action: Exclude<PhoneReadinessFixAction, 'run_narration'>; seriesId: string; chapterIds?: string[]; prompt?: string }) =>
+    fetchApi<{ message: string }>('/r2/phone/readiness/fix', { method: 'POST', body: JSON.stringify(fix) }),
 
   /** Each phone's screen state and last screenshot, from the relay. */
   getPhoneScreens: () => fetchApi<{ phones: PhoneScreen[] }>('/r2/phone/screens'),

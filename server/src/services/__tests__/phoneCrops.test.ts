@@ -164,7 +164,15 @@ describe('getPhoneCrops', () => {
           limits: [
             { at: '2026-10-01T09:00:00Z', until: '2026-10-01T12:00:00Z', used: 60, countedSince: '2026-10-01T08:00:00Z', complete: false, flagged: false, reason: 'You\'ve hit the upload limit' },
             { at: 'bad', until: '2026-10-01T12:00:00Z', used: 1 }
-          ]
+          ],
+          usage: {
+            checkedAt: '2026-10-01T09:20:00Z', limitReached: false, error: null,
+            windows: [
+              { seconds: 18000, usedPercent: 37.5, resetAt: '2026-10-01T13:00:00Z' },
+              { seconds: 604800, usedPercent: 140, resetAt: null },
+              { seconds: 60 }
+            ]
+          }
         },
         { id: 'profile-1', name: '', limitedUntil: '2026-10-01T13:00:00Z', counting: { images: 3 } },
         { name: 'no id' }
@@ -177,9 +185,16 @@ describe('getPhoneCrops', () => {
         counting: { since: '2026-10-01T09:00:00Z', images: 14 },
         uploads: [{ at: '2026-10-01T09:05:00Z', images: 8 }, { at: '2026-10-01T09:10:00Z', images: 6 }],
         limits: [{ at: '2026-10-01T09:00:00Z', until: '2026-10-01T12:00:00Z', used: 60, countedSince: '2026-10-01T08:00:00Z', complete: false, flagged: false, reason: 'You\'ve hit the upload limit' }],
-        device: '', phone: 'Phone'
+        device: '', phone: 'Phone', profileId: 'Default', chatGpt: null, check: null,
+        usage: {
+          checkedAt: '2026-10-01T09:20:00Z', limitReached: false, error: null,
+          windows: [{ seconds: 18000, usedPercent: 37.5, resetAt: '2026-10-01T13:00:00Z' }, { seconds: 604800, usedPercent: 100, resetAt: null }]
+        }
       },
-      { id: 'profile-1', name: 'profile-1', selected: false, limitedUntil: '2026-10-01T13:00:00Z', trackingSince: null, counting: null, uploads: [], limits: [], device: '', phone: 'Phone' }
+      {
+        id: 'profile-1', name: 'profile-1', selected: false, limitedUntil: '2026-10-01T13:00:00Z', trackingSince: null, counting: null, uploads: [], limits: [],
+        device: '', phone: 'Phone', profileId: 'profile-1', chatGpt: null, check: null, usage: null
+      }
     ])
 
     // Older phone builds send no profiles.

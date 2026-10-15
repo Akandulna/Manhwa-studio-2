@@ -5,6 +5,9 @@ import path from 'path'
 
 // The phone's sync receipt (ManhwaSync.kt, version 2), served as if from the relay.
 let receipt: object = {}
+const libraryFlow = vi.hoisted(() => ({ origin: false, prepare: vi.fn() }))
+vi.mock('../librarySync.js', () => ({ scheduleLibraryPublish: vi.fn(), isLibraryOrigin: async () => libraryFlow.origin }))
+vi.mock('../libraryPreparation.js', () => ({ prepareLibrarySeries: libraryFlow.prepare }))
 
 interface Row {
   chapterId: string
@@ -251,6 +254,8 @@ describe('startPhoneSend', () => {
   const io = { emit: vi.fn() } as unknown as import('socket.io').Server
 
   beforeEach(() => {
+    libraryFlow.origin = false
+    libraryFlow.prepare.mockReset()
     config = { bucket: 'b', prefix: 'Manhwa/', concurrency: 2 }
     commands.length = 0
     uploads.length = 0
@@ -271,6 +276,27 @@ describe('startPhoneSend', () => {
     for (let i = 0; i < 200 && getSendJob()?.state === 'running'; i++) await new Promise(r => setTimeout(r, 10))
     return getSendJob()!
   }
+
+  it('does not publish raw pages when origin preparation fails', async () => {
+    libraryFlow.origin = true
+    libraryFlow.prepare.mockRejectedValueOnce(new Error('Preparation failed'))
+    requestPhoneUpdate.mockClear()
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await startPhoneSend([{ seriesId: 's1', chapterIds: ['c1'] }], io)
+      const job = await finished()
+      expect(job.series[0]).toMatchObject({ state: 'failed', error: 'Preparation failed' })
+      expect(uploads).toHaveLength(0)
+      expect(requestPhoneUpdate).not.toHaveBeenCalled()
+    } finally { log.mockRestore() }
+  })
+
+  it('keeps shared-library ZIPs available when a local copy was cleared', async () => {
+    settings.set('libraryOwner:s1', 'origin-phone')
+    await startPhoneSend([{ seriesId: 's1', chapterIds: ['c1'] }], io)
+    await finished()
+    expect(commands.filter(c => c.name === 'DeleteObjectCommand')).toHaveLength(0)
+  })
 
   it('sends each picked chapter as its own zip where the phone looks, then the index, and wakes the phone', async () => {
     await startPhoneSend([{ seriesId: 's1', chapterIds: ['c1', 'c3'] }], io)

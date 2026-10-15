@@ -150,7 +150,7 @@ function PlanBadge({ profile }: { profile: PhoneUploadProfile }) {
 }
 
 /** The profile the run starts in, picked in Run automation, with its ChatGPT plan. */
-export function PhoneProfilePicker({ phone, profiles, relay, screen, onPending }: {
+export function PhoneProfilePicker({ phone, profiles, relay, screen, onPending, label = 'Profile' }: {
   phone: PhoneOverviewPhone
   /** This phone's profiles. */
   profiles: PhoneUploadProfile[]
@@ -158,6 +158,8 @@ export function PhoneProfilePicker({ phone, profiles, relay, screen, onPending }
   screen: PhoneScreen | null
   /** Whether a selection is on its way to the phone, so the run isn't started before it lands. */
   onPending?: (pending: boolean) => void
+  /** Its heading: "Profile", or the phone's when a run is split between phones. */
+  label?: string
 }) {
   const { send, pending, answer, late } = useProfileCommand(phone, screen)
   const selected = profiles.find(p => p.selected) ?? null
@@ -169,7 +171,7 @@ export function PhoneProfilePicker({ phone, profiles, relay, screen, onPending }
   return (
     <div className="space-y-1.5">
       <p className="flex items-center gap-1.5 text-sm font-medium">
-        Profile
+        {label}
         <InfoTip text="The browser profile the run starts in (one ChatGPT account each); picking one switches the phone to it now. Plans are what Sleeper-Cell’s Tools → Profiles → Check last found: Free and Go have no mode or model choices; Plus and up do." />
       </p>
       <div className="flex items-center gap-2">
@@ -178,7 +180,7 @@ export function PhoneProfilePicker({ phone, profiles, relay, screen, onPending }
           disabled={!!blocker || pending !== null}
           onValueChange={id => { if (id !== selected?.profileId) send('select', id) }}
         >
-          <SelectTrigger className="h-9 flex-1" aria-label="Profile">
+          <SelectTrigger className="h-9 flex-1" aria-label={label}>
             <SelectValue placeholder="Pick a profile" />
           </SelectTrigger>
           <SelectContent>

@@ -50,6 +50,25 @@ export const phoneEditorApi = {
   savePrompt: (content: string) => post<{ phoneNotified: boolean }>('/prompt', { content }, 'PUT')
 }
 
+/**
+ * Where the Editor 2.0 prompt lives (Settings → Editor 2.0 → Prompt): this
+ * browser's localStorage, not the server.
+ */
+export const EDITOR_PROMPT_KEY = 'editor2.prompt'
+
+/** The saved Editor 2.0 prompt, or '' when nothing has been saved here. */
+export function readSavedEditorPrompt(): string {
+  try {
+    const raw = localStorage.getItem(EDITOR_PROMPT_KEY)
+    if (!raw) return ''
+    const parsed = JSON.parse(raw) as { content?: unknown }
+    return typeof parsed.content === 'string' ? parsed.content.trim() : ''
+  } catch {
+    // Unavailable or corrupt storage just means there is no prompt.
+    return ''
+  }
+}
+
 /** "Chapters 3, 4 and 7", for the toasts. */
 export function chapterList(numbers: number[]): string {
   if (numbers.length === 0) return ''

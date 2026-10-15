@@ -13,7 +13,7 @@ const NOW = Date.parse('2026-10-01T12:00:00Z')
 const at = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString()
 
 function profile(over: Partial<PhoneUploadProfile> = {}): PhoneUploadProfile {
-  return { id: 'p', name: 'Main', selected: false, limitedUntil: null, trackingSince: at(600), counting: null, uploads: [], limits: [], device: null, phone: null, ...over }
+  return { id: 'p', profileId: 'p', chatGpt: null, check: null, usage: null, name: 'Main', selected: false, limitedUntil: null, trackingSince: at(600), counting: null, uploads: [], limits: [], device: null, phone: null, ...over }
 }
 
 function limit(over: Partial<PhoneUploadLimit> = {}): PhoneUploadLimit {

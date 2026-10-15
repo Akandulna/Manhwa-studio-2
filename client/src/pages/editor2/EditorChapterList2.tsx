@@ -70,7 +70,7 @@ import {
 import { useWakeLock } from '@/hooks/useWakeLock'
 import { usePublishedChapters } from '@/hooks/usePublishedChapters'
 import { CompletedBadge, completedRowClass } from '@/components/PublishedBadge'
-import { chapterList, phoneEditorApi } from './phoneEditor'
+import { chapterList, phoneEditorApi, readSavedEditorPrompt as readSavedPrompt } from './phoneEditor'
 import { LanguageTabs } from '@/components/LanguageTabs'
 import { LANGUAGE_LABEL, useNarrationLanguage, withLang, type NarrationLanguage } from '@/lib/narrationLanguage'
 import {
@@ -80,33 +80,13 @@ import {
   getScrollTop,
   getTimelineJson,
   isProcessed,
+  markProcessed,
   saveExpanded,
   saveScrollTop,
   setTimelineJson,
+  syncChapterTimeline,
   syncSeriesTimelines
 } from './timelineHandoff'
-
-/**
- * Where the Editor 2.0 prompt lives (Settings → Editor 2.0 → Prompt).
- *
- * localStorage, not the server settings table: that Settings card saves the
- * prompt to this browser only, the same way the Crop 3.0 documents do, so
- * this is the only place a saved prompt can actually be found.
- */
-const CHAPTER_PROMPT_KEY = 'editor2.prompt'
-
-/** The saved Editor 2.0 prompt, or '' when nothing has been saved here. */
-function readSavedPrompt(): string {
-  try {
-    const raw = localStorage.getItem(CHAPTER_PROMPT_KEY)
-    if (!raw) return ''
-    const parsed = JSON.parse(raw) as { content?: unknown }
-    return typeof parsed.content === 'string' ? parsed.content.trim() : ''
-  } catch {
-    // Unavailable or corrupt storage just means there is no prompt to add.
-    return ''
-  }
-}
 
 /** An export's size, for the Exported tooltip. */
 function formatSize(bytes: number): string {
@@ -222,6 +202,10 @@ export default function EditorChapterList2() {
   // The running batch export, polled while it renders. Null when idle.
   const [exportJob, setExportJob] = useState<Export2Job | null>(null)
   const [starting, setStarting] = useState(false)
+
+  // Process All — how many chapters are left and which one is in flight right
+  // now, while the run is going. Null overall means no run is in progress.
+  const [processingAll, setProcessingAll] = useState<{ total: number; done: number; chapterNumber: number } | null>(null)
 
   // Chapters that already have an MP4 on disk, keyed by chapter id. Server
   // truth rather than a local flag: the record is the series' _video2 folder,
@@ -494,6 +478,60 @@ export default function EditorChapterList2() {
     // preview lands on this row rather than at the top.
     rememberPosition()
     navigate(withLang(`/editor2/chapter/${ch.id}/preview`, language))
+  }
+
+  /**
+   * Process All — run every ready-but-unprocessed chapter's pasted JSON
+   * through the same build the preview screen does, without opening it for
+   * each one. The preview's own effect is just sync → read the paste → POST
+   * process-timeline → markProcessed; none of that depends on being mounted,
+   * so this repeats it here chapter by chapter and leaves the browsing
+   * screen in front the whole time.
+   *
+   * One at a time, not in parallel: these hit the same render-adjacent
+   * server work the single preview does, and a failure on one chapter should
+   * not race ahead into the next five before the user sees it.
+   */
+  async function processAll() {
+    const targets = chapters.filter(ch => {
+      if (completedPart(ch.id) !== null) return false
+      const content = pasted[ch.id]?.trim() ?? ''
+      if (!content || !liveChecklist(ch, content).ready) return false
+      return !isProcessed(ch.id, language, content)
+    })
+    if (targets.length === 0) return
+
+    setProcessingAll({ total: targets.length, done: 0, chapterNumber: targets[0].number })
+    let failed = 0
+    let lastError = ''
+    try {
+      for (let i = 0; i < targets.length; i++) {
+        const ch = targets[i]
+        setProcessingAll({ total: targets.length, done: i, chapterNumber: ch.number })
+        const content = pasted[ch.id]?.trim() ?? ''
+        try {
+          await syncChapterTimeline(ch.id, language)
+          const json = getTimelineJson(ch.id, language) ?? content
+          await videoApi2.processTimeline(ch.id, language, json)
+          markProcessed(ch.id, language, json)
+          setProcessedTick(t => t + 1)
+        } catch (err) {
+          failed++
+          lastError = err instanceof Error ? err.message : 'Processing failed'
+        }
+      }
+    } finally {
+      setProcessingAll(null)
+    }
+
+    const okCount = targets.length - failed
+    toast({
+      title: failed === 0
+        ? `Processed ${okCount} chapter${okCount === 1 ? '' : 's'}`
+        : `Processed ${okCount} of ${targets.length} chapters`,
+      description: failed > 0 ? `${failed} failed — ${lastError}` : 'All ready, pasted chapters are now previewable.',
+      variant: failed > 0 ? 'destructive' : undefined
+    })
   }
 
   /**
@@ -851,6 +889,12 @@ export default function EditorChapterList2() {
   const processedCount = processedInputs.length
   const allProcessed = readyChapters.length > 0 && processedCount === readyChapters.length
 
+  // Ready, pasted, and not yet processed — exactly what Process All would do.
+  const pendingProcessCount = readyChapters.filter(ch => {
+    const content = pasted[ch.id]?.trim() ?? ''
+    return content.length > 0 && !isProcessed(ch.id, language, content)
+  }).length
+
   // Of the processed chapters, how many still need rendering. This — not the
   // processed count — is what Export All would actually do, so it is what the
   // button counts and what decides whether it has anything to do at all.
@@ -963,6 +1007,35 @@ export default function EditorChapterList2() {
               </span>
             )}
 
+            {/* Process All — every pasted, ready chapter still showing
+                Process rather than Preview, run one by one without opening
+                each. Sits before Check Images: processing is what turns a
+                paste into something Export All can pick up at all. */}
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8"
+              onClick={processAll}
+              disabled={processingAll !== null || pendingProcessCount === 0}
+              title={
+                pendingProcessCount === 0
+                  ? 'Nothing to process — every ready, pasted chapter has already been processed'
+                  : `Process the ${pendingProcessCount} ready chapter${pendingProcessCount === 1 ? '' : 's'} with a paste still waiting on Process`
+              }
+            >
+              {processingAll ? (
+                <>
+                  <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                  Processing {processingAll.done + 1}/{processingAll.total} · Ch {processingAll.chapterNumber}
+                </>
+              ) : (
+                <>
+                  <Play className="h-3 w-3 mr-1" />
+                  Process All{pendingProcessCount > 0 ? ` (${pendingProcessCount})` : ''}
+                </>
+              )}
+            </Button>
+
             {/* Check Images — sits beside Export because a broken reference is
                 only ever noticed here, as a missing image in the preview or a
                 gap in a finished render. Before the export is the cheap moment
@@ -988,7 +1061,7 @@ export default function EditorChapterList2() {
               variant={everythingExported ? 'outline' : 'default'}
               className="h-8"
               onClick={() => exportAll(everythingExported)}
-              disabled={processedCount === 0 || starting}
+              disabled={processedCount === 0 || starting || processingAll !== null}
               title={
                 readyChapters.length === 0
                   ? 'No chapter is ready yet — every checklist item (voiceover audio, alignment, timeline JSON, cropped images) has to pass first'

@@ -15,10 +15,8 @@ import {
   Search, 
   Loader2, 
   Check, 
-  X, 
   AlertTriangle,
   Link as LinkIcon,
-  BookOpen,
   List,
   CheckCircle,
   Upload,
@@ -48,7 +46,7 @@ export default function AddSeries() {
   const [sourceSite, setSourceSite] = useState('')
   
   // Range state
-  const [patternValidated, setPatternValidated] = useState(false)
+  const [, setPatternValidated] = useState(false)
   const [validationResult, setValidationResult] = useState<QuickValidationResult | null>(null)
   const [fromChapter, setFromChapter] = useState('1')
   const [toChapter, setToChapter] = useState('20')

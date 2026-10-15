@@ -10,6 +10,7 @@ import { getChapterImages, DetectedImage } from './scraper.js';
 import { zeroPad, sanitizeTitle } from '../utils/urlPattern.js';
 import { storePageImage } from './pageImageStore.js';
 import { flushAutoSend, noteChapterDownloaded } from './phoneSend.js';
+import { notifySeriesProcessChanged } from './seriesProcess.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as https from 'https';
@@ -42,6 +43,7 @@ export class DownloadManager {
   private completedCount: number = 0;
   private failedCount: number = 0;
   private currentChapterId?: string;
+  private scheduled = new Set<string>();
   
   constructor(io: Server) {
     this.io = io;
@@ -80,6 +82,7 @@ export class DownloadManager {
    */
   private emitStatus(): void {
     this.io.emit('queue:status', this.getQueueStatus());
+    notifySeriesProcessChanged();
   }
   
   /**
@@ -87,6 +90,7 @@ export class DownloadManager {
    */
   async queueChapters(chapterIds: string[]): Promise<void> {
     for (const chapterId of chapterIds) {
+      if (this.scheduled.has(chapterId)) continue;
       const chapter = await prisma.chapter.findUnique({
         where: { id: chapterId },
         include: { series: true }
@@ -113,7 +117,8 @@ export class DownloadManager {
       };
       
       // Add to queue
-      this.queue.add(() => this.downloadChapter(task));
+      this.scheduled.add(chapterId);
+      void this.queue.add(() => this.downloadChapter(task)).finally(() => this.scheduled.delete(chapterId));
     }
     
     this.emitStatus();

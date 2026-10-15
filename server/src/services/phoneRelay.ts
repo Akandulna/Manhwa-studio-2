@@ -30,6 +30,8 @@ import { randomUUID } from 'crypto'
 import WebSocket from 'ws'
 import type { Server } from 'socket.io'
 import { writeEnvVars } from '../utils/envFile.js'
+import { receiveLibraryManifest, scheduleLibraryPublish } from './librarySync.js'
+import { notifySeriesProcessChanged, receiveDeviceProcess } from './seriesProcess.js'
 
 export type ReceiptKind = 'sync' | 'scripts' | 'crops'
 
@@ -65,10 +67,10 @@ export type PhoneAction =
 export type ScreenKind = 'screen' | 'screenshot'
 
 /**
- * For the starts: the phone's series folder, and the tabs for Image Clipper and
- * the voiceover; Image Clipper without them goes on with its last run's.
- * `chapters` limits Image Clipper to those chapter folders (a series split
- * between phones); `ai` and `flow` are where and how it prompts the pages.
+ * For the starts: the phone's series folder, and the tabs for Image Clipper,
+ * Editor 2.0 and the voiceover; Image Clipper without them goes on with its
+ * last run's. `chapters` limits Image Clipper or Editor 2.0 to those chapter
+ * folders (a series split between phones); `ai` and `flow` are where and how it prompts the pages.
  * `language` is Editor 2.0's and the voiceover's. `device` sends the request
  * to that phone only.
  */
@@ -382,10 +384,13 @@ function handle(text: string): void {
       presence = parseDevices(message.devices)
       seen = parseSeen(message.seen) ?? seen
       emitStatus()
+      if (message.type === 'hello') scheduleLibraryPublish()
       break
     case 'receipt': {
       const { kind, body } = message
       if (!kind || !body || typeof body !== 'object' || Array.isArray(body)) return
+      if (kind === 'library') { receiveLibraryManifest(body); return }
+      if (kind === 'process') { receiveDeviceProcess(body); return }
       // A relay deployed before phones had ids sends none: one phone, as before.
       const device = typeof message.device === 'string' ? message.device : ''
       const at = Number(message.at) || Date.now()
@@ -406,6 +411,7 @@ function handle(text: string): void {
       receipts.set(device, kinds)
       lastReceiptAt = at
       io?.emit('phone:receipt', { kind })
+      notifySeriesProcessChanged()
       break
     }
     case 'forgotten': {

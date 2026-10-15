@@ -18,7 +18,7 @@ describe('mergeCropsReceipts', () => {
       chapters: { C1: { total: 4, done: 1, pages: { p1: 'done' }, finished: { p1: { at: 'x', device: 'a', phone: 'Phone a' } } } }
     } })
     // One phone: profile ids stay as they are.
-    expect(merged.profiles).toEqual([{ id: 'default', name: 'Main', device: 'a', phone: 'Phone a' }])
+    expect(merged.profiles).toEqual([{ id: 'default', profileId: 'default', name: 'Main', device: 'a', phone: 'Phone a' }])
   })
 
   it('adds up pages done on either phone without counting a page twice', () => {

@@ -475,6 +475,15 @@ export async function getSendPlan(fresh = false): Promise<PhoneSendPlan> {
   }
 }
 
+/** One series' plan, as getSendPlan has it: for Run automation's checklist (phoneReadiness.ts). Null when the series is gone. */
+export async function getSeriesSendPlan(seriesId: string): Promise<PhoneSendSeries | null> {
+  const [row] = await loadSeriesRows([seriesId])
+  if (!row) return null
+  const receipt = await readSyncReceipt(getR2Config(), false)
+  const auto = await autoSendSeries()
+  return (await seriesState(row, receipt, auto.has(row.id))).plan
+}
+
 export async function setAutoSend(seriesId: string, enabled: boolean): Promise<void> {
   if (enabled) {
     await prisma.setting.upsert({ where: { key: autoSendKey(seriesId) }, create: { key: autoSendKey(seriesId), value: 'true' }, update: { value: 'true' } })
@@ -517,6 +526,9 @@ async function writeIndex(client: S3Client, config: R2Config, folder: string, se
  * and the whole-series zips from before chapters were sent one by one.
  */
 async function cleanUp(client: S3Client, config: R2Config, storage: BucketStorage, folder: string, state: SeriesState): Promise<void> {
+  // Shared-library ZIPs must remain available to replicas that are offline. Local clears are not global deletes.
+  const owner = await prisma.setting.findUnique({ where: { key: `libraryOwner:${state.plan.seriesId}` } })
+  if (owner) return
   const present = new Map(storage.objects.map(o => [o.key, o.etag]))
   for (const row of state.ledger.values()) {
     if (!row.clearedAt || !row.key) continue
@@ -718,10 +730,17 @@ export async function startPhoneSend(requests: PhoneSendRequest[], io: Server, a
       let state: SeriesState | null = null
       let sentHere = 0
       try {
+        const { isLibraryOrigin } = await import('./librarySync.js')
+        const origin = await isLibraryOrigin(row.id)
+        if (origin) {
+          const { prepareLibrarySeries } = await import('./libraryPreparation.js')
+          await prepareLibrarySeries(row.id)
+        }
         state = await seriesState(row, receipt, autoSeries.has(row.id))
         progress.folder = `${folder}${state.index.series}/`
         const wanted = request?.chapterIds ? new Set(request.chapterIds) : null
-        const picked = state.plan.chapters.filter(c => c.pages > 0 && (wanted ? wanted.has(c.chapterId) : isDefaultPick(c)))
+        const complete = origin ? new Set((await prisma.chapter.findMany({ where: { seriesId: row.id, status: 'done', completedAt: null }, select: { id: true } })).map(c => c.id)) : null
+        const picked = state.plan.chapters.filter(c => c.pages > 0 && (!complete || complete.has(c.chapterId)) && (wanted ? wanted.has(c.chapterId) : isDefaultPick(c)))
         const waitingForStitch = wanted ? 0 : state.plan.chapters.filter(c => (c.state === 'new' || c.state === 'changed') && c.needsStitch).length
         progress.chaptersTotal = picked.length
         progress.bytesTotal = picked.reduce((sum, c) => sum + c.bytes, 0)
@@ -836,6 +855,8 @@ export async function startPhoneSend(requests: PhoneSendRequest[], io: Server, a
 
     await fsp.rm(jobDir, { recursive: true, force: true }).catch(() => {})
     if (sent > 0) {
+      const { scheduleLibraryPublish } = await import('./librarySync.js')
+      scheduleLibraryPublish()
       try {
         job.phone = await requestPhoneUpdate('sync')
       } catch (error) {
@@ -858,6 +879,13 @@ export async function startPhoneSend(requests: PhoneSendRequest[], io: Server, a
       job.state = cancelRequested ? 'cancelled' : 'done'
       job.finishedAt = new Date().toISOString()
       emit(true)
+      if (auto) {
+        const failed = job.series.filter(s => s.state === 'failed').map(s => s.seriesId)
+        if (failed.length) {
+          const timer = setTimeout(() => { failed.forEach(id => autoPending.add(id)); flushAutoSend(io) }, 30_000)
+          timer.unref()
+        }
+      }
       // Downloads that finished during this send.
       if (autoPending.size > 0) flushAutoSend(io)
     })
@@ -877,6 +905,7 @@ export async function cancelPhoneSend(): Promise<void> {
 
 /** Series with chapters downloaded since the last auto-send, waiting for the download queue to go idle. */
 const autoPending = new Set<string>()
+let preparingAuto = false
 
 /** From the download manager, for each chapter downloaded. */
 export async function noteChapterDownloaded(seriesId: string): Promise<void> {
@@ -886,15 +915,37 @@ export async function noteChapterDownloaded(seriesId: string): Promise<void> {
 
 /** From the download manager when its queue goes idle: sends the new chapters of auto-send series. */
 export function flushAutoSend(io: Server): void {
-  if (autoPending.size === 0 || currentJob?.state === 'running') return // retried when the running send ends
+  if (autoPending.size === 0 || preparingAuto || currentJob?.state === 'running') return // retried when the running send ends
   if (!getR2Config()) {
     autoPending.clear()
     return
   }
   const seriesIds = [...autoPending]
   autoPending.clear()
-  startPhoneSend(seriesIds.map(seriesId => ({ seriesId })), io, true).catch(error => {
-    console.error('Auto-send to the phone failed to start:', error)
+  preparingAuto = true
+  void (async () => {
+    const { isLibraryOrigin } = await import('./librarySync.js')
+    const { prepareLibrarySeries } = await import('./libraryPreparation.js')
+    const requests: PhoneSendRequest[] = []
+    for (const seriesId of seriesIds) {
+      try {
+        if (await isLibraryOrigin(seriesId)) {
+          await prepareLibrarySeries(seriesId)
+          const plan = await getSeriesSendPlan(seriesId)
+          const chapters = await prisma.chapter.findMany({ where: { seriesId, status: 'done', completedAt: null }, select: { id: true } })
+          const done = new Set(chapters.map(c => c.id))
+          const chapterIds = plan?.chapters.filter(c => done.has(c.chapterId) && (c.state === 'new' || c.state === 'changed')).map(c => c.chapterId) ?? []
+          if (chapterIds.length) requests.push({ seriesId, chapterIds })
+        } else requests.push({ seriesId })
+      } catch (error) {
+        console.error(`[library-sync] preparation failed for ${seriesId}; no raw pages published:`, error)
+        io.emit('library:preparation-error', { seriesId, error: errorMessage(error) })
+      }
+    }
+    if (requests.length) await startPhoneSend(requests, io, true)
+  })().catch(error => console.error('Auto-send to the phone failed to start:', error)).finally(() => {
+    preparingAuto = false
+    if (autoPending.size) flushAutoSend(io)
   })
 }
 

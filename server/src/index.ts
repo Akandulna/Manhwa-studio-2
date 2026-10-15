@@ -24,6 +24,8 @@ import { startPhoneRelay } from './services/phoneRelay.js';
 import { reconcileQuietly } from './services/diskReconcile.js';
 import { backfillAlignmentDocumentsQuietly } from './services/alignment/alignmentDocument.js';
 import { publishEditorPackagesAtStartup } from './services/editorAutoPublish.js';
+import { startLibrarySync } from './services/librarySync.js';
+import { getSeriesProcess, notifySeriesProcessChanged, startSeriesProcess } from './services/seriesProcess.js';
 
 dotenv.config();
 
@@ -50,6 +52,16 @@ app.use(express.json({ limit: '50mb' }));
 
 // Make io available to routes
 app.set('io', io);
+app.use((req, res, next) => {
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && /^\/api\/(series|manual|narration|clipper3|video2|storage|stitch|page-preview)(\/|$)/.test(req.path)) {
+    res.on('finish', () => { if (res.statusCode < 400) notifySeriesProcessChanged(true) });
+  }
+  next();
+});
+app.get('/api/library/progress', async (_req, res) => {
+  try { res.json(await getSeriesProcess()); }
+  catch (error) { console.error('[series-process]', error); res.status(500).json({ error: 'Could not read series progress' }); }
+});
 
 // Routes
 app.use('/api/series', seriesRoutes);
@@ -111,6 +123,8 @@ backfillAlignmentDocumentsQuietly();
 publishEditorPackagesAtStartup();
 
 // Live phone status through the relay Worker, when Settings → Cloudflare has it set up.
+startLibrarySync(io);
+startSeriesProcess(io);
 startPhoneRelay(io);
 
 // Graceful shutdown

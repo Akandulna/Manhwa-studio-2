@@ -116,7 +116,7 @@ export function onPhone(item: { phone: string | null }, phone: PhoneOverviewPhon
 /** A narration, Editor 2.0 or voiceover run's headline: "Writing scripts", "Making timelines", "Voicing 3 splits". */
 export function runTitle(run: PhoneOverviewRun): string {
   if (run.kind === 'narration') return run.tabs[0]?.language === 'hi' ? 'Converting to Hindi' : 'Writing scripts'
-  if (run.kind === 'editor') return 'Making timelines'
+  if (run.kind === 'editor') return run.tabs.length > 1 ? `Making ${run.tabs.length} timelines` : 'Making timelines'
   return run.tabs.length > 1 ? `Voicing ${run.tabs.length} splits` : 'Voicing'
 }
 

@@ -273,6 +273,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         })
       }
     })
+    socketInstance.on('library:updated', () => setLastStatusUpdate(Date.now()))
+    socketInstance.on('chapters:updated', () => setLastStatusUpdate(Date.now()))
 
     socketInstance.on('discovery:progress', (progress: DiscoveryProgress) => {
       setDiscoveryProgress(progress)

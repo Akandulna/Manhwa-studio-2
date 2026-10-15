@@ -4,6 +4,7 @@ import type { AddressInfo } from 'net'
 
 // R2 must not be touched while the relay is set up.
 const send = vi.fn(async () => { throw new Error('R2 should not be called') })
+vi.mock('../librarySync.js', () => ({ receiveLibraryManifest: vi.fn(), scheduleLibraryPublish: vi.fn(), isLibraryOrigin: async () => false }))
 vi.mock('@aws-sdk/client-s3', async importOriginal => {
   const actual = await importOriginal<typeof import('@aws-sdk/client-s3')>()
   return { ...actual, S3Client: class { send = send } }
@@ -129,7 +130,7 @@ describe('phone relay', () => {
     expect((await getPhoneOverview(null)).automation).toEqual({
       wakeMode: 'dedicated', resumeAfterLimit: true, remoteStart: true,
       resume: { seriesId: 's1', series: 'Solo Hero', tabs: 2, at: '2026-10-02T15:40:00.000Z' },
-      runs: ['clipper'], clipper: null, stopAfter: false, clipperStopping: false
+      runs: ['clipper'], clipper: null, editor: null, chapterRuns: [], rescope: false, stopAfter: false, clipperStopping: false
     })
     await expect(sendAutomationCommand('start', { kind: 'editor', seriesId: 's1' })).rejects.toThrow('this build can only start Image Clipper')
     await expect(sendAutomationCommand('stop', { after: true })).rejects.toThrow('this build can only stop it now')
@@ -161,7 +162,7 @@ describe('phone relay', () => {
     const editor = await sendAutomationCommand('start', { kind: 'editor', seriesId: 's1', tabs: 2, ai: 'chatgpt', language: 'hi' })
     await until(() => received.some(m => m.includes(editor.id)))
     expect(JSON.parse(received.find(m => m.includes(editor.id))!)).toEqual({
-      type: 'request', id: editor.id, requestedAt: editor.requestedAt, action: 'editor_start', series: 'Solo Hero', language: 'hi'
+      type: 'request', id: editor.id, requestedAt: editor.requestedAt, action: 'editor_start', series: 'Solo Hero', tabs: 2, language: 'hi'
     })
 
     const voice = await sendAutomationCommand('start', { kind: 'voiceover', seriesId: 's1', tabs: 4 })
@@ -169,7 +170,10 @@ describe('phone relay', () => {
     expect(JSON.parse(received.find(m => m.includes(voice.id))!)).toMatchObject({ action: 'voiceover_start', tabs: 4, language: 'en' })
 
     await expect(sendAutomationCommand('start', { kind: 'narration' })).rejects.toThrow('Pick a series for Narration scripts')
-    await expect(sendAutomationCommand('start', { kind: 'narration', seriesId: 's1', split: true })).rejects.toThrow('Only Image Clipper can be split')
+    // Narration scripts are never split: each chapter goes on from the one before's summary.
+    await expect(sendAutomationCommand('start', { kind: 'narration', seriesId: 's1', split: true }))
+      .rejects.toThrow('Narration scripts run on one phone at a time: start it on one phone')
+    await expect(sendAutomationCommand('start', { kind: 'voiceover', seriesId: 's1', split: true })).rejects.toThrow('Splitting needs two phones')
 
     const stop = await sendAutomationCommand('stop')
     await until(() => received.some(m => m.includes(stop.id)))
@@ -189,20 +193,21 @@ describe('phone relay', () => {
 
 describe('two phones', () => {
   const now = new Date().toISOString()
-  const crops = (device: string, series: object) => ({
+  const crops = (device: string, series: object, automation: object = {}) => ({
     type: 'receipt', kind: 'crops', device, at: 10, body: {
       device: 'Honor', updatedAt: now, series,
-      automation: { wakeMode: 'dedicated', resumeAfterLimit: true, remoteStart: true, resume: null }
+      automation: { wakeMode: 'dedicated', resumeAfterLimit: true, remoteStart: true, resume: null, ...automation }
     }
   })
+  const aaaaSeries = { 'Solo Hero': {
+    total: 21, done: 2, workingPages: [{ chapter: 'Chapter 002', page: 'p1.webp', since: now }],
+    chapters: { 'Chapter 001': { total: 2, done: 2, pages: { 'a.webp': 'done', 'b.webp': 'done' } } }
+  } }
 
   it('merges their receipts and lists each phone', async () => {
     emitted.length = 0
     desktop!.send(JSON.stringify({ type: 'presence', phones: 2, devices: [{ id: 'aaaa1111', name: 'Honor' }, { id: 'bbbb2222', name: 'Honor' }] }))
-    desktop!.send(JSON.stringify(crops('aaaa1111', { 'Solo Hero': {
-      total: 21, done: 2, workingPages: [{ chapter: 'Chapter 002', page: 'p1.webp', since: now }],
-      chapters: { 'Chapter 001': { total: 2, done: 2, pages: { 'a.webp': 'done', 'b.webp': 'done' } } }
-    } })))
+    desktop!.send(JSON.stringify(crops('aaaa1111', aaaaSeries)))
     desktop!.send(JSON.stringify(crops('bbbb2222', { 'Solo Hero': {
       total: 21, done: 2,
       chapters: {
@@ -224,12 +229,31 @@ describe('two phones', () => {
   })
 
   it('splits a series between the phones, unfinished chapters only, balanced by pages left', async () => {
+    const { planSplit } = await import('../phoneSplit.js')
+    // aaaa is clipping Chapter 002 of it already, on a build that would start over.
+    await expect(planSplit('clipper', 's1')).rejects.toThrow('Honor · aaaa is already running this with an older Sleeper-Cell')
+    emitted.length = 0
+    desktop!.send(JSON.stringify(crops('aaaa1111', aaaaSeries, { rescope: true })))
+    await until(() => emitted.some(e => e.event === 'phone:receipt'))
+
+    // aaaa keeps Chapter 002 (10 pages); in reading order the rest go to the phone with the fewest pages so far:
+    // 003 (3 left) and 004 (5) to bbbb. Nothing is sent yet.
     received.length = 0
+    const plan = await planSplit('clipper', 's1')
+    expect(plan).toEqual({
+      kind: 'clipper', seriesId: 's1', series: 'Solo Hero', language: 'en',
+      targets: [
+        { device: 'aaaa1111', name: 'Honor · aaaa', chapters: ['Chapter 002'], inProgress: ['Chapter 002'], action: 'rescope' },
+        { device: 'bbbb2222', name: 'Honor · bbbb', chapters: ['Chapter 003', 'Chapter 004'], inProgress: [], action: 'start' }
+      ],
+      numbers: { 'Chapter 002': 2, 'Chapter 003': 3, 'Chapter 004': 4 }
+    })
+    expect(received).toEqual([])
+
     const sent = await sendAutomationCommand('start', { seriesId: 's1', tabs: 2, split: true })
-    // In reading order, each to the phone with the fewest pages so far: 002 (10 pages) to one, 003 (3 left) and 004 (5) to the other.
     expect(sent.targets).toEqual([
-      { device: 'aaaa1111', name: 'Honor · aaaa', chapters: ['Chapter 002'], reached: true },
-      { device: 'bbbb2222', name: 'Honor · bbbb', chapters: ['Chapter 003', 'Chapter 004'], reached: true }
+      { device: 'aaaa1111', name: 'Honor · aaaa', chapters: ['Chapter 002'], reached: true, action: 'rescope' },
+      { device: 'bbbb2222', name: 'Honor · bbbb', chapters: ['Chapter 003', 'Chapter 004'], reached: true, action: 'start' }
     ])
     expect(sent.phones).toBe(2)
     await until(() => received.length === 2)
@@ -237,6 +261,67 @@ describe('two phones', () => {
       expect.objectContaining({ action: 'clipper_start', device: 'aaaa1111', series: 'Solo Hero', tabs: 2, chapters: ['Chapter 002'] }),
       expect.objectContaining({ action: 'clipper_start', device: 'bbbb2222', series: 'Solo Hero', tabs: 2, chapters: ['Chapter 003', 'Chapter 004'] })
     ])
+  })
+
+  it('sends a confirmed split exactly as confirmed', async () => {
+    received.length = 0
+    const sent = await sendAutomationCommand('start', {
+      seriesId: 's1', split: true, assignments: { aaaa1111: ['Chapter 004'], bbbb2222: [] }
+    })
+    expect(sent.targets).toEqual([
+      { device: 'aaaa1111', name: 'Honor · aaaa', chapters: ['Chapter 004'], reached: true, action: 'rescope' },
+      { device: 'bbbb2222', name: 'Honor · bbbb', chapters: [], reached: true, action: 'finish' }
+    ])
+    await until(() => received.length === 2)
+    expect(received.map(m => JSON.parse(m))).toEqual([
+      expect.objectContaining({ action: 'clipper_start', device: 'aaaa1111', series: 'Solo Hero', chapters: ['Chapter 004'] }),
+      expect.objectContaining({ action: 'run_finish', device: 'bbbb2222' })
+    ])
+    await expect(sendAutomationCommand('start', { seriesId: 's1', split: true, assignments: { aaaa1111: ['Chapter 003'], bbbb2222: ['Chapter 003'] } }))
+      .rejects.toThrow('Chapter 003 is in two phones’ shares')
+    await expect(sendAutomationCommand('start', { seriesId: 's1', split: true, assignments: { nobody: ['Chapter 003'] } }))
+      .rejects.toThrow('not known to the relay')
+  })
+
+  it('writes a series\' narration scripts on one phone at a time', async () => {
+    emitted.length = 0
+    const runs = { runs: ['clipper', 'narration', 'editor', 'voiceover'], rescope: true }
+    desktop!.send(JSON.stringify(crops('aaaa1111', aaaaSeries, runs)))
+    desktop!.send(JSON.stringify(crops('bbbb2222', {}, runs)))
+    const scripts = (runs: object[]) => ({ type: 'receipt', kind: 'scripts', device: 'bbbb2222', at: 11, body: { device: 'Honor', updatedAt: now, series: {}, runs } })
+    // bbbb is writing Solo Hero's scripts (paused counts).
+    desktop!.send(JSON.stringify(scripts([{ kind: 'narration', series: 'Solo Hero', paused: true, at: now, tabs: [{ chapter: 'Chapter 002', language: 'en' }] }])))
+    await until(() => (relayReceipts<{ runs?: unknown[] }>('scripts') ?? []).some(r => r.device === 'bbbb2222' && r.body.runs?.length))
+
+    const busy = 'Honor · bbbb is already writing Solo Hero\'s scripts. Stop it there first.'
+    await expect(sendAutomationCommand('start', { kind: 'narration', seriesId: 's1', device: 'aaaa1111' })).rejects.toThrow(busy)
+    // To every phone (two connected): one of them would start a second run.
+    await expect(sendAutomationCommand('start', { kind: 'narration', seriesId: 's1' })).rejects.toThrow(busy)
+    received.length = 0
+    // The phone running it may be started again: it resumes.
+    const again = await sendAutomationCommand('start', { kind: 'narration', seriesId: 's1', device: 'bbbb2222' })
+    await until(() => received.some(m => m.includes(again.id)))
+    expect(JSON.parse(received.find(m => m.includes(again.id))!)).toMatchObject({ action: 'narration_start', device: 'bbbb2222', series: 'Solo Hero' })
+    // Other runs aren't held back by it.
+    await expect(sendAutomationCommand('start', { kind: 'voiceover', seriesId: 's1', device: 'aaaa1111' })).resolves.toMatchObject({ via: 'relay' })
+
+    // A run gone quiet past WORKING_STALE_MS is dead.
+    emitted.length = 0
+    desktop!.send(JSON.stringify(scripts([{ kind: 'narration', series: 'Solo Hero', at: '2026-01-01T00:00:00Z', tabs: [] }])))
+    await until(() => emitted.some(e => e.event === 'phone:receipt'))
+    await expect(sendAutomationCommand('start', { kind: 'narration', seriesId: 's1', device: 'aaaa1111' })).resolves.toMatchObject({ via: 'relay' })
+
+    // Back to builds that start only Image Clipper, for the tests below.
+    emitted.length = 0
+    desktop!.send(JSON.stringify(crops('aaaa1111', aaaaSeries, { rescope: true })))
+    desktop!.send(JSON.stringify(crops('bbbb2222', {})))
+    await until(() => (relayReceipts<{ automation?: { runs?: unknown } }>('crops') ?? []).every(r => !r.device || !r.body.automation?.runs))
+  })
+
+  it('splits Editor 2.0 only between builds that take a share', async () => {
+    // Neither phone's receipt says `automation.editor`: each would make every chapter.
+    await expect(sendAutomationCommand('start', { kind: 'editor', seriesId: 's1', language: 'en', split: true }))
+      .rejects.toThrow('Update Sleeper-Cell on Honor · aaaa and Honor · bbbb to split Editor 2.0')
   })
 
   it('stops one phone only', async () => {

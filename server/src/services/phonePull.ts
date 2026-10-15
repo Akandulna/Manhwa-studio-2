@@ -24,6 +24,7 @@ import { readZip } from '../utils/zipReader.js'
 import { FROM_MASTER, indexEntries } from './phoneIndexMerge.js'
 import { chapterFingerprint, chapterPages, phoneZipFolder } from './phoneSend.js'
 import { createClient, getR2Config, invalidateStorage, isNotFound, measureBucket, type R2Config } from './r2Service.js'
+import type { LibraryChapter, LibrarySeries } from './libraryManifest.js'
 
 const PAGE_FILE = /\.(jpe?g|png|webp|gif)$/i
 /** A chapter zip bigger than this is refused rather than read into memory. */
@@ -58,6 +59,24 @@ export interface PullOffer {
 export interface PullResult {
   pulled: { folder: string; chapter: string; pages: number }[]
   failed: { folder: string; chapter: string; reason: string }[]
+}
+
+/** Automatic import from a validated origin manifest; skip identical versions and completed Parts. */
+export async function importLibraryChapter(seriesId: string, series: LibrarySeries, chapter: LibraryChapter): Promise<void> {
+  if (!chapter.key) return
+  const config = getR2Config()
+  if (!config) throw new Error('Cloudflare R2 is not set up')
+  const local = await prisma.chapter.findUnique({ where: { seriesId_number: { seriesId, number: chapter.number } }, include: { phoneSend: true } })
+  if (local?.completedAt || local?.phoneSend?.clearedAt) return
+  const pages = local ? await chapterPages(local.folderPath) : []
+  if (pages.length && local?.phoneSend && local.phoneSend.sentAt?.toISOString() === chapter.sentAt && local.phoneSend.etag === chapter.etag) return
+  const client = createClient(config)
+  try {
+    await pullChapter(client, config, { folder: series.folder, title: series.title, seriesId, chapters: [] }, {
+      ...chapter, key: chapter.key, etag: chapter.etag ?? null, sentAt: chapter.sentAt ?? '', files: chapter.files ?? 0,
+      bytes: chapter.bytes ?? 0, fingerprint: chapter.fingerprint ?? null, state: pages.length ? 'changed' : 'new'
+    })
+  } finally { client.destroy() }
 }
 
 function downloadRoot(): string {
@@ -177,9 +196,13 @@ async function pullChapter(client: S3Client, config: R2Config, series: PullSerie
     .filter(f => isSafeSegment(f.name) && !f.name.startsWith('.') && PAGE_FILE.test(f.name))
   if (files.length === 0) throw new Error('The zip has no pages in it')
 
-  // The series and chapter rows, made when missing (Import Existing's way).
+  // The series and chapter rows, made when missing (Import Existing's way). A
+  // series made here is remembered on the offer, so the rest of its chapters go
+  // into that one series rather than a new one each.
   let row = series.seriesId ? await prisma.series.findUnique({ where: { id: series.seriesId } }) : null
+  row ??= await prisma.series.findFirst({ where: { rootFolder: series.folder }, orderBy: { createdAt: 'asc' } })
   row ??= await prisma.series.create({ data: { title: series.folder, sourceSite: 'phone', rootFolder: series.folder } })
+  series.seriesId = row.id
   const chapters = await prisma.chapter.findMany({ where: { seriesId: row.id }, select: { id: true, number: true, folderPath: true } })
   let target = chapters.find(c => path.basename(c.folderPath) === chapter.name)
     ?? chapters.find(c => c.number === chapter.number)
@@ -189,14 +212,27 @@ async function pullChapter(client: S3Client, config: R2Config, series: PullSerie
   const dir = path.join(downloadRoot(), folderPath)
   const staging = `${dir}.pull-tmp`
   const old = `${dir}.pull-old`
+  // Recover a prior interrupted swap before removing either working directory.
+  const targetExists = await fs.stat(dir).then(() => true, () => false)
+  if (!targetExists && await fs.stat(old).then(() => true, () => false)) await fs.rename(old, dir)
   await fs.rm(staging, { recursive: true, force: true })
   await fs.mkdir(staging, { recursive: true })
+  // A page refresh must preserve scripts, audio, crop data and other local production files.
+  for (const entry of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+    if (!entry.isDirectory() && PAGE_FILE.test(entry.name)) continue
+    await fs.cp(path.join(dir, entry.name), path.join(staging, entry.name), { recursive: true })
+  }
   for (const file of files) await fs.writeFile(path.join(staging, file.name), file.data)
   // Swapped in whole: the chapter is never half old, half new.
   await fs.rm(old, { recursive: true, force: true })
   const had = await fs.stat(dir).then(() => true, () => false)
   if (had) await fs.rename(dir, old)
-  await fs.rename(staging, dir)
+  try {
+    await fs.rename(staging, dir)
+  } catch (error) {
+    if (had) await fs.rename(old, dir)
+    throw error
+  }
   if (had) await fs.rm(old, { recursive: true, force: true })
 
   const written = await chapterPages(folderPath)

@@ -5,6 +5,21 @@ crop pages) to Manhwa Studio as it happens, and "Refresh from phone" back to the
 the last copy of each receipt, so Manhwa Studio catches up when it opens even if the Mac was off.
 See `src/index.ts` for the protocol.
 
+Shared Library catalogs (`library` receipts) go to both desktops and phones. Each origin's last catalog is
+stored and replayed when another device reconnects. A catalog first announces the series/chapter listing,
+then the prepared R2 ZIP versions; receivers create listings immediately and fetch ready chapters automatically.
+Older phone builds ignore this additional receipt kind. Both phones need the updated build for automatic imports.
+
+Production tracker snapshots (`process` receipts) are also stored, broadcast to desktops and other phones,
+and replayed on reconnect. Phones report saved chapter stages; the Mac adds alignment, final cropping,
+processed timelines and language-specific Editor 2.0 exports, and persists its combined snapshot in R2
+under `progress/<Mac device id>.json` for phone catch-up. Parts are fixed at 20 chapters and complete only
+when every chapter has both English and Hinglish exports.
+
+Local delivery/reconnect check: run `npx wrangler dev --ip 127.0.0.1 --port 8791 --var RELAY_TOKEN:library-local-check`
+and then `node scripts/library-sync-check.mjs` in another terminal. It checks both catalog and process
+delivery/replay and writes only to a local relay.
+
 Runs on the Workers free plan: 100k requests/day; incoming WebSocket messages count 20 to 1; idle sockets
 hibernate and cost nothing. The phone sends a receipt only when something changes. While a phone is
 connected, an alarm wakes the relay once a minute (about 1,440 requests a day) to notice a phone that went

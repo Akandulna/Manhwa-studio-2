@@ -11,9 +11,12 @@
  *   GET  /phone/crops?seriesId=…&chapterId=…&fresh=1   which pages have crop JSON on the phone, and the page Auto-run is on
  *   GET  /phone/overview?fresh=1   all three receipts across every series, for the Sleeper Cells page
  *   POST /phone/request   ask the phone to write both receipts again ("Refresh from phone")
- *   POST /phone/automation { command: start|stop, kind?, seriesId?, tabs?, ai?, flow?, chatGpt?, language?, device?, split?, after? } — start a
- *                         run (Image Clipper, narration, Editor 2.0, voiceover) on the phone through the relay, or stop it (`after`: once
- *                         what it's on is done)
+ *   POST /phone/automation { command: start|stop, kind?, seriesId?, tabs?, ai?, flow?, chatGpt?, language?, device?, split?, assignments?, after? }
+ *                         — start a run (Image Clipper, narration, Editor 2.0, voiceover) on the phone through the relay, or stop it
+ *                         (`after`: once what it's on is done). `split` with `assignments` ({ <phone id>: [chapter folders] }, as the
+ *                         plan below was confirmed) sends each phone its share.
+ *   POST /phone/automation/plan { kind, seriesId, language? } — a split's plan, sending nothing: which phone takes which
+ *                         chapters, which keeps what it's on, and which are left alone (phoneSplit.ts)
  *   GET  /phone/screens   each phone's screen state and last screenshot (relay only)
  *   GET  /phone/screens/:device/:index   one screenshot image (JPEG, never cached)
  *   POST /phone/profile   { command: select|options, device, profile } — pick the phone's profile, or have it read what that
@@ -50,6 +53,7 @@ import {
   requestPhoneUpdate,
   publicR2Config,
   PHONE_RUN_KINDS,
+  type PhoneRunKind,
   sendAutomationCommand,
   testR2Connection,
   updateR2Config
@@ -65,9 +69,17 @@ import {
   type PhoneSendRequest
 } from '../services/phoneSend.js'
 import { listPhoneChapters, pullPhoneChapters } from '../services/phonePull.js'
-import { forgetPhone, relayStatus, testRelay, updateRelayConfig } from '../services/phoneRelay.js'
+import { fixRunReadiness, getRunReadiness, type ReadinessFixAction } from '../services/phoneReadiness.js'
+import { forgetPhone, relayConfigured, relayStatus, testRelay, updateRelayConfig } from '../services/phoneRelay.js'
+import { planSplit } from '../services/phoneSplit.js'
 import { parseChatGptSettings, sendProfileCommand } from '../services/phoneProfiles.js'
 import { dropPhoneScreenshot, getPhoneScreens, phoneScreenshotImage, sendScreenCommand } from '../services/phoneScreen.js'
+
+/** A split's confirmed shares: { <phone id>: [chapter folders] }. */
+function isAssignments(value: unknown): value is Record<string, string[]> {
+  return !!value && typeof value === 'object' && !Array.isArray(value) &&
+    Object.values(value).every(list => Array.isArray(list) && list.every(c => typeof c === 'string' && !!c))
+}
 
 function message(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
@@ -106,6 +118,9 @@ export function initR2Routes(io: Server): Router {
         analyticsToken: str(body.analyticsToken),
         clearAnalyticsToken: body.clearAnalyticsToken === true
       })
+      const library = await import('../services/librarySync.js')
+      library.scheduleLibraryPublish()
+      void library.resumeLibraryUploads().catch(error => console.error('[library-sync] upload recovery failed:', error))
       res.json(publicR2Config())
     } catch (error) {
       res.status(400).json({ error: message(error, 'Failed to save R2 settings') })
@@ -182,7 +197,7 @@ export function initR2Routes(io: Server): Router {
 
   router.post('/phone/automation', async (req: Request, res: Response) => {
     try {
-      const { command, kind, seriesId, tabs, ai, flow, language, device, split, after, chatGpt } = req.body ?? {}
+      const { command, kind, seriesId, tabs, ai, flow, language, device, split, after, chatGpt, assignments } = req.body ?? {}
       if (command !== 'start' && command !== 'stop') throw new Error('command must be start or stop')
       if (kind !== undefined && !PHONE_RUN_KINDS.includes(kind)) throw new Error(`kind must be one of ${PHONE_RUN_KINDS.join(', ')}`)
       if (ai !== undefined && ai !== 'chatgpt' && ai !== 'aistudio') throw new Error('ai must be chatgpt or aistudio')
@@ -194,11 +209,63 @@ export function initR2Routes(io: Server): Router {
       if (device !== undefined && (typeof device !== 'string' || !device)) throw new Error('device must be a phone id')
       if (split !== undefined && typeof split !== 'boolean') throw new Error('split must be true or false')
       if (device !== undefined && split) throw new Error('Pick one phone or split, not both')
+      if (assignments !== undefined && (!split || !isAssignments(assignments))) throw new Error('assignments must go with split, as { <phone id>: [chapter folders] }')
       const choices = chatGpt === undefined || chatGpt === null ? undefined : parseChatGptSettings(chatGpt)
-      res.json(await sendAutomationCommand(command, { kind, seriesId, tabs, ai, flow, chatGpt: choices, language, device, split, after }))
+      res.json(await sendAutomationCommand(command, { kind, seriesId, tabs, ai, flow, chatGpt: choices, language, device, split, after, assignments }))
     } catch (error) {
       console.error('Phone automation command failed:', error)
       res.status(400).json({ error: message(error, 'Could not reach the phone') })
+    }
+  })
+
+  /**
+   * Split across the phones, step 1 (phoneSplit.ts): which phone would take which chapters of the series, and which
+   * are left alone, without sending anything. Run automation shows it to confirm, then starts it with
+   * POST /phone/automation { split: true, assignments }.
+   */
+  router.post('/phone/automation/plan', async (req: Request, res: Response) => {
+    try {
+      const { kind = 'clipper', seriesId, language = 'en' } = req.body ?? {}
+      if (!PHONE_RUN_KINDS.includes(kind)) throw new Error(`kind must be one of ${PHONE_RUN_KINDS.join(', ')}`)
+      if (typeof seriesId !== 'string' || !seriesId) throw new Error('Pick a series to split between the phones')
+      if (language !== 'en' && language !== 'hi') throw new Error('language must be en or hi')
+      if (!relayConfigured()) throw new Error('Splitting runs between the phones needs the phone relay (Settings → Cloudflare)')
+      res.json(await planSplit(kind, seriesId, language))
+    } catch (error) {
+      console.error('Phone automation command failed:', error)
+      res.status(400).json({ error: message(error, 'Could not reach the phone') })
+    }
+  })
+
+  /** Run automation's checklist: what `kind` needs of the series on the phone (phoneReadiness.ts). Editor 2.0's LISTs R2. */
+  router.get('/phone/readiness', async (req: Request, res: Response) => {
+    try {
+      const { kind, seriesId, language = 'en' } = req.query
+      if (typeof kind !== 'string' || !PHONE_RUN_KINDS.includes(kind as PhoneRunKind)) throw new Error(`kind must be one of ${PHONE_RUN_KINDS.join(', ')}`)
+      if (typeof seriesId !== 'string' || !seriesId) throw new Error('seriesId is required')
+      if (language !== 'en' && language !== 'hi') throw new Error('language must be en or hi')
+      res.json(await getRunReadiness(kind as PhoneRunKind, seriesId, language))
+    } catch (error) {
+      console.error('Phone run readiness failed:', error)
+      res.status(400).json({ error: message(error, 'Could not check what the phone needs') })
+    }
+  })
+
+  /** One fix from that checklist: send the pages or packages, the prompt, or ask the phones to download. */
+  router.post('/phone/readiness/fix', async (req: Request, res: Response) => {
+    try {
+      const { action, seriesId, chapterIds, prompt } = req.body ?? {}
+      const actions: ReadinessFixAction[] = ['send_pages', 'ask_download', 'send_editor', 'send_prompt']
+      if (!actions.includes(action)) throw new Error(`action must be one of ${actions.join(', ')}`)
+      if (typeof seriesId !== 'string' || !seriesId) throw new Error('seriesId is required')
+      if (chapterIds !== undefined && (!Array.isArray(chapterIds) || !chapterIds.every((id: unknown) => typeof id === 'string'))) {
+        throw new Error('chapterIds must be an array of strings')
+      }
+      if (prompt !== undefined && typeof prompt !== 'string') throw new Error('prompt must be a string')
+      res.json(await fixRunReadiness({ action, seriesId, chapterIds, prompt }, io))
+    } catch (error) {
+      console.error('Phone run readiness fix failed:', error)
+      res.status(400).json({ error: message(error, 'Could not get it to the phone') })
     }
   })
 

@@ -3,7 +3,8 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { prisma } from '../index.js';
+import { prisma, downloadManager } from '../index.js';
+import { ownLibrarySeries, scheduleLibraryPublish } from '../services/librarySync.js';
 import { inferPattern, sanitizeTitle, zeroPad, generateUrl } from '../utils/urlPattern.js';
 import { extractSiteDomain, getPageTitle } from '../services/scraper.js';
 import { validateManualChapters } from '../services/discovery.js';
@@ -254,6 +255,8 @@ router.post('/', async (req: Request, res: Response) => {
       }
     });
     
+    await ownLibrarySeries(series.id);
+    await downloadManager.queueChapters(series.chapters.map(c => c.id));
     res.status(201).json(series);
   } catch (error) {
     console.error('Error creating series:', error);
@@ -343,6 +346,8 @@ router.post('/:id/chapters', async (req: Request, res: Response) => {
       })
     );
     
+    scheduleLibraryPublish();
+    await downloadManager.queueChapters(createdChapters.filter(c => c.status !== 'done').map(c => c.id));
     res.status(201).json(createdChapters);
   } catch (error) {
     console.error('Error adding chapters:', error);

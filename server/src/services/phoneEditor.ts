@@ -52,6 +52,7 @@ import { getChapterBlockers, getChapterCropMetadataBundle, getChapterTimelineBun
 import { getOutputDir, getSourceFolderPath } from './clipper3/perImageStore.js'
 import { readEffectiveReview } from './clipper3/chapterReview.js'
 import { NARRATION_LANGUAGES, type NarrationLanguage } from './narrationLanguage.js'
+import { getPublishedChapters } from './storageService.js'
 
 /** Inside the phone's prefix. Keep in step with FOLDER in EditorSync.kt. */
 export const EDITOR_FOLDER = 'editor/'
@@ -369,7 +370,7 @@ export async function publishReadyEditorPackages(chapterIds: string[] | null): P
 }
 
 /** Every key under the phone folders' editor/, to tell a package that's gone from one that's up. */
-async function listEditorKeys(client: S3Client, config: R2Config, folders: string[]): Promise<Set<string>> {
+export async function listEditorKeys(client: S3Client, config: R2Config, folders: string[]): Promise<Set<string>> {
   const keys = new Set<string>()
   for (const folder of folders) {
     let token: string | undefined
@@ -380,6 +381,129 @@ async function listEditorKeys(client: S3Client, config: R2Config, folders: strin
     } while (token)
   }
   return keys
+}
+
+// ============ Split between phones ============
+
+/**
+ * A series' chapters still waiting for their timeline in `language`, in
+ * reading order, for Editor 2.0's run split between phones (phoneSplit.ts
+ * shares them out). Waiting means its package is up for the phones, and
+ * neither its timeline is up nor a timeline JSON pasted here. R2 cost: one
+ * LIST per phone folder, once the plan is asked for.
+ */
+export async function editorWaitingChapters(seriesId: string, language: NarrationLanguage): Promise<string[]> {
+  const config = getR2Config()
+  if (!config) throw new Error('Cloudflare R2 is not set up')
+  const series = await prisma.series.findUnique({
+    where: { id: seriesId },
+    select: { rootFolder: true, chapters: { orderBy: { number: 'asc' }, select: { id: true, folderPath: true } } }
+  })
+  if (!series) throw new Error('Series not found')
+  const seriesFolder = path.basename(series.rootFolder)
+  const suffix = languageSuffix(language)
+
+  const client = createClient(config)
+  const names = new Set<string>()
+  for (const folder of await phoneFolders(client, config)) {
+    const base = `${folder}${EDITOR_FOLDER}${seriesFolder}/`
+    let token: string | undefined
+    do {
+      const page = await client.send(new ListObjectsV2Command({ Bucket: config.bucket, Prefix: base, ContinuationToken: token }))
+      for (const object of page.Contents ?? []) {
+        const name = object.Key?.slice(base.length) ?? ''
+        if (name && !name.includes('/')) names.add(name)
+      }
+      token = page.IsTruncated ? page.NextContinuationToken : undefined
+    } while (token)
+  }
+  const withJson = new Set(
+    (await prisma.editor2Timeline.findMany({
+      where: { chapterId: { in: series.chapters.map(c => c.id) }, language },
+      select: { chapterId: true, json: true }
+    })).filter(r => r.json.trim()).map(r => r.chapterId)
+  )
+
+  const waiting: string[] = []
+  let sent = 0
+  for (const chapter of series.chapters) {
+    const folder = path.basename(chapter.folderPath)
+    if (!names.has(`${folder}${suffix}${PACKAGE_SUFFIX}`)) continue
+    sent++
+    if (withJson.has(chapter.id) || names.has(`${folder}${suffix}${TIMELINE_SUFFIX}`)) continue
+    waiting.push(folder)
+  }
+  if (sent === 0) throw new Error('No Editor 2.0 package of this series is up for the phones: send its chapters to the phone from Editor 2.0 first')
+  return waiting
+}
+
+// ============ Ready for a run ============
+
+export interface EditorChapterRef { chapterId: string; number: number }
+
+/** What a series' Editor 2.0 run on the phone has to work with, in `language` (Run automation's checklist). */
+export interface EditorReadiness {
+  /** The Editor 2.0 prompt is up for the phones. */
+  prompt: boolean
+  /** Chapters with their timeline made already: a JSON pasted here, or the phone's timeline up. */
+  made: number
+  /** Waiting for their timeline, package up: the run fetches these as it starts. */
+  up: EditorChapterRef[]
+  /** Ready here, package not up yet: what publishReadyEditorPackages would send. */
+  toSend: EditorChapterRef[]
+  /** Not ready here: what each still lacks (voiceover, alignment, crops, review…). */
+  notReady: (EditorChapterRef & { missing: string[] })[]
+}
+
+/**
+ * Every unpublished, uncompleted chapter of the series sorted into the groups
+ * above. R2 cost: one LIST per phone folder, so it's asked for on demand only.
+ */
+export async function getEditorReadiness(seriesId: string, language: NarrationLanguage): Promise<EditorReadiness> {
+  const config = getR2Config()
+  if (!config) throw new Error('Cloudflare R2 is not set up')
+  const series = await prisma.series.findUnique({
+    where: { id: seriesId },
+    select: {
+      rootFolder: true,
+      chapters: {
+        where: { completedAt: null },
+        orderBy: { number: 'asc' },
+        select: { id: true, number: true, folderPath: true, _count: { select: { audioSections: { where: { language } } } } }
+      }
+    }
+  })
+  if (!series) throw new Error('Series not found')
+  const seriesFolder = path.basename(series.rootFolder)
+  const suffix = languageSuffix(language)
+
+  const client = createClient(config)
+  const folders = await phoneFolders(client, config)
+  const keys = await listEditorKeys(client, config, folders)
+  const everywhere = (name: string) => folders.every(folder => keys.has(`${folder}${EDITOR_FOLDER}${name}`))
+  const anywhere = (name: string) => folders.some(folder => keys.has(`${folder}${EDITOR_FOLDER}${name}`))
+
+  const [published, timelines] = await Promise.all([
+    getPublishedChapters(seriesId, language),
+    prisma.editor2Timeline.findMany({ where: { chapterId: { in: series.chapters.map(c => c.id) }, language }, select: { chapterId: true, json: true } })
+  ])
+  const withJson = new Set(timelines.filter(r => r.json.trim()).map(r => r.chapterId))
+
+  const result: EditorReadiness = { prompt: everywhere(PROMPT_NAME), made: 0, up: [], toSend: [], notReady: [] }
+  for (const chapter of series.chapters) {
+    if (published.chapters[chapter.id]) continue
+    const ref = { chapterId: chapter.id, number: chapter.number }
+    const name = `${seriesFolder}/${path.basename(chapter.folderPath)}${suffix}`
+    if (withJson.has(chapter.id) || anywhere(`${name}${TIMELINE_SUFFIX}`)) { result.made++; continue }
+    if (everywhere(`${name}${PACKAGE_SUFFIX}`)) { result.up.push(ref); continue }
+    // No voiceover yet: the checklist would only say the same, at a cost.
+    if (chapter._count.audioSections === 0) { result.notReady.push({ ...ref, missing: ['voiceover'] }); continue }
+    const missing = [...((await getChapterBlockers(chapter.id, language)) ?? [])]
+    if (!(await readEffectiveReview(chapter.folderPath)).reviewed) missing.push('crop review')
+    if (missing.length) result.notReady.push({ ...ref, missing })
+    else result.toSend.push(ref)
+  }
+  return result
 }
 
 // ============ Fetch ============
