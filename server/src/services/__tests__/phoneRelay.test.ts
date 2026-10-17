@@ -144,13 +144,15 @@ describe('phone relay', () => {
         automation: {
           wakeMode: 'personal', resumeAfterLimit: false, remoteStart: true, resume: null,
           runs: ['clipper', 'narration', 'editor', 'voiceover'], clipper: { ai: 'aistudio', flow: 'steps', tabs: 3 },
+          editor: { tabs: 2, staged: true, chatGpt: { mode: 'Chat', model: 'Selected model', effort: 'High' } },
           stopAfter: true, clipperStopping: true
         }
       }
     }))
     await until(() => emitted.some(e => e.event === 'phone:receipt'))
     expect((await getPhoneOverview(null)).automation).toMatchObject({
-      runs: ['clipper', 'narration', 'editor', 'voiceover'], clipper: { ai: 'aistudio', flow: 'steps', tabs: 3 }
+      runs: ['clipper', 'narration', 'editor', 'voiceover'], clipper: { ai: 'aistudio', flow: 'steps', tabs: 3 },
+      editor: { tabs: 2, staged: true, chatGpt: { mode: 'Chat', model: 'Selected model', effort: 'High' } }
     })
 
     const clip = await sendAutomationCommand('start', { seriesId: 's1', tabs: 2, ai: 'aistudio', flow: 'steps', language: 'hi' })
@@ -159,10 +161,17 @@ describe('phone relay', () => {
       type: 'request', id: clip.id, requestedAt: clip.requestedAt, action: 'clipper_start', series: 'Solo Hero', tabs: 2, ai: 'aistudio', flow: 'steps'
     })
 
-    const editor = await sendAutomationCommand('start', { kind: 'editor', seriesId: 's1', tabs: 2, ai: 'chatgpt', language: 'hi' })
+    const gemini = await sendAutomationCommand('start', { seriesId: 's1', ai: 'gemini', flow: 'steps' })
+    await until(() => received.some(m => m.includes(gemini.id)))
+    expect(JSON.parse(received.find(m => m.includes(gemini.id))!)).toMatchObject({
+      action: 'clipper_start', ai: 'gemini', flow: 'steps'
+    })
+
+    const editorChoices = { mode: 'Chat' as const, model: 'Selected model', effort: 'High' }
+    const editor = await sendAutomationCommand('start', { kind: 'editor', seriesId: 's1', tabs: 2, ai: 'chatgpt', language: 'hi', chatGpt: editorChoices })
     await until(() => received.some(m => m.includes(editor.id)))
     expect(JSON.parse(received.find(m => m.includes(editor.id))!)).toEqual({
-      type: 'request', id: editor.id, requestedAt: editor.requestedAt, action: 'editor_start', series: 'Solo Hero', tabs: 2, language: 'hi'
+      type: 'request', id: editor.id, requestedAt: editor.requestedAt, action: 'editor_start', series: 'Solo Hero', tabs: 2, language: 'hi', chatGpt: editorChoices
     })
 
     const voice = await sendAutomationCommand('start', { kind: 'voiceover', seriesId: 's1', tabs: 4 })
@@ -367,10 +376,30 @@ describe('two phones', () => {
     expect(battery.get('aaaa1111')).toEqual({ level: 80, charging: true, plugged: 'usb' })
   })
 
+  it('scopes a production run to validated unfinished chapters on one capable phone', async () => {
+    desktop!.send(JSON.stringify(crops('aaaa1111', aaaaSeries, { chapterRuns: ['clipper'] })))
+    await until(() => (relayReceipts<{ automation?: { chapterRuns?: string[] } }>('crops') ?? []).some(r => r.device === 'aaaa1111' && r.body.automation?.chapterRuns?.includes('clipper')))
+    const sent = await sendAutomationCommand('start', { seriesId: 's1', device: 'aaaa1111', chapters: ['Chapter 001'] })
+    await until(() => received.some(m => m.includes(sent.id)))
+    expect(JSON.parse(received.find(m => m.includes(sent.id))!)).toMatchObject({ action: 'clipper_start', device: 'aaaa1111', chapters: ['Chapter 001'] })
+    expect(sent.targets[0].chapters).toEqual(['Chapter 001'])
+    await expect(sendAutomationCommand('start', { seriesId: 's1', device: 'aaaa1111', chapters: ['Another series chapter'] })).rejects.toThrow('not in this series')
+    await expect(sendAutomationCommand('start', { seriesId: 's1', chapters: ['Chapter 001'] })).rejects.toThrow('needs one device and series')
+    await expect(sendAutomationCommand('start', { seriesId: 's1', device: 'bbbb2222', chapters: ['Chapter 001'] })).rejects.toThrow('Update Sleeper-Cell')
+  })
+
   it('drops a phone the relay forgot', async () => {
     emitted.length = 0
     desktop!.send(JSON.stringify({ type: 'forgotten', device: '' }))
     await until(() => emitted.some(e => e.event === 'phone:receipt'))
     expect(relayStatus().devices.map(d => d.id).sort()).toEqual(['aaaa1111', 'bbbb2222'])
+  })
+
+  it('preserves Gemini web as the phone’s saved clipper provider', async () => {
+    desktop!.send(JSON.stringify({ type: 'receipt', kind: 'crops', device: 'aaaa1111', at: Date.now(), body: {
+      series: {}, automation: { remoteStart: true, clipper: { ai: 'gemini', flow: 'steps', tabs: 2 } }
+    } }))
+    await until(() => relayReceipts<any>('crops')?.some(r => r.device === 'aaaa1111' && r.body.automation?.clipper?.ai === 'gemini') === true)
+    expect((await getPhoneOverview(null)).phones.find(p => p.id === 'aaaa1111')?.automation?.clipper?.ai).toBe('gemini')
   })
 })

@@ -9,7 +9,7 @@ import { r2Api, type PhoneScreen } from '@/lib/api'
 import { useSocket } from '@/lib/socket'
 
 export function usePhoneScreens(): Map<string, PhoneScreen> {
-  const { socket } = useSocket()
+  const { socket, isConnected } = useSocket()
   const [screens, setScreens] = useState<Map<string, PhoneScreen>>(new Map())
 
   const load = useCallback(() => {
@@ -18,7 +18,7 @@ export function usePhoneScreens(): Map<string, PhoneScreen> {
       .catch(() => { /* advisory only */ })
   }, [])
 
-  useEffect(load, [load])
+  useEffect(load, [load, isConnected])
 
   useEffect(() => {
     if (!socket) return

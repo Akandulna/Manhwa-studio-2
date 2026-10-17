@@ -33,6 +33,7 @@ vi.mock('../alignment/alignmentService.js', () => ({ alignSectionInBackground: (
 // An in-memory stand-in for the sections and audio files Prisma would hold.
 let sections: any[] = []
 let files: any[] = []
+let timelines: any[] = []
 let nextId = 0
 const forChapter = (where: any) => (row: any) => row.chapterId === where.chapterId && row.language === where.language
 vi.mock('../../index.js', () => ({
@@ -58,6 +59,14 @@ vi.mock('../../index.js', () => ({
       deleteMany: async ({ where }: any) => { const ids = new Set(where.id.in); files = files.filter(f => !ids.has(f.id)) },
       delete: async ({ where }: any) => { files = files.filter(f => f.id !== where.id) },
       create: async ({ data }: any) => { const f = { id: `f${++nextId}`, ...data }; files.push(f); return f }
+    },
+    editor2Timeline: {
+      findUnique: async ({ where }: any) => timelines.find(forChapter(where.chapterId_language)) ?? null,
+      upsert: async ({ where, create, update }: any) => {
+        const row = timelines.find(forChapter(where.chapterId_language))
+        if (row) Object.assign(row, update)
+        else timelines.push({ ...create })
+      }
     }
   }
 }))
@@ -123,6 +132,7 @@ beforeEach(async () => {
   send.mockClear()
   sections = []
   files = []
+  timelines = []
   aligned.length = 0
 })
 
@@ -200,6 +210,37 @@ describe('fetchPhoneVoiceover in Hinglish', () => {
 })
 
 describe('fetchPhoneVoiceover', () => {
+  it('rejects stale phone audio after a local script replacement before changing sections', async () => {
+    const chapter = path.join(root, 'Solo Hero/Chapter 009')
+    await fs.mkdir(chapter, { recursive: true })
+    await fs.writeFile(path.join(chapter, '.script-replacement.hi.json'), JSON.stringify({ sha256: 'replacement-script' }))
+    zips.set('voiceover/Solo Hero/Chapter 009.hi.zip', await chapterZip('Chapter 009', ['पुराना।'], 0, { language: 'hi', script_sha256: 'old-script' }))
+    etags.set('voiceover/Solo Hero/Chapter 009.hi.zip', 'old')
+    const result = await fetchPhoneVoiceover('s1', ['c9'], null, 'hi')
+    expect(result.fetched).toEqual([])
+    expect(result.failed[0].reason).toMatch(/before the script replacement/)
+    expect(sections).toEqual([])
+    expect(files).toEqual([])
+    expect(aligned).toEqual([])
+  })
+
+  it('backs up and clears only the replaced language timeline, leaving a newer cache invalidation', async () => {
+    const previous = new Date(Date.now() + 10_000)
+    timelines.push({ chapterId: 'c9', language: 'hi', json: '{"old":true}', processedJson: '{"old":true}', updatedAt: previous })
+    timelines.push({ chapterId: 'c9', language: 'en', json: '{"english":true}', processedJson: '{"english":true}', updatedAt: previous })
+    zips.set('voiceover/Solo Hero/Chapter 009.hi.zip', await chapterZip('Chapter 009', ['नया टेक्स्ट।'], 0, { language: 'hi', script_sha256: 'new-script-hash' }))
+    etags.set('voiceover/Solo Hero/Chapter 009.hi.zip', 'replacement')
+    const result = await fetchPhoneVoiceover('s1', ['c9'], null, 'hi')
+    expect(result.failed).toEqual([])
+    expect(timelines[0]).toMatchObject({ json: '', processedJson: null })
+    expect(timelines[0].updatedAt.getTime()).toBeGreaterThan(previous.getTime())
+    expect(timelines[1].json).toBe('{"english":true}')
+    const backup = await fs.readdir(path.join(audioDir('Chapter 009', 'audio_hi'), 'backup'))
+    expect(await fs.readFile(path.join(audioDir('Chapter 009', 'audio_hi'), 'backup', backup[0]), 'utf-8')).toBe('{"old":true}')
+    const marker = JSON.parse(await fs.readFile(path.join(audioDir('Chapter 009', 'audio_hi'), FETCH_MARKER), 'utf-8'))
+    expect(marker.scriptSha256).toBe('new-script-hash')
+  })
+
   it('makes the phone\'s splits the sections, attaches their audio, then downloads only what changed', async () => {
     zips.set('voiceover/Solo Hero/Chapter 009.zip', await chapterZip('Chapter 009', ['One.', 'Two.']))
     etags.set('voiceover/Solo Hero/Chapter 009.zip', 'e9')

@@ -1,4 +1,5 @@
 import fs from 'fs/promises'
+import { recordSeriesFileActivity, recordPhoneActivity } from './seriesActivity.js'
 import { watch, type FSWatcher } from 'fs'
 import path from 'path'
 import { createHash } from 'crypto'
@@ -14,10 +15,11 @@ import { relayReceipts } from './phoneRelay.js'
 import { createClient, getR2Config } from './r2Service.js'
 import { libraryDeviceId } from './librarySync.js'
 import { libraryControl } from './libraryControls.js'
+import { readPageReplacement, type PageReplacement } from './chapterPageReplacement.js'
 import { buildProcessSeries, emptyStages, mergeStage, PROCESS_STAGES, stage,
   type ChapterStages, type ProcessSnapshot } from './seriesProcessModel.js'
 
-type RemoteChapter = { stages?: Partial<ChapterStages> }
+type RemoteChapter = { stages?: Partial<ChapterStages>; pageRevision?: string }
 interface DeviceProcess { schema: 'device-process/1'; deviceId: string; updatedAt: string; series: { folder: string; chapters: Record<string, RemoteChapter> }[] }
 const phoneProgress = new Map<string, DeviceProcess>()
 let io: Server | null = null
@@ -42,6 +44,7 @@ export function receiveDeviceProcess(value: unknown): void {
   const prior = phoneProgress.get(body.deviceId)
   if (prior && Date.parse(prior.updatedAt) >= Date.parse(body.updatedAt)) return
   phoneProgress.set(body.deviceId, body)
+  recordPhoneActivity('process', body.deviceId, body)
   notifySeriesProcessChanged()
 }
 
@@ -102,11 +105,13 @@ async function localStages(chapter: any, title: string, timelines: any[]): Promi
   return result
 }
 
-function mergeRemote(stages: ChapterStages, folder: string, name: string): void {
+function mergeRemote(stages: ChapterStages, folder: string, name: string, replacement: PageReplacement | null): void {
   for (const receipt of phoneProgress.values()) {
-    const remote = receipt.series.find(s => s.folder === folder)?.chapters?.[name]?.stages
+    const chapter = receipt.series.find(s => s.folder === folder)?.chapters?.[name]
+    const remote = chapter?.stages
     if (!remote) continue
     for (const key of PROCESS_STAGES) {
+      if (replacement && ['crop_json', 'review'].includes(key) && chapter?.pageRevision !== replacement.revision) continue
       // Rendering, processing and alignment are desktop facts, never guessed from a phone's script or package.
       if (key.startsWith('export_') || key.startsWith('processed_') || key.startsWith('align_') || key === 'crop') continue
       const value = remote[key]
@@ -131,6 +136,7 @@ function mergeRemote(stages: ChapterStages, folder: string, name: string): void 
   let total = 0
   for (const receipt of relayReceipts<any>('crops') ?? []) {
     const c = receipt.body.series?.[folder]?.chapters?.[name]
+    if (replacement && c?.pageRevision !== replacement.revision) continue
     total = Math.max(total, Number(c?.total) || 0)
     for (const [page, state] of Object.entries(c?.pages ?? {})) if (state === 'done') donePages.add(page)
   }
@@ -152,10 +158,11 @@ async function scan(): Promise<ProcessSnapshot> {
     const chapters = []
     for (const c of row.chapters) {
       const stages = await localStages(c, row.title, timelines.filter(t => t.chapterId === c.id))
-      mergeRemote(stages, path.basename(row.rootFolder), path.basename(c.folderPath))
+      const replacement = await readPageReplacement(c.folderPath)
+      mergeRemote(stages, path.basename(row.rootFolder), path.basename(c.folderPath), replacement)
       stages.export_en = { state: c.completedAt || en.has(c.number) ? 'done' : 'pending' }
       stages.export_hi = { state: c.completedAt || hi.has(c.number) ? 'done' : 'pending' }
-      chapters.push({ id: c.id, name: path.basename(c.folderPath), number: c.number, stages })
+      chapters.push({ id: c.id, name: path.basename(c.folderPath), number: c.number, stages, ...(replacement ? { pageRevision: replacement.revision } : {}) })
     }
     series.push(buildProcessSeries({ ...row, rootFolder: path.basename(row.rootFolder) }, chapters,
       Object.entries(control.parts ?? {}).filter(([, d]) => d.done).map(([n]) => Number(n))))
@@ -219,6 +226,7 @@ export function startSeriesProcess(socket: Server): void {
     watcher?.close()
     watcher = watch(root(), { recursive: true }, (_event, file) => {
       if (file) {
+        recordSeriesFileActivity(String(file))
         const parts = String(file).split(path.sep)
         if (parts.length >= 2) {
           const folder = parts.slice(0, 2).join(path.sep)

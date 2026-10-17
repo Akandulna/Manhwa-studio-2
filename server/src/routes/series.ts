@@ -2,6 +2,7 @@
  * Series API Routes
  */
 
+import { withSeriesActivity } from '../services/seriesActivity.js';
 import { Router, Request, Response } from 'express';
 import { prisma, downloadManager } from '../index.js';
 import { ownLibrarySeries, scheduleLibraryPublish } from '../services/librarySync.js';
@@ -14,8 +15,23 @@ import path from 'path';
 import { libraryDeviceId, scheduleLibraryCleanup } from '../services/librarySync.js';
 import { libraryControl, libraryControls, saveLibraryControls } from '../services/libraryControls.js';
 import { notifySeriesProcessChanged } from '../services/seriesProcess.js';
+import { productionAutomation, getProductionStatus } from '../services/productionAutomation.js';
+import { parseProductionConfig } from '../services/productionAutomationModel.js';
 
 const router = Router();
+
+router.get('/:id/automation', async (req, res) => {
+  try { res.json(await getProductionStatus(req.params.id)); }
+  catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
+});
+router.post('/:id/automation', async (req, res) => {
+  try { res.json(await productionAutomation.start(req.params.id, parseProductionConfig(req.body))); }
+  catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
+});
+router.post('/:id/automation/stop', async (req, res) => {
+  try { res.json(await productionAutomation.cancel(req.params.id)); }
+  catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
+});
 
 // Get all series
 router.get('/', async (req: Request, res: Response) => {
@@ -63,7 +79,7 @@ router.get('/', async (req: Request, res: Response) => {
       };
     });
     
-    res.json(result);
+    res.json(await withSeriesActivity(result));
   } catch (error) {
     console.error('Error fetching series:', error);
     res.status(500).json({ error: 'Failed to fetch series' });

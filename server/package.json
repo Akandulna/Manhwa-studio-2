@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
+    "build:editor-workflow": "node scripts/build-editor-workflow.mjs",
     "start": "node dist/index.js",
     "db:push": "prisma db push",
     "db:generate": "prisma generate",
@@ -41,6 +42,7 @@
     "@types/sharp": "^0.31.1",
     "@types/uuid": "^9.0.8",
     "@types/ws": "^8.18.2",
+    "esbuild": "^0.28.0",
     "prisma": "^5.10.2",
     "tsx": "^4.7.1",
     "typescript": "^5.3.3",

@@ -131,6 +131,29 @@ describe('unpackChapterZip', () => {
 })
 
 describe('fetchPhoneCrops', () => {
+  it('rejects stale crops after page replacement and accepts only crops for the new revision', async () => {
+    const { newPageReplacement, resetChapterClipping } = await import('../chapterPageReplacement.js')
+    const replacement = newPageReplacement()
+    await resetChapterClipping('Solo Hero/Chapter 009', replacement)
+    const key = 'crops/Solo Hero/Chapter 009.zip'
+    zips.set(key, await chapterZip('Chapter 009', [1]))
+    etags.set(key, 'old')
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const stale = await fetchPhoneCrops('s1')
+      expect(stale.fetched).toEqual([])
+      expect(stale.failed[0].reason).toContain('older page revision')
+      await expect(fs.access(processed('Chapter 009'))).rejects.toThrow()
+    } finally { log.mockRestore() }
+    zips.set(key, await zipOf({
+      'Solo Hero/Chapter 009/chapter.json': JSON.stringify({ page_revision: replacement.revision }),
+      'Solo Hero/Chapter 009/page_001/crop-pointers-ch009-p001.json': '{}',
+      'Solo Hero/Chapter 009/page_001/crop-metadata-ch009-p001.json': '{}'
+    }))
+    etags.set(key, 'new')
+    expect((await fetchPhoneCrops('s1')).fetched).toHaveLength(1)
+  })
+
   it('unpacks each finished chapter into Processed/, then downloads only what changed', async () => {
     zips.set('crops/Solo Hero/Chapter 009.zip', await chapterZip('Chapter 009', [1, 2]))
     etags.set('crops/Solo Hero/Chapter 009.zip', 'e9')

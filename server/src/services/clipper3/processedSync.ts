@@ -43,6 +43,7 @@
 
 import fs from 'fs/promises'
 import path from 'path'
+import { pageReplacementActive } from '../chapterPageReplacement.js'
 import {
   deleteImageMetadata,
   deleteImagePoints,
@@ -384,6 +385,7 @@ export interface SyncChapterInput {
  * made after it are protected by the normal rule again.
  */
 export async function syncChapterProcessed(input: SyncChapterInput): Promise<ChapterSyncResult> {
+  if (pageReplacementActive(input.folderPath)) throw new Error('This chapter’s pages are being replaced')
   const result: ChapterSyncResult = {
     chapterId: input.chapterId,
     chapterNumber: input.chapterNumber,

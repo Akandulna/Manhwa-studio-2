@@ -1,3 +1,4 @@
+import { useSeriesOrder } from '@/hooks/useSeriesOrder'
 /**
  * EditorLibrary2 — Module 4v2: Editor 2.0
  *
@@ -33,6 +34,7 @@ type SeriesReadiness = Editor2SeriesReadiness | 'error'
 export default function EditorLibrary2() {
   const [language, setLanguage] = useNarrationLanguage('editor2')
   const [series, setSeries] = useState<Series[]>([])
+  const orderedSeries = useSeriesOrder(series)
   // Parts completed on the Storage page (files deleted, continuity kept).
   const { seriesCompletedParts, completedPart } = usePublishedChapters()
   const [loading, setLoading] = useState(true)
@@ -125,7 +127,7 @@ export default function EditorLibrary2() {
       </div>
 
       <Card className="overflow-hidden divide-y">
-        {series.map((s) => {
+        {orderedSeries.map((s) => {
           const status = readiness[s.id]
           return (
             <Link

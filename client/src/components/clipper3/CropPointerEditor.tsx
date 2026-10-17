@@ -11,10 +11,9 @@
  * bounding box of a crop's 4 points regardless of stored `mode`, so a
  * rectangle editor can only ever produce exactly what would be cut anyway.
  *
- * This component owns the fetch of the image's own crop file and the PUT on
- * save — a caller only needs an image's filename/width/height and a chapter
- * id. `onSaved` lets the caller refresh its own row/status state after a
- * successful save.
+ * The image-list dialog uses this component's fetch and manual Save/Cancel.
+ * The chapter preview supplies reviewMode and onCommit, owning autosave and
+ * Undo while this component keeps intermediate drag positions local.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
@@ -22,7 +21,7 @@ import { Button } from '@/components/ui/button'
 import { Loader2, Pencil, Save, X } from 'lucide-react'
 import { clipper3Api, type Clipper3CropEntry, type Clipper3ImageCropFile, type Clipper3ImagePoints } from '@/lib/api'
 import { useToast } from '@/components/ui/use-toast'
-import { seriesSlug, stemOf, exportedFilenameFor } from '@/lib/clipper3Naming'
+import { removeCropFromMetadata } from '@/lib/cropReviewSession'
 
 const ACCENT = '#a855f7'
 const SELECTED_ACCENT = '#facc15'
@@ -76,54 +75,6 @@ function boundsToEntry(entry: Clipper3CropEntry, bounds: Bounds): Clipper3CropEn
   }
 }
 
-/**
- * Drops one crop's entry from a metadata document and renumbers what's left.
- *
- * The store treats this document as opaque text (it is written by whatever
- * template Settings holds), so this is best-effort by design: it only rewrites
- * a document that actually parses as JSON with a `crops` array, and returns
- * null for anything else rather than mangling it. A null result means the
- * caller leaves the metadata file untouched and says so.
- *
- * Renumbering matters because `exportedFilename` encodes a 1-based position
- * that the cutter regenerates from array order — after a removal, every later
- * entry's stored name would otherwise point at a file that never gets written.
- * Ids are deliberately NOT renumbered: they are the join key back to the crop
- * points file, and rewriting them would break that pairing.
- */
-export function removeCropFromMetadata(
-  metadataText: string,
-  removedCropId: string,
-  remainingCrops: Clipper3CropEntry[],
-  opts: { seriesTitle: string; imageFilename: string }
-): string | null {
-  let parsed: any
-  try {
-    parsed = JSON.parse(metadataText)
-  } catch {
-    return null
-  }
-  if (!parsed || !Array.isArray(parsed.crops)) return null
-
-  const slug = seriesSlug(opts.seriesTitle)
-  const stem = stemOf(opts.imageFilename)
-
-  const kept = parsed.crops.filter((entry: any) => entry?.id !== removedCropId)
-
-  // Reason strings live in the POINTS file, not here, so the new filename is
-  // rebuilt from the surviving crop entries in their post-removal order.
-  const reasonById = new Map(remainingCrops.map(c => [c.id, c.reason]))
-  const renumbered = kept.map((entry: any, index: number) => {
-    if (typeof entry?.exportedFilename !== 'string') return entry
-    return {
-      ...entry,
-      exportedFilename: exportedFilenameFor(slug, stem, index, reasonById.get(entry?.id))
-    }
-  })
-
-  return JSON.stringify({ ...parsed, crops: renumbered }, null, 2)
-}
-
 type DragMode =
   | { kind: 'move'; startX: number; startY: number; origin: Bounds }
   | { kind: 'resize'; handle: 'nw' | 'ne' | 'sw' | 'se'; startX: number; startY: number; origin: Bounds }
@@ -132,6 +83,10 @@ const CLAMP01 = (n: number) => Math.min(1, Math.max(0, n))
 const MIN_SIZE = 0.01
 
 export interface CropPointerEditorProps {
+  /** Chapter preview supplies committed edits; all pages stay editable. */
+  reviewMode?: boolean
+  onCommit?: (file: Clipper3ImageCropFile, removedCropId?: string) => void
+  onInteractionChange?: (dragging: boolean) => void
   chapterId: string
   filename: string
   width: number
@@ -152,24 +107,9 @@ export interface CropPointerEditorProps {
   /** Fired whenever this image enters/exits edit mode, so a caller stacking
    *  several editors (Clipper3Preview) can dim the ones not being edited. */
   onEditingChange?: (editing: boolean) => void
-  /**
-   * Once editing starts, renders Save/Cancel as a fixed panel pinned to the
-   * viewport's right edge instead of inline above the image. Needed on
-   * Clipper3Preview: cards are stacked and can run taller than the viewport,
-   * so an inline Save button scrolls out of reach mid-drag. A caller with a
-   * short, non-scrolling container (the image-list dialog) should leave this
-   * off.
-   */
+  /** Pins manual Save/Cancel controls to the viewport when requested. */
   floatingControls?: boolean
-  /**
-   * Hides the inline "Adjust pointers" trigger, on the understanding that the
-   * caller offers its own. Clipper3Preview does: its trigger lives in the
-   * left drawer, which is reachable from anywhere in a long stack of images,
-   * whereas an inline one sits at the top of a card that can be several
-   * viewports tall — the user had to scroll back up to it to start editing.
-   * The caller drives this component through `editRequest` and hears back
-   * through the existing `onEditingChange`.
-   */
+  /** Hides the manual edit trigger when a caller provides its own controls. */
   hideInlineTrigger?: boolean
   /**
    * A counter the caller bumps to ask this editor to enter edit mode. A
@@ -200,6 +140,9 @@ export interface CropMetadataEntry {
 }
 
 export function CropPointerEditor({
+  reviewMode = false,
+  onCommit,
+  onInteractionChange,
   chapterId,
   filename,
   width,
@@ -219,7 +162,7 @@ export function CropPointerEditor({
   const { toast } = useToast()
   const [file, setFile] = useState<Clipper3ImageCropFile | null>(initialFile ?? null)
   const [loading, setLoading] = useState(initialFile === undefined)
-  const [editing, setEditing] = useState(false)
+  const [editing, setEditing] = useState(reviewMode)
   const [selectedCropId, setSelectedCropId] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -231,6 +174,21 @@ export function CropPointerEditor({
 
   const dragRef = useRef<DragMode | null>(null)
   const boxRef = useRef<HTMLDivElement | null>(null)
+  const draftRef = useRef(file)
+  const dragCleanup = useRef<(() => void) | null>(null)
+  const onCommitRef = useRef(onCommit)
+  const interactionRef = useRef(onInteractionChange)
+  onCommitRef.current = onCommit
+  interactionRef.current = onInteractionChange
+
+  useEffect(() => {
+    if (reviewMode) {
+      draftRef.current = initialFile ?? null
+      setFile(initialFile ?? null)
+    }
+  }, [reviewMode, initialFile])
+
+  useEffect(() => () => dragCleanup.current?.(), [])
 
   useEffect(() => {
     if (initialFile !== undefined) return
@@ -259,8 +217,8 @@ export function CropPointerEditor({
     onEditingChange?.(true)
   }, [onEditingChange])
 
-  // An external trigger (Clipper3Preview's left drawer) asking to edit this
-  // image. Skipped on mount and while already editing, so re-renders and a
+  // An external trigger asking to edit this image. Skipped on mount and
+  // while already editing, so re-renders and a
   // stale count can't yank the user back into edit mode.
   const lastEditRequest = useRef(editRequest)
   useEffect(() => {
@@ -280,7 +238,7 @@ export function CropPointerEditor({
   }, [dirty, reload, onEditingChange])
 
   /**
-   * Stages one crop for removal. The server refuses a points file with zero
+   * Removes one crop (staged until Save in manual mode). The server refuses a points file with zero
    * usable crops (it would make the image un-cuttable while still claiming to
    * be done), so the last remaining crop cannot be removed here — clearing an
    * image entirely is what the row dialog's "remove crop JSON" is for.
@@ -296,20 +254,26 @@ export function CropPointerEditor({
       return
     }
 
-    setFile(prev => (prev ? { ...prev, crops: prev.crops.filter(c => c.id !== cropId) } : prev))
+    if (reviewMode && file) {
+      onCommitRef.current?.({ ...file, crops: remaining }, cropId)
+      setSelectedCropId(null)
+      return
+    }
+    setFile(prev => (prev ? { ...prev, crops: remaining } : prev))
     setRemovedCropIds(prev => [...prev, cropId])
     setSelectedCropId(null)
     setDirty(true)
-  }, [file, toast])
+  }, [file, reviewMode, toast])
 
   const updateCropBounds = useCallback((cropId: string, bounds: Bounds) => {
-    setFile(prev => {
-      if (!prev) return prev
-      return {
-        ...prev,
-        crops: prev.crops.map(entry => (entry.id === cropId ? boundsToEntry(entry, bounds) : entry))
-      }
-    })
+    const current = draftRef.current
+    if (!current) return
+    const next = {
+      ...current,
+      crops: current.crops.map(entry => (entry.id === cropId ? boundsToEntry(entry, bounds) : entry))
+    }
+    draftRef.current = next
+    setFile(next)
     setDirty(true)
   }, [])
 
@@ -324,6 +288,9 @@ export function CropPointerEditor({
     const bounds = entryBounds(entry)
     if (!bounds || !boxRef.current) return
     setSelectedCropId(entry.id)
+    draftRef.current = file
+    const before = file
+    interactionRef.current?.(true)
 
     const rect = boxRef.current.getBoundingClientRect()
     dragRef.current = mode === 'move'
@@ -363,15 +330,25 @@ export function CropPointerEditor({
       updateCropBounds(entry.id, next)
     }
 
-    const onMouseUp = () => {
+    const cleanup = () => {
       dragRef.current = null
       window.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('mouseup', onMouseUp)
+      window.removeEventListener('blur', onMouseUp)
+      dragCleanup.current = null
+      interactionRef.current?.(false)
+    }
+    const onMouseUp = () => {
+      cleanup()
+      const draft = draftRef.current
+      if (reviewMode && draft && draft !== before) onCommitRef.current?.(draft)
     }
 
+    dragCleanup.current = cleanup
     window.addEventListener('mousemove', onMouseMove)
     window.addEventListener('mouseup', onMouseUp)
-  }, [updateCropBounds])
+    window.addEventListener('blur', onMouseUp)
+  }, [file, reviewMode, updateCropBounds])
 
   const saveEdits = useCallback(async () => {
     if (!file) return
@@ -449,7 +426,7 @@ export function CropPointerEditor({
 
   // Save/Cancel, inline above the image — used unless floatingControls asks
   // for the fixed panel below instead.
-  const inlineSaveCancel = editing && (
+  const inlineSaveCancel = !reviewMode && editing && (
     <>
       <span className="text-xs text-amber-500 flex items-center gap-1">
         <Pencil className="h-3 w-3" />
@@ -474,7 +451,7 @@ export function CropPointerEditor({
   // this sits outside any single card's box and must not scroll with it.
   // Only rendered by the card currently being edited (editing is true here),
   // so there is never more than one on screen at once.
-  const floatingSaveCancel = floatingControls && editing && (
+  const floatingSaveCancel = !reviewMode && floatingControls && editing && (
     <div
       className="fixed z-50 flex flex-col items-stretch gap-2 rounded-lg border bg-card p-2 shadow-lg"
       style={{ top: '50%', right: 16, transform: 'translateY(-50%)' }}

@@ -51,8 +51,9 @@ import { createClient, getR2Config, phoneFolders, requestPhoneUpdate, type R2Con
 import { getChapterBlockers, getChapterCropMetadataBundle, getChapterTimelineBundle } from './videoEditor2Service.js'
 import { getOutputDir, getSourceFolderPath } from './clipper3/perImageStore.js'
 import { readEffectiveReview } from './clipper3/chapterReview.js'
-import { NARRATION_LANGUAGES, type NarrationLanguage } from './narrationLanguage.js'
+import { audioFolderName, NARRATION_LANGUAGES, type NarrationLanguage } from './narrationLanguage.js'
 import { getPublishedChapters } from './storageService.js'
+import { buildEditorWorkflow, validateWorkflowTimeline } from './editorWorkflow.js'
 
 /** Inside the phone's prefix. Keep in step with FOLDER in EditorSync.kt. */
 export const EDITOR_FOLDER = 'editor/'
@@ -98,6 +99,12 @@ function lastTimestamp(timelineScript: string): number | null {
 
 // ============ The prompt ============
 
+/** The existing desktop setting is retained when a browser has no local prompt cache. */
+export async function getEditorPrompt(): Promise<{ content: string }> {
+  const setting = await prisma.setting.findUnique({ where: { key: 'editor2Prompt' } })
+  return { content: setting?.value.trim() ?? '' }
+}
+
 /**
  * Puts the Editor 2.0 prompt where the phone fetches it, replacing the last
  * one. With `notify`, the phone is asked to check R2 straight away, so it has
@@ -105,6 +112,9 @@ function lastTimestamp(timelineScript: string): number | null {
  */
 export async function saveEditorPrompt(content: string, notify = true): Promise<{ phoneNotified: boolean }> {
   if (!content.trim()) throw new Error('The prompt is empty')
+  // Saving on this Mac does not depend on the phone or R2 being available.
+  await prisma.setting.upsert({ where: { key: 'editor2Prompt' },
+    create: { key: 'editor2Prompt', value: content.trim() }, update: { value: content.trim() } })
   const config = getR2Config()
   if (!config) throw new Error('Cloudflare R2 is not set up')
   const client = createClient(config)
@@ -141,6 +151,18 @@ interface PackageChapter { id: string; number: number; title: string | null; fol
 /** One chapter's package, ready to PUT; `sha256` covers everything but `sentAt`, so an unchanged chapter reads the same. */
 interface BuiltPackage { name: string; body: string; sha256: string }
 
+/** Matches EditorPackage.sha256 on the phone. */
+function timelinePackageSha256(timeline: string, metadata: string, scriptSha256: string | null, workflowHash?: string): string {
+  return createHash('sha256').update(`${timeline}\u0000${metadata}${scriptSha256 ? `\u0000${scriptSha256}` : ''}${workflowHash ? `\u0000${workflowHash}` : ''}`).digest('hex')
+}
+
+async function voicedScriptSha256(folderPath: string, language: NarrationLanguage): Promise<string | null> {
+  try {
+    const marker = JSON.parse(await fs.readFile(path.join(getSourceFolderPath(folderPath), audioFolderName(language), '.r2-voiceover.json'), 'utf-8'))
+    return typeof marker.scriptSha256 === 'string' && /^[a-f0-9]{64}$/.test(marker.scriptSha256) ? marker.scriptSha256 : null
+  } catch { return null }
+}
+
 /**
  * Builds `chapter`'s package in `language`, or says why it can't: a chapter
  * without a script with timeline or crop metadata has nothing to make one from.
@@ -148,7 +170,8 @@ interface BuiltPackage { name: string; body: string; sha256: string }
 async function buildPackage(
   seriesFolder: string,
   chapter: PackageChapter,
-  language: NarrationLanguage
+  language: NarrationLanguage,
+  workflowMode: 'legacy' | 'staged' = 'legacy'
 ): Promise<BuiltPackage | { skip: string }> {
   const [timeline, metadata] = await Promise.all([
     getChapterTimelineBundle(chapter.id, language),
@@ -180,18 +203,23 @@ async function buildPackage(
   }
 
   const chapterFolder = path.basename(chapter.folderPath)
+  // This hash belongs to the script the fetched audio was actually voiced from,
+  // rather than a Markdown file that may have been edited since that recording.
+  const scriptSha256 = await voicedScriptSha256(chapter.folderPath, language)
   const content = {
-    schema: PACKAGE_SCHEMA,
+    schema: workflowMode === 'staged' ? 'manhwa-studio-editor-package/3' : PACKAGE_SCHEMA,
     series: seriesFolder,
     chapter: chapterFolder,
     chapterId: chapter.id,
     number: chapter.number,
     title: chapter.title,
     language,
+    scriptSha256,
     sections,
     images,
     timeline: timeline.text,
-    metadata: metadata.text
+    metadata: metadata.text,
+    ...(workflowMode === 'staged' ? { workflow: buildEditorWorkflow(timeline.text, metadata.text, images, scriptSha256, sections) } : {})
   }
   return {
     name: `${seriesFolder}/${chapterFolder}${languageSuffix(language)}${PACKAGE_SUFFIX}`,
@@ -217,7 +245,7 @@ async function putPackage(client: S3Client, config: R2Config, folders: string[],
  * changed. Only ever a hint: a missing or unreadable record means a resend.
  */
 const SENT_RECORD = '.editor2-phone.json'
-type SentRecord = Partial<Record<NarrationLanguage, { sha256: string; sentAt: string }>>
+type SentRecord = Partial<Record<NarrationLanguage, { sha256: string; sentAt: string; workflow?: 'legacy' | 'staged' }>>
 
 async function readSentRecord(folderPath: string): Promise<SentRecord> {
   try {
@@ -227,10 +255,10 @@ async function readSentRecord(folderPath: string): Promise<SentRecord> {
   }
 }
 
-async function recordSent(folderPath: string, language: NarrationLanguage, sha256: string): Promise<void> {
+async function recordSent(folderPath: string, language: NarrationLanguage, sha256: string, workflow: 'legacy' | 'staged' = 'legacy'): Promise<void> {
   try {
     const record = await readSentRecord(folderPath)
-    record[language] = { sha256, sentAt: new Date().toISOString() }
+    record[language] = { sha256, sentAt: new Date().toISOString(), workflow }
     await fs.writeFile(path.join(getSourceFolderPath(folderPath), SENT_RECORD), JSON.stringify(record, null, 2), 'utf-8')
   } catch {
     // The chapter folder is gone; the next automatic send just sends it again.
@@ -258,9 +286,10 @@ export async function sendEditorPackages(
   seriesId: string,
   language: NarrationLanguage,
   chapterIds: string[],
-  prompt: string
+  prompt: string,
+  workflowMode: 'legacy' | 'staged' = 'legacy'
 ): Promise<EditorSendResult> {
-  if (!prompt.trim()) throw new Error('Save the Editor 2.0 prompt in Settings → Editor 2.0 first: the phone pastes it with each chapter.')
+  if (!prompt.trim() && workflowMode === 'legacy') throw new Error('Save the Editor 2.0 prompt in Settings → Editor 2.0 first: the phone pastes it with each chapter.')
   const config = getR2Config()
   if (!config) throw new Error('Cloudflare R2 is not set up')
   const series = await prisma.series.findUnique({
@@ -273,7 +302,7 @@ export async function sendEditorPackages(
   })
   if (!series) throw new Error('Series not found')
 
-  await saveEditorPrompt(prompt, false)
+  if (workflowMode === 'legacy') await saveEditorPrompt(prompt, false)
   const client = createClient(config)
   const folders = await phoneFolders(client, config)
   const seriesFolder = path.basename(series.rootFolder)
@@ -282,10 +311,10 @@ export async function sendEditorPackages(
   for (const chapter of series.chapters) {
     const skip = (reason: string) => result.skipped.push({ chapterId: chapter.id, number: chapter.number, reason })
     try {
-      const pkg = await buildPackage(seriesFolder, chapter, language)
+      const pkg = await buildPackage(seriesFolder, chapter, language, workflowMode)
       if ('skip' in pkg) { skip(pkg.skip); continue }
       await putPackage(client, config, folders, pkg)
-      await recordSent(chapter.folderPath, language, pkg.sha256)
+      await recordSent(chapter.folderPath, language, pkg.sha256, workflowMode)
       result.sent.push({ chapterId: chapter.id, number: chapter.number })
     } catch (error) {
       skip(errorMessage(error))
@@ -344,7 +373,9 @@ export async function publishReadyEditorPackages(chapterIds: string[] | null): P
         const blockers = await getChapterBlockers(chapter.id, language)
         if (blockers === null || blockers.length > 0) continue
         if (!(await readEffectiveReview(chapter.folderPath)).reviewed) continue
-        const pkg = await buildPackage(path.basename(chapter.series.rootFolder), chapter, language)
+        const previous = (await readSentRecord(chapter.folderPath))[language]
+        const workflow = previous?.workflow === 'staged' ? 'staged' : 'legacy'
+        const pkg = await buildPackage(path.basename(chapter.series.rootFolder), chapter, language, workflow)
         if ('skip' in pkg) continue
 
         if (!r2) {
@@ -354,10 +385,10 @@ export async function publishReadyEditorPackages(chapterIds: string[] | null): P
         }
         const { client, folders, keys } = r2
         const upEverywhere = folders.every(folder => keys.has(`${folder}${EDITOR_FOLDER}${pkg.name}`))
-        if (upEverywhere && (await readSentRecord(chapter.folderPath))[language]?.sha256 === pkg.sha256) continue
+        if (upEverywhere && previous?.sha256 === pkg.sha256) continue
 
         await putPackage(client, config, folders, pkg)
-        await recordSent(chapter.folderPath, language, pkg.sha256)
+        await recordSent(chapter.folderPath, language, pkg.sha256, workflow)
         result.sent.push({ chapterId: chapter.id, number: chapter.number, language })
       } catch (error) {
         result.failed.push({ chapterId: chapter.id, language, error: errorMessage(error) })
@@ -417,12 +448,12 @@ export async function editorWaitingChapters(seriesId: string, language: Narratio
       token = page.IsTruncated ? page.NextContinuationToken : undefined
     } while (token)
   }
-  const withJson = new Set(
-    (await prisma.editor2Timeline.findMany({
+  const stored = await prisma.editor2Timeline.findMany({
       where: { chapterId: { in: series.chapters.map(c => c.id) }, language },
       select: { chapterId: true, json: true }
-    })).filter(r => r.json.trim()).map(r => r.chapterId)
-  )
+    })
+  const withJson = new Set(stored.filter(r => r.json.trim()).map(r => r.chapterId))
+  const cleared = new Set(stored.filter(r => !r.json.trim()).map(r => r.chapterId))
 
   const waiting: string[] = []
   let sent = 0
@@ -430,7 +461,7 @@ export async function editorWaitingChapters(seriesId: string, language: Narratio
     const folder = path.basename(chapter.folderPath)
     if (!names.has(`${folder}${suffix}${PACKAGE_SUFFIX}`)) continue
     sent++
-    if (withJson.has(chapter.id) || names.has(`${folder}${suffix}${TIMELINE_SUFFIX}`)) continue
+    if (withJson.has(chapter.id) || (!cleared.has(chapter.id) && names.has(`${folder}${suffix}${TIMELINE_SUFFIX}`))) continue
     waiting.push(folder)
   }
   if (sent === 0) throw new Error('No Editor 2.0 package of this series is up for the phones: send its chapters to the phone from Editor 2.0 first')
@@ -445,6 +476,7 @@ export interface EditorChapterRef { chapterId: string; number: number }
 export interface EditorReadiness {
   /** The Editor 2.0 prompt is up for the phones. */
   prompt: boolean
+  staged?: boolean
   /** Chapters with their timeline made already: a JSON pasted here, or the phone's timeline up. */
   made: number
   /** Waiting for their timeline, package up: the run fetches these as it starts. */
@@ -488,13 +520,14 @@ export async function getEditorReadiness(seriesId: string, language: NarrationLa
     prisma.editor2Timeline.findMany({ where: { chapterId: { in: series.chapters.map(c => c.id) }, language }, select: { chapterId: true, json: true } })
   ])
   const withJson = new Set(timelines.filter(r => r.json.trim()).map(r => r.chapterId))
+  const cleared = new Set(timelines.filter(r => !r.json.trim()).map(r => r.chapterId))
 
   const result: EditorReadiness = { prompt: everywhere(PROMPT_NAME), made: 0, up: [], toSend: [], notReady: [] }
   for (const chapter of series.chapters) {
-    if (published.chapters[chapter.id]) continue
+    if (published.chapters[chapter.id] && !cleared.has(chapter.id)) continue
     const ref = { chapterId: chapter.id, number: chapter.number }
     const name = `${seriesFolder}/${path.basename(chapter.folderPath)}${suffix}`
-    if (withJson.has(chapter.id) || anywhere(`${name}${TIMELINE_SUFFIX}`)) { result.made++; continue }
+    if (withJson.has(chapter.id) || (!cleared.has(chapter.id) && anywhere(`${name}${TIMELINE_SUFFIX}`))) { result.made++; continue }
     if (everywhere(`${name}${PACKAGE_SUFFIX}`)) { result.up.push(ref); continue }
     // No voiceover yet: the checklist would only say the same, at a cost.
     if (chapter._count.audioSections === 0) { result.notReady.push({ ...ref, missing: ['voiceover'] }); continue }
@@ -503,6 +536,9 @@ export async function getEditorReadiness(seriesId: string, language: NarrationLa
     if (missing.length) result.notReady.push({ ...ref, missing })
     else result.toSend.push(ref)
   }
+  const pending = new Set([...result.up, ...result.toSend].map(c => c.chapterId))
+  const modes = await Promise.all(series.chapters.filter(c => pending.has(c.id)).map(async c => (await readSentRecord(c.folderPath))[language]?.workflow))
+  if (modes.length && modes.every(mode => mode === 'staged')) { result.prompt = true; result.staged = true }
   return result
 }
 
@@ -591,6 +627,27 @@ export async function fetchPhoneTimelines(seriesId: string, language: NarrationL
 
       const where = { chapterId_language: { chapterId: chapter.id, language } }
       const existing = await prisma.editor2Timeline.findUnique({ where })
+      const mode = (await readSentRecord(chapter.folderPath))[language]?.workflow
+      let currentWorkflowHash: string | undefined
+      if (mode === 'staged' || typeof body.workflowHash === 'string') {
+        const current = await buildPackage(path.basename(series.rootFolder), { ...chapter, title: null }, language, 'staged')
+        if ('skip' in current) throw new Error(current.skip)
+        const pkg = JSON.parse(current.body)
+        currentWorkflowHash = pkg.workflow.sourceHash
+        if (body.workflowHash !== currentWorkflowHash || body.packageSha256 !== timelinePackageSha256(pkg.timeline, pkg.metadata, pkg.scriptSha256, currentWorkflowHash)) throw new Error('staged timeline inputs or prompts changed; make it again from the current Editor package')
+        validateWorkflowTimeline(pkg.workflow, json)
+      }
+      // A newer empty row is the invalidation left by replacement audio.
+      // Never restore an old phone timeline over it, even if R2 still holds one.
+      if (existing && !existing.json.trim()) {
+        const [timeline, metadata, scriptSha256] = await Promise.all([
+          getChapterTimelineBundle(chapter.id, language), getChapterCropMetadataBundle(chapter.id),
+          voicedScriptSha256(chapter.folderPath, language)
+        ])
+        if (!timeline?.text || !metadata?.text || body.packageSha256 !== timelinePackageSha256(timeline.text, metadata.text, scriptSha256, currentWorkflowHash) || madeAt < existing.updatedAt.getTime()) {
+          throw new Error('timeline is from before the voiceover replacement; make it again from the new Editor package')
+        }
+      }
       if (existing && existing.json.trim() === json) {
         result.upToDate++
         continue

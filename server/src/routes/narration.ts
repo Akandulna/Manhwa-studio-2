@@ -1,3 +1,4 @@
+import { withSeriesActivity } from '../services/seriesActivity.js'
 /**
  * Narration API Routes
  *
@@ -34,6 +35,7 @@ import { getR2Config } from '../services/r2Service.js'
 import { alignChapter, checkAlignmentAvailable, pendingAlignments } from '../services/alignment/alignmentService.js'
 import { hasAlignmentDocument, writeAlignmentDocument } from '../services/alignment/alignmentDocument.js'
 import { NarrationLanguage, requestLanguage } from '../services/narrationLanguage.js'
+import { getReplacementScript, replaceChapterScript, scriptReplacementBusy, ScriptReplacementError } from '../services/scriptReplacement.js'
 
 const router = Router()
 
@@ -171,13 +173,14 @@ router.get('/series', async (req: Request, res: Response) => {
       sectionCounts(language, { status: 'done' })
     ])
 
-    res.json(series.map(s => {
+    res.json((await withSeriesActivity(series)).map(s => {
       const rows = s.chapters.map(c => counts.get(c.id) ?? NO_SECTIONS)
       return {
         id: s.id,
         title: s.title,
         sourceSite: s.sourceSite,
         rootFolder: s.rootFolder,
+        lastActivityAt: s.lastActivityAt,
         chapterCount: s.chapters.length,
         scriptedCount: s.chapters.filter(c => SCRIPT_WRITTEN.includes(c.scripts[0]?.status ?? '')).length,
         voicedCount: rows.filter(r => r.sections > 0 && r.withAudio === r.sections).length,
@@ -311,6 +314,7 @@ router.post('/series/:id/phone/fetch', async (req: Request, res: Response) => {
     if (fetchJobs.has(`${seriesId}:${language}`)) {
       return res.status(409).json({ error: 'A fetch for this series is already running' })
     }
+    if ([...scriptIds, ...voiceoverIds].some(scriptReplacementBusy)) return res.status(409).json({ error: 'Wait for script replacement to finish' })
     const exists = await prisma.series.findUnique({ where: { id: seriesId }, select: { id: true } })
     if (!exists) return res.status(404).json({ error: 'Series not found' })
 
@@ -326,6 +330,25 @@ router.post('/series/:id/phone/fetch', async (req: Request, res: Response) => {
 
 // ============ Alignment ============
 
+router.get('/chapters/:id/script', async (req: Request, res: Response) => {
+  try { res.json(await getReplacementScript(req.params.id, requestLanguage(req))) }
+  catch (error) { res.status(error instanceof ScriptReplacementError ? error.status : 500).json({ error: message(error, 'Could not read script') }) }
+})
+
+router.post('/chapters/:id/script/replace', async (req: Request, res: Response) => {
+  try {
+    const language = requestLanguage(req)
+    const chapter = await prisma.chapter.findUnique({ where: { id: req.params.id }, select: { seriesId: true } })
+    if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+    if (fetchJobs.has(`${chapter.seriesId}:${language}`) || alignRuns.has(`${req.params.id}:${language}`)) {
+      return res.status(409).json({ error: 'Wait for this chapter’s fetch or alignment to finish' })
+    }
+    const result = await replaceChapterScript(req.params.id, language, req.body ?? {})
+    io?.emit('narration:script-replaced', { chapterId: req.params.id, language })
+    res.json(result)
+  } catch (error) { res.status(error instanceof ScriptReplacementError ? error.status : 500).json({ error: message(error, 'Could not replace script') }) }
+})
+
 /**
  * Aligns the chapter's sections that have audio but no timeline yet (after a
  * failed or interrupted alignment). With every section aligned already, it
@@ -336,6 +359,7 @@ router.post('/chapters/:id/align', async (req: Request, res: Response) => {
   try {
     const language = requestLanguage(req)
     const chapterId = req.params.id
+    if (scriptReplacementBusy(chapterId)) return res.status(409).json({ error: 'Wait for script replacement to finish' })
     const key = `${chapterId}:${language}`
     const chapter = await prisma.chapter.findUnique({ where: { id: chapterId }, select: { id: true } })
     if (!chapter) return res.status(404).json({ error: 'Chapter not found' })

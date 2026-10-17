@@ -290,6 +290,21 @@ export async function attachVoiceover(
       await prisma.audioSection.update({ where: { id: row.id }, data: { status: 'done', error: null, timelineScript: null } })
       aligning.push(row.id)
     }
+    // A timeline authored against the old audio must not survive a re-voice.
+    // Keep a newer empty row so browser caches also discard their old paste.
+    const timelineWhere = { chapterId_language: { chapterId, language } }
+    const previousTimeline = await prisma.editor2Timeline.findUnique({ where: timelineWhere })
+    if (previousTimeline?.json.trim()) {
+      const backupDir = path.join(audioDir, 'backup')
+      await fs.mkdir(backupDir, { recursive: true })
+      await fs.writeFile(path.join(backupDir, `editor-timeline-${Date.now()}.json`), previousTimeline.json, 'utf-8')
+    }
+    const updatedAt = new Date(Math.max(Date.now(), (previousTimeline?.updatedAt.getTime() ?? 0) + 1))
+    await prisma.editor2Timeline.upsert({
+      where: timelineWhere,
+      create: { chapterId, language, json: '', processedJson: null, updatedAt },
+      update: { json: '', processedJson: null, updatedAt }
+    })
     // Queued once every section is attached, so the last one to finish writes the document.
     for (const id of aligning) alignSectionInBackground(id, io)
     return !sameSplits
@@ -507,6 +522,11 @@ export async function fetchPhoneVoiceover(
         const res = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: zip.key }))
         const body = Buffer.from(await res.Body!.transformToByteArray())
         const voiceover = parseVoiceoverZip(readZip(body), language)
+        const replacement = await fs.readFile(path.join(chapterDir(chapter.folderPath), `.script-replacement${language === 'hi' ? '.hi' : ''}.json`), 'utf-8')
+          .then(text => JSON.parse(text) as { sha256?: string }).catch((e: NodeJS.ErrnoException) => { if (e.code === 'ENOENT') return null; throw e })
+        if (replacement?.sha256 && replacement.sha256 !== voiceover.scriptSha256) {
+          throw new Error('The phone voiceover is from before the script replacement. Generate and upload the new voiceover first.')
+        }
         const resplit = await attachVoiceover(chapter.id, chapter.folderPath, voiceover, io, language)
         const marker = {
           key: zip.key,
@@ -514,7 +534,8 @@ export async function fetchPhoneVoiceover(
           fetchedAt: new Date().toISOString(),
           sections: voiceover.sections.length,
           voice: voiceover.voice,
-          style: voiceover.style
+          style: voiceover.style,
+          scriptSha256: voiceover.scriptSha256
         }
         await fs.writeFile(path.join(audioDir, FETCH_MARKER), JSON.stringify(marker, null, 2) + '\n', 'utf-8')
         result.fetched.push({

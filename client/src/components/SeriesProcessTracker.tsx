@@ -2,9 +2,10 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { BookOpen, CheckCircle2, ChevronDown, Circle, Loader2, MoreVertical, Play, Trash2 } from 'lucide-react'
 import { SeriesAutomationDialog } from './SeriesAutomationDialog'
+import { useProductionJobs } from '@/hooks/useProductionJobs'
 import { Button } from './ui/button'
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from './ui/dropdown-menu'
-import type { Series, ProcessSnapshot, ProcessSeries, ProcessPart, ProcessStage, StageCount, PhoneSyncStatus } from '@/lib/api'
+import type { Series, ProcessSnapshot, ProcessSeries, ProcessPart, ProcessStage, StageCount, PhoneSyncStatus, ProductionJob } from '@/lib/api'
 import { PhoneSyncBadge } from './PhoneSyncBadge'
 import { Badge } from './ui/badge'
 import { Progress } from './ui/progress'
@@ -53,14 +54,14 @@ function Part({ part, active, onMark }: { part: ProcessPart; active: boolean; on
   </details>
 }
 
-function SeriesRow({ series, tracker, phoneSync, onDelete, onMarkPart, onRunAutomation }: { series: Series; tracker?: ProcessSeries; phoneSync: PhoneSyncStatus | null; onRunAutomation: (series: Series) => void } & Actions) {
+function SeriesRow({ series, tracker, phoneSync, onDelete, onMarkPart, onRunAutomation, automationJob }: { series: Series; tracker?: ProcessSeries; phoneSync: PhoneSyncStatus | null; onRunAutomation: (series: Series) => void; automationJob?: ProductionJob } & Actions) {
   const current = tracker?.parts.find(p => !p.complete) ?? tracker?.parts.at(-1)
   const exported = tracker?.stages
   return <details className="group/series border-t first:border-t-0">
     <summary className="flex cursor-pointer list-none items-center gap-3 p-4 hover:bg-accent/40 [&::-webkit-details-marker]:hidden">
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10"><BookOpen className="h-5 w-5 text-primary/60" /></div>
       <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2"><Link to={`/series/${series.id}`} onClick={e => e.stopPropagation()} className="truncate font-semibold hover:underline">{series.title}</Link>{tracker?.completedParts.length ? <Badge variant="secondary">{tracker.completedParts.length} part{tracker.completedParts.length === 1 ? '' : 's'} complete</Badge> : null}</div>
+        <div className="flex flex-wrap items-center gap-2"><Link to={`/series/${series.id}`} onClick={e => e.stopPropagation()} className="truncate font-semibold hover:underline">{series.title}</Link>{tracker?.completedParts.length ? <Badge variant="secondary">{tracker.completedParts.length} part{tracker.completedParts.length === 1 ? '' : 's'} complete</Badge> : null}{automationJob?.status === 'running' && <Badge variant="secondary"><Loader2 className="mr-1 h-3 w-3 animate-spin" />Automation running</Badge>}{automationJob?.status === 'review' && <Badge variant="outline">Ready for review</Badge>}</div>
         <p className="mt-1 text-xs text-muted-foreground">{series.chapterCount ?? 0} chapters · {current ? `Part ${current.number} · chapters ${current.firstChapter}–${current.lastChapter}` : 'Waiting for chapters'}</p>
         {current && <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
           {(['stitch', 'script_en', 'voice_en', 'align_en', 'crop', 'export_en'] as ProcessStage[]).map((key, i) => <span key={key} className={current.stages[key].done === current.expected ? 'text-emerald-600 dark:text-emerald-400' : ''}>{['Prepared', 'Scripts EN', 'Voice EN', 'Aligned EN', 'Cropped', 'Exported EN'][i]} {current.stages[key].done}/{current.expected}</span>)}
@@ -82,7 +83,7 @@ function SeriesRow({ series, tracker, phoneSync, onDelete, onMarkPart, onRunAuto
     <div className="space-y-3 bg-muted/20 px-4 pb-4 pt-1">
       <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-3">
         <h3 className="text-sm font-semibold">Production process</h3>
-        <Button size="sm" onClick={() => onRunAutomation(series)}><Play className="mr-2 h-4 w-4" />Run Sleeper-Cell automation</Button>
+        <Button size="sm" onClick={() => onRunAutomation(series)}>{automationJob?.status === 'running' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}{automationJob?.status === 'running' ? 'View automation' : 'Run Sleeper-Cell automation'}</Button>
       </div>
       <p className="text-xs text-muted-foreground">Each counter shows completed chapters. Parts complete after exports in both languages, or when you mark them done.</p>
       {tracker ? tracker.parts.length ? tracker.parts.map(p => <Part key={p.number} part={p} active={p.number === current?.number} onMark={done => onMarkPart(series, p.number, done)} />) : <p className="py-3 text-sm text-muted-foreground">No chapters added yet.</p> : <p className="py-3 text-sm text-muted-foreground">Checking process status…</p>}
@@ -92,21 +93,9 @@ function SeriesRow({ series, tracker, phoneSync, onDelete, onMarkPart, onRunAuto
 
 export function SeriesProcessTracker({ series, progress, phoneSync, ...actions }: { series: Series[]; progress: ProcessSnapshot | null; phoneSync: PhoneSyncStatus | null } & Actions) {
   const [automationSeries, setAutomationSeries] = useState<Series | null>(null)
+  const jobs = useProductionJobs()
   const byId = new Map(progress?.series.map(s => [s.seriesId, s]))
-  const groups = new Map<number, Series[]>()
-  for (const s of series) {
-    const key = byId.get(s.id)?.completedThrough ?? (progress ? 0 : -1)
-    groups.set(key, [...(groups.get(key) ?? []), s])
-  }
-  return <><div className="space-y-4">{[...groups].sort(([a], [b]) => a - b).map(([completed, rows]) => <details key={completed} className="group/section overflow-hidden rounded-xl border bg-card shadow-sm" open={completed <= 0 || undefined}>
-    <summary className="flex cursor-pointer list-none items-center gap-3 bg-muted/30 px-4 py-4 [&::-webkit-details-marker]:hidden">
-      <ChevronDown className="h-4 w-4 -rotate-90 transition-transform group-open/section:rotate-0" />
-      <h2 className="flex-1 text-sm font-semibold">{completed < 0 ? 'Checking process status' : completed === 0 ? 'No parts completed' : `Part ${completed} completed`}</h2>
-      {completed > 1 && <span className="text-xs text-muted-foreground">Parts 1–{completed} complete</span>}
-      <Badge variant="secondary">{rows.length} series</Badge>
-    </summary>
-    <div>{rows.map(s => <SeriesRow key={s.id} series={s} tracker={byId.get(s.id)} phoneSync={phoneSync} onRunAutomation={setAutomationSeries} {...actions} />)}</div>
-  </details>)}</div>
+  return <><div className="overflow-hidden rounded-xl border bg-card shadow-sm">{series.map(s => <SeriesRow key={s.id} series={s} tracker={byId.get(s.id)} phoneSync={phoneSync} onRunAutomation={setAutomationSeries} automationJob={jobs.get(s.id)} {...actions} />)}</div>
     {automationSeries && <SeriesAutomationDialog series={automationSeries} onClose={() => setAutomationSeries(null)} />}
   </>
 }

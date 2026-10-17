@@ -1,3 +1,4 @@
+import { useSeriesOrder } from '@/hooks/useSeriesOrder'
 import { useCallback, useEffect, useState } from 'react'
 import { useSeriesProcess } from '@/hooks/useSeriesProcess'
 import { SeriesProcessTracker } from '@/components/SeriesProcessTracker'
@@ -34,6 +35,7 @@ interface ScannedSeries {
 
 export default function Library() {
   const [series, setSeries] = useState<Series[]>([])
+  const orderedSeries = useSeriesOrder(series)
   const [deleteTarget, setDeleteTarget] = useState<Series | null>(null)
   const [deleting, setDeleting] = useState(false)
   const { progress, error: progressError, reload: reloadProgress } = useSeriesProcess()
@@ -145,7 +147,7 @@ export default function Library() {
     finally { setDeleting(false) }
   }
 
-  const handleSend = async (picked: { seriesId: string; chapterIds: string[] }[]) => {
+  const handleSend = async (picked: { seriesId: string; chapterIds: string[]; resetClipping?: boolean }[]) => {
     try {
       setSendJob(await r2Api.sendToPhone(picked))
     } catch (error) {
@@ -459,7 +461,7 @@ export default function Library() {
           </Link>
         </Card>
       ) : (
-        <SeriesProcessTracker series={series} progress={progress} phoneSync={phoneSync} onDelete={setDeleteTarget} onMarkPart={markPart} />
+        <SeriesProcessTracker series={orderedSeries} progress={progress} phoneSync={phoneSync} onDelete={setDeleteTarget} onMarkPart={markPart} />
       )}
     </div>
 

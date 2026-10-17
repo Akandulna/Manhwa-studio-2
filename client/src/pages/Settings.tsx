@@ -13,7 +13,7 @@ import { useTheme, type Theme } from '@/lib/theme'
 import { DocHistoryDialog, DocHistoryButton } from '@/components/settings/DocHistoryDialog'
 import { CloudflareTab } from '@/components/settings/CloudflareR2Card'
 import { archiveVersion, readHistory, type DocVersion } from '@/lib/docHistory'
-import { phoneEditorApi } from '@/pages/editor2/phoneEditor'
+import { loadSavedEditorPrompt, phoneEditorApi } from '@/pages/editor2/phoneEditor'
 import StorageManager from '@/pages/storage/StorageManager'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Save, RotateCcw, FolderOpen, Gauge, UserCircle, ImageIcon, Download, Wand2, FileText, Film, Moon, Sun, Monitor, Palette, Cloud, HardDrive } from 'lucide-react'
@@ -60,7 +60,10 @@ export default function Settings() {
     setSaving(true)
     
     try {
-      await settingsApi.updateAll(settings)
+      // The response also contains independently edited documents and job state.
+      // Saving general preferences must not write stale copies of those back.
+      const { downloadRoot, concurrency, requestDelayMs, userAgent, minImageWidth, minAspectRatio } = settings
+      await settingsApi.updateAll({ downloadRoot, concurrency, requestDelayMs, userAgent, minImageWidth, minAspectRatio })
       toast({
         title: 'Settings saved',
         description: 'Your settings have been updated. Restart the server for some changes to take effect.'
@@ -420,9 +423,8 @@ export default function Settings() {
   )
 }
 
-// localStorage key for the Editor 2.0 prompt — kept local to the browser,
-// same as the Crop 3.0 documents. Each save also puts it in R2 for the
-// Sleeper-Cell phone, which pastes it with every chapter (phoneEditor.ts).
+// Browser cache and history key. Saves also retain the prompt on the server
+// and put it in R2 for the Sleeper-Cell phone (phoneEditor.ts).
 const EDITOR2_PROMPT_KEY = 'editor2.prompt'
 
 /**
@@ -453,13 +455,25 @@ function Editor2PromptCard() {
     } catch {
       // ignore corrupt/missing local state
     }
+    let cancelled = false
+    void loadSavedEditorPrompt().then(text => {
+      if (cancelled) return
+      setContent(text)
+    }).catch(error => {
+      if (!cancelled) toast({ title: 'Could not load Editor prompt', description: error instanceof Error ? error.message : 'Check the server connection.', variant: 'destructive' })
+    })
     setHistoryCount(readHistory(EDITOR2_PROMPT_KEY).length)
+    return () => { cancelled = true }
   }, [])
 
   const startEdit = () => { setDraft(content); setEditing(true) }
   const cancelEdit = () => setEditing(false)
 
   const save = () => {
+    if (!draft.trim()) {
+      toast({ title: 'Prompt is empty', description: 'Enter the Editor instructions before saving.', variant: 'destructive' })
+      return
+    }
     const savedAtIso = new Date().toISOString()
     try {
       // Archive first: archiveVersion no-ops on unchanged text, so re-saving
@@ -526,7 +540,7 @@ function Editor2PromptCard() {
           Prompt
         </CardTitle>
         <CardDescription>
-          The prompt used by Editor 2.0. Saved locally in this browser, and sent to R2 for the phone’s Editor 2.0 run.
+          The instructions used by Editor 2.0. Saved in Manhwa Studio and this browser, and sent to R2 for the phone’s Editor run.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -542,7 +556,7 @@ function Editor2PromptCard() {
               spellCheck={false}
             />
             <div className="flex gap-2">
-              <Button onClick={save}>
+              <Button onClick={save} disabled={!draft.trim()}>
                 <Save className="h-4 w-4 mr-2" />
                 Save Prompt
               </Button>

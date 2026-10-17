@@ -1,3 +1,4 @@
+import { useSeriesOrder } from '@/hooks/useSeriesOrder'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { stitchApi, StitchChapterRow, LARGE_CHAPTER_PAGES } from '@/lib/api'
@@ -10,6 +11,8 @@ import { useToast } from '@/components/ui/use-toast'
 import { ArrowLeft, BookOpen, CheckCircle, ChevronRight, Layers, Loader2, Search, Sparkles } from 'lucide-react'
 
 interface SeriesRow {
+  rootFolder?: string
+  lastActivityAt?: string
   id: string
   title: string
   chapters: number
@@ -77,16 +80,17 @@ function SeriesList({ rows }: { rows: StitchChapterRow[] }) {
   const series = useMemo(() => {
     const byId = new Map<string, SeriesRow>()
     for (const r of rows) {
-      const s = byId.get(r.seriesId) ?? { id: r.seriesId, title: r.seriesTitle, chapters: 0, large: 0, stitched: 0 }
+      const s = byId.get(r.seriesId) ?? { id: r.seriesId, title: r.seriesTitle, rootFolder: r.rootFolder, lastActivityAt: r.lastActivityAt, chapters: 0, large: 0, stitched: 0 }
       s.chapters++
       if (r.stitched) s.stitched++
       else if (r.pageCount > LARGE_CHAPTER_PAGES) s.large++
       byId.set(r.seriesId, s)
     }
     const q = query.trim().toLowerCase()
-    // Rows arrive sorted by series title, so the map keeps that order.
+    // Chapter rows carry the shared series activity order.
     return [...byId.values()].filter(s => !q || s.title.toLowerCase().includes(q))
   }, [rows, query])
+  const orderedSeries = useSeriesOrder(series)
 
   return (
     <div className="p-6">
@@ -109,7 +113,7 @@ function SeriesList({ rows }: { rows: StitchChapterRow[] }) {
       ) : (
         <Card>
           <CardContent className="p-2">
-            {series.map(s => (
+            {orderedSeries.map(s => (
               <Link
                 key={s.id}
                 to={`/stitch/series/${s.id}`}

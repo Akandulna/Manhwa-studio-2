@@ -158,7 +158,7 @@ async function editorItems(seriesId: string, language: NarrationLanguage): Promi
   const editor = await getEditorReadiness(seriesId, language)
   const items: ReadinessItem[] = []
   items.push(editor.prompt
-    ? { id: 'prompt', label: 'Editor 2.0 prompt', state: 'ready', detail: 'Up for the phones.' }
+    ? { id: 'prompt', label: 'Editor 2.0 prompt', state: 'ready', detail: editor.staged ? 'Small-batch instructions are included in the chapter packages.' : 'Up for the phones.' }
     : {
         id: 'prompt',
         label: 'Editor 2.0 prompt',

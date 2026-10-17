@@ -1,3 +1,4 @@
+import { withSeriesActivity } from '../services/seriesActivity.js'
 /**
  * Page Stitcher API — preview a chapter's pages and join many short pages into
  * a few tall ones (see services/pageStitch.ts).
@@ -83,7 +84,7 @@ export function initStitchRoutes(): Router {
           seriesId: true,
           pageCount: true,
           folderPath: true,
-          series: { select: { title: true } }
+          series: { select: { title: true, rootFolder: true, createdAt: true } }
         },
         orderBy: [{ series: { title: 'asc' } }, { number: 'asc' }]
       })
@@ -97,6 +98,8 @@ export function initStitchRoutes(): Router {
             title: c.title,
             seriesId: c.seriesId,
             seriesTitle: c.series.title,
+            rootFolder: c.series.rootFolder,
+            createdAt: c.series.createdAt,
             pageCount: c.pageCount ?? 0,
             stitched: record
               ? { originalPages: record.originals.length, stitchedAt: record.stitchedAt }
@@ -104,7 +107,7 @@ export function initStitchRoutes(): Router {
           }
         })
       )
-      res.json(rows)
+      res.json(await withSeriesActivity(rows))
     } catch (error) {
       sendError(res, error, 'list chapters')
     }

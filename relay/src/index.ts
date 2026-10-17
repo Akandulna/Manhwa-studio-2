@@ -45,7 +45,7 @@
  * Image Clipper on the phone, on `series` in `tabs` ChatGPT tabs (both optional:
  * the phone's last run and tab count), and only on the chapter folders in
  * `chapters` when given (the desktop splitting a series between phones),
- * waking it if need be; `ai` ("chatgpt" | "aistudio") and `flow` ("classic" |
+ * waking it if need be; `ai` ("chatgpt" | "aistudio" | "gemini") and `flow` ("classic" |
  * "steps") pick where and how it prompts the pages. "narration_start" writes
  * `series`' scripts (`ai`: "aistudio" | "gemini", when given), "editor_start"
  * makes its Editor 2.0 timelines in `language` ("en" | "hi") in `tabs` ChatGPT
@@ -185,7 +185,7 @@ const CHAPTER_ACTIONS = new Set(['clipper_start', 'editor_start', 'voiceover_sta
 /** The runs that take a `language`. */
 const LANGUAGE_ACTIONS = new Set(['editor_start', 'voiceover_start'])
 
-const AIS = new Set(['chatgpt', 'aistudio'])
+const AIS = new Set(['chatgpt', 'aistudio', 'gemini'])
 /** The narration run's AI: Gemini in AI Studio, or Gemini on the web. */
 const NARRATION_AIS = new Set(['aistudio', 'gemini'])
 const FLOWS = new Set(['classic', 'steps'])

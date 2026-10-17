@@ -4,6 +4,14 @@ const API_BASE = '/api'
 import type { ProcessSnapshot } from '../../../server/src/services/seriesProcessModel'
 export type { ProcessSnapshot, ProcessSeries, ProcessPart, ProcessStage, StageCount } from '../../../server/src/services/seriesProcessModel'
 export const libraryProgressApi = { get: () => fetchApi<ProcessSnapshot>('/library/progress') }
+import type { ProductionConfig, ProductionJob, ProductionStep } from '../../../server/src/services/productionAutomationModel'
+export type { ProductionConfig, ProductionJob, ProductionStep }
+export const productionApi = {
+  list: () => fetchApi<ProductionJob[]>('/library/automation'),
+  get: (seriesId: string) => fetchApi<{ job: ProductionJob | null; nextStep: ProductionStep }>(`/series/${seriesId}/automation`),
+  start: (seriesId: string, config: ProductionConfig) => fetchApi<ProductionJob>(`/series/${seriesId}/automation`, { method: 'POST', body: JSON.stringify(config) }),
+  stop: (seriesId: string) => fetchApi<ProductionJob>(`/series/${seriesId}/automation/stop`, { method: 'POST' })
+}
 
 async function fetchApi<T>(
   endpoint: string, 
@@ -36,6 +44,7 @@ async function fetchApi<T>(
 
 // Series API
 export interface Series {
+  lastActivityAt?: string
   id: string
   title: string
   sourceSite: string
@@ -283,6 +292,7 @@ export const settingsApi = {
 // English and Hindi are separate scripts and voiceovers on the server.
 
 export interface NarrationSeries {
+  lastActivityAt?: string
   id: string
   title: string
   sourceSite: string
@@ -378,6 +388,13 @@ export interface PhoneVoiceoverFetch {
 }
 
 export const narrationApi = {
+  getScript: (chapterId: string, lang: NarrationLanguage) =>
+    fetchApi<{ text: string; sha256: string | null; phoneConfigured: boolean }>(`/narration/chapters/${chapterId}/script?lang=${lang}`),
+
+  replaceScript: (chapterId: string, lang: NarrationLanguage, body: { text: string; expectedSha256: string | null; sendToPhones: boolean }) =>
+    fetchApi<{ sha256: string; unchanged: boolean; backupPath: string; phoneSent: boolean; phoneNotified: boolean; phoneError?: string }>(
+      `/narration/chapters/${chapterId}/script/replace?lang=${lang}`, { method: 'POST', body: JSON.stringify(body) }),
+
   getSeries: (lang: NarrationLanguage) => fetchApi<NarrationSeries[]>(`/narration/series?lang=${lang}`),
 
   getSeriesDetail: (id: string, lang: NarrationLanguage) =>
@@ -949,6 +966,8 @@ export interface Clipper3ChapterSummary {
 }
 
 export interface Clipper3Series {
+  rootFolder?: string
+  lastActivityAt?: string
   id: string
   title: string
   sourceSite: string
@@ -1136,6 +1155,7 @@ export interface ChapterStorage {
 }
 
 export interface SeriesStorage {
+  lastActivityAt?: string
   id: string
   title: string
   rootFolder: string
@@ -1539,6 +1559,7 @@ export interface PhoneScriptRunTab {
   split: number | null
   splits: number | null
   since: string | null
+  step?: string
 }
 
 /**
@@ -1784,6 +1805,8 @@ export interface PhoneOverviewChapterZip extends PhoneOverviewPlace {
 }
 
 export interface PhoneOverviewSeries {
+  rootFolder?: string
+  lastActivityAt?: string
   id: string
   title: string
   /** Has the phone downloaded this series' zip; null when there's no zip in R2. */
@@ -1823,7 +1846,7 @@ export interface PhoneAutomation {
   /** How Image Clipper last ran there; null from builds before it was sent. */
   clipper?: { ai: PhoneClipperAi; flow: PhoneClipperFlow; tabs: number; chatGpt?: PhoneChatGptSettings | null } | null
   /** Editor 2.0's tabs last used there; null from builds whose Editor 2.0 run takes neither tabs nor a share of a split. */
-  editor?: { tabs: number } | null
+  editor?: { tabs: number; staged?: boolean; chatGpt?: PhoneChatGptSettings } | null
   /** The runs that take a share of a split (a `chapters` list); empty or left out from builds before. */
   chapterRuns?: PhoneRunKind[]
   /** A run going there takes a split's start of it as its new scope, keeping what it's on; builds before would start over. */
@@ -1836,8 +1859,8 @@ export interface PhoneAutomation {
 
 /** The automation runs Sleeper-Cell can start from here (PhoneRunKind in r2Service.ts). */
 export type PhoneRunKind = 'clipper' | 'narration' | 'editor' | 'voiceover'
-/** Image Clipper's AI: ChatGPT, or Gemini in AI Studio. */
-export type PhoneClipperAi = 'chatgpt' | 'aistudio'
+/** Image Clipper's AI: ChatGPT, AI Studio, or Gemini on the web. */
+export type PhoneClipperAi = 'chatgpt' | 'aistudio' | 'gemini'
 /** Image Clipper's prompting: one prompt then review rounds (classic), or four steps. */
 export type PhoneClipperFlow = 'classic' | 'steps'
 
@@ -2197,7 +2220,7 @@ export const r2Api = {
     fetchApi<PhoneSendPlan>(`/r2/phone-send/plan${fresh ? '?fresh=1' : ''}`),
 
   /** Sends each series' new and changed chapters, or exactly `chapterIds`. Progress comes as `phone-send:progress`. */
-  sendToPhone: (series: { seriesId: string; chapterIds?: string[] }[]) =>
+  sendToPhone: (series: { seriesId: string; chapterIds?: string[]; resetClipping?: boolean }[]) =>
     fetchApi<PhoneSendJob>('/r2/phone-send', {
       method: 'POST',
       body: JSON.stringify({ series })
@@ -2250,6 +2273,8 @@ export interface PhonePullResult {
 export const LARGE_CHAPTER_PAGES = 40
 
 export interface StitchChapterRow {
+  rootFolder?: string
+  lastActivityAt?: string
   id: string
   number: number
   title: string | null

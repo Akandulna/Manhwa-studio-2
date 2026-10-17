@@ -9,14 +9,14 @@ import { r2Api, type RelayStatus } from '@/lib/api'
 import { useSocket } from '@/lib/socket'
 
 export function usePhoneRelay(): RelayStatus | null {
-  const { socket } = useSocket()
+  const { socket, isConnected } = useSocket()
   const [status, setStatus] = useState<RelayStatus | null>(null)
 
   useEffect(() => {
     let cancelled = false
     r2Api.getRelay().then(next => { if (!cancelled) setStatus(next) }).catch(() => { /* advisory only */ })
     return () => { cancelled = true }
-  }, [])
+  }, [isConnected])
 
   useEffect(() => {
     if (!socket) return

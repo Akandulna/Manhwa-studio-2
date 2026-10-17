@@ -26,6 +26,7 @@
  * idle socket costs nothing (hibernation). Reconnects back off to a minute.
  */
 
+import { recordPhoneActivity } from './seriesActivity.js'
 import { randomUUID } from 'crypto'
 import WebSocket from 'ws'
 import type { Server } from 'socket.io'
@@ -78,7 +79,7 @@ export interface PhoneRequestArgs {
   series?: string
   tabs?: number
   chapters?: string[]
-  ai?: 'chatgpt' | 'aistudio'
+  ai?: 'chatgpt' | 'aistudio' | 'gemini'
   flow?: 'classic' | 'steps'
   language?: 'en' | 'hi'
   device?: string
@@ -142,6 +143,8 @@ const DEAD_MS = 2 * PING_MS + 10_000
 const RETRY_MS = [2_000, 5_000, 15_000, 30_000, 60_000]
 /** A connection that stayed up this long resets the backoff. */
 const STABLE_MS = 60_000
+/** Bound DNS/TLS/upgrade waits too: the heartbeat only runs after open. */
+const HANDSHAKE_MS = 15_000
 
 let io: Server | null = null
 let socket: WebSocket | null = null
@@ -291,6 +294,12 @@ function socketUrl(base: string): string {
   return url.toString()
 }
 
+function scheduleReconnect(): void {
+  const delay = RETRY_MS[Math.min(attempt, RETRY_MS.length - 1)]
+  attempt++
+  retryTimer = setTimeout(connect, delay)
+}
+
 function connect(): void {
   clearTimers()
   const env = relayEnv()
@@ -298,10 +307,14 @@ function connect(): void {
 
   let ws: WebSocket
   try {
-    ws = new WebSocket(socketUrl(env.url), { headers: { Authorization: `Bearer ${env.token}` } })
+    ws = new WebSocket(socketUrl(env.url), {
+      headers: { Authorization: `Bearer ${env.token}` },
+      handshakeTimeout: HANDSHAKE_MS
+    })
   } catch (error) {
     lastError = error instanceof Error ? error.message : String(error)
     emitStatus()
+    scheduleReconnect()
     return
   }
   socket = ws
@@ -335,9 +348,7 @@ function connect(): void {
     if (wasConnected) console.log('Phone relay: disconnected')
     emitStatus()
     if (Date.now() - openedAt > STABLE_MS) attempt = 0
-    const delay = RETRY_MS[Math.min(attempt, RETRY_MS.length - 1)]
-    attempt++
-    retryTimer = setTimeout(connect, delay)
+    scheduleReconnect()
   })
 }
 
@@ -406,6 +417,7 @@ function handle(text: string): void {
         return
       }
       if (!KINDS.has(kind)) return
+      recordPhoneActivity(kind, device, body, at)
       const kinds = receipts.get(device) ?? new Map<ReceiptKind, { at: number; body: object }>()
       kinds.set(kind as ReceiptKind, { at, body })
       receipts.set(device, kinds)

@@ -1,3 +1,4 @@
+import { useSeriesOrder } from '@/hooks/useSeriesOrder'
 /**
  * Narration Library Page
  *
@@ -28,6 +29,7 @@ export default function NarrationLibrary() {
   const { seriesCompletedParts } = usePublishedChapters()
   const [language, setLanguage] = useNarrationLanguage('narration')
   const [series, setSeries] = useState<NarrationSeries[]>([])
+  const orderedSeries = useSeriesOrder(series)
   const [loading, setLoading] = useState(true)
   const { toast } = useToast()
   // Scripts written in the Sleeper-Cell phone app, per series: the server's
@@ -76,7 +78,7 @@ export default function NarrationLibrary() {
         </div>
       ) : (
         <Card className="overflow-hidden divide-y">
-          {series.map(s => {
+          {orderedSeries.map(s => {
             const progress = s.chapterCount > 0 ? Math.round((s.alignedCount / s.chapterCount) * 100) : 0
             const onPhone = phoneScripts?.series[s.id]
             return (

@@ -40,8 +40,8 @@ async function post<T>(endpoint: string, body: unknown, method = 'POST'): Promis
 }
 
 export const phoneEditorApi = {
-  send: (seriesId: string, lang: NarrationLanguage, chapterIds: string[], prompt: string) =>
-    post<EditorSendResult>(`/series/${seriesId}/send-to-phone?lang=${lang}`, { chapterIds, prompt }),
+  send: (seriesId: string, lang: NarrationLanguage, chapterIds: string[], prompt: string, workflow: 'legacy' | 'staged' = 'legacy') =>
+    post<EditorSendResult>(`/series/${seriesId}/send-to-phone?lang=${lang}`, { chapterIds, prompt, workflow }),
 
   fetch: (seriesId: string, lang: NarrationLanguage) =>
     post<EditorFetchResult>(`/series/${seriesId}/fetch-phone-timelines?lang=${lang}`, {}),
@@ -51,8 +51,8 @@ export const phoneEditorApi = {
 }
 
 /**
- * Where the Editor 2.0 prompt lives (Settings → Editor 2.0 → Prompt): this
- * browser's localStorage, not the server.
+ * Browser cache of the Editor 2.0 prompt (Settings → Editor 2.0 → Prompt).
+ * The desktop database also retains it for browsers without this cache.
  */
 export const EDITOR_PROMPT_KEY = 'editor2.prompt'
 
@@ -67,6 +67,21 @@ export function readSavedEditorPrompt(): string {
     // Unavailable or corrupt storage just means there is no prompt.
     return ''
   }
+}
+
+/** Recover the saved desktop instructions when this browser's cache is empty. */
+export async function loadSavedEditorPrompt(): Promise<string> {
+  const local = readSavedEditorPrompt()
+  if (local) return local
+  const response = await fetch('/api/video2/prompt')
+  if (!response.ok) throw new Error('Could not load the saved Editor 2.0 prompt. Check Settings → Editor 2.0.')
+  const saved = await response.json() as { content?: unknown }
+  const content = typeof saved.content === 'string' ? saved.content.trim() : ''
+  if (content) {
+    try { localStorage.setItem(EDITOR_PROMPT_KEY, JSON.stringify({ content, savedAt: null })) }
+    catch { /* Copying still works when browser storage is unavailable. */ }
+  }
+  return content
 }
 
 /** "Chapters 3, 4 and 7", for the toasts. */

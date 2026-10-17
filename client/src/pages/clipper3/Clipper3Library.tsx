@@ -1,3 +1,4 @@
+import { useSeriesOrder } from '@/hooks/useSeriesOrder'
 /**
  * Clipper3Library — Module 3 v3: Image Clipper 3.0
  *
@@ -47,6 +48,7 @@ export default function Clipper3Library() {
   // Parts completed on the Storage page (files deleted, continuity kept).
   const { seriesCompletedParts } = usePublishedChapters()
   const [seriesList, setSeriesList] = useState<Clipper3Series[]>([])
+  const orderedSeries = useSeriesOrder(seriesList)
   const [chapters, setChapters] = useState<Clipper3Chapter[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -210,7 +212,7 @@ export default function Clipper3Library() {
 
       {seriesWithChapters.length > 0 && (
         <Card className="overflow-hidden divide-y">
-          {seriesWithChapters.map(s => {
+          {orderedSeries.filter(s => chapters.some(c => c.seriesId === s.id)).map(s => {
             const seriesChapters = chapters.filter(c => c.seriesId === s.id)
             // Done here means "every page has its crops and matching metadata",
             // the same bar Clipper 3's own chapter list calls fully attached.

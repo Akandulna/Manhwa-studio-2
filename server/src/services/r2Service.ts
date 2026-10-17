@@ -1,3 +1,4 @@
+import { withSeriesActivity, recordPhoneActivity } from './seriesActivity.js'
 /**
  * Cloudflare R2: settings, the free-plan guard, and what the Sleeper-Cell phone
  * app reports back.
@@ -26,6 +27,7 @@ import { phoneName, relayConfigured, relayPhones, relayReceipts, sendPhoneReques
 import type { NarrationLanguage } from './narrationLanguage.js'
 import { mergeCropsReceipts, mergeScriptsReceipts, type PhoneReceipt } from './phoneReceipts.js'
 import { analyticsConfigured, getCloudflareMonthOps, invalidateAnalytics } from './r2Analytics.js'
+import { filterReplacedCropFacts } from './chapterPageReplacement.js'
 
 // ============ Config ============
 
@@ -367,6 +369,7 @@ export interface PhoneScriptRunTab {
   split: number | null
   splits: number | null
   since: string | null
+  step?: string
 }
 
 interface ScriptsReceipt {
@@ -470,6 +473,7 @@ export async function readPhoneReceipts<T extends object>(kind: ReceiptKind, nam
   const body = await readPolledReceipt<T>(createClient(config), config, name, fresh)
   if (!Object.keys(body).length) return []
   const device = (body as { device?: unknown }).device
+  recordPhoneActivity(kind, 'r2', body)
   return [{ device: '', name: typeof device === 'string' && device ? device : 'Phone', body }]
 }
 
@@ -554,7 +558,8 @@ export function parseScriptRuns(raw: unknown, now = Date.now()): PhoneScriptRun[
         language: tab.language === 'hi' ? 'hi' as const : 'en' as const,
         split: count(tab.split) || null,
         splits: count(tab.splits) || null,
-        since: isTime(tab.since) ? tab.since : null
+        since: isTime(tab.since) ? tab.since : null,
+        ...(typeof tab.step === 'string' && tab.step ? { step: tab.step.slice(0, 240) } : {})
       }))
     runs.push({
       kind: run.kind,
@@ -959,7 +964,8 @@ export async function getPhoneCrops(seriesId?: string, chapterId?: string, fresh
   const list = await readPhoneReceipts<CropsReceipt>('crops', CROPS_RECEIPT_NAME, fresh)
   if (!list) return { configured: false, ...empty }
 
-  const receipt = mergeCropsReceipts(list as PhoneReceipt<Record<string, unknown>>[]) as CropsReceipt
+  const filtered = await Promise.all(list.map(async r => ({ ...r, body: await filterReplacedCropFacts(r.body) })))
+  const receipt = mergeCropsReceipts(filtered as PhoneReceipt<Record<string, unknown>>[]) as CropsReceipt
   const phoneSeries = isObject(receipt.series) ? receipt.series : {}
 
   const rows = await prisma.series.findMany({ select: { id: true, rootFolder: true } })
@@ -1106,7 +1112,7 @@ export interface PhoneAutomation {
   /** How Image Clipper last ran; `chatGpt` is the mode, model and effort last picked in Run automation (older builds: null). */
   clipper: { ai: PhoneClipperAi; flow: PhoneClipperFlow; tabs: number; chatGpt: ChatGptRunSettings | null } | null
   /** Editor 2.0's tabs last used there; null from builds whose Editor 2.0 run takes neither tabs nor chapters (no split). */
-  editor: { tabs: number } | null
+  editor: { tabs: number; staged?: boolean; chatGpt?: ChatGptRunSettings } | null
   /** The runs whose start takes a `chapters` list (a share of a split); empty from builds before it was said. */
   chapterRuns: PhoneRunKind[]
   /**
@@ -1127,7 +1133,7 @@ export interface PhoneAutomation {
  */
 export type PhoneRunKind = 'clipper' | 'narration' | 'editor' | 'voiceover'
 export const PHONE_RUN_KINDS: readonly PhoneRunKind[] = ['clipper', 'narration', 'editor', 'voiceover']
-export type PhoneClipperAi = 'chatgpt' | 'aistudio'
+export type PhoneClipperAi = 'chatgpt' | 'aistudio' | 'gemini'
 export type PhoneClipperFlow = 'classic' | 'steps'
 
 /** One phone running Sleeper-Cell. */
@@ -1200,10 +1206,11 @@ export async function getPhoneOverview(sync: PhoneSyncStatus | null, fresh = fal
     readPhoneReceipts<CropsReceipt>('crops', CROPS_RECEIPT_NAME, fresh)
   ])
   if (!cropsList) return empty
-  const crops = mergeCropsReceipts(cropsList as PhoneReceipt<Record<string, unknown>>[]) as CropsReceipt
+  const filteredCrops = await Promise.all(cropsList.map(async r => ({ ...r, body: await filterReplacedCropFacts(r.body) })))
+  const crops = mergeCropsReceipts(filteredCrops as PhoneReceipt<Record<string, unknown>>[]) as CropsReceipt
 
   const rows = await prisma.series.findMany({
-    select: { id: true, title: true, rootFolder: true, chapters: { select: { id: true, folderPath: true, number: true } } }
+    select: { id: true, title: true, rootFolder: true, createdAt: true, chapters: { select: { id: true, folderPath: true, number: true } } }
   })
   const byFolder = new Map(rows.map(row => [path.basename(row.rootFolder), row]))
   const place = (seriesFolder: string, chapterFolder: string): PhoneOverviewPlace => {
@@ -1293,8 +1300,10 @@ export async function getPhoneOverview(sync: PhoneSyncStatus | null, fresh = fal
     }
     if (entry.sync || entry.scripts || entry.crops || entry.runs.length) overview.series.push(entry)
   }
-  const busy = (s: PhoneOverviewSeries) => s.working + s.runs.length
-  overview.series.sort((a, b) => busy(b) - busy(a) || a.title.localeCompare(b.title))
+  overview.series = await withSeriesActivity(overview.series.map(entry => {
+    const row = rows.find(row => row.id === entry.id)!
+    return { ...entry, rootFolder: row.rootFolder, createdAt: row.createdAt }
+  }))
   overview.phones = overviewPhones(overview, automations)
   return overview
 }
@@ -1350,13 +1359,15 @@ function parseAutomation(raw: unknown, seriesFor: (folder: string) => { id: stri
     runs: phoneRuns(raw),
     clipper: isObject(raw.clipper)
       ? {
-          ai: raw.clipper.ai === 'aistudio' ? 'aistudio' : 'chatgpt',
+          ai: raw.clipper.ai === 'gemini' ? 'gemini' : raw.clipper.ai === 'aistudio' ? 'aistudio' : 'chatgpt',
           flow: raw.clipper.flow === 'steps' ? 'steps' : 'classic',
           tabs: Math.min(PHONE_MAX_TABS, Math.max(1, Number(raw.clipper.tabs) || 1)),
           chatGpt: isObject(raw.clipper.chatGpt) ? runSettingsOf(raw.clipper.chatGpt) : null
         }
       : null,
-    editor: isObject(raw.editor) ? { tabs: Math.min(PHONE_MAX_TABS, Math.max(1, Number(raw.editor.tabs) || 1)) } : null,
+    editor: isObject(raw.editor) ? { tabs: Math.min(PHONE_MAX_TABS, Math.max(1, Number(raw.editor.tabs) || 1)),
+      staged: raw.editor.staged === true,
+      ...(isObject(raw.editor.chatGpt) ? { chatGpt: runSettingsOf(raw.editor.chatGpt) } : {}) } : null,
     chapterRuns: Array.isArray(raw.chapterRuns) ? PHONE_RUN_KINDS.filter(kind => (raw.chapterRuns as unknown[]).includes(kind)) : [],
     rescope: raw.rescope === true,
     stopAfter: raw.stopAfter === true,
@@ -1397,9 +1408,11 @@ export interface PhoneAutomationOptions {
   /** The run to start; Image Clipper when left out. A stop stops whichever run is going. */
   kind?: PhoneRunKind
   seriesId?: string
+  /** Production sequence: a validated scope on one phone, excluding completed work. */
+  chapters?: string[]
   /** Image Clipper's, Editor 2.0's and the voiceover's tabs. */
   tabs?: number
-  /** Image Clipper: ChatGPT or Gemini in AI Studio, and one prompt (classic) or four steps. */
+  /** Image Clipper: ChatGPT, AI Studio, or Gemini on the web, and one prompt (classic) or four steps. */
   ai?: PhoneClipperAi
   flow?: PhoneClipperFlow
   /** Image Clipper on ChatGPT: the mode, model and effort (each null: as the account has it); the phone keeps them. */
@@ -1486,13 +1499,23 @@ export async function sendAutomationCommand(
     series = path.basename(row.rootFolder)
   }
   const takesTabs = kind === 'clipper' || kind === 'editor' || kind === 'voiceover'
+  if (options.chapters !== undefined) {
+    if (!device || !options.seriesId || options.split) throw new Error('A chapter scope needs one device and series')
+    if (!Array.isArray(options.chapters) || !options.chapters.length || options.chapters.some(c => typeof c !== 'string' || !c)) throw new Error('Pick chapters to run')
+    if (!automationOf(device).some(a => Array.isArray(a.chapterRuns) && a.chapterRuns.includes(kind))) throw new Error('Update Sleeper-Cell to run only the unfinished chapters')
+    const chapters = await prisma.chapter.findMany({ where: { seriesId: options.seriesId }, select: { folderPath: true } })
+    const known = new Set(chapters.map(c => path.basename(c.folderPath)))
+    if (options.chapters.some(c => !known.has(c))) throw new Error('A chapter in the run is not in this series')
+  }
   if (options.tabs !== undefined && !(Number.isInteger(options.tabs) && options.tabs >= 1 && options.tabs <= PHONE_MAX_TABS)) {
     throw new Error(`tabs must be 1 to ${PHONE_MAX_TABS}`)
   }
   const args = {
     series,
+    ...(options.chapters ? { chapters: [...new Set(options.chapters)] } : {}),
     tabs: takesTabs ? options.tabs : undefined,
     ...(kind === 'clipper' ? { ai: options.ai, flow: options.flow, chatGpt: options.chatGpt } : {}),
+    ...(kind === 'editor' ? { chatGpt: options.chatGpt } : {}),
     // Narration's AI only when asked for: Run automation has no choice of it, so the phone keeps its own.
     ...(kind === 'narration' && options.ai ? { ai: options.ai } : {}),
     ...(kind === 'editor' || kind === 'voiceover' ? { language: options.language ?? 'en' } : {})
@@ -1500,7 +1523,7 @@ export async function sendAutomationCommand(
   if (!options.split) {
     if (kind === 'narration' && series) assertNarrationFree(series, device)
     const sent = await sendPhoneRequest(START_ACTION[kind], { ...args, device })
-    return { ...sent, via: 'relay', targets: [target(sent)] }
+    return { ...sent, via: 'relay', targets: [target(sent, options.chapters ?? null)] }
   }
 
   const split = await import('./phoneSplit.js')

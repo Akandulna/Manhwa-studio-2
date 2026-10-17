@@ -148,6 +148,12 @@ export function isProcessed(chapterId: string, lang: NarrationLanguage, content:
   return processed !== null && processed === content
 }
 
+/** A saved video predating the current processed state needs a fresh render. */
+export function isProcessedAfter(chapterId: string, lang: NarrationLanguage, exportedAt: number): boolean {
+  const content = getTimelineJson(chapterId, lang)
+  return !!content && isProcessed(chapterId, lang, content) && localUpdatedAt(keyOf(chapterId, lang)) > exportedAt
+}
+
 /**
  * The JSON of every chapter here that has been processed, in the order given.
  *

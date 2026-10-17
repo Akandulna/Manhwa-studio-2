@@ -1,3 +1,4 @@
+import { useSeriesOrder } from '@/hooks/useSeriesOrder'
 /**
  * Storage Manager — what the local disk is holding, and what is safe to drop.
  *
@@ -156,6 +157,7 @@ export default function StorageManager({ libraryRoot }: { libraryRoot?: string }
   const { toast } = useToast()
 
   const [overview, setOverview] = useState<StorageOverview | null>(null)
+  const orderedSeries = useSeriesOrder(overview?.series ?? [])
   const [categories, setCategories] = useState<StorageCategoryMeta[]>([])
   const [loading, setLoading] = useState(true)
   const [scanning, setScanning] = useState(false)
@@ -544,7 +546,7 @@ export default function StorageManager({ libraryRoot }: { libraryRoot?: string }
 
           {/* Per-series */}
           <div className="space-y-4">
-            {overview.series.map(series => {
+            {orderedSeries.map(series => {
               const isOpen = expanded === series.id
               const exportProgress = series.chapterCount > 0
                 ? Math.round((series.exportedChapterCount / series.chapterCount) * 100)

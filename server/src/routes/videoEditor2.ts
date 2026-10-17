@@ -34,11 +34,27 @@ import {
   type Export2Input
 } from '../services/editor2Export.js'
 import { NarrationLanguage, requestLanguage } from '../services/narrationLanguage.js'
-import { fetchPhoneTimelines, saveEditorPrompt, sendEditorPackages } from '../services/phoneEditor.js'
+import { fetchPhoneTimelines, getEditorPrompt, saveEditorPrompt, sendEditorPackages } from '../services/phoneEditor.js'
 import { queueEditorPublish } from '../services/editorAutoPublish.js'
+import { editorWorkflowSession } from '../services/editorWorkflowStore.js'
+import { WorkflowReplyError } from '../services/editorWorkflow.js'
 
 export function initVideoEditor2Routes(io: Server): Router {
   const router = Router()
+
+  // GET is read-only; POST accepts only the current task and writes a resumable checkpoint.
+  router.get('/chapters/:id/staged-timeline', async (req, res) => {
+    try { res.json(await editorWorkflowSession(req.params.id, requestLanguage(req))) }
+    catch (e) { res.status(400).json({ error: (e as Error).message }) }
+  })
+  router.post('/chapters/:id/staged-timeline', async (req, res) => {
+    try {
+      const { taskId, fingerprint, reply, reset } = req.body ?? {}
+      if (typeof reset === 'string') return res.json(await editorWorkflowSession(req.params.id, requestLanguage(req), { reset }))
+      if (![taskId, fingerprint, reply].every(v => typeof v === 'string') || reply.length > 20000) return res.status(400).json({ error: 'taskId, fingerprint and a JSON reply of up to 20,000 characters are required' })
+      res.json(await editorWorkflowSession(req.params.id, requestLanguage(req), { taskId, fingerprint, reply }))
+    } catch (e) { res.status(400).json({ error: (e as Error).message, ...(e instanceof WorkflowReplyError ? { repairPrompt: e.repairPrompt } : {}) }) }
+  })
 
   /** GET /series/:seriesId/editable-chapters */
   router.get('/series/:seriesId/editable-chapters', async (req: Request, res: Response) => {
@@ -328,12 +344,17 @@ export function initVideoEditor2Routes(io: Server): Router {
 
   // ============ The phone (see phoneEditor.ts) ============
 
+  router.get('/prompt', async (_req: Request, res: Response) => {
+    try { res.json(await getEditorPrompt()) }
+    catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : 'Could not read the saved Editor prompt' }) }
+  })
+
   /**
    * PUT /prompt { content }
    *
    * Puts the Editor 2.0 prompt in R2 for the phone, which pastes it with every
-   * chapter. Settings calls it on each save; the prompt itself stays in the
-   * browser as before.
+   * chapter. Settings calls it on each save; the prompt is also retained in
+   * the desktop database so another browser can recover it.
    */
   router.put('/prompt', async (req: Request, res: Response) => {
     try {
@@ -358,14 +379,15 @@ export function initVideoEditor2Routes(io: Server): Router {
    */
   router.post('/series/:seriesId/send-to-phone', async (req: Request, res: Response) => {
     try {
-      const { chapterIds, prompt } = req.body ?? {}
+      const { chapterIds, prompt, workflow = 'legacy' } = req.body ?? {}
+      if (workflow !== 'legacy' && workflow !== 'staged') return res.status(400).json({ error: 'workflow must be legacy or staged' })
       if (!Array.isArray(chapterIds) || chapterIds.length === 0 || !chapterIds.every(id => typeof id === 'string')) {
         return res.status(400).json({ error: 'chapterIds (non-empty array of ids) is required' })
       }
       if (typeof prompt !== 'string') {
         return res.status(400).json({ error: 'prompt (string) is required' })
       }
-      res.json(await sendEditorPackages(req.params.seriesId, requestLanguage(req), chapterIds, prompt))
+      res.json(await sendEditorPackages(req.params.seriesId, requestLanguage(req), chapterIds, prompt, workflow))
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to send to the phone'
       console.error('[videoEditor2] sending to the phone failed:', message)

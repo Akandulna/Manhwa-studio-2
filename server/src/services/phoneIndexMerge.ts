@@ -35,11 +35,12 @@ export interface IndexChapter {
   cleared: boolean
   /** Who sent the zip: "master" for the Master phone; left out for this server. */
   from?: string
+  pageRevision?: string
 }
 
 type Entry = Record<string, unknown>
 
-const TRANSPORT = ['key', 'etag', 'sentAt', 'files', 'bytes', 'fingerprint', 'cleared', 'from'] as const
+const TRANSPORT = ['key', 'etag', 'sentAt', 'files', 'bytes', 'fingerprint', 'cleared', 'from', 'pageRevision'] as const
 
 function isObject(value: unknown): value is Entry {
   return !!value && typeof value === 'object' && !Array.isArray(value)

@@ -1,11 +1,15 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import { createHash } from 'crypto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { GetObjectCommand, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3'
 
 // The bucket, as key → body.
 const bucket = new Map<string, string>()
+const settings = new Map<string, string>()
+let failPromptUpload = false
+let stagedFixtures = false
 
 interface TimelineRow { chapterId: string; language: string; json: string; processedJson: string | null; updatedAt: Date }
 let rows: TimelineRow[] = []
@@ -26,6 +30,12 @@ let unreviewed = new Set<string>()
 
 vi.mock('../../index.js', () => ({
   prisma: {
+    setting: {
+      findUnique: async ({ where }: { where: { key: string } }) => settings.has(where.key) ? { key: where.key, value: settings.get(where.key)! } : null,
+      upsert: async ({ where, create, update }: { where: { key: string }; create: { value: string }; update: { value: string } }) => {
+        settings.set(where.key, settings.has(where.key) ? update.value : create.value)
+      }
+    },
     chapter: {
       findMany: async ({ where }: { where: { id?: { in: string[] } } }) =>
         chapters.filter(c => !where.id || where.id.in.includes(c.id)).map(c => ({ ...c, series: { rootFolder: '/library/Demo' } }))
@@ -63,6 +73,7 @@ vi.mock('../r2Service.js', () => ({
   createClient: () => ({
     send: async (command: unknown) => {
       if (command instanceof PutObjectCommand) {
+        if (failPromptUpload && command.input.Key?.endsWith('_prompt.json')) throw new Error('R2 offline')
         bucket.set(command.input.Key!, String(command.input.Body))
         return {}
       }
@@ -81,13 +92,13 @@ vi.mock('../r2Service.js', () => ({
 }))
 
 vi.mock('../videoEditor2Service.js', () => ({
-  getChapterTimelineBundle: async (id: string) => ({ text: id === 'c3' ? '' : `## Section 1\n\ntimeline of ${id}` }),
-  getChapterCropMetadataBundle: async (id: string) => ({ text: `## page_001.webp\n\nmetadata of ${id}` }),
+  getChapterTimelineBundle: async (id: string) => ({ text: id === 'c3' ? '' : stagedFixtures ? '## Section 1\n00:00.00 - 00:05.00: "One."\n## Section 2\n00:00.00 - 00:04.50: "Two."' : `## Section 1\n\ntimeline of ${id}` }),
+  getChapterCropMetadataBundle: async (id: string) => ({ text: stagedFixtures ? JSON.stringify({ crops: [{ exportedFilename: 'crop.png', description: 'A woman summons a spirit.' }] }) : `## page_001.webp\n\nmetadata of ${id}` }),
   getChapterBlockers: async (id: string) => blockers[id] ?? []
 }))
 
 vi.mock('../clipper3/perImageStore.js', () => ({
-  getOutputDir: () => '/nowhere/crops3',
+  getOutputDir: () => stagedFixtures ? path.join(folders, 'staged-crops') : '/nowhere/crops3',
   getSourceFolderPath: (folderPath: string) => path.join(folders, folderPath)
 }))
 
@@ -95,7 +106,7 @@ vi.mock('../clipper3/chapterReview.js', () => ({
   readEffectiveReview: async (folderPath: string) => ({ reviewed: !unreviewed.has(folderPath) })
 }))
 
-const { copyAllText, fetchPhoneTimelines, publishReadyEditorPackages, saveEditorPrompt, sendEditorPackages } = await import('../phoneEditor.js')
+const { copyAllText, editorWaitingChapters, fetchPhoneTimelines, getEditorPrompt, publishReadyEditorPackages, saveEditorPrompt, sendEditorPackages } = await import('../phoneEditor.js')
 
 function timelineBody(chapter: string, timeline: string, madeAt: string, language = 'en') {
   return JSON.stringify({ schema: 'sleeper-cell-editor-timeline/1', series: 'Demo', chapter, language, madeAt, review: [], timeline })
@@ -103,13 +114,60 @@ function timelineBody(chapter: string, timeline: string, madeAt: string, languag
 
 beforeEach(() => {
   bucket.clear()
+  settings.clear()
+  failPromptUpload = false
+  stagedFixtures = false
   rows = []
   blockers = {}
   unreviewed = new Set()
   for (const c of chapters) fs.rmSync(path.join(folders, c.folderPath, '.editor2-phone.json'), { force: true })
+  for (const c of chapters) for (const dir of ['audio', 'audio_hi']) fs.rmSync(path.join(folders, c.folderPath, dir), { recursive: true, force: true })
 })
 
 describe('sendEditorPackages', () => {
+  it('imports only staged results with current input/prompt hashes and every original timestamp', async () => {
+    stagedFixtures = true
+    fs.mkdirSync(path.join(folders, 'staged-crops'), { recursive: true })
+    fs.writeFileSync(path.join(folders, 'staged-crops', 'crop.png'), '')
+    await sendEditorPackages('s1', 'hi', ['c1'], '', 'staged')
+    const pkg = JSON.parse(bucket.get('Phone/editor/Demo/Chapter 001.hi.package.json')!)
+    const json = JSON.stringify({ sections: [1, 2].map(number => ({ section: `Section ${number}`, timelines: pkg.workflow.beats.filter((b: any) => b.section === number).map((b: any) => ({ timeline: b.range, selectedImages: ['crop.png'] })) })) })
+    const hash = createHash('sha256').update(`${pkg.timeline}\u0000${pkg.metadata}\u0000${pkg.workflow.sourceHash}`).digest('hex')
+    const body = { ...JSON.parse(timelineBody('Chapter 001', json, new Date().toISOString(), 'hi')), workflowHash: pkg.workflow.sourceHash, packageSha256: hash }
+    const key = 'Phone/editor/Demo/Chapter 001.hi.timeline.json'
+    bucket.set(key, JSON.stringify(body))
+    expect((await fetchPhoneTimelines('s1', 'hi')).imported).toHaveLength(1)
+    bucket.set(key, JSON.stringify({ ...body, timeline: json.replace('00:05.00', '00:05.01') }))
+    expect((await fetchPhoneTimelines('s1', 'hi')).failed[0].error).toMatch(/timestamp/)
+    expect(rows[0].json).toBe(json)
+    bucket.set(key, JSON.stringify({ ...body, workflowHash: 'old-prompts' }))
+    expect((await fetchPhoneTimelines('s1', 'hi')).failed[0].error).toMatch(/inputs or prompts changed/)
+  })
+  it('sends a versioned staged package with built-in instructions, preserving the mode on automatic republish', async () => {
+    stagedFixtures = true
+    fs.mkdirSync(path.join(folders, 'staged-crops'), { recursive: true })
+    fs.writeFileSync(path.join(folders, 'staged-crops', 'crop.png'), '')
+    const result = await sendEditorPackages('s1', 'hi', ['c1'], '', 'staged')
+    expect(result.sent).toHaveLength(1)
+    const key = 'Phone/editor/Demo/Chapter 001.hi.package.json'
+    const body = JSON.parse(bucket.get(key)!)
+    expect(body.schema).toBe('manhwa-studio-editor-package/3')
+    expect(body.workflow.beats).toHaveLength(2)
+    expect(body.workflow.crops[0]).toMatchObject({ id: 'C001', filename: 'crop.png' })
+    expect(bucket.has('Phone/editor/_prompt.json')).toBe(false)
+    bucket.delete(key)
+    await publishReadyEditorPackages(['c1'])
+    expect(JSON.parse(bucket.get(key)!).schema).toBe('manhwa-studio-editor-package/3')
+  })
+  it('includes the fetched audio script hash so a replacement phone waits for the right revision', async () => {
+    const dir = path.join(folders, chapters[0].folderPath, 'audio_hi')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, '.r2-voiceover.json'), JSON.stringify({ scriptSha256: 'a'.repeat(64) }))
+    await sendEditorPackages('s1', 'hi', ['c1'], 'PROMPT')
+    const body = JSON.parse(bucket.get('Phone/editor/Demo/Chapter 001.hi.package.json')!)
+    expect(body.scriptSha256).toBe('a'.repeat(64))
+  })
+
   it('writes the prompt, and each chapter\'s parts and sections, to the phone folder, skipping chapters without a timeline', async () => {
     const result = await sendEditorPackages('s1', 'en', ['c1', 'c3'], 'THE PROMPT')
     expect(result.sent.map(s => s.chapterId)).toEqual(['c1'])
@@ -165,11 +223,27 @@ describe('publishReadyEditorPackages', () => {
 })
 
 describe('saveEditorPrompt', () => {
+  it('recovers the original desktop setting even without any browser-local prompt', async () => {
+    settings.set('editor2Prompt', '  Original instructions: make a section-wise timeline.  ')
+    expect(await getEditorPrompt()).toEqual({ content: 'Original instructions: make a section-wise timeline.' })
+  })
+
+  it('keeps the desktop prompt when the phone upload fails', async () => {
+    failPromptUpload = true
+    await expect(saveEditorPrompt('Latest custom instructions')).rejects.toThrow('R2 offline')
+    expect(await getEditorPrompt()).toEqual({ content: 'Latest custom instructions' })
+  })
+
+  it('reports an absent prompt without inventing instructions', async () => {
+    expect(await getEditorPrompt()).toEqual({ content: '' })
+  })
+
   it('replaces the prompt in R2 and nudges the phone', async () => {
     await saveEditorPrompt('first')
     const result = await saveEditorPrompt('  second  ')
     expect(JSON.parse(bucket.get('Phone/editor/_prompt.json')!).content).toBe('second')
     expect(result.phoneNotified).toBe(true)
+    expect(await getEditorPrompt()).toEqual({ content: 'second' })
   })
 
   it('refuses an empty prompt', async () => {
@@ -184,6 +258,36 @@ describe('copyAllText', () => {
 })
 
 describe('fetchPhoneTimelines', () => {
+  it('rejects an old phone timeline after replacement audio and accepts one made from the new package', async () => {
+    const dir = path.join(folders, chapters[0].folderPath, 'audio_hi')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, '.r2-voiceover.json'), JSON.stringify({ scriptSha256: 'a'.repeat(64) }))
+    const clearedAt = new Date('2026-10-09T10:00:00Z')
+    rows.push({ chapterId: 'c1', language: 'hi', json: '', processedJson: null, updatedAt: clearedAt })
+    const key = 'Phone/editor/Demo/Chapter 001.hi.timeline.json'
+    const old = JSON.parse(timelineBody('Chapter 001', '{"old":1}', '2026-10-09T09:00:00Z', 'hi'))
+    old.packageSha256 = 'old-package'
+    bucket.set(key, JSON.stringify(old))
+    const stale = await fetchPhoneTimelines('s1', 'hi')
+    expect(stale.imported).toEqual([])
+    expect(stale.failed[0].error).toMatch(/before the voiceover replacement/)
+    expect(rows[0].json).toBe('')
+    const fresh = { ...old, timeline: '{"fresh":1}', madeAt: '2026-10-09T11:00:00Z',
+      packageSha256: createHash('sha256').update('## Section 1\n\ntimeline of c1\u0000## page_001.webp\n\nmetadata of c1\u0000' + 'a'.repeat(64)).digest('hex') }
+    bucket.set(key, JSON.stringify(fresh))
+    const result = await fetchPhoneTimelines('s1', 'hi')
+    expect(result.failed).toEqual([])
+    expect(result.imported.map(c => c.chapterId)).toEqual(['c1'])
+    expect(rows[0].json).toBe('{"fresh":1}')
+  })
+
+  it('keeps a replacement chapter in the Editor queue while its old timeline remains in R2', async () => {
+    rows.push({ chapterId: 'c1', language: 'hi', json: '', processedJson: null, updatedAt: new Date() })
+    bucket.set('Phone/editor/Demo/Chapter 001.hi.package.json', '{}')
+    bucket.set('Phone/editor/Demo/Chapter 001.hi.timeline.json', timelineBody('Chapter 001', '{"old":1}', '2020-01-01T00:00:00Z', 'hi'))
+    expect(await editorWaitingChapters('s1', 'hi')).toEqual(['Chapter 001'])
+  })
+
   it('stores new timelines unprocessed, leaves the same one alone and keeps a newer paste', async () => {
     bucket.set('Phone/editor/Demo/Chapter 001.timeline.json', timelineBody('Chapter 001', '{"sections":[1]}', '2026-10-09T10:00:00Z'))
     bucket.set('Phone/editor/Demo/Chapter 002.timeline.json', timelineBody('Chapter 002', '{"sections":[2]}', '2026-10-09T10:00:00Z'))

@@ -16,7 +16,7 @@ interface Props {
   /** A send is running; nothing can start until it ends. */
   busy: boolean
   /** Called with the chapters to send per series. */
-  onSend: (series: { seriesId: string; chapterIds: string[] }[]) => Promise<void>
+  onSend: (series: { seriesId: string; chapterIds: string[]; resetClipping?: boolean }[]) => Promise<void>
 }
 
 const STATE_LABEL: Record<PhoneChapterState, { label: string; className: string }> = {
@@ -32,20 +32,20 @@ const STATE_LABEL: Record<PhoneChapterState, { label: string; className: string 
  * New and changed chapters go by default (as the server's isDefaultPick), except ones still to be stitched
  * and ones already done here, which leave the phone nothing to do. Either can be ticked by hand.
  */
-function defaultPick(series: PhoneSendSeries): Set<string> {
+function defaultPick(series: PhoneSendSeries, resetClipping = false): Set<string> {
   return new Set(
     series.chapters
-      .filter(c => (c.state === 'new' || c.state === 'changed') && !c.needsStitch && !c.desktop.done)
+      .filter(c => resetClipping ? c.state === 'changed' && c.pages > 0 : (c.state === 'new' || c.state === 'changed') && !c.needsStitch && !c.desktop.done)
       .map(c => c.chapterId)
   )
 }
 
-function summary(series: PhoneSendSeries): string {
+function summary(series: PhoneSendSeries, resetClipping = false): string {
   const parts: string[] = []
   const unsent = series.chapters.filter(c => c.state === 'new' || c.state === 'changed')
-  const fresh = unsent.filter(c => c.state === 'new' && !c.desktop.done).length
-  const changed = unsent.filter(c => c.state === 'changed' && !c.desktop.done).length
-  const doneHere = unsent.filter(c => c.desktop.done).length
+  const fresh = unsent.filter(c => c.state === 'new' && (!c.desktop.done || resetClipping)).length
+  const changed = unsent.filter(c => c.state === 'changed' && (!c.desktop.done || resetClipping)).length
+  const doneHere = resetClipping ? 0 : unsent.filter(c => c.desktop.done).length
   if (fresh) parts.push(`${fresh} new`)
   if (changed) parts.push(`${changed} changed`)
   if (doneHere) parts.push(`${doneHere} done here, not sent`)
@@ -70,6 +70,7 @@ export function PhoneSendDialog({ open, onOpenChange, busy, onSend }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [starting, setStarting] = useState(false)
   const [updatingIndex, setUpdatingIndex] = useState(false)
+  const [resetClipping, setResetClipping] = useState(false)
 
   const load = (fresh = false) => {
     setLoading(true)
@@ -77,7 +78,7 @@ export function PhoneSendDialog({ open, onOpenChange, busy, onSend }: Props) {
       .getSendPlan(fresh)
       .then(next => {
         setPlan(next)
-        setPicked(new Map(next.series.map(s => [s.seriesId, defaultPick(s)])))
+        setPicked(new Map(next.series.map(s => [s.seriesId, defaultPick(s, resetClipping)])))
       })
       .catch(error => toast({ title: 'Could not work out what to send', description: error instanceof Error ? error.message : String(error), variant: 'destructive' }))
       .finally(() => setLoading(false))
@@ -119,7 +120,7 @@ export function PhoneSendDialog({ open, onOpenChange, busy, onSend }: Props) {
     setPicked(prev => {
       const next = new Map(prev)
       const ids = next.get(series.seriesId)
-      next.set(series.seriesId, ids && ids.size > 0 ? new Set() : defaultPick(series))
+      next.set(series.seriesId, ids && ids.size > 0 ? new Set() : defaultPick(series, resetClipping))
       return next
     })
   }
@@ -146,7 +147,7 @@ export function PhoneSendDialog({ open, onOpenChange, busy, onSend }: Props) {
   const handleSend = async () => {
     const series = [...picked]
       .filter(([, ids]) => ids.size > 0)
-      .map(([seriesId, ids]) => ({ seriesId, chapterIds: [...ids] }))
+      .map(([seriesId, ids]) => ({ seriesId, chapterIds: [...ids], resetClipping }))
     setStarting(true)
     try {
       await onSend(series)
@@ -187,6 +188,19 @@ export function PhoneSendDialog({ open, onOpenChange, busy, onSend }: Props) {
           </DialogDescription>
         </DialogHeader>
 
+        <label className="flex items-start gap-3 rounded-lg border p-3 text-sm">
+          <Checkbox checked={resetClipping} disabled={busy || starting} onCheckedChange={checked => {
+            const reset = checked === true
+            setResetClipping(reset)
+            if (plan) setPicked(new Map(plan.series.map(s => [s.seriesId, defaultPick(s, reset)])))
+          }} />
+          <span>
+            <span className="block font-medium">Replace pages & reset Image Clipper</span>
+            <span className="text-muted-foreground">Replaces the selected chapters in R2 and clears their old crops and review on this computer and every updated Sleeper Cell device. Scripts and voiceovers are kept. Local crop files are backed up.</span>
+            {resetClipping && <span className="mt-1 block text-muted-foreground">Changed chapters are selected even when done here. Expand a series to select any others you updated.</span>}
+          </span>
+        </label>
+
         {loading && !plan ? (
           <div className="flex items-center justify-center py-10 text-muted-foreground">
             <Loader2 className="mr-3 h-6 w-6 animate-spin" />
@@ -221,7 +235,7 @@ export function PhoneSendDialog({ open, onOpenChange, busy, onSend }: Props) {
                         <span className="min-w-0">
                           <span className="block truncate font-medium">{series.title}</span>
                           <span className="block truncate text-xs text-muted-foreground">
-                            {summary(series)}
+                            {summary(series, resetClipping)}
                             {ids.size > 0 && ` — sending ${ids.size}`}
                           </span>
                         </span>
@@ -293,7 +307,7 @@ export function PhoneSendDialog({ open, onOpenChange, busy, onSend }: Props) {
             </Button>
             <Button onClick={handleSend} disabled={busy || starting || totals.chapters === 0}>
               {starting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Smartphone className="mr-2 h-4 w-4" />}
-              {busy ? 'A send is running' : `Send ${totals.chapters} chapter${totals.chapters === 1 ? '' : 's'}`}
+              {busy ? 'A send is running' : `${resetClipping ? 'Replace & reset' : 'Send'} ${totals.chapters} chapter${totals.chapters === 1 ? '' : 's'}`}
               {totals.chapters > 0 && !busy && ` · ${formatBytes(totals.bytes)}`}
             </Button>
           </div>

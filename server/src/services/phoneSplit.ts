@@ -28,6 +28,7 @@ import { prisma } from '../index.js'
 import { LANGUAGE_NAMES, type NarrationLanguage } from './narrationLanguage.js'
 import { mergeCropsReceipts } from './phoneReceipts.js'
 import { relayReceipts } from './phoneRelay.js'
+import { filterReplacedCropFacts } from './chapterPageReplacement.js'
 import { parseScriptRuns, RUN_LABEL, startablePhones, WORKING_STALE_MS, type PhoneRunKind } from './r2Service.js'
 
 type Obj = Record<string, unknown>
@@ -427,13 +428,14 @@ export async function planSplit(kind: PhoneRunKind, seriesId: string, language: 
   if (!row) throw new Error('Series not found')
   const series = path.basename(row.rootFolder)
   const { phoneOf, devices } = relayedPhones()
+  const filterPhone = async (phone: SplitPhone): Promise<SplitPhone> => ({ ...phone, crops: phone.crops ? await filterReplacedCropFacts(phone.crops) : null })
   return buildSplitPlan({
     kind,
     seriesId,
     series,
     language,
-    phones: startablePhones().map(p => phoneOf(p.id, p.name)),
-    all: [...devices].map(id => phoneOf(id, id)),
+    phones: await Promise.all(startablePhones().map(p => filterPhone(phoneOf(p.id, p.name)))),
+    all: await Promise.all([...devices].map(id => filterPhone(phoneOf(id, id)))),
     chapters: row.chapters.map(c => ({ folder: path.basename(c.folderPath), number: c.number ?? null, pageCount: c.pageCount ?? null })),
     editorWaiting: async () => (await import('./phoneEditor.js')).editorWaitingChapters(seriesId, language)
   })

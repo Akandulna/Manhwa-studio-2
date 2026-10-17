@@ -1,3 +1,4 @@
+import { useSeriesOrder } from '@/hooks/useSeriesOrder'
 /**
  * Run automation — Phone Status's one way to start a run on a phone, in two
  * steps: which automation (Image Clipper, Narration scripts, Editor 2.0
@@ -100,7 +101,7 @@ export const AUTOMATIONS: Automation[] = [
     name: 'Image Clipper',
     icon: Scissors,
     does: 'Crops every page left in a series',
-    ai: 'ChatGPT or Gemini',
+    ai: 'ChatGPT, AI Studio or Gemini',
     tabs: { unit: 'page' },
     clipper: true,
     split: true,
@@ -115,7 +116,7 @@ export const AUTOMATIONS: Automation[] = [
     tabs: { unit: 'chapter' },
     language: true,
     split: true,
-    fixed: 'ChatGPT with GPT-6 Astra, in the profiles that have it (Plus and up). Needs the chapters sent to the phone from Editor 2.0.'
+    fixed: 'Send chapters from Editor 2.0 first. Updated phones support resumable small batches and the model selected below; older phones use GPT-6 Astra.'
   }
 ]
 
@@ -130,7 +131,8 @@ const SPLIT_HINT: Partial<Record<PhoneRunKind, string>> = {
 
 const AI_CHOICES: Choice<PhoneClipperAi>[] = [
   { value: 'chatgpt', label: 'ChatGPT', hint: 'Uses the ChatGPT accounts’ image uploads; switches account at each limit.' },
-  { value: 'aistudio', label: 'Gemini', hint: 'Gemini in AI Studio at High thinking, against each profile’s own Gemini limit.' }
+  { value: 'aistudio', label: 'AI Studio', hint: 'Gemini in AI Studio at High thinking, against each profile’s own Gemini limit.' },
+  { value: 'gemini', label: 'Gemini', hint: 'Uses Gemini on the web in the phone’s selected profile.' }
 ]
 
 const FLOW_CHOICES: Choice<PhoneClipperFlow>[] = [
@@ -276,6 +278,21 @@ function TabChoices({ value, onChange, each, unit, disabled }: {
   )
 }
 
+/** Image Clipping settings shared by individual runs and the production sequence. */
+export function ClipperSettings({ phone, profiles, relay, screen, now, value, onChange }: {
+  phone: PhoneOverviewPhone; profiles: PhoneUploadProfile[]; relay: RelayStatus | null; screen: PhoneScreen | null; now: number
+  value: { ai: PhoneClipperAi; flow: PhoneClipperFlow; tabs: number; chatGpt: PhoneChatGptSettings }
+  onChange: (next: typeof value) => void
+}) {
+  const supportsSettings = !!phone.automation?.clipper
+  return <div className="space-y-4">
+    <Choices label="AI" choices={AI_CHOICES} value={value.ai} onChange={ai => onChange({ ...value, ai })} disabled={supportsSettings ? undefined : 'Update Sleeper-Cell to configure Image Clipping.'} />
+    <Choices label="Method" choices={FLOW_CHOICES} value={value.flow} onChange={flow => onChange({ ...value, flow })} disabled={supportsSettings ? undefined : 'Update Sleeper-Cell to configure Image Clipping.'} />
+    {value.ai === 'chatgpt' && phone.automation?.clipper?.chatGpt && <ChatGptChoices phone={phone} profiles={profiles} relay={relay} screen={screen} now={now} value={value.chatGpt} onChange={chatGpt => onChange({ ...value, chatGpt })} />}
+    <TabChoices value={value.tabs} onChange={tabs => onChange({ ...value, tabs })} each={false} unit="page" />
+  </div>
+}
+
 /**
  * A profile picker for each phone a split run goes to, so each works in an
  * account of its own, with a warning when two are on the same ChatGPT account
@@ -360,6 +377,7 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
   const [language, setLanguage] = useState<NarrationLanguage>('en')
   const [split, setSplit] = useState(false)
   const [chatGpt, setChatGpt] = useState<PhoneChatGptSettings>(last?.chatGpt ?? NO_CHATGPT_CHOICES)
+  const [editorChatGpt, setEditorChatGpt] = useState<PhoneChatGptSettings>(editorLast?.chatGpt ?? NO_CHATGPT_CHOICES)
   // Phones a profile selection is on its way to (by device id, '' for this one when it has none).
   const [selecting, setSelecting] = useState<Record<string, boolean>>({})
   const onPending = useCallback((device: string, pending: boolean) => {
@@ -379,8 +397,9 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
       .catch(() => { /* the phone's series are still offered */ })
     return () => { cancelled = true }
   }, [open, fixedSeries])
+  const orderedLibrary = useSeriesOrder(library)
   const onPhoneIds = new Set(overview.series.map(s => s.id))
-  const notOnPhone = library.filter(s => !onPhoneIds.has(s.id)).sort((a, b) => a.title.localeCompare(b.title))
+  const notOnPhone = orderedLibrary.filter(s => !onPhoneIds.has(s.id))
 
   const automation = AUTOMATIONS.find(a => a.kind === kind) ?? null
   const seriesId = kind ? fixedSeries?.id ?? picked[kind] ?? preferredSeries(kind, overview, phone, several) : ''
@@ -449,6 +468,7 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
       ...(automation.clipper && choosesChatGpt && ai === 'chatgpt'
         ? { chatGpt: hasChoices(profiles.find(p => p.selected) ?? null) === false ? NO_CHATGPT_CHOICES : chatGpt }
         : {}),
+      ...(kind === 'editor' && editorLast?.staged ? { chatGpt: editorChatGpt } : {}),
       ...(automation.language ? { language } : {}),
       ...(splitting && plan
         ? { split: true, assignments: Object.fromEntries(planned.map(t => [t.device, t.chapters])) }
@@ -573,6 +593,7 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
                 </>
               )}
 
+              {kind === 'editor' && editorLast?.staged && <ChatGptChoices phone={phone} profiles={profiles} relay={relay} screen={screen} value={editorChatGpt} onChange={setEditorChatGpt} now={now} />}
               {automation.language && <Choices label="Language" choices={LANGUAGE_CHOICES} value={language} onChange={setLanguage} />}
 
               {automation.tabs && (

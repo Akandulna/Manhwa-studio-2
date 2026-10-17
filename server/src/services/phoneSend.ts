@@ -1,3 +1,4 @@
+import { withSeriesActivity, recordPhoneActivity } from './seriesActivity.js'
 /**
  * Send chapters to the Sleeper-Cell phone app through Cloudflare R2, one zip per chapter.
  *
@@ -49,6 +50,8 @@ import { listMetadataImageStems, listPointedImageStems, stemOf } from './clipper
 import { phoneName, relayConfigured, relayReceipts } from './phoneRelay.js'
 import { mergeSyncReceipts } from './phoneReceipts.js'
 import { mergeIndex, type IndexChapter } from './phoneIndexMerge.js'
+import { PAGE_REPLACEMENT_FILE, beginPageReplacement, endPageReplacement, newPageReplacement, readPageReplacement, resetChapterClipping, type PageReplacement } from './chapterPageReplacement.js'
+import { isChapterCropping } from './clipper3/chapterCrop.js'
 import {
   PART_SIZE,
   assertWithinFreePlan,
@@ -168,7 +171,9 @@ async function readSyncReceipt(config: R2Config | null, fresh: boolean): Promise
   const relayed = relayReceipts<Record<string, unknown>>('sync')
   if (relayed) return mergeSyncReceipts(relayed.map(r => ({ device: r.device, name: phoneName(r.device), body: r.body }))) as SyncReceipt
   if (!config) return {}
-  return readPolledReceipt<SyncReceipt>(createClient(config), config, PHONE_RECEIPT_NAME, fresh).catch(() => ({}))
+  const receipt = await readPolledReceipt<SyncReceipt>(createClient(config), config, PHONE_RECEIPT_NAME, fresh).catch(() => ({}))
+  recordPhoneActivity('sync', 'r2', receipt)
+  return receipt
 }
 
 function receiptSeries(receipt: SyncReceipt, seriesFolder: string) {
@@ -270,12 +275,13 @@ async function desktopStates(
     const crops = await cropsDone(chapter.folderPath)
     const script = scripted.has(chapter.id)
     const isPublished = !!published.chapters[chapter.id]
+    const needsNewCrops = !crops && !!(await readPageReplacement(chapter.folderPath))
     states.set(chapter.id, {
       crops,
       script,
       scriptHi: scriptedHi.has(chapter.id),
       published: isPublished,
-      done: isPublished || (crops && script)
+      done: !needsNewCrops && (isPublished || (crops && script))
     })
   }
   return states
@@ -350,11 +356,11 @@ interface SeriesState {
 }
 
 async function loadSeriesRows(seriesIds?: string[]): Promise<SeriesRow[]> {
-  return prisma.series.findMany({
+  return withSeriesActivity(await prisma.series.findMany({
     where: seriesIds ? { id: { in: seriesIds } } : undefined,
-    select: { id: true, title: true, rootFolder: true, chapters: { select: { id: true, number: true, folderPath: true }, orderBy: { number: 'asc' } } },
+    select: { id: true, title: true, rootFolder: true, createdAt: true, chapters: { select: { id: true, number: true, folderPath: true }, orderBy: { number: 'asc' } } },
     orderBy: { title: 'asc' }
-  })
+  }))
 }
 
 async function autoSendSeries(): Promise<Set<string>> {
@@ -374,9 +380,9 @@ async function seriesState(row: SeriesRow, receipt: SyncReceipt, autoSend: boole
 
   const pagesOf = new Map<string, ChapterPage[]>()
   for (const chapter of row.chapters) pagesOf.set(chapter.id, await chapterPages(chapter.folderPath))
-  // Published chapters that never went to the phone don't need to now.
+  // Keep published chapters selectable for an explicit page replacement; default picks still skip them.
   const candidates = row.chapters
-    .filter(chapter => ledger.has(chapter.id) || (pagesOf.get(chapter.id)!.length > 0 && !published.chapters[chapter.id]))
+    .filter(chapter => ledger.has(chapter.id) || pagesOf.get(chapter.id)!.length > 0)
     .map(chapter => ({ chapter, pages: pagesOf.get(chapter.id)! }))
   const desktop = await desktopStates(row.id, row.chapters, published)
 
@@ -410,10 +416,11 @@ async function seriesState(row: SeriesRow, receipt: SyncReceipt, autoSend: boole
   // Every chapter, sent or not: the phone may hold chapters from a whole-series
   // zip of before, and its clear dialog needs the desktop's state for those too.
   // Only sent ones have a key, so only they are downloaded.
-  const indexChapters: IndexChapter[] = row.chapters.map(chapter => {
+  const indexChapters: IndexChapter[] = await Promise.all(row.chapters.map(async chapter => {
     const sent = ledger.get(chapter.id)
     const pages = pagesOf.get(chapter.id)!
     const cleared = !!sent?.clearedAt
+    const replacement = await readPageReplacement(chapter.folderPath)
     return {
       name: path.basename(chapter.folderPath),
       number: chapter.number,
@@ -424,9 +431,10 @@ async function seriesState(row: SeriesRow, receipt: SyncReceipt, autoSend: boole
       bytes: sent?.sentAt ? sent.bytes : pages.reduce((sum, p) => sum + p.size, 0),
       fingerprint: sent?.sentAt ? sent.fingerprint : chapterFingerprint(pages),
       ...desktop.get(chapter.id)!,
-      cleared
+      cleared,
+      ...(replacement ? { pageRevision: replacement.revision } : {})
     }
-  })
+  }))
   const index = { series: seriesFolder, chapters: indexChapters }
   const indexHash = createHash('sha256').update(JSON.stringify(index)).digest('hex')
   const written = await prisma.setting.findUnique({ where: { key: indexStateKey(row.id) } })
@@ -620,6 +628,8 @@ export interface PhoneSendRequest {
   seriesId: string
   /** Exactly these chapters; without it, the default pick (see isDefaultPick). */
   chapterIds?: string[]
+  /** Explicitly replace these page images and invalidate their clipping work on every device. */
+  resetClipping?: boolean
 }
 
 let currentJob: PhoneSendJob | null = null
@@ -635,7 +645,7 @@ export function getSendJob(): PhoneSendJob | null {
 const STORE_EXTENSIONS = new Set(['.webp', '.jpg', '.jpeg', '.png', '.gif'])
 
 /** Writes `<root>/<page>` entries; resolves once the file is flushed. */
-function writeChapterZip(zipPath: string, root: string, pages: { name: string; absPath: string }[], onProgress: (bytes: number) => void): Promise<void> {
+function writeChapterZip(zipPath: string, root: string, pages: { name: string; absPath: string }[], onProgress: (bytes: number) => void, replacement: PageReplacement | null = null): Promise<void> {
   return new Promise((resolve, reject) => {
     const output = fs.createWriteStream(zipPath)
     const archive = archiver('zip', { zlib: { level: 6 } })
@@ -654,6 +664,7 @@ function writeChapterZip(zipPath: string, root: string, pages: { name: string; a
     archive.on('warning', err => finish(err))
     archive.on('progress', p => onProgress(p.fs.processedBytes))
     archive.pipe(output)
+    if (replacement) archive.append(JSON.stringify(replacement), { name: `${root}/${PAGE_REPLACEMENT_FILE}` })
     for (const page of pages) {
       // `store` is a per-entry zip option archiver honours but its types omit.
       archive.file(page.absPath, { name: `${root}/${page.name}`, store: STORE_EXTENSIONS.has(path.extname(page.name).toLowerCase()) } as archiver.EntryData)
@@ -680,6 +691,9 @@ export async function startPhoneSend(requests: PhoneSendRequest[], io: Server, a
   if (!config) throw new Error(`R2 is not configured. Missing: ${missingR2Env().join(', ')}`)
   if (currentJob?.state === 'running') throw new Error('A send is already running')
   if (requests.length === 0) throw new Error('No series selected')
+  for (const request of requests) {
+    if (request.resetClipping && (!request.chapterIds?.length || auto)) throw new Error('Select specific chapters to replace their pages')
+  }
 
   const rows = await loadSeriesRows(requests.map(r => r.seriesId))
   if (rows.length === 0) throw new Error('None of the selected series exist')
@@ -734,7 +748,7 @@ export async function startPhoneSend(requests: PhoneSendRequest[], io: Server, a
       try {
         const { isLibraryOrigin } = await import('./librarySync.js')
         const origin = await isLibraryOrigin(row.id)
-        if (origin) {
+        if (origin && !request?.resetClipping) {
           const { prepareLibrarySeries } = await import('./libraryPreparation.js')
           await prepareLibrarySeries(row.id)
         }
@@ -743,6 +757,8 @@ export async function startPhoneSend(requests: PhoneSendRequest[], io: Server, a
         const wanted = request?.chapterIds ? new Set(request.chapterIds) : null
         const complete = origin ? new Set((await prisma.chapter.findMany({ where: { seriesId: row.id, status: 'done', completedAt: null }, select: { id: true } })).map(c => c.id)) : null
         const picked = state.plan.chapters.filter(c => c.pages > 0 && (!complete || complete.has(c.chapterId)) && (wanted ? wanted.has(c.chapterId) : isDefaultPick(c)))
+        if (request?.resetClipping && picked.length !== wanted!.size) throw new Error('Some selected chapters have no downloaded pages or are archived. Refresh the chapter list.')
+        if (request?.resetClipping && picked.some(c => isChapterCropping(c.chapterId))) throw new Error('Wait for the selected chapters to finish cropping before replacing their pages')
         const waitingForStitch = wanted ? 0 : state.plan.chapters.filter(c => (c.state === 'new' || c.state === 'changed') && c.needsStitch).length
         progress.chaptersTotal = picked.length
         progress.bytesTotal = picked.reduce((sum, c) => sum + c.bytes, 0)
@@ -766,8 +782,14 @@ export async function startPhoneSend(requests: PhoneSendRequest[], io: Server, a
           if (await isLibraryDeleted(state.index.series)) throw new Error('Series deleted')
           if (cancelRequested) throw new Error('Cancelled')
           const pages = await chapterPages(state.folderPaths.get(chapter.chapterId)!)
+          const folderPath = state.folderPaths.get(chapter.chapterId)!
+          const replacement = request?.resetClipping ? newPageReplacement() : await readPageReplacement(folderPath)
           const pageBytes = pages.reduce((sum, p) => sum + p.size, 0)
           const zipPath = path.join(jobDir, `${chapter.chapterId}.zip`)
+          if (request?.resetClipping) {
+            if (isChapterCropping(chapter.chapterId)) throw new Error('This chapter is being cropped. Wait before replacing its pages.')
+            beginPageReplacement(folderPath)
+          }
           progress.current = { folder: chapter.folder, phase: 'zipping' }
           emit(true)
           try {
@@ -775,7 +797,7 @@ export async function startPhoneSend(requests: PhoneSendRequest[], io: Server, a
             await writeChapterZip(zipPath, `${state.index.series}/${chapter.folder}`, pages, processed => {
               progress.bytesDone = doneBytes + Math.min(processed, pageBytes) / 2
               emit()
-            })
+            }, replacement)
             const { size } = await fsp.stat(zipPath)
             progress.current = { folder: chapter.folder, phase: 'uploading' }
             emit(true)
@@ -801,6 +823,12 @@ export async function startPhoneSend(requests: PhoneSendRequest[], io: Server, a
               await client.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: key }))
               throw new Error('Series deleted')
             }
+            if (request?.resetClipping) {
+              // The new ZIP is safely uploaded before any local crop work is reset.
+              await resetChapterClipping(folderPath, replacement!)
+              const { notifySeriesProcessChanged } = await import('./seriesProcess.js')
+              notifySeriesProcessChanged(true)
+            }
             const sentAt = new Date()
             const data = {
               key,
@@ -817,13 +845,26 @@ export async function startPhoneSend(requests: PhoneSendRequest[], io: Server, a
               update: data
             })
             state.ledger.set(chapter.chapterId, saved)
+            sentHere++
+            sent++
+            progress.chaptersSent = sentHere
+            if (request?.resetClipping) {
+              const prefixes = new Set([config.prefix, folder.slice(0, -PHONE_FOLDER.length), ...(await phoneFolders(client, config))])
+              const oldCropKeys = new Set<string>()
+              for (const prefix of prefixes) {
+                oldCropKeys.add(`${prefix}crops/${state.index.series}/${chapter.folder}.zip`)
+                oldCropKeys.add(`${prefix}crops/${state.index.series}/${chapter.folder}.cropped.json`)
+              }
+              for (const object of storage.objects) {
+                if ([...prefixes].some(prefix => object.key.startsWith(`${prefix}shared/crops/${state!.index.series}/${chapter.folder}/`))) oldCropKeys.add(object.key)
+              }
+              for (const oldKey of oldCropKeys) await client.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: oldKey }))
+            }
           } finally {
+            if (request?.resetClipping) endPageReplacement(folderPath)
             await fsp.rm(zipPath, { force: true }).catch(() => {})
           }
           doneBytes += pageBytes
-          sentHere++
-          sent++
-          progress.chaptersSent = sentHere
           progress.bytesDone = doneBytes
           emit()
         }

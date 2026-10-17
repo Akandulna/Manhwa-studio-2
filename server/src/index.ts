@@ -26,6 +26,8 @@ import { backfillAlignmentDocumentsQuietly } from './services/alignment/alignmen
 import { publishEditorPackagesAtStartup } from './services/editorAutoPublish.js';
 import { publishLibrary, startLibrarySync } from './services/librarySync.js';
 import { getSeriesProcess, notifySeriesProcessChanged, startSeriesProcess } from './services/seriesProcess.js';
+import { startSeriesActivity, seriesActivityMiddleware, flushSeriesActivity } from './services/seriesActivity.js';
+import { productionAutomation, startProductionAutomation } from './services/productionAutomation.js';
 
 dotenv.config();
 
@@ -39,6 +41,7 @@ const io = new Server(httpServer, {
 });
 
 export const prisma = new PrismaClient();
+startSeriesActivity(prisma, io);
 export const downloadManager = new DownloadManager(io);
 
 // Middleware
@@ -52,6 +55,7 @@ app.use(express.json({ limit: '50mb' }));
 
 // Make io available to routes
 app.set('io', io);
+app.use(seriesActivityMiddleware(prisma));
 app.use((req, res, next) => {
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && /^\/api\/(series|manual|narration|clipper3|video2|storage|stitch|page-preview)(\/|$)/.test(req.path)) {
     res.on('finish', () => { if (res.statusCode < 400) notifySeriesProcessChanged(true) });
@@ -61,6 +65,10 @@ app.use((req, res, next) => {
 app.get('/api/library/progress', async (_req, res) => {
   try { res.json(await getSeriesProcess()); }
   catch (error) { console.error('[series-process]', error); res.status(500).json({ error: 'Could not read series progress' }); }
+});
+app.get('/api/library/automation', async (_req, res) => {
+  try { res.json(await productionAutomation.list()); }
+  catch (error) { res.status(500).json({ error: 'Could not read production automation' }); }
 });
 app.post('/api/library/publish', async (_req, res) => {
   try { await publishLibrary(); res.json({ published: true }); }
@@ -130,11 +138,13 @@ publishEditorPackagesAtStartup();
 startLibrarySync(io);
 startSeriesProcess(io);
 startPhoneRelay(io);
+startProductionAutomation(io);
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('Shutting down...');
   await downloadManager.shutdown();
+  await flushSeriesActivity();
   await prisma.$disconnect();
   process.exit(0);
 });

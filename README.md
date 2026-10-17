@@ -20,13 +20,29 @@ work onto the Mac, aligns the voiceover, cuts the crops and renders the video.
   concurrent queue, resume and retry), preview a chapter's pages and delete
   unwanted ones into a restorable bin.
 - **Production process**: expand a series in the Library and use **Run Sleeper-Cell automation**
-  to choose a phone and start scripts, voiceover, clipping or Editor 2.0 timelines for that series.
+  to choose a primary device, per-phone profiles and Image Clipping settings. Choose **Parallel devices**
+  to share unfinished voiceover and clipping chapters between selected phones without overlap. Narration
+  scripts stay on the primary phone in reading order. It resumes the first unfinished step,
+  then runs scripts → English and Hinglish voiceovers → Image Clipping in order. Preparation
+  must be complete first. Voiceovers are fetched and aligned on the Mac automatically.
+  The sequence continues after closing the dialog and stops for manual review before Editor 2.0.
+  The Library shows its running/review status; reopen it to stop a run or resume after an error.
+  After a server restart, runs are marked interrupted so a possibly delivered phone command is
+  never replayed automatically.
 - **Downloads**: the live queue — pause, resume, retry failed.
 - **Page Stitcher**: joins chapters of 200–300 short pages into tall pages;
   auto-stitch cuts at blank rows and drops repeated intro/outro pages.
 - **Send to phone** zips chapters to R2 for the phones (optionally on its own
   after downloads); **Get from phones** brings in what the Master phone
   downloaded.
+- To resend updated page images, open **Send to phone**, enable **Replace pages & reset Image Clipper**,
+  expand the series and select the chapters, then use **Replace & reset**. Finished chapters can be selected.
+  The current page images replace their R2 ZIPs without running preparation again. After upload, old local
+  crop JSON, metadata, review, cut images, slices and Processed drop-offs move into the chapter's
+  `.page-replacements/<revision>/` backup. Scripts, voiceovers and alignment stay intact. Old cloud crop ZIPs,
+  Cropped markers and shared crop files are removed. Every phone needs the matching updated Sleeper Cell build;
+  it downloads the new revision, backs up its clipping state and starts Image Clipper fresh when idle.
+  Offline phones catch up on reconnect; crops from an older page revision cannot be imported over the reset.
 
 ### Narration Library
 Manhwa → English / Hindi → chapters.
@@ -37,6 +53,18 @@ Manhwa → English / Hindi → chapters.
   the alignment document is written next to it (`script-timeline.md`, or
   `script-timeline.hi.md` for Hindi).
 - **Align again** re-runs alignment for a chapter that failed or is incomplete.
+- **Replace** on a chapter opens its saved local script. Keep that text (including edits already made on disk),
+  choose a `.md`/`.txt` file, or paste a revision, then use **Replace & send**. This backs up the script and
+  that language's audio, alignment and Editor paste under the chapter's `.script-replacements/` folder,
+  clears the old results, and sends the revised script through the phones' shared-script sync. Updated
+  Sleeper-Cell builds apply it when idle and prepare fresh splits; use **Check for new uploads** after stopping
+  an active run. Generate the new voiceover, fetch it here for alignment, and continue in Editor 2.0.
+  A failed phone upload can be retried from Replace without resetting the saved revision again.
+- To revise a script on Sleeper-Cell, use **Workspace → Scripts → series → chapter → ⋮ → Replace**
+  on `script.md` or `script.hi.md`, then generate its new voiceover. Fetching replacement audio backs up and
+  clears that language's old Editor timeline, realigns the sections, and sends a fresh Editor package once ready.
+  Old phone timelines are not imported over the cleared paste. Run Editor again, fetch its new timeline,
+  process and export the revised chapter. Existing rendered videos are retained.
 
 ### Image Clipper 3.0
 Manhwa → chapters → pages.
@@ -50,6 +78,11 @@ Manhwa → chapters → pages.
 - Slice pages into parts and unsync chapters from the series view.
 
 ### Editor 2.0
+
+- **Small batches** builds timelines through resumable visual indexing, narration routing, selection,
+  review and targeted repair. Each prompt is capped at 6,000 characters. It supports manual copy/paste
+  and updated Sleeper-Cell automation with selectable models; one-shot stays available.
+  See [the staged timeline guide](docs/editor-timeline-stages.md) for usage and the phone build requirement.
 Manhwa → chapters, per language.
 - A per-chapter checklist: **voiceover audio**, **alignment**, **timeline
   JSON** and **cropped images**. Preview and Export stay locked until all four
@@ -58,8 +91,14 @@ Manhwa → chapters, per language.
   crop metadata) → ChatGPT → **Paste**, or from the timelines the phone made
   (**Fetch from phone**). **Send to phone** hands the phone's Editor run the
   packages it needs; **Check Images** repairs missing image references.
+- **Copy All** recovers the saved Editor instructions from Manhwa Studio when the browser has no local
+  prompt. It refuses to copy a package without instructions. Settings retains prompt saves on the desktop
+  before trying to upload them to the phone, so an R2 failure does not lose the prompt.
 - Export renders one MP4 per chapter into the series' `_video2/` (or
   `_video2_hi/`) folder.
+- Each processed chapter has its own **Export** or **Re-export** button. Processing a chapter again marks its
+  older video **Re-export ready** and includes that chapter in the next batch export. Other finished chapters
+  stay out of that batch. Re-export writes a new MP4 and retains the previous render.
 - Series show **Done** in Editor 2.0 when the selected language's video folder
   has a nonempty video in `compressed` (also `Compressed` or `Compress`). This
   remains visible after cleaning up original renders. Use **Rescan** on the

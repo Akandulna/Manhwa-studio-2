@@ -39,6 +39,12 @@ const master = (name: string, number: number, sentAt: string, extra: Record<stri
 })
 
 describe('mergeIndex', () => {
+  it('keeps the page revision with the winning ZIP version', () => {
+    const existing = { chapters: [master('Chapter 001', 1, '2026-10-05T00:00:00.000Z', { pageRevision: 'phone-revision' })] }
+    expect(mergeIndex(existing, [chapter('Chapter 001', 1, '2026-10-01T00:00:00.000Z', { pageRevision: 'old-revision' })])[0].pageRevision).toBe('phone-revision')
+    expect(mergeIndex(existing, [chapter('Chapter 001', 1, '2026-10-06T00:00:00.000Z', { pageRevision: 'replacement' })])[0].pageRevision).toBe('replacement')
+  })
+
   it('keeps the Master’s chapters the desktop does not have', () => {
     const merged = mergeIndex({ chapters: [master('Chapter 003', 3, '2026-10-05T00:00:00.000Z')] }, [
       chapter('Chapter 001', 1, '2026-10-01T00:00:00.000Z')

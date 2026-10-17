@@ -26,6 +26,7 @@ import {
   FolderOpen,
   Loader2,
   RefreshCw,
+  Replace,
   Volume2,
   Waves
 } from 'lucide-react'
@@ -50,6 +51,7 @@ import { CompletedBadge, PublishedBadge, completedRowClass, publishedRowClass } 
 import { PhoneScriptBadge } from '@/components/PhoneSyncBadge'
 import { PhoneRefreshButton } from '@/components/PhoneRefreshButton'
 import { PhoneFetchDialog, type PhoneFetchSelection } from '@/components/narration/PhoneFetchDialog'
+import { ReplaceScriptDialog } from '@/components/narration/ReplaceScriptDialog'
 import { cn } from '@/lib/utils'
 
 const chapters = (n: number) => `${n} chapter${n === 1 ? '' : 's'}`
@@ -154,6 +156,7 @@ export default function NarrationChapters() {
   const [lastFetch, setLastFetch] = useState<NarrationPhoneFetch | null>(null)
   // Chapters whose "Align again" was just asked for, until the reload shows them aligning.
   const [aligningNow, setAligningNow] = useState<Set<string>>(new Set())
+  const [replacing, setReplacing] = useState<NarrationChapter | null>(null)
 
   // Rendered or completed chapters in this language.
   const { isPublished, completedPart } = usePublishedChapters(id, language)
@@ -177,6 +180,7 @@ export default function NarrationChapters() {
 
   useEffect(() => {
     setLastFetch(null)
+    setReplacing(null)
     loadSeries()
   }, [loadSeries])
 
@@ -224,10 +228,13 @@ export default function NarrationChapters() {
     socket.on('narration:fetch', onFetchEvent)
     socket.on('alignment:progress', onAlignmentEvent)
     socket.on('alignment:chapter-complete', onAlignmentEvent)
+    const onReplacement = (event: AlignmentEvent) => { if (chapterIds.current.has(event.chapterId) && mine(event)) scheduleReload() }
+    socket.on('narration:script-replaced', onReplacement)
     return () => {
       socket.off('narration:fetch', onFetchEvent)
       socket.off('alignment:progress', onAlignmentEvent)
       socket.off('alignment:chapter-complete', onAlignmentEvent)
+      socket.off('narration:script-replaced', onReplacement)
     }
   }, [socket, id, language, loadSeries, scheduleReload])
 
@@ -510,7 +517,11 @@ export default function NarrationChapters() {
                     Document {chapter.documentWritten ? '✓' : '–'}
                   </span>
 
-                  <div className="flex w-36 justify-end gap-1">
+                  <div className="flex shrink-0 justify-end gap-1">
+                    <Button variant="outline" size="sm" onClick={() => setReplacing(chapter)} disabled={aligning || !!fetchRun}
+                      title="Replace this language’s script and prepare a new voiceover and timeline">
+                      <Replace className="h-4 w-4 mr-1" />Replace
+                    </Button>
                     {canAlign && (
                       <Button
                         variant="outline"
@@ -547,6 +558,8 @@ export default function NarrationChapters() {
         onCancel={() => setPreview(null)}
         onConfirm={handleFetch}
       />
+      {replacing && <ReplaceScriptDialog key={`${replacing.id}:${language}`} chapter={replacing} language={language}
+        onClose={() => setReplacing(null)} onSaved={() => { void loadSeries() }} />}
     </div>
   )
 }

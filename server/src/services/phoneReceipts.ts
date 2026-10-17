@@ -117,6 +117,7 @@ function mergeCropsChapter(entries: Obj[]): Obj {
   }
   return {
     total: Math.max(...entries.map(c => count(c.total))),
+    ...(typeof entries[0]?.pageRevision === 'string' ? { pageRevision: entries[0].pageRevision } : {}),
     done: Object.values(pages).filter(state => state === 'done').length,
     pages,
     ...(Object.keys(finished).length ? { finished } : {}),

@@ -200,7 +200,7 @@ export function initR2Routes(io: Server): Router {
       const { command, kind, seriesId, tabs, ai, flow, language, device, split, after, chatGpt, assignments } = req.body ?? {}
       if (command !== 'start' && command !== 'stop') throw new Error('command must be start or stop')
       if (kind !== undefined && !PHONE_RUN_KINDS.includes(kind)) throw new Error(`kind must be one of ${PHONE_RUN_KINDS.join(', ')}`)
-      if (ai !== undefined && ai !== 'chatgpt' && ai !== 'aistudio') throw new Error('ai must be chatgpt or aistudio')
+      if (ai !== undefined && ai !== 'chatgpt' && ai !== 'aistudio' && ai !== 'gemini') throw new Error('ai must be chatgpt, aistudio or gemini')
       if (flow !== undefined && flow !== 'classic' && flow !== 'steps') throw new Error('flow must be classic or steps')
       if (language !== undefined && language !== 'en' && language !== 'hi') throw new Error('language must be en or hi')
       if (after !== undefined && typeof after !== 'boolean') throw new Error('after must be true or false')
@@ -380,7 +380,8 @@ export function initR2Routes(io: Server): Router {
         if (item.chapterIds !== undefined && (!Array.isArray(item.chapterIds) || !item.chapterIds.every((id: unknown) => typeof id === 'string'))) {
           throw new Error('chapterIds must be an array of strings')
         }
-        return { seriesId: item.seriesId, chapterIds: item.chapterIds }
+        if (item.resetClipping !== undefined && typeof item.resetClipping !== 'boolean') throw new Error('resetClipping must be a boolean')
+        return { seriesId: item.seriesId, chapterIds: item.chapterIds, resetClipping: item.resetClipping === true }
       })
       res.json(await startPhoneSend(requests, io))
     } catch (error) {

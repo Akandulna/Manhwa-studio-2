@@ -1,3 +1,4 @@
+import { useSeriesOrder } from '@/hooks/useSeriesOrder'
 /**
  * Live Progress — what the automation on the phones is doing right now: Image
  * Clipper's Auto-run pages (each against the usual time per page) and the
@@ -108,7 +109,7 @@ function RunSection({ run, now }: { run: PhoneOverviewRun; now: number }) {
         const elapsed = Number.isNaN(since) ? null : Math.max(0, (now - since) / 1000)
         const what = run.kind === 'voiceover'
           ? (tab.split !== null ? `split ${tab.split}${tab.splits ? ` of ${tab.splits}` : ''}` : 'split')
-          : run.kind === 'editor' ? 'timeline' : `${LANGUAGE_LABEL[tab.language]} script`
+          : run.kind === 'editor' ? tab.step ?? 'timeline' : `${LANGUAGE_LABEL[tab.language]} script`
         const where = <><span className="text-muted-foreground">{chapterLabel(tab)} · </span>{what}</>
         const tabLang = tab.language === 'hi' ? '?lang=hi' : ''
         // Narration has no chapter page: its series page shows each chapter's script and voiceover.
@@ -245,6 +246,7 @@ export default function LiveProgress() {
   const receipt = usePhoneOverview()
   const relay = usePhoneRelay()
   const overview = receipt.status
+  const orderedSeries = useSeriesOrder(overview?.series ?? [])
   const busy = (overview?.working.length ?? 0) + (overview?.runs.length ?? 0) > 0
   const now = useNow(busy)
   const [showAllRecent, setShowAllRecent] = useState(false)
@@ -408,7 +410,7 @@ export default function LiveProgress() {
                         </tr>
                       </thead>
                       <tbody>
-                        {overview.series.map(s => {
+                        {orderedSeries.map(s => {
                           const percent = s.crops?.total ? (s.crops.done / s.crops.total) * 100 : 0
                           return (
                             <tr key={s.id} className="border-t align-middle">

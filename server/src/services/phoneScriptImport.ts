@@ -396,6 +396,14 @@ export async function importPhoneScripts(
     const phone = byFolder.get(path.basename(chapter.folderPath))
     if (!phone?.script) continue
     const scriptPath = path.join(getFullFolderPath(chapter.folderPath), scriptFileName(language))
+    const replacement = await fs.readFile(path.join(path.dirname(scriptPath), `.script-replacement${language === 'hi' ? '.hi' : ''}.json`), 'utf-8')
+      .then(text => JSON.parse(text)).catch((e: NodeJS.ErrnoException) => { if (e.code === 'ENOENT') return null; throw e })
+    if (replacement) {
+      const current = await fs.readFile(scriptPath, 'utf-8')
+      if (current.trim() !== phone.script.trim()) throw new Error(`Chapter ${chapter.number}: the phone still has a different script. Sync the replacement to Sleeper-Cell first.`)
+      // Preserve the exact replacement bytes: its audio and revision hashes use them.
+      continue
+    }
     await fs.writeFile(scriptPath, phone.script + '\n', 'utf-8')
     const data = {
       mode: 'manual',

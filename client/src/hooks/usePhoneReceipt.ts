@@ -46,7 +46,7 @@ export function usePhoneReceipt<T extends { configured: boolean; answers: string
   load: (fresh: boolean) => Promise<T>,
   key: string
 ): PhoneReceipt<T> {
-  const { socket } = useSocket()
+  const { socket, isConnected } = useSocket()
   const [status, setStatus] = useState<T | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [lastRequest, setLastRequest] = useState<PhoneUpdateRequest | null>(null)
@@ -73,7 +73,7 @@ export function usePhoneReceipt<T extends { configured: boolean; answers: string
       .then(next => { if (!cancelled) apply(next) })
       .catch(() => { /* advisory only */ })
     return () => { cancelled = true }
-  }, [key, apply])
+  }, [key, apply, isConnected])
 
   useEffect(() => {
     if (!socket) return
@@ -88,7 +88,13 @@ export function usePhoneReceipt<T extends { configured: boolean; answers: string
         .catch(() => { /* advisory only */ })
     }
     socket.on('phone:receipt', onReceipt)
-    return () => { socket.off('phone:receipt', onReceipt) }
+    // Presence can change without a receipt; overview contains connection state.
+    const onRelay = () => onReceipt({ kind: 'all' })
+    if (kind === 'all') socket.on('phone:relay', onRelay)
+    return () => {
+      socket.off('phone:receipt', onReceipt)
+      socket.off('phone:relay', onRelay)
+    }
   }, [socket, kind, apply])
 
   const refresh = useCallback(async (): Promise<PhoneRefreshOutcome> => {

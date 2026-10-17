@@ -27,7 +27,7 @@ import {
 import type { NarrationLanguage } from '@/lib/narrationLanguage'
 import { useSocket } from '@/lib/socket'
 import { cn } from '@/lib/utils'
-import { readSavedEditorPrompt } from '@/pages/editor2/phoneEditor'
+import { loadSavedEditorPrompt } from '@/pages/editor2/phoneEditor'
 
 /** The fixes "Get everything ready" runs, in this order: the prompt and packages are quick, pages take a while. */
 const FIX_ORDER: PhoneReadinessFixAction[] = ['send_prompt', 'send_editor', 'send_pages', 'ask_download']
@@ -129,8 +129,8 @@ export function useRunReadiness(
     try {
       let prompt: string | undefined
       if (fix.action === 'send_prompt') {
-        prompt = readSavedEditorPrompt()
-        if (!prompt) throw new Error('No Editor 2.0 prompt is saved in this browser: save it in Settings → Editor 2.0 first.')
+        prompt = await loadSavedEditorPrompt()
+        if (!prompt) throw new Error('No Editor 2.0 prompt is saved: save it in Settings → Editor 2.0 first.')
       }
       const done = await r2Api.fixRunReadiness({ action: fix.action, seriesId, chapterIds: fix.chapterIds, prompt })
       if (!quiet) toast({ title: fix.label, description: done.message })

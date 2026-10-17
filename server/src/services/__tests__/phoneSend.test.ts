@@ -27,6 +27,7 @@ const chapters = [1, 2, 3, 4, 5, 6].map(n => ({ id: `c${n}`, number: n, folderPa
 
 vi.mock('../../index.js', () => ({
   prisma: {
+    chapter: { findMany: async () => chapters },
     series: { findMany: async () => [{ id: 's1', title: 'Demo', rootFolder: '/library/Demo', chapters }] },
     phoneChapterSend: {
       findMany: async ({ where }: { where?: { seriesId?: string } } = {}) =>
@@ -76,13 +77,17 @@ let config: object | null = null
 const commands: { name: string; Key: string; Body?: string }[] = []
 let bucket: { key: string; size: number }[] = []
 const uploads: { Key: string; entries: number }[] = []
+const uploadBodies: Buffer[] = []
+let uploadError: Error | null = null
 vi.mock('@aws-sdk/lib-storage', () => ({
   Upload: class {
     constructor(private options: { params: { Key: string; Body: NodeJS.ReadableStream } }) {}
     on() {}
     async done() {
+      if (uploadError) { this.options.params.Body.resume(); throw uploadError }
       const chunks: Buffer[] = []
       for await (const chunk of this.options.params.Body) chunks.push(chunk as Buffer)
+      uploadBodies.push(Buffer.concat(chunks))
       uploads.push({ Key: this.options.params.Key, entries: Buffer.concat(chunks).toString('latin1').split('PK\x03\x04').length - 1 })
       return { ETag: `"etag-${uploads.length}"` }
     }
@@ -101,7 +106,7 @@ vi.mock('../r2Service.js', () => ({
     }
   }),
   readPolledReceipt: vi.fn(),
-  phoneFolders: vi.fn(),
+  phoneFolders: vi.fn(async () => ['']),
   requestPhoneUpdate,
   setUploadBusy: vi.fn(),
   assertWithinFreePlan: async () => ({ bytes: 0, objects: bucket, measuredAt: '' }),
@@ -205,7 +210,8 @@ describe('getSendPlan', () => {
       ['Chapter 002', 'changed'],
       ['Chapter 003', 'new'],
       ['Chapter 004', 'cleared'],
-      // Chapter 005 is published and was never sent, so it isn't offered.
+      // Published chapters can be explicitly selected for replacement, but aren't default picks.
+      ['Chapter 005', 'new'],
       ['Chapter 006', 'cleared']
     ])
     expect([series.toSend, series.onPhone, series.waiting, series.cleared]).toEqual([2, 1, 0, 2])
@@ -259,6 +265,8 @@ describe('startPhoneSend', () => {
     config = { bucket: 'b', prefix: 'Manhwa/', concurrency: 2 }
     commands.length = 0
     uploads.length = 0
+    uploadBodies.length = 0
+    uploadError = null
     settings.clear()
     ledger = [{
       chapterId: 'c4', seriesId: 's1', key: 'manhwa/Demo/Chapter 004.zip', etag: 'e', fingerprint: 'f', files: 2, bytes: 300,
@@ -350,5 +358,48 @@ describe('startPhoneSend', () => {
     expect(uploads).toEqual([])
     expect(commands.some(c => c.Key === 'manhwa/Demo/index.json')).toBe(true)
     expect(requestPhoneUpdate).not.toHaveBeenCalled()
+  })
+
+  it('keeps crops intact when replacement upload fails', async () => {
+    uploadError = new Error('Upload failed')
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await startPhoneSend([{ seriesId: 's1', chapterIds: ['c1'], resetClipping: true }], io)
+      expect((await finished()).series[0]).toMatchObject({ state: 'failed', error: 'Upload failed' })
+      expect(await fs.readFile(path.join(root, 'Demo/Chapter 001/crop_points3/page_001.json'), 'utf-8')).toBe('{}')
+      await expect(fs.access(path.join(root, 'Demo/Chapter 001/.page-replacement.json'))).rejects.toThrow()
+    } finally { log.mockRestore() }
+  })
+
+  it('replaces a completed chapter, resets clipping, versions the ZIP/index, and preserves scripts and audio', async () => {
+    libraryFlow.origin = true
+    bucket.push({ key: 'shared/crops/Demo/Chapter 001/page_001.page.json', size: 10 })
+    const dir = path.join(root, 'Demo/Chapter 001')
+    await fs.mkdir(path.join(dir, 'audio'), { recursive: true })
+    await fs.writeFile(path.join(dir, 'audio/section.wav'), 'voiceover')
+    await fs.writeFile(path.join(dir, 'script.hi.md'), 'Hinglish script')
+    await startPhoneSend([{ seriesId: 's1', chapterIds: ['c1'], resetClipping: true }], io)
+    expect((await finished()).series[0]).toMatchObject({ state: 'done', chaptersSent: 1 })
+    expect(libraryFlow.prepare).not.toHaveBeenCalled()
+    const { readZip } = await import('../../utils/zipReader.js')
+    const entries = readZip(uploadBodies[0])
+    const replacement = JSON.parse(entries.find(e => e.name.endsWith('/.page-replacement.json'))!.data.toString())
+    expect(entries.filter(e => /page_\d+\.jpg$/.test(e.name))).toHaveLength(2)
+    const index = JSON.parse(commands.find(c => c.name === 'PutObjectCommand' && c.Key === 'manhwa/Demo/index.json')!.Body!)
+    expect(index.chapters[0]).toMatchObject({ pageRevision: replacement.revision, crops: false, script: true, done: false })
+    expect(await fs.readFile(path.join(dir, 'script.md'), 'utf-8')).toBe('not a page')
+    expect(await fs.readFile(path.join(dir, 'script.hi.md'), 'utf-8')).toBe('Hinglish script')
+    expect(await fs.readFile(path.join(dir, 'audio/section.wav'), 'utf-8')).toBe('voiceover')
+    expect(commands.filter(c => c.name === 'DeleteObjectCommand').map(c => c.Key)).toEqual(expect.arrayContaining([
+      'crops/Demo/Chapter 001.zip', 'crops/Demo/Chapter 001.cropped.json', 'shared/crops/Demo/Chapter 001/page_001.page.json'
+    ]))
+    expect(await fs.readFile(path.join(dir, '.page-replacements', replacement.revision, 'points/page_001.json'), 'utf-8')).toBe('{}')
+  })
+
+  it('keeps a replaced published chapter out of the phone’s done list until its crops are regenerated', async () => {
+    await startPhoneSend([{ seriesId: 's1', chapterIds: ['c5'], resetClipping: true }], io)
+    expect((await finished()).series[0].state).toBe('done')
+    const index = JSON.parse(commands.find(c => c.name === 'PutObjectCommand' && c.Key === 'manhwa/Demo/index.json')!.Body!)
+    expect(index.chapters.find((c: { name: string }) => c.name === 'Chapter 005')).toMatchObject({ published: true, crops: false, done: false })
   })
 })

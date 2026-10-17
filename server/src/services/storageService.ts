@@ -1,3 +1,4 @@
+import { withSeriesActivity } from './seriesActivity.js'
 /**
  * Storage — what the local disk is actually holding, per series and chapter,
  * and what is safe to reclaim.
@@ -473,7 +474,7 @@ export async function scanStorage(): Promise<StorageOverview> {
     safeToDeleteBytes: seriesOut.reduce((sum, s) => sum + s.safeToDeleteBytes, 0),
     videoBytes: seriesOut.reduce((sum, s) => sum + s.videoBytes, 0),
     sharedBytes,
-    series: seriesOut,
+    series: await withSeriesActivity(seriesOut),
     scannedAt: new Date().toISOString()
   }
 }

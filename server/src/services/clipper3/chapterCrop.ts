@@ -41,6 +41,7 @@ import {
 } from './perImageStore.js'
 import { cutImageCrops, type CutFile } from './perImageCrop.js'
 import { readChapterReview } from './chapterReview.js'
+import { pageReplacementActive } from '../chapterPageReplacement.js'
 
 /** The chapter fields cutting needs. */
 export interface CropChapter {
@@ -161,6 +162,7 @@ export async function runChapterCrop(
   const auto = opts.auto === true
   // Carried on every event so the series page can follow a cut it did not start.
   const tag = { chapterId, chapterNumber: chapter.number, seriesId: chapter.seriesId, auto }
+  if (pageReplacementActive(chapter.folderPath)) throw new Error('This chapter’s pages are being replaced')
   cropping.add(chapterId)
 
   const allFiles: CutFile[] = []
@@ -262,6 +264,7 @@ let autoChain: Promise<void> = Promise.resolve()
  * to cut, or null.
  */
 async function autoCropTargets(chapter: CropChapter): Promise<CropTarget[] | null> {
+  if (pageReplacementActive(chapter.folderPath)) return null
   const review = await readChapterReview(chapter.folderPath)
   if (!review.reviewed || review.by !== 'phone') return null
   let state: ChapterCropState

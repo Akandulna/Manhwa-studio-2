@@ -1,3 +1,4 @@
+import { withSeriesActivity } from '../services/seriesActivity.js'
 /**
  * Image Clipper 3.0 — per-image crop artifacts and cutting.
  *
@@ -144,19 +145,23 @@ export function initClipper3Routes(io: Server): Router {
           title: true,
           sourceSite: true,
           coverPath: true,
+          rootFolder: true,
+          createdAt: true,
           _count: { select: { chapters: { where: { status: 'done' } } } }
         },
-        // Newest series first, so a just-added series is at the top of the library.
+        // Creation time breaks ties until a series has processing activity.
         orderBy: { createdAt: 'desc' }
       })
       res.json(
-        series
+        (await withSeriesActivity(series))
           .filter(s => s._count.chapters > 0)
           .map(s => ({
             id: s.id,
             title: s.title,
             sourceSite: s.sourceSite,
             coverPath: s.coverPath,
+            rootFolder: s.rootFolder,
+            lastActivityAt: s.lastActivityAt,
             chapterCount: s._count.chapters
           }))
       )

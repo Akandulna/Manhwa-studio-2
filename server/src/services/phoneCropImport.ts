@@ -36,7 +36,7 @@
  * so the Master shows it as Cropped (no review) and clipping phones hold
  * their uploads over it. It is written after every cut, backfilled by Sync
  * json for chapters cut before the marker existed, and by the Library's
- * "Publish cropped chapters" for every series. Markers are never deleted here.
+ * "Publish cropped chapters" for every series. Only an explicit page replacement removes those markers.
  */
 
 import fs from 'fs/promises'
@@ -50,6 +50,7 @@ import { getOutputDir, listOutputs, stemOf } from './clipper3/perImageStore.js'
 import { seriesSlug } from './clipper3/chapterCrop.js'
 import { FETCH_MARKER, getProcessedDir, type FetchMarker } from './clipper3/processedSync.js'
 import { notReviewed, parseManifestReview, writeChapterReview } from './clipper3/chapterReview.js'
+import { matchesPageRevision, pageReplacementActive, readPageReplacement } from './chapterPageReplacement.js'
 
 /** Folder the phone uploads chapter zips to, inside its R2 prefix. Keep in step with FOLDER in ChapterUpload.kt. */
 export const CROPS_FOLDER = 'crops/'
@@ -510,6 +511,10 @@ export async function fetchPhoneCrops(seriesId: string, chapterIds?: string[]): 
       continue
     }
     if (wanted && !wanted.has(chapter.id)) continue
+    if (pageReplacementActive(chapter.folderPath)) {
+      result.failed.push({ folder: zip.folder, reason: 'This chapter’s pages are being replaced. Sync its crops after the replacement finishes.' })
+      continue
+    }
 
     const processedDir = getProcessedDir(chapter.folderPath)
     if (zip.etag && (await readMarkerEtag(processedDir)) === zip.etag) {
@@ -522,9 +527,13 @@ export async function fetchPhoneCrops(seriesId: string, chapterIds?: string[]): 
       const res = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: zip.key }))
       const body = Buffer.from(await res.Body!.transformToByteArray())
       const entries = readZip(body)
+      const manifest = readZipManifest(entries)
+      if (!matchesPageRevision(await readPageReplacement(chapter.folderPath), (manifest as { page_revision?: unknown } | null)?.page_revision)) {
+        throw new Error('These crops belong to an older page revision. Sync the replacement pages on the phone and clip them again.')
+      }
       const pages = await unpackChapterZip(entries, processedDir)
       const etag = (res.ETag ?? zip.etag).replace(/"/g, '')
-      const review = parseManifestReview(readZipManifest(entries))
+      const review = parseManifestReview(manifest)
 
       // A new zip always rewrites the review record. An unreviewed one means
       // the crops changed since any earlier review, so that review no longer
