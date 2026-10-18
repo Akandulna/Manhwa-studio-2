@@ -28,6 +28,7 @@ import {
   chapterCropOutputs,
   expectedExportedFilenames,
   extractCrops,
+  hasNoCrops,
   listMetadataImageStems,
   listPointedImageStems,
   readImageMetadata,
@@ -181,7 +182,7 @@ async function checkCrops(folderPath: string, slug: string): Promise<ChecklistIt
     if (!pointed.has(stem) || !described.has(stem)) continue
     const stored = await readImagePoints(folderPath, img.filename)
     const crops = extractCrops(stored?.file ?? null)
-    if (crops.length === 0) continue
+    if (crops.length === 0 && !hasNoCrops(stored?.file ?? null)) continue
     const metadata = await readImageMetadata(folderPath, img.filename)
     const names = expectedExportedFilenames(slug, img.filename, crops)
     if (metadata == null || !validateMetadata(metadata, crops.map(c => c.id), names, slug).isValid) continue

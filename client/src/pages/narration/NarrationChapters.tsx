@@ -52,6 +52,7 @@ import { PhoneScriptBadge } from '@/components/PhoneSyncBadge'
 import { PhoneRefreshButton } from '@/components/PhoneRefreshButton'
 import { PhoneFetchDialog, type PhoneFetchSelection } from '@/components/narration/PhoneFetchDialog'
 import { ReplaceScriptDialog } from '@/components/narration/ReplaceScriptDialog'
+import { ResetAlignmentDialog } from '@/components/narration/ResetAlignmentDialog'
 import { cn } from '@/lib/utils'
 
 const chapters = (n: number) => `${n} chapter${n === 1 ? '' : 's'}`
@@ -157,6 +158,7 @@ export default function NarrationChapters() {
   // Chapters whose "Align again" was just asked for, until the reload shows them aligning.
   const [aligningNow, setAligningNow] = useState<Set<string>>(new Set())
   const [replacing, setReplacing] = useState<NarrationChapter | null>(null)
+  const [resettingAlignment, setResettingAlignment] = useState<NarrationChapter | null>(null)
 
   // Rendered or completed chapters in this language.
   const { isPublished, completedPart } = usePublishedChapters(id, language)
@@ -181,6 +183,7 @@ export default function NarrationChapters() {
   useEffect(() => {
     setLastFetch(null)
     setReplacing(null)
+    setResettingAlignment(null)
     loadSeries()
   }, [loadSeries])
 
@@ -518,6 +521,11 @@ export default function NarrationChapters() {
                   </span>
 
                   <div className="flex shrink-0 justify-end gap-1">
+                    {chapter.withAudio > 0 && <Button variant="outline" size="sm"
+                      disabled={aligning || !!fetchRun || aligner?.available === false}
+                      onClick={() => setResettingAlignment(chapter)} title="Back up and rebuild one audio section’s timestamps">
+                      <RefreshCw className="h-4 w-4 mr-1" />Reset alignment
+                    </Button>}
                     <Button variant="outline" size="sm" onClick={() => setReplacing(chapter)} disabled={aligning || !!fetchRun}
                       title="Replace this language’s script and prepare a new voiceover and timeline">
                       <Replace className="h-4 w-4 mr-1" />Replace
@@ -560,6 +568,11 @@ export default function NarrationChapters() {
       />
       {replacing && <ReplaceScriptDialog key={`${replacing.id}:${language}`} chapter={replacing} language={language}
         onClose={() => setReplacing(null)} onSaved={() => { void loadSeries() }} />}
+      {resettingAlignment && <ResetAlignmentDialog key={`${resettingAlignment.id}:${language}`} chapter={resettingAlignment} language={language}
+        onClose={() => setResettingAlignment(null)} onStarted={() => {
+          setAligningNow(previous => new Set(previous).add(resettingAlignment.id))
+          void loadSeries()
+        }} />}
     </div>
   )
 }

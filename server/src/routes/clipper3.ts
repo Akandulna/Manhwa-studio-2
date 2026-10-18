@@ -46,6 +46,7 @@ import { prisma } from '../index.js'
 import { getChapterManifest } from '../services/chapterManifest.js'
 import {
   extractCrops,
+  hasNoCrops,
   getOutputDir,
   getSourceFolderPath,
   listMetadataImageStems,
@@ -271,9 +272,8 @@ export function initClipper3Routes(io: Server): Router {
             const stored = await readImagePoints(chapter.folderPath, img.filename)
             const crops = extractCrops(stored?.file ?? null)
             cropCount = crops.length
-            // An artifact that exists but does not parse (or carries no usable
-            // crop) is not done — it cannot be cut.
-            parseable = crops.length > 0
+            // Empty crop lists are intentional; malformed crop entries remain pending.
+            parseable = crops.length > 0 || hasNoCrops(stored?.file ?? null)
 
             if (parseable && hasMetadata) {
               const metadataText = await readImageMetadata(chapter.folderPath, img.filename)
@@ -369,7 +369,7 @@ export function initClipper3Routes(io: Server): Router {
       }
 
       const crops = extractCrops(stored.file)
-      const metadataValid = hasMetadata && crops.length > 0
+      const metadataValid = hasMetadata && (crops.length > 0 || hasNoCrops(stored.file))
         && validateMetadata(
           metadataText!,
           crops.map(c => c.id),
@@ -383,7 +383,7 @@ export function initClipper3Routes(io: Server): Router {
         cropCount: crops.length,
         hasMetadata,
         metadataValid,
-        status: crops.length > 0 && hasMetadata && metadataValid ? 'done' : 'pending'
+        status: metadataValid ? 'done' : 'pending'
       })
     } catch (error) {
       console.error('[clipper3] reading image points failed:', error)
@@ -446,7 +446,7 @@ export function initClipper3Routes(io: Server): Router {
       }
 
       const crops = extractCrops(file)
-      if (crops.length === 0) {
+      if (crops.length === 0 && !(Array.isArray(parsed?.crops) && parsed.crops.length === 0)) {
         return res.status(400).json({
           error: 'No usable four-point crop found — each crop needs exactly 4 numeric points'
         })
@@ -491,7 +491,7 @@ export function initClipper3Routes(io: Server): Router {
       const stored = await readImagePoints(chapter.folderPath, req.params.filename)
       const crops = extractCrops(stored?.file ?? null)
 
-      const validation = content != null && crops.length > 0
+      const validation = content != null && (crops.length > 0 || hasNoCrops(stored?.file ?? null))
         ? validateMetadata(
             content,
             crops.map(c => c.id),
@@ -543,7 +543,7 @@ export function initClipper3Routes(io: Server): Router {
 
       const storedPoints = await readImagePoints(chapter.folderPath, image.filename)
       const crops = extractCrops(storedPoints?.file ?? null)
-      if (crops.length === 0) {
+      if (crops.length === 0 && !hasNoCrops(storedPoints?.file ?? null)) {
         return res.status(400).json({
           error: 'This image has no crop pointers yet — attach the crop JSON before its metadata.'
         })

@@ -115,6 +115,41 @@ describe('queueAutoCrop', () => {
     expect(await queueAutoCrop(fakeIo().io, [CHAPTER])).toEqual([])
   })
 
+  async function attachEmpty(filename: string) {
+    await writeImagePoints(FOLDER, filename, {
+      format: 'four-point-crop', version: '1.0', image: { filename },
+      coordinateSystem: 'normalized', crops: []
+    })
+    await writeImageMetadata(FOLDER, filename, '{"crops":[]}')
+  }
+
+  it('cuts a chapter with an explicitly empty crop list on one page', async () => {
+    await phoneReview()
+    await attach(PAGES[0])
+    await attachEmpty(PAGES[1])
+    expect((await readChapterCropState(CHAPTER)).fullyAttached).toBe(true)
+    const { io, done } = fakeIo()
+    expect(await queueAutoCrop(io, [CHAPTER])).toHaveLength(1)
+    expect(await done).toMatchObject({ images: 2, exported: 1, failed: 0 })
+    expect((await readChapterCropState(CHAPTER)).outputs.complete).toBe(true)
+  })
+
+  it('accepts a chapter with no crops on any page', async () => {
+    for (const filename of PAGES) await attachEmpty(filename)
+    expect((await readChapterCropState(CHAPTER)).outputs).toMatchObject({ complete: true, files: 0 })
+  })
+
+  it('keeps malformed nonempty crop lists pending', async () => {
+    await attach(PAGES[0])
+    await writeImagePoints(FOLDER, PAGES[1], {
+      format: 'four-point-crop', version: '1.0', image: { filename: PAGES[1] },
+      coordinateSystem: 'normalized',
+      crops: [{ id: 'bad', reason: '', crop: { mode: 'rectangle', points: [] } }]
+    })
+    await writeImageMetadata(FOLDER, PAGES[1], '{"crops":[]}')
+    expect((await readChapterCropState(CHAPTER)).fullyAttached).toBe(false)
+  })
+
   it('leaves chapters reviewed on the desktop, or not at all, for Crop', async () => {
     for (const page of PAGES) await attach(page)
     expect(await queueAutoCrop(fakeIo().io, [CHAPTER])).toEqual([])

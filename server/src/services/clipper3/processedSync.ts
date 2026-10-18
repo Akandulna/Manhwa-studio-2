@@ -472,7 +472,7 @@ export async function syncChapterProcessed(input: SyncChapterInput): Promise<Cha
 
     const artifact = toArtifact(parsed, image)
     const crops = extractCrops(artifact)
-    if (crops.length === 0) {
+    if (crops.length === 0 && !(Array.isArray(parsed?.crops) && parsed.crops.length === 0)) {
       record('failed', `${failPrefix}No usable four-point crop in the pointers file.`, image.filename)
       continue
     }

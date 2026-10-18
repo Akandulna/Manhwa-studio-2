@@ -139,6 +139,11 @@ export function extractCrops(file: Clipper3ImageCropFile | null): Clipper3CropEn
   )
 }
 
+/** An explicit empty crop list is a finished page that needs no cuts. */
+export function hasNoCrops(file: Clipper3ImageCropFile | null): boolean {
+  return file != null && Array.isArray(file.crops) && file.crops.length === 0
+}
+
 // ============ Metadata validation ============
 
 /**
@@ -706,7 +711,7 @@ export async function chapterCropOutputs(
   }
 
   return {
-    complete: allPagesDone && wanted.size > 0 && missing === 0 && extra === 0 && changed === 0,
+    complete: allPagesDone && missing === 0 && extra === 0 && changed === 0,
     files: onDisk.size,
     missing,
     extra,

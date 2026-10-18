@@ -388,6 +388,13 @@ export interface PhoneVoiceoverFetch {
 }
 
 export const narrationApi = {
+  getAlignmentSections: (chapterId: string, lang: NarrationLanguage) =>
+    fetchApi<{ id: string; number: number; audioReady: boolean; durationSec: number; aligned: boolean }[]>(
+      `/narration/chapters/${chapterId}/alignment-sections?lang=${lang}`),
+
+  resetSectionAlignment: (chapterId: string, sectionId: string, lang: NarrationLanguage) =>
+    fetchApi<{ started: boolean }>(`/narration/chapters/${chapterId}/alignment-sections/${sectionId}/reset?lang=${lang}`, { method: 'POST' }),
+
   getScript: (chapterId: string, lang: NarrationLanguage) =>
     fetchApi<{ text: string; sha256: string | null; phoneConfigured: boolean }>(`/narration/chapters/${chapterId}/script?lang=${lang}`),
 
@@ -1242,12 +1249,14 @@ export interface SeriesPart {
   exportedHi: number
   ready: boolean
   blocker: string | null
+  workingBytes: number
   localBytes: number
 }
 
 export interface SeriesParts {
   seriesId: string
   title: string
+  compressedVideos: string[]
   r2Configured: boolean
   parts: SeriesPart[]
 }
@@ -1278,6 +1287,11 @@ export const storageApi = {
   },
 
   getCategories: () => fetchApi<StorageCategoryMeta[]>('/storage/categories'),
+
+  cleanPartWorkingFiles: (seriesId: string, part: number, confirm: string) =>
+    fetchApi<{ freedBytes: number; chapters: number }>(`/storage/series/${seriesId}/parts/${part}/working-files`, {
+      method: 'POST', body: JSON.stringify({ confirm })
+    }),
 
   getParts: (seriesId: string) => fetchApi<SeriesParts>(`/storage/series/${seriesId}/parts`),
 

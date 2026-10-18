@@ -12,6 +12,7 @@ interface Section { timelineScript: string | null; audioFile: { status: string; 
 let sections: Section[] = []
 let storedJson: string | null = null
 // What Clipper 3.0 reports for the chapter's crops3/.
+let emptyPage = false
 let crops = { complete: true, metadataStems: ['page_001'] }
 
 vi.mock('../../index.js', () => ({
@@ -36,7 +37,8 @@ vi.mock('../clipper3/perImageStore.js', () => ({
   listPointedImageStems: async () => new Set(['page_001']),
   listMetadataImageStems: async () => new Set(crops.metadataStems),
   readImagePoints: async () => ({ file: {} }),
-  extractCrops: () => [{ id: 'a', reason: null }],
+  extractCrops: () => emptyPage ? [] : [{ id: 'a', reason: null }],
+  hasNoCrops: () => emptyPage,
   readImageMetadata: async () => '{}',
   expectedExportedFilenames: () => ['demo_page_001_01.png'],
   validateMetadata: () => ({ isValid: true, errors: [] }),
@@ -63,6 +65,7 @@ beforeEach(() => {
   fs.rmSync(chapterDir, { recursive: true, force: true })
   fs.mkdirSync(chapterDir, { recursive: true })
   sections = []
+  emptyPage = false
   storedJson = null
   crops = { complete: true, metadataStems: ['page_001'] }
 })
@@ -78,6 +81,13 @@ describe('Editor 2.0 checklist', () => {
     expect(ch.ready).toBe(true)
     expect(ch.missing).toEqual([])
     expect(ch.checklist.alignment.detail).toMatch(/script-timeline\.md is on disk/)
+  })
+
+  it('accepts pages with an explicitly empty crop list', async () => {
+    emptyPage = true
+    sections = [{ timelineScript: 'aligned', audioFile: audioFile('s1.wav') }]
+    storedJson = '{}'
+    expect((await chapter()).ready).toBe(true)
   })
 
   it('needs every section audio file on disk, not just a done row', async () => {

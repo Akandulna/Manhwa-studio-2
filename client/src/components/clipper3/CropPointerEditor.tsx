@@ -237,23 +237,9 @@ export function CropPointerEditor({
     onEditingChange?.(false)
   }, [dirty, reload, onEditingChange])
 
-  /**
-   * Removes one crop (staged until Save in manual mode). The server refuses a points file with zero
-   * usable crops (it would make the image un-cuttable while still claiming to
-   * be done), so the last remaining crop cannot be removed here — clearing an
-   * image entirely is what the row dialog's "remove crop JSON" is for.
-   */
+  /** Removes a crop; an empty list marks a page that needs no cuts. */
   const removeCrop = useCallback((cropId: string) => {
     const remaining = (file?.crops ?? []).filter(c => c.id !== cropId)
-    if (remaining.length === 0) {
-      toast({
-        title: 'Cannot remove the last crop',
-        description: 'An image needs at least one crop. Use "Remove this image\'s crop JSON" in the image list to clear it entirely.',
-        variant: 'destructive'
-      })
-      return
-    }
-
     if (reviewMode && file) {
       onCommitRef.current?.({ ...file, crops: remaining }, cropId)
       setSelectedCropId(null)

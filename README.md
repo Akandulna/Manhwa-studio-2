@@ -53,6 +53,12 @@ Manhwa → English / Hindi → chapters.
   the alignment document is written next to it (`script-timeline.md`, or
   `script-timeline.hi.md` for Hindi).
 - **Align again** re-runs alignment for a chapter that failed or is incomplete.
+- **Reset alignment** opens a section picker, including for chapters already marked aligned. Choose the
+  section named by the phone's error and use **Reset & realign section**. Its previous timestamps and
+  this language's Editor timeline are backed up under `.alignment-resets/` before being cleared. Only
+  the selected section is realigned; scripts, audio and videos are kept. Once it finishes, resend the
+  chapter from Editor 2.0 and generate its timeline again. Repeated duration errors require checking
+  the audio for missing speech or excess silence.
 - **Replace** on a chapter opens its saved local script. Keep that text (including edits already made on disk),
   choose a `.md`/`.txt` file, or paste a revision, then use **Replace & send**. This backs up the script and
   that language's audio, alignment and Editor paste under the chapter's `.script-replacements/` folder,
@@ -120,6 +126,15 @@ Storage also offers **Delete renders** for each `_video`, `_video2`, or
 (`Compressed` and `Compress` are also supported). Click **Rescan** after adding
 the compressed video. Confirming deletes only the original MP4s directly in
 that render folder and keeps the compressed folder and its contents.
+
+For a finished Part, use **Storage → Parts → Delete working files**. A nonempty
+video must exist in a `compressed`, `Compressed` or `Compress` subfolder of a
+video folder. Choose the Part by its displayed chapter range and confirm that
+the saved video covers that range. This local cleanup removes source pages,
+both languages' audio, crops, JSON and other working files while keeping
+scripts, timelines, saved script records and all videos. R2 is unchanged and
+is not required. This is separate from **Complete & delete**, which also
+removes scripts and cloud assets.
 
 ## Tech Stack
 

@@ -613,6 +613,10 @@ export default function StorageManager({ libraryRoot }: { libraryRoot?: string }
                       </div>
                     </div>
 
+                    <div className="mt-4 border-t pt-4">
+                      <PartsPanel seriesId={series.id} onChanged={() => load(true)} />
+                    </div>
+
                     {/* Breakdown + export progress */}
                     <div className="mt-4 space-y-3">
                       <UsageBar sizes={series.sizes} total={series.totalBytes} categories={categories} />
@@ -662,9 +666,6 @@ export default function StorageManager({ libraryRoot }: { libraryRoot?: string }
                     {/* Chapters */}
                     {isOpen && (
                       <div className="mt-5 border-t pt-5">
-                        <div className="mb-6">
-                          <PartsPanel seriesId={series.id} onChanged={() => load(true)} />
-                        </div>
                         <div className="overflow-x-auto">
                           <table className="w-full text-sm">
                             <thead>

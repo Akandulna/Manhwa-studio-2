@@ -33,6 +33,7 @@
  * (the export check is not repeated, since the videos are gone by then).
  */
 
+import { workingFiles } from './workingFiles.js'
 import fs from 'fs/promises'
 import path from 'path'
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3'
@@ -54,7 +55,8 @@ import {
   removeWithin,
   scanExportedChapterNumbers,
   videoChapterNumber,
-  videoDirsFor
+  videoDirsFor,
+  scanVideoCleanupFolder
 } from './storageService.js'
 import { NARRATION_LANGUAGES, partExportSuffix, type NarrationLanguage } from './narrationLanguage.js'
 import { updatePhoneIndexes } from './phoneSend.js'
@@ -114,12 +116,14 @@ export interface SeriesPart {
   blocker: string | null
   /** What deleting would free on this disk (or what's left over, once completed). */
   localBytes: number
+  workingBytes: number
 }
 
 export interface SeriesParts {
   seriesId: string
   title: string
   r2Configured: boolean
+  compressedVideos: string[]
   parts: SeriesPart[]
 }
 
@@ -291,11 +295,14 @@ export async function getSeriesParts(seriesId: string, measure = true): Promise<
       exportedHi: hi,
       ready: !completed && blocker === null,
       blocker,
+      workingBytes: measure ? (await Promise.all(chapters.flatMap(ch => [path.join(downloadRoot(), ch.folderPath), ...seriesLevelChapterDirs(series.rootFolder, ch.folderPath)]).map(dir => workingFiles(dir)))).reduce((a, b) => a + b, 0) : 0,
       localBytes: measure ? await partLocalBytes(series.rootFolder, number, chapters) : 0
     })
   }
 
-  return { seriesId: series.id, title: series.title, r2Configured: getR2Config() !== null, parts }
+  const compressedVideos = (await Promise.all(VIDEO_DIRS.map(dir => scanVideoCleanupFolder(series.rootFolder, dir))))
+    .flatMap(folder => folder.compressedVideos.map(file => `${folder.dir}/${file}`))
+  return { seriesId: series.id, title: series.title, r2Configured: getR2Config() !== null, compressedVideos, parts }
 }
 
 // ============ Continuity backup ============
@@ -694,4 +701,25 @@ export async function completePart(seriesId: string, partNumber: number, confirm
   } finally {
     running.delete(seriesId)
   }
+}
+
+/** Local-only cleanup of the explicitly selected Part. Scripts and database script rows survive. */
+export async function cleanPartWorkingFiles(seriesId: string, partNumber: number, confirm: string) {
+  const data = await getSeriesParts(seriesId, false)
+  if (confirm.trim() !== data.title.trim()) throw new Error('Type the series title to confirm')
+  if (!data.compressedVideos.length) throw new Error('A nonempty compressed video is required')
+  const part = data.parts.find(p => p.number === partNumber)
+  if (!part) throw new Error('Part not found')
+  const series = await prisma.series.findUnique({ where: { id: seriesId }, select: { rootFolder: true } })
+  if (!series) throw new Error('Series not found')
+  const dirs = part.chapters.flatMap(ch => [path.join(downloadRoot(), ch.folderPath), ...seriesLevelChapterDirs(series.rootFolder, ch.folderPath)])
+  // Validate all targets before any mutation.
+  for (const dir of dirs) await workingFiles(dir)
+  let freedBytes = 0
+  for (const dir of dirs) freedBytes += await workingFiles(dir, true)
+  const ids = part.chapters.map(ch => ch.id)
+  await prisma.page.updateMany({ where: { chapterId: { in: ids } }, data: { localPath: null, bytes: null } })
+  await prisma.audioFile.deleteMany({ where: { chapterId: { in: ids } } })
+  await prisma.audioSection.updateMany({ where: { chapterId: { in: ids } }, data: { status: 'none' } })
+  return { freedBytes, chapters: ids.length }
 }

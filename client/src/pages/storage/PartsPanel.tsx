@@ -57,6 +57,7 @@ export function PartsPanel({ seriesId, onChanged }: { seriesId: string; onChange
   const [data, setData] = useState<SeriesParts | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [confirming, setConfirming] = useState<SeriesPart | null>(null)
+  const [workingOnly, setWorkingOnly] = useState(false)
   const [typed, setTyped] = useState('')
   const [running, setRunning] = useState<number | null>(null)
 
@@ -71,7 +72,8 @@ export function PartsPanel({ seriesId, onChanged }: { seriesId: string; onChange
 
   useEffect(() => { load() }, [load])
 
-  const open = (part: SeriesPart) => {
+  const open = (part: SeriesPart, working = false) => {
+    setWorkingOnly(working)
     setTyped('')
     setConfirming(part)
   }
@@ -82,6 +84,13 @@ export function PartsPanel({ seriesId, onChanged }: { seriesId: string; onChange
     setConfirming(null)
     setRunning(part.number)
     try {
+      if (workingOnly) {
+        const result = await storageApi.cleanPartWorkingFiles(seriesId, part.number, typed)
+        toast({ title: `Part ${part.number} working files deleted`, description: `Freed ${formatBytes(result.freedBytes)}. Scripts and videos kept.` })
+        await load()
+        onChanged()
+        return
+      }
       const result = await storageApi.completePart(seriesId, part.number, typed)
       toast({
         title: `Part ${part.number} completed`,
@@ -128,16 +137,18 @@ export function PartsPanel({ seriesId, onChanged }: { seriesId: string; onChange
         Parts
       </h3>
       <p className="mt-1 text-xs text-muted-foreground">
-        A Part runs to its "Part end" in Narration or, if none is marked, to the last chapter with an
-        exported video. Once every chapter of a Part has its English and Hindi video exported, Complete deletes all of
-        the Part's files here and in R2. Only each chapter's rolling summary and closing paragraph are
-        kept (backed up to R2) so the next Part continues the story. Files in the video folders that
-        aren't the app's own <code>chNNN_…</code> exports, such as your final render, are kept.
+        After saving a compressed video, choose its Part and delete working files to free space.
+        Source pages, audio, crops and JSON are removed locally. Scripts, timelines and all videos are kept.
+        Confirm that the saved video covers the chapter range shown; its filename does not determine the Part.
+        This works without R2. The separate Complete &amp; delete action also removes scripts and cloud files.
+      </p>
+      <p className="mt-2 break-words text-xs text-muted-foreground">
+        {data.compressedVideos.length ? `Compressed videos found: ${data.compressedVideos.join(', ')}` : 'No compressed video found. Add a nonempty video to compressed, Compressed or Compress inside a video folder, then Rescan.'}
       </p>
       {!data.r2Configured && (
         <p className="mt-2 flex items-center gap-2 rounded bg-amber-500/10 p-2 text-xs text-amber-600">
           <AlertTriangle className="h-3.5 w-3.5" />
-          R2 isn't set up. A Part can't be completed until its continuity can be backed up there.
+          R2 isn't set up. Local working-file cleanup is available; Complete & delete requires R2.
         </p>
       )}
 
@@ -191,6 +202,12 @@ export function PartsPanel({ seriesId, onChanged }: { seriesId: string; onChange
                 )}
               </div>
 
+              <div className="flex flex-wrap gap-2">
+                <Button variant="destructive" size="sm" onClick={() => open(part, true)}
+                  disabled={!data.compressedVideos.length || running !== null || part.workingBytes <= 0}>
+                  {running === part.number ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  Delete working files · {formatBytes(part.workingBytes)}
+                </Button>
               {part.closed && (!part.completed || part.localBytes > 0) && (
                 <Button
                   variant="destructive"
@@ -205,6 +222,7 @@ export function PartsPanel({ seriesId, onChanged }: { seriesId: string; onChange
                   {part.completed ? 'Delete leftovers' : 'Complete & delete'}
                 </Button>
               )}
+              </div>
             </li>
           ))}
         </ul>
@@ -214,10 +232,17 @@ export function PartsPanel({ seriesId, onChanged }: { seriesId: string; onChange
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {confirming?.completed ? 'Delete leftovers of' : 'Complete'} Part {confirming?.number}?
+              {workingOnly ? 'Delete working files for' : confirming?.completed ? 'Delete leftovers of' : 'Complete'} Part {confirming?.number}?
             </DialogTitle>
             <DialogDescription asChild>
               <div className="space-y-2 text-sm">
+                {workingOnly ? <>
+                  <p>Part {confirming?.number}: chapters {confirming?.firstChapter}–{confirming?.lastChapter} of <b>{data.title}</b>.</p>
+                  <p>Confirm your compressed video covers this entire range. Delete source pages, both languages’ audio, crops, JSON and other working files from these chapters.</p>
+                  <p>Keep scripts, timelines, saved script records and all videos, including compressed videos. R2 files remain available.</p>
+                  <p>This cannot be undone locally. Frees about {formatBytes(confirming?.workingBytes ?? 0)}.</p>
+                </> : <>
+
                 <p>
                   Chapters {confirming?.firstChapter}–{confirming?.lastChapter} of <b>{data.title}</b>.
                   This can't be undone. These are permanently deleted:
@@ -233,6 +258,7 @@ export function PartsPanel({ seriesId, onChanged }: { seriesId: string; onChange
                   {(confirming?.number ?? 0) + 1} continues the story. The chapters show as Completed everywhere.
                 </p>
                 {confirming && <p>About {formatBytes(confirming.localBytes)} on this disk.</p>}
+                </>}
               </div>
             </DialogDescription>
           </DialogHeader>

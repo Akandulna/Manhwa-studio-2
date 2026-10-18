@@ -32,7 +32,8 @@ import {
   type PhoneVoiceoverFetch
 } from '../services/phoneVoiceoverImport.js'
 import { getR2Config } from '../services/r2Service.js'
-import { alignChapter, checkAlignmentAvailable, pendingAlignments } from '../services/alignment/alignmentService.js'
+import { alignChapter, alignSection, checkAlignmentAvailable, pendingAlignments } from '../services/alignment/alignmentService.js'
+import { resetSectionAlignment } from '../services/alignment/resetAlignment.js'
 import { hasAlignmentDocument, writeAlignmentDocument } from '../services/alignment/alignmentDocument.js'
 import { NarrationLanguage, requestLanguage } from '../services/narrationLanguage.js'
 import { getReplacementScript, replaceChapterScript, scriptReplacementBusy, ScriptReplacementError } from '../services/scriptReplacement.js'
@@ -355,6 +356,47 @@ router.post('/chapters/:id/script/replace', async (req: Request, res: Response) 
  * only writes the alignment document if that's missing. Runs in the
  * background; progress arrives on `alignment:progress` / `alignment:chapter-complete`.
  */
+router.get('/chapters/:id/alignment-sections', async (req: Request, res: Response) => {
+  try {
+    const sections = await prisma.audioSection.findMany({
+      where: { chapterId: req.params.id, language: requestLanguage(req) }, orderBy: { index: 'asc' },
+      select: { id: true, index: true, timelineScript: true, audioFile: { select: { durationMs: true, status: true } } }
+    })
+    res.json(sections.map(s => ({ id: s.id, number: s.index + 1,
+      audioReady: s.audioFile?.status === 'done', durationSec: (s.audioFile?.durationMs ?? 0) / 1000,
+      aligned: !!s.timelineScript?.trim() })))
+  } catch (error) { res.status(500).json({ error: message(error, 'Could not load sections') }) }
+})
+
+router.post('/chapters/:id/alignment-sections/:sectionId/reset', async (req: Request, res: Response) => {
+  const chapterId = req.params.id
+  const language = requestLanguage(req)
+  const key = `${chapterId}:${language}`
+  if (alignRuns.has(key) || pendingAlignments(chapterId, language) > 0 || scriptReplacementBusy(chapterId)) {
+    return res.status(409).json({ error: 'Wait for this chapter’s alignment or script replacement to finish' })
+  }
+  const chapter = await prisma.chapter.findUnique({ where: { id: chapterId }, select: { seriesId: true } })
+  if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+  if (fetchJobs.has(`${chapter.seriesId}:${language}`)) return res.status(409).json({ error: 'Wait for the phone fetch to finish' })
+  // Reserve synchronously before any further awaits; the normal retry uses this same lock.
+  if (alignRuns.has(key)) return res.status(409).json({ error: 'This chapter is already aligning' })
+  alignRuns.add(key)
+  try {
+    const available = await checkAlignmentAvailable()
+    if (!available.available) throw new Error(available.error ?? 'The aligner is unavailable')
+    await resetSectionAlignment(chapterId, req.params.sectionId, language)
+    io?.emit('alignment:progress', { chapterId, language, stage: 'aligning' })
+    void alignSection(req.params.sectionId, io ?? undefined)
+      .then(() => io?.emit('alignment:chapter-complete', { chapterId, language }))
+      .catch(error => console.error('[narration] targeted alignment failed:', message(error, 'Alignment failed')))
+      .finally(() => alignRuns.delete(key))
+    res.json({ started: true })
+  } catch (error) {
+    alignRuns.delete(key)
+    res.status(400).json({ error: message(error, 'Could not reset alignment') })
+  }
+})
+
 router.post('/chapters/:id/align', async (req: Request, res: Response) => {
   try {
     const language = requestLanguage(req)

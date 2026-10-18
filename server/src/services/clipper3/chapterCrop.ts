@@ -2,7 +2,7 @@
  * Image Clipper 3.0 — cutting a whole chapter (Crop Sections), by hand or
  * automatically after Sync json.
  *
- * A page is cut when it is Done: crop JSON with at least one usable crop AND
+ * A page is cut when it is Done: crop JSON with usable crops (or an explicit empty list) AND
  * metadata that still validates against those crops — the same definition the
  * page list shows, read from the same files. A cut replaces the chapter's
  * previous crops3/ output (removeStaleOutputs).
@@ -26,6 +26,7 @@ import {
   chapterCropOutputs,
   expectedExportedFilenames,
   extractCrops,
+  hasNoCrops,
   findUnresolvedMetadataNames,
   getOutputDir,
   listMetadataImageStems,
@@ -114,7 +115,7 @@ export async function readChapterCropState(chapter: Pick<CropChapter, 'folderPat
     if (!pointed.has(stem) || !described.has(stem)) continue
     const stored = await readImagePoints(chapter.folderPath, img.filename)
     const crops = extractCrops(stored?.file ?? null)
-    if (crops.length === 0) continue
+    if (crops.length === 0 && !hasNoCrops(stored?.file ?? null)) continue
 
     // Metadata that no longer validates against these crops must not be cut
     // as if it still did — the page list shows such a page as pending too.

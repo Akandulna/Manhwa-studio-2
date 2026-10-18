@@ -30,7 +30,7 @@ import {
   scanStorage,
   type CategoryKey
 } from '../services/storageService.js'
-import { completePart, getSeriesParts } from '../services/partArchive.js'
+import { cleanPartWorkingFiles, completePart, getSeriesParts } from '../services/partArchive.js'
 
 /** Validate the requested categories against the catalogue. */
 function parseCategories(raw: unknown): CategoryKey[] {
@@ -136,6 +136,16 @@ export function initStorageRoutes(): Router {
       res.json(await deleteCompressedSeriesVideos(req.params.id, req.params.dir))
     } catch (error) {
       fail(res, error, 'Failed to delete rendered videos')
+    }
+  })
+
+  router.post('/series/:id/parts/:part/working-files', async (req: Request, res: Response) => {
+    try {
+      const part = Number(req.params.part)
+      if (!Number.isInteger(part) || part < 1) throw new Error('Invalid part number')
+      res.json(await cleanPartWorkingFiles(req.params.id, part, typeof req.body?.confirm === 'string' ? req.body.confirm : ''))
+    } catch (error) {
+      fail(res, error, 'Failed to clean working files')
     }
   })
 
