@@ -38,7 +38,9 @@ export default function ManagedAccountsPanel(){
       {candidate&&link?.candidate!==candidate&&<Button size="sm" variant="outline" disabled={busy} onClick={()=>void update({action:'confirm',deviceId:p.deviceId,profileId:p.profileId,product,candidate,accountId:snapshot.accounts.find(a=>a.candidate===candidate)?.id??'account_'+candidate.split(':')[1],maxConcurrent:1})}>Confirm this account</Button>}
      </div>})}
     </td><td className="p-2">{label(p.audit.state)}{p.audit.reason&&` · ${label(p.audit.reason)}`}<br/>Due {date(p.audit.dueAt)}<br/>Last successful {date(p.audit.lastSuccessfulAt)}<br/>
-     <select aria-label={`Audit cadence for ${p.id}`} className="rounded border bg-background p-1" disabled={busy} value={p.audit.cadenceHours} onChange={e=>void update({action:'cadence',deviceId:p.deviceId,profileId:p.profileId,hours:Number(e.target.value)})}><option value={24}>Every 24 hours</option><option value={48}>Every 48 hours</option></select>
+     <select aria-label={`Audit cadence for ${p.id}`} className="rounded border bg-background p-1" disabled={busy} value={p.audit.cadenceHours} onChange={e=>void update({action:'cadence',deviceId:p.deviceId,profileId:p.profileId,hours:Number(e.target.value)})}><option value={24}>Every 24 hours</option><option value={48}>Every 48 hours</option></select><br/>
+     <Button size="sm" variant="outline" disabled={busy||!policy.auditsEnabled||p.audit.claimId!==null} onClick={()=>void update({action:'audit_recheck',deviceId:p.deviceId,profileId:p.profileId})}>Request idle recheck</Button>
+     <p className="text-xs text-muted-foreground">Waits for an idle phone. Repeat requests and failed checks have a 15-minute cooldown.</p>
     </td></tr>)}
    </tbody></table></div>
    <div className="space-y-2"><h3 className="font-medium">Scoped quota evidence</h3>

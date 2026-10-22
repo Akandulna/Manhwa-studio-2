@@ -10,13 +10,14 @@ export async function accountApi(request:Request,actor:TaskPrincipal,authority:A
  let raw:any;try{raw=JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(await boundedBody(request.body,32_000)))}catch{throw new TaskConflict('Bounded account JSON required')}
  if(!raw||raw.schema!==ACCOUNTS_SCHEMA||raw.workspaceId!==workspace||!id(raw.eventId))throw new TaskConflict('Exact account schema, workspace and event required')
  const {schema,workspaceId,eventId,action,...fields}=raw
- const studio=['policy','confirm','quota','cadence','observe','select'],phone=['audit_claim','audit_finish','audit_defer','observe','quota']
+ const studio=['policy','confirm','quota','cadence','observe','select','audit_recheck'],phone=['audit_claim','audit_finish','audit_defer','observe','quota']
  if(!(actor.role==='studio'?studio:phone).includes(action))return Response.json({error:'Account operation not authorized'},{status:403})
  let result:unknown
  switch(action){
  case 'policy':exact(fields,['policy']);result=authority.setPolicy(actor,eventId,fields.policy);break
  case 'confirm':exact(fields,['deviceId','profileId','product','candidate','accountId','maxConcurrent']);if(typeof fields.candidate!=='string'||fields.candidate.length>80)throw new TaskConflict('Exact candidate required');result=authority.confirm(actor,eventId,fields.deviceId,fields.profileId,fields.product,fields.candidate,fields.accountId,fields.maxConcurrent);break
  case 'cadence':exact(fields,['deviceId','profileId','hours']);result=authority.cadence(actor,eventId,fields.deviceId,fields.profileId,fields.hours);break
+ case 'audit_recheck':exact(fields,['deviceId','profileId']);result=authority.requestAudit(actor,eventId,fields.deviceId,fields.profileId);break
  case 'observe':exact(fields,['deviceId','profileId','check']);result=authority.observe(actor,eventId,fields.deviceId,fields.profileId,await accountObservation(fields.check,now));break
  case 'quota':exact(fields,['profileId','quota']);if(!(fields.profileId===null||id(fields.profileId)))throw new TaskConflict('Exact quota profile required');result=authority.quota(actor,eventId,fields.profileId,parseAccountQuota(fields.quota,now));break
  case 'audit_claim':exact(fields,['profileId']);result=authority.auditClaim(actor,eventId,fields.profileId);break

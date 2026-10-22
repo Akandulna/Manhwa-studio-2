@@ -31,6 +31,60 @@ function setup(){
  return {a,db,sql,event,policy,raw,observe,confirm,quota,plan,claim,stop,restart:authority,setNow:(v:number)=>{now=v},getNow:()=>now}
 }
 describe('durable accounts and atomic task capacity',()=>{
+ it('requests an owner-authorized idle recheck without rewriting successful history, cadence or reservations',async()=>{
+  const s=setup(),audit=s.event();s.a.accounts.auditClaim(phone(),audit,'profile');s.a.accounts.auditFinish(phone(),s.event(),audit,await accountObservation(s.raw(),NOW))
+  s.a.accounts.cadence(studio,s.event(),'one','profile',48);s.setNow(NOW+1000)
+  const requested=s.a.accounts.requestAudit(studio,s.event(),'one','profile')
+  expect(requested.audit).toMatchObject({state:'due',dueAt:NOW+1000,nextCheckAt:NOW+1000,lastSuccessfulAt:NOW,cadenceHours:48,claimId:null})
+  expect(s.a.accounts.snapshot(studio).reservations).toHaveLength(0)
+ })
+ it('retains the owner recheck bound across replay, restart and a backwards clock',async()=>{
+  const s=setup(),event=s.event(),first=s.a.accounts.requestAudit(studio,event,'one','profile')
+  const audit=s.event();s.a.accounts.auditClaim(phone(),audit,'profile');s.setNow(NOW+1000);s.a.accounts.auditFinish(phone(),s.event(),audit,await accountObservation(s.raw(),s.getNow()))
+  const before=s.a.accounts.snapshot(studio);expect(s.restart().accounts.requestAudit(studio,event,'one','profile')).toEqual(first)
+  expect(s.a.accounts.snapshot(studio)).toEqual(before)
+  expect(()=>s.restart().accounts.requestAudit(studio,s.event(),'one','profile')).toThrow('once per 15 minutes')
+  s.setNow(NOW-1000);expect(()=>s.restart().accounts.requestAudit(studio,s.event(),'one','profile')).toThrow('once per 15 minutes')
+  s.setNow(NOW+15*60_000);expect(s.restart().accounts.requestAudit(studio,s.event(),'one','profile').audit.dueAt).toBe(s.getNow())
+ })
+ it('never uses an owner recheck to bypass the failed-audit cooldown',()=>{
+  const s=setup(),audit=s.event();s.a.accounts.auditClaim(phone(),audit,'profile');s.a.accounts.auditFinish(phone(),s.event(),audit,null)
+  const before=s.a.accounts.snapshot(studio)
+  expect(()=>s.a.accounts.requestAudit(studio,s.event(),'one','profile')).toThrow('retry cooldown')
+  expect(s.a.accounts.snapshot(studio)).toEqual(before)
+  s.setNow(NOW+15*60_000);expect(s.a.accounts.requestAudit(studio,s.event(),'one','profile').audit.dueAt).toBe(NOW)
+ })
+ it('keeps a running audit and its exact reservations held when a recheck is requested',()=>{
+  const s=setup(),audit=s.event();s.a.accounts.auditClaim(phone(),audit,'profile');const before=s.a.accounts.snapshot(studio)
+  expect(()=>s.a.accounts.requestAudit(studio,s.event(),'one','profile')).toThrow('current audit')
+  expect(s.a.accounts.snapshot(studio)).toEqual(before)
+ })
+ it('defers a requested recheck behind actual busy ownership without changing the task',async()=>{
+  const s=setup();await s.confirm();s.quota();const c=s.claim((await s.plan()).id),before=s.a.timeline(studio,c.task.id),held=s.a.accounts.snapshot(studio).reservations
+  expect(s.a.accounts.requestAudit(studio,s.event(),'one','profile').audit).toMatchObject({state:'deferred',reason:'busy'})
+  expect(s.a.timeline(studio,c.task.id)).toEqual(before);expect(s.a.accounts.snapshot(studio).reservations).toEqual(held)
+ })
+ it('leaves an offline owner-requested audit due and cannot grant navigation',()=>{
+  const s=setup();s.a.accounts.snapshot(studio);s.setNow(NOW+16*60_000)
+  expect(s.a.accounts.requestAudit(studio,s.event(),'one','profile').audit).toMatchObject({state:'deferred',reason:'offline',dueAt:NOW})
+  expect(s.a.accounts.auditClaim(phone(),s.event(),'profile')).toMatchObject({state:'deferred',reason:'offline'})
+  expect(s.a.accounts.snapshot(studio).reservations).toHaveLength(0)
+ })
+ it('requires the Studio role, enabled audit policy and exact enrolled profile',()=>{
+  const s=setup()
+  expect(()=>s.a.accounts.requestAudit(phone(),s.event(),'one','profile')).toThrow('Studio authority')
+  expect(()=>s.a.accounts.requestAudit(studio,s.event(),'one','missing')).toThrow('Enroll')
+  s.a.accounts.setPolicy(studio,s.event(),{...s.policy,revision:2,auditsEnabled:false})
+  expect(()=>s.a.accounts.requestAudit(studio,s.event(),'one','profile')).toThrow('Enable idle audits')
+ })
+ it('authorizes strict owner recheck operations without accepting phone or extra-field requests',async()=>{
+  const s=setup(),body={schema:'managed-accounts/1',workspaceId:'workspace',eventId:s.event(),action:'audit_recheck',deviceId:'one',profileId:'profile'}
+  const request=(v:any)=>new Request('https://relay/managed/accounts/operation',{method:'POST',body:JSON.stringify(v)})
+  expect((await accountApi(request(body),phone(),s.a.accounts,'workspace',NOW)).status).toBe(403)
+  await expect(accountApi(request({...body,force:true}),studio,s.a.accounts,'workspace',NOW)).rejects.toThrow('Exact account')
+  expect((await accountApi(request(body),studio,s.a.accounts,'workspace',NOW)).status).toBe(200)
+  expect((await accountApi(request(body),studio,s.a.accounts,'workspace',NOW)).status).toBe(200)
+ })
  it('ranks deterministically without treating names or candidates as confirmed accounts',async()=>{
   const s=setup(),task=await s.plan();await s.observe();expect(s.a.selectAccount(studio,task.id).candidates.find(c=>c.deviceId==='one')!.reasons).toContain('account_identity_confirmation_required')
   await s.confirm('one');await s.confirm('two');s.quota()

@@ -85,6 +85,20 @@ export class AccountAuthority {
   })
  }
  cadence(actor:TaskPrincipal,eventId:string,device:string,profile:string,hours:24|48){this.studio(actor);if(hours!==24&&hours!==48)throw new TaskConflict('Audit cadence must be 24 or 48 hours');return this.once(actor,eventId,{device,profile,hours},()=>{const p=this.profile(device,profile);p.audit.cadenceHours=hours;p.audit.dueAt=p.audit.lastSuccessfulAt===null?this.clock():p.audit.lastSuccessfulAt+hours*3_600_000;p.audit.nextCheckAt=Math.min(p.audit.nextCheckAt,p.audit.dueAt);this.put('profiles',p.id,p);return p})}
+ requestAudit(actor:TaskPrincipal,eventId:string,device:string,profile:string){
+  this.studio(actor)
+  return this.once(actor,eventId,{action:'audit_recheck',device,profile},()=>{
+   if(!this.policy()?.auditsEnabled)throw new TaskConflict('Enable idle audits before requesting a recheck')
+   const p=this.profile(device,profile),now=this.clock(),key='audit-recheck:'+p.id
+   if(p.audit.claimId)throw new TaskConflict('The current audit must finish on its original phone')
+   if((p.audit.retryNotBefore??0)>now)throw new TaskConflict('Failed audit retry cooldown remains active')
+   const prior=this.get<{requestedAt:number}>('policies',key)
+   if(prior&&(!Number.isSafeInteger(prior.requestedAt)||now-prior.requestedAt<15*60_000))throw new TaskConflict('Owner audit rechecks are limited to once per 15 minutes')
+   p.audit.dueAt=Math.min(p.audit.dueAt,now);p.audit.nextCheckAt=now
+   const reason=this.auditReason(p);p.audit.state=reason?'deferred':'due';p.audit.reason=reason
+   this.put('profiles',p.id,p);this.put('policies',key,{requestedAt:now});return p
+  })
+ }
  private reserved(resource:string){return this.sql.exec('SELECT attempt_id FROM managed_reservations WHERE resource = ?',resource).toArray().length>0}
  private accountReservations(account:string){return this.sql.exec<{resource:string;attempt_id:string}>("SELECT resource,attempt_id FROM managed_reservations WHERE substr(resource,1,?) = ?",('account:'+account+':').length,'account:'+account+':').toArray()}
  private peer(device:string){return this.managed<{receivedAt:string;capabilities:string[];profileIds:string[]}>('peers',device)}
