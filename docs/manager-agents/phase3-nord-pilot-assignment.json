@@ -1,0 +1,67 @@
+{
+  "checkedAt": "2026-10-19T18:37:22.364Z",
+  "status": 200,
+  "pageId": "9431b5f1-9db0-4619-a587-41736f7f33a3",
+  "deviceId": "304527cb8fc1440a",
+  "profileId": "profile-1",
+  "response": {
+    "schema": "managed-task/1",
+    "task": {
+      "workspaceId": "studio_01df7f214f87472e802b2bc43b8d9165",
+      "seriesId": "775891fa-bdfd-47b2-bb1d-a0c109341fa8",
+      "chapterId": "9fee19f4-de13-4051-8cb2-c6e5b40b8265",
+      "pageId": "page_dc2d76cec7161e74baa6d4f5c4e08f0729e71022ebcb583061564ad4be7debe0",
+      "id": "task:sha256:30fa8bbd2591315c2cdbdbd569c95f98ea1d517d1328eddd7849f829c2e2a623",
+      "fingerprint": "64ea935c79a1daf5551df2dd38a63ad1e5f7f8f55aee832361fb2da2ab89a55b",
+      "spec": {
+        "version": "crop-page/1",
+        "provider": "chatgpt",
+        "product": "chatgpt-web",
+        "model": "provider-default",
+        "settings": {
+          "mode": null,
+          "effort": null
+        },
+        "pageRevision": "sha256:155d022b85274a5237814223fb6a570f2cb81b5d17fd5ddde61dead2d79181a5",
+        "promptVersion": "managed-chatgpt-default-crop/1",
+        "validatorVersion": "managed-crop-validator/1",
+        "dependencies": [
+          {
+            "id": "page_dc2d76cec7161e74baa6d4f5c4e08f0729e71022ebcb583061564ad4be7debe0",
+            "revision": "sha256:155d022b85274a5237814223fb6a570f2cb81b5d17fd5ddde61dead2d79181a5",
+            "sha256": "155d022b85274a5237814223fb6a570f2cb81b5d17fd5ddde61dead2d79181a5"
+          }
+        ]
+      },
+      "state": "assigned",
+      "generation": 1,
+      "attemptId": "7e2d55db-f448-45b4-a655-d811f92c2840",
+      "canonical": null
+    },
+    "attempt": {
+      "id": "7e2d55db-f448-45b4-a655-d811f92c2840",
+      "activeCommandId": "2e004d93-23a4-418f-b97c-06afe0e653ea",
+      "taskId": "task:sha256:30fa8bbd2591315c2cdbdbd569c95f98ea1d517d1328eddd7849f829c2e2a623",
+      "generation": 1,
+      "deviceId": "304527cb8fc1440a",
+      "profileId": "profile-1",
+      "accountId": null,
+      "leaseExpiresAt": "2026-10-19T18:42:22.121Z",
+      "phase": "assigned",
+      "submission": "unsent",
+      "checkpointRef": null
+    },
+    "commands": [
+      {
+        "id": "2e004d93-23a4-418f-b97c-06afe0e653ea",
+        "taskId": "task:sha256:30fa8bbd2591315c2cdbdbd569c95f98ea1d517d1328eddd7849f829c2e2a623",
+        "attemptId": "7e2d55db-f448-45b4-a655-d811f92c2840",
+        "generation": 1,
+        "fingerprint": "64ea935c79a1daf5551df2dd38a63ad1e5f7f8f55aee832361fb2da2ab89a55b",
+        "action": "start",
+        "phase": "queued"
+      }
+    ]
+  },
+  "scope": "Owner-authorized single-page Studio assignment. Phone must explicitly check/run before provider submission; credentials excluded."
+}

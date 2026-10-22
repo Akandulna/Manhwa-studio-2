@@ -1,0 +1,23 @@
+{
+  "checkedAt": "2026-10-19T18:45:55.218Z",
+  "changes": [
+    "Treat the newly created WebView’s null/blank/about:blank document as loading; continue to reject unrelated origins and profiles.",
+    "Surface timeout errors instead of hiding TimeoutCancellationException with ordinary cancellation.",
+    "Persist bounded app-private stage/status diagnostics and show the last status on Managed page pilot.",
+    "Match origin-owned local catalog IDs and replica origin mappings separately; ignore cache entries for owned series, require one available matching chapter, and retain exact page identity/hash checks."
+  ],
+  "tests": {
+    "command": "./gradlew testDebugUnitTest --offline",
+    "tests": 321,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "installedBuild": "1.0.135",
+  "fixesInstalled": false,
+  "apkBuiltOrInstalled": false,
+  "exactCauseConfirmed": true,
+  "scope": "Source startup/diagnostic hardening plus confirmed origin-versus-replica identity resolution fix. Owner dialog and catalog IDs identify the source lookup failure; successful installed-phone execution remains pending a GitHub Actions APK.",
+  "followUpIdentityFix": "phase3-nord-pilot-identity-fix-validation.json",
+  "confirmedImmediateFailure": "Sync the exact shared chapter to this phone before running"
+}

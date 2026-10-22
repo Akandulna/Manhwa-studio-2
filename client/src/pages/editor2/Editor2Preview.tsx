@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { videoApi2, type PlanImage, type TimelinePlan } from '@/lib/api'
+import { TimelineModelBadge } from './TimelineModelBadge'
 import { getTimelineJson, markProcessed, syncChapterTimeline } from './timelineHandoff'
 import { LANGUAGE_LABEL, useNarrationLanguage } from '@/lib/narrationLanguage'
 import { Button } from '@/components/ui/button'
@@ -353,6 +354,7 @@ export default function Editor2Preview() {
           <p className="text-xs text-muted-foreground">
             {plan.seriesTitle} · {LANGUAGE_LABEL[language]} · {plan.sections.length} sections · {plan.imageCount} images · {fmt(plan.totalDuration)}
           </p>
+          <TimelineModelBadge chapterId={chapterId!} language={language} />
         </div>
       </div>
 

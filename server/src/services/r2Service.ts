@@ -1112,7 +1112,7 @@ export interface PhoneAutomation {
   /** How Image Clipper last ran; `chatGpt` is the mode, model and effort last picked in Run automation (older builds: null). */
   clipper: { ai: PhoneClipperAi; flow: PhoneClipperFlow; tabs: number; chatGpt: ChatGptRunSettings | null } | null
   /** Editor 2.0's tabs last used there; null from builds whose Editor 2.0 run takes neither tabs nor chapters (no split). */
-  editor: { tabs: number; staged?: boolean; chatGpt?: ChatGptRunSettings } | null
+  editor: { tabs: number; staged?: boolean; ai?: 'chatgpt' | 'aistudio'; providers?: string[]; smallBatches?: boolean; chatGpt?: ChatGptRunSettings } | null
   /** The runs whose start takes a `chapters` list (a share of a split); empty from builds before it was said. */
   chapterRuns: PhoneRunKind[]
   /**
@@ -1367,6 +1367,9 @@ function parseAutomation(raw: unknown, seriesFor: (folder: string) => { id: stri
       : null,
     editor: isObject(raw.editor) ? { tabs: Math.min(PHONE_MAX_TABS, Math.max(1, Number(raw.editor.tabs) || 1)),
       staged: raw.editor.staged === true,
+      ai: raw.editor.ai === 'aistudio' || raw.editor.ai === 'gemini' ? 'aistudio' : 'chatgpt',
+      providers: Array.isArray(raw.editor.providers) ? raw.editor.providers.filter((p): p is string => typeof p === 'string' && (p === 'chatgpt' || p === 'aistudio')) : [],
+      ...(typeof raw.editor.smallBatches === 'boolean' ? { smallBatches: raw.editor.smallBatches } : {}),
       ...(isObject(raw.editor.chatGpt) ? { chatGpt: runSettingsOf(raw.editor.chatGpt) } : {}) } : null,
     chapterRuns: Array.isArray(raw.chapterRuns) ? PHONE_RUN_KINDS.filter(kind => (raw.chapterRuns as unknown[]).includes(kind)) : [],
     rescope: raw.rescope === true,
@@ -1414,6 +1417,8 @@ export interface PhoneAutomationOptions {
   tabs?: number
   /** Image Clipper: ChatGPT, AI Studio, or Gemini on the web, and one prompt (classic) or four steps. */
   ai?: PhoneClipperAi
+  /** Editor: match one audio section per request and resume accepted checkpoints. */
+  smallBatches?: boolean
   flow?: PhoneClipperFlow
   /** Image Clipper on ChatGPT: the mode, model and effort (each null: as the account has it); the phone keeps them. */
   chatGpt?: ChatGptRunSettings
@@ -1515,12 +1520,13 @@ export async function sendAutomationCommand(
     ...(options.chapters ? { chapters: [...new Set(options.chapters)] } : {}),
     tabs: takesTabs ? options.tabs : undefined,
     ...(kind === 'clipper' ? { ai: options.ai, flow: options.flow, chatGpt: options.chatGpt } : {}),
-    ...(kind === 'editor' ? { chatGpt: options.chatGpt } : {}),
+    ...(kind === 'editor' ? { ai: options.ai, smallBatches: options.smallBatches, chatGpt: options.chatGpt } : {}),
     // Narration's AI only when asked for: Run automation has no choice of it, so the phone keeps its own.
     ...(kind === 'narration' && options.ai ? { ai: options.ai } : {}),
     ...(kind === 'editor' || kind === 'voiceover' ? { language: options.language ?? 'en' } : {})
   }
   if (!options.split) {
+    if (kind === 'editor') assertEditorSettings(options, device === undefined ? relayPhones().map(p => p.id) : [device])
     if (kind === 'narration' && series) assertNarrationFree(series, device)
     const sent = await sendPhoneRequest(START_ACTION[kind], { ...args, device })
     return { ...sent, via: 'relay', targets: [target(sent, options.chapters ?? null)] }
@@ -1551,6 +1557,7 @@ export async function sendAutomationCommand(
     const row = await prisma.series.findUnique({ where: { id: options.seriesId }, select: { chapters: { select: { folderPath: true, number: true } } } })
     numbers = Object.fromEntries((row?.chapters ?? []).map(c => [path.basename(c.folderPath), c.number]).filter(([folder]) => given.has(folder as string)))
   }
+  if (kind === 'editor') assertEditorSettings(options, Object.entries(assignments).filter(([, chapters]) => chapters.length > 0).map(([device]) => device))
   const targets: PhoneAutomationTarget[] = []
   let first: (PhoneUpdateRequest & { phones: number }) | null = null
   let reached = 0
@@ -1580,6 +1587,25 @@ function assertNarrationFree(series: string, device: string | undefined): void {
     if (target !== null && receipt.device === target) continue
     if (parseScriptRuns(receipt.body.runs).some(r => r.kind === 'narration' && r.series === series)) {
       throw new Error(`${phoneName(receipt.device)} is already writing ${series}'s scripts. Stop it there first.`)
+    }
+  }
+}
+
+/** Validate every recipient before sending any Editor start, including a split. */
+function assertEditorSettings(options: PhoneAutomationOptions, devices: string[]): void {
+  if (options.ai === undefined && options.smallBatches === undefined) return // Older phone's original start.
+  if (options.ai !== undefined && options.ai !== 'chatgpt' && options.ai !== 'aistudio') throw new Error('Editor supports ChatGPT or AI Studio. Choose one of these providers.')
+  if (options.smallBatches !== undefined && typeof options.smallBatches !== 'boolean') throw new Error('smallBatches must be true or false')
+  if (!devices.length) throw new Error('Refresh Phone Status before choosing Editor settings')
+  for (const device of devices) {
+    const editor = automationOf(device)[0]?.editor
+    const provider = options.ai ?? (isObject(editor) && editor.ai === 'aistudio' ? 'aistudio' : 'chatgpt')
+    if (!isObject(editor) || !Array.isArray(editor.providers) || !editor.providers.includes(provider) || typeof editor.smallBatches !== 'boolean') {
+      throw new Error(`Update Sleeper-Cell on ${phoneName(device)} and refresh Phone Status to choose Editor AI and small batches`)
+    }
+    const active = (relayReceipts<{ runs?: unknown }>('scripts') ?? []).some(r => r.device === device && parseScriptRuns(r.body.runs).some(run => run.kind === 'editor'))
+    if (active && ((options.ai !== undefined && options.ai !== editor.ai) || (options.smallBatches !== undefined && options.smallBatches !== editor.smallBatches))) {
+      throw new Error(`Stop Editor on ${phoneName(device)} before changing its AI or small batch setting`)
     }
   }
 }

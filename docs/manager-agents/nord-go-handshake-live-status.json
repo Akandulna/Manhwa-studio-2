@@ -1,0 +1,37 @@
+{
+  "scope": "Sanitized live telemetry only; headers, tokens, request/response bodies and console logs are discarded before persistence.",
+  "events": [
+    {
+      "capturedAt": "2026-10-20T05:56:18.864200+00:00",
+      "method": "POST",
+      "path": "/managed/operation",
+      "httpStatus": 403,
+      "outcome": "ok",
+      "eventTimestamp": 1792475778820
+    },
+    {
+      "capturedAt": "2026-10-20T05:56:19.746886+00:00",
+      "method": "POST",
+      "path": "/managed/operation",
+      "httpStatus": 403,
+      "outcome": "ok",
+      "eventTimestamp": 1792475778772
+    },
+    {
+      "capturedAt": "2026-10-20T05:56:40.428124+00:00",
+      "method": "POST",
+      "path": "/managed/operation",
+      "httpStatus": 403,
+      "outcome": "ok",
+      "eventTimestamp": 1792475800354
+    },
+    {
+      "capturedAt": "2026-10-20T05:56:40.469402+00:00",
+      "method": "POST",
+      "path": "/managed/operation",
+      "httpStatus": 403,
+      "outcome": "ok",
+      "eventTimestamp": 1792475800312
+    }
+  ]
+}

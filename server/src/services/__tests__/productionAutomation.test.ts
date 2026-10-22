@@ -48,7 +48,7 @@ describe('production resume and review boundary', () => {
 function harness(c = prepared(), override: Partial<ProductionRunnerDependencies> = {}) {
   const events: ProductionJob[] = [], saved: ProductionJob[] = [], performed: string[] = []
   const deps: ProductionRunnerDependencies = {
-    load: async () => [], save: async job => { saved.push(structuredClone(job)) },
+    activate:async()=>{}, load: async () => [], save: async job => { saved.push(structuredClone(job)) },
     series: async () => model([c]), validate: async () => {}, emit: j => events.push(structuredClone(j)), stop: vi.fn(async () => {}),
     perform: async (step, _job, _signal, report) => {
       performed.push(step)
@@ -59,6 +59,69 @@ function harness(c = prepared(), override: Partial<ProductionRunnerDependencies>
   }
   return { runner: new ProductionRunner(deps), events, saved, performed, deps }
 }
+
+describe('managed crop ProductionRunner mode',()=>{
+ const managed={...config,managedCrop:true as const,clipper:{ai:'chatgpt' as const,flow:'classic' as const,tabs:1,chatGpt:{mode:null,model:null,effort:null}}}
+ it('uses only prepared crop-page prerequisites and stops at explicit review',async()=>{
+  const c=prepared(),h=harness(c)
+  expect(nextProductionStep(model([c]),managed)).toBe('clipping')
+  await h.runner.start('s1',managed)
+  await vi.waitFor(()=>expect(h.events.at(-1)?.status).toBe('review'))
+  expect(h.performed).toEqual(['clipping','review'])
+  expect(c.stages.script_en.state).not.toBe('done')
+ })
+ it('preserves managed resume mode after a Studio restart',async()=>{
+  const c=prepared(),h=harness(c,{load:async()=>[{id:'saved',seriesId:'s1',config:managed,status:'running',step:'clipping',message:'waiting',createdAt:'2026-10-20',updatedAt:'2026-10-20'}]})
+  const status=await h.runner.get('s1')
+  expect(status.job?.status).toBe('running');expect(status.nextStep).toBe('clipping')
+ })
+ it('carries original claim intents into the first durable resumed job save',async()=>{
+  const command:ProductionJob['command']={kind:'clipper',sentAt:'2026-10-20',managedTaskIds:['task'],managedClaims:[{taskId:'task',claimEventId:'original-claim',deviceId:managed.device,profileId:managed.profileId}]}
+  const h=harness(prepared(),{load:async()=>[{id:'saved',seriesId:'s1',config:managed,status:'failed',step:'clipping',message:'lost reply',createdAt:'2026-10-20',updatedAt:'2026-10-20',command}],perform:async()=>{throw new Error('paused test')}})
+  await h.runner.start('s1',managed,{jobId:'saved',revision:0,scopeDigest:'a'.repeat(64),checkedAt:'2026-10-22T00:00:00Z',preparedTaskIds:[]})
+  expect(h.saved[0].command).toEqual(command)
+  expect(h.saved[0].resumedFrom).toMatchObject({jobId:'saved',revision:0,scopeDigest:'a'.repeat(64)})
+  await vi.waitFor(()=>expect(h.events.at(-1)?.status).toBe('failed'))
+ })
+ it('persists an explicit reconciliation message when a phone stop cannot be confirmed',async()=>{
+  let release!:()=>void
+  const wait=new Promise<void>(resolve=>{release=resolve})
+  const h=harness(prepared(),{perform:async()=>wait,stop:async()=>{throw new Error('Missing durable claim receipt')}})
+  await h.runner.start('s1',managed)
+  await expect(h.runner.cancel('s1')).rejects.toThrow('Missing durable claim')
+  const job=(await h.runner.get('s1')).job
+  expect(job?.status).toBe('cancelled');expect(job?.message).toContain('Phone stop needs reconciliation')
+  expect(h.saved.at(-1)?.message).toBe(job?.message)
+  release()
+ })
+ it('waits for an in-flight claim save before collecting cancellation receipts',async()=>{
+  let release!:()=>void,entered!:()=>void
+  const saving=new Promise<void>(resolve=>{entered=resolve}),gate=new Promise<void>(resolve=>{release=resolve})
+  const claim={taskId:'task',claimEventId:'original',deviceId:managed.device,profileId:managed.profileId}
+  const stop=vi.fn(async(_job:ProductionJob)=>{})
+  const h=harness(prepared(),{save:async job=>{if(job.status==='running'&&job.command?.managedClaims){entered();await gate}},perform:async(_s,_job,_signal,report)=>{await report('Assigning',{kind:'clipper',sentAt:'now',managedTaskIds:['task'],managedClaims:[claim]})},stop})
+  await h.runner.start('s1',managed);await saving
+  const cancelled=h.runner.cancel('s1')
+  expect(stop).not.toHaveBeenCalled();release();await cancelled
+  expect(stop).toHaveBeenCalledOnce();expect(stop.mock.calls[0][0].command?.managedClaims).toEqual([claim])
+  expect((await h.runner.get('s1')).job?.status).toBe('cancelled')
+ })
+ it('requires explicit resume for retained managed jobs and rejects cancellation, stale revisions or changed configuration',async()=>{
+  const saved:ProductionJob={id:'retained',revision:5,seriesId:'s1',config:managed,status:'interrupted',step:'clipping',message:'retained',createdAt:'fixture',updatedAt:'fixture'}
+  const h=harness(prepared(),{load:async()=>[structuredClone(saved)],perform:async()=>{throw new Error('fixture finish')}})
+  await expect(h.runner.start('s1',managed)).rejects.toThrow('explicit Resume')
+  const approval={jobId:saved.id,revision:4,scopeDigest:'a'.repeat(64),checkedAt:'2026-10-22T00:00:00Z',preparedTaskIds:[]}
+  await expect(h.runner.start('s1',managed,approval)).rejects.toThrow('exact current revision')
+  await expect(h.runner.start('s1',{...managed,device:'other'},{...approval,revision:5})).rejects.toThrow('exact current revision')
+  saved.status='cancelled'
+  await expect(h.runner.start('s1',managed,{...approval,revision:5})).rejects.toThrow('exact current revision')
+  expect(h.saved).toHaveLength(0)
+ })
+ it('rejects multi-device or selected-model settings in the Phase 3 entry point',()=>{
+  expect(parseProductionConfig(managed)).toEqual(managed)
+  for(const bad of [{...managed,parallelDevices:[{device:'other',profileId:'p'}]},{...managed,clipper:{...managed.clipper,tabs:2}},{...managed,clipper:{...managed.clipper,chatGpt:{mode:null,effort:null,model:'selected'}}},{...managed,managedCrop:false}])expect(()=>parseProductionConfig(bad)).toThrow()
+ })
+})
 
 describe('parallel production devices', () => {
   const parallel = { ...config, parallelDevices: [{ device: 'phone-b', profileId: 'b-profile' }] }
@@ -134,13 +197,13 @@ describe('server production runner', () => {
     expect(perform).toHaveBeenCalledOnce()
     expect((await h.runner.get('s1')).job?.status).toBe('cancelled')
   })
-  it('restores active jobs as interrupted after restart without replaying commands', async () => {
+  it('reads retained jobs without changing another scheduler ownership or replaying commands', async () => {
     const old: ProductionJob = { id: 'old', seriesId: 's1', config, status: 'running', step: 'scripts', message: 'sent', createdAt: '', updatedAt: '', command: { kind: 'narration', sentAt: '' } }
     const perform = vi.fn()
     const h = harness(prepared(), { load: async () => [old], perform })
-    expect((await h.runner.get('s1')).job?.status).toBe('interrupted')
+    expect((await h.runner.get('s1')).job?.status).toBe('running')
     expect(perform).not.toHaveBeenCalled()
-    expect(h.saved.at(-1)?.status).toBe('interrupted')
+    expect(h.saved).toHaveLength(0)
   })
   it('does not reserve a device or save a job when validation fails', async () => {
     const h = harness(prepared(), { validate: async () => { throw new Error('profile missing') } })

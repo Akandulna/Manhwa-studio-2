@@ -1,3 +1,4 @@
+import {readManagedChapterAssets,assertManagedChapterRevision} from './managedChapterAssets.js'
 /**
  * Editor 2.0 — repairing timeline image references that name no file on disk.
  *
@@ -203,10 +204,11 @@ async function repairChapterTimeline(
     throw new Error(`Timeline JSON does not parse: ${err instanceof Error ? err.message : 'bad JSON'}`)
   }
 
+  const managed=await readManagedChapterAssets(folderPath)
   const outputDir = getOutputDir(folderPath)
   let outputs: string[]
   try {
-    outputs = (await fs.readdir(outputDir)).filter(n => /\.(png|jpe?g|webp)$/i.test(n))
+    outputs = (managed ? managed.assets.map(file=>file.filename) : await fs.readdir(outputDir)).filter(n => /\.(png|jpe?g|webp)$/i.test(n))
   } catch {
     throw new Error('This chapter has no crops3 folder — run "Crop Sections" in Image Clipper 3.0 first.')
   }
@@ -281,5 +283,6 @@ async function repairChapterTimeline(
 
   // Two spaces, matching what the pasting side emits, so a corrected paste
   // does not read as wholly rewritten if the user compares it to the original.
+  await assertManagedChapterRevision(folderPath,managed?.revision??null)
   return { json: JSON.stringify(parsed, null, 2), repaired, unfixable }
 }

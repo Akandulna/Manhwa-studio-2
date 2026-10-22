@@ -17,6 +17,7 @@ import { initClipper3Routes } from './routes/clipper3.js';
 import { initVideoEditor2Routes } from './routes/videoEditor2.js';
 import { initStorageRoutes } from './routes/storage.js';
 import { initR2Routes } from './routes/r2.js';
+import {initManagedPilotRoutes} from './routes/managedPilot.js';
 import { initStitchRoutes } from './routes/stitch.js';
 import { initPagePreviewRoutes } from './routes/pagePreview.js';
 import { DownloadManager } from './services/downloadManager.js';
@@ -28,6 +29,7 @@ import { publishLibrary, startLibrarySync } from './services/librarySync.js';
 import { getSeriesProcess, notifySeriesProcessChanged, startSeriesProcess } from './services/seriesProcess.js';
 import { startSeriesActivity, seriesActivityMiddleware, flushSeriesActivity } from './services/seriesActivity.js';
 import { productionAutomation, startProductionAutomation } from './services/productionAutomation.js';
+import { startManagerReporting, managerOverview, acknowledgeManagerIncident, recordManagerStorage, managerRelayUsage } from './services/managerReporting.js';
 
 dotenv.config();
 
@@ -88,6 +90,20 @@ app.use('/api/storage', initStorageRoutes());        // Storage: local disk usag
 app.use('/api/stitch', initStitchRoutes());          // Library: stitch a chapter's many short pages into a few tall ones
 app.use('/api/page-preview', initPagePreviewRoutes()); // Library: preview a chapter's pages and delete unwanted ones
 app.use('/api/r2', initR2Routes(io));                // Cloud backup: upload series folders to Cloudflare R2
+app.use('/api/managed-pilot',initManagedPilotRoutes(prisma));
+app.get('/api/managers', async (_req, res) => {
+  try { res.json(await managerOverview()); }
+  catch { res.status(503).json({ error: 'Manager reporting is unavailable. Existing production is unaffected.' }); }
+});
+app.get('/api/managers/relay-usage', async (_req, res) => {
+  try { res.json(await managerRelayUsage()); }
+  catch { res.status(503).json({ error: 'Relay usage is unavailable.' }); }
+});
+app.post('/api/managers/acknowledge', async (req, res) => {
+  if (typeof req.body?.incidentId !== 'string' || typeof req.body?.notificationId !== 'string') return res.status(400).json({ error: 'Choose an incident notification.' });
+  try { await acknowledgeManagerIncident(req.body.incidentId, req.body.notificationId); res.json({ queued: true }); }
+  catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : 'Could not acknowledge incident.' }); }
+});
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -135,10 +151,15 @@ backfillAlignmentDocumentsQuietly();
 publishEditorPackagesAtStartup();
 
 // Live phone status through the relay Worker, when Settings → Cloudflare has it set up.
+startManagerReporting(prisma, io);
 startLibrarySync(io);
 startSeriesProcess(io);
 startPhoneRelay(io);
 startProductionAutomation(io);
+void getSeriesProcess().catch(error => console.error('[process] initial scan:', error));
+void recordManagerStorage().catch(error => console.error('[managers] storage:', error));
+const managerStorageTimer = setInterval(() => { void recordManagerStorage().catch(error => console.error('[managers] storage:', error)); }, 60_000);
+managerStorageTimer.unref();
 
 // Graceful shutdown
 process.on('SIGINT', async () => {

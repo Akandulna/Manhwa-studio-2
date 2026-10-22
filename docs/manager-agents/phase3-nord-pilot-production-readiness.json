@@ -1,0 +1,19 @@
+{
+  "checkedAt": "2026-10-19T18:24:14.585Z",
+  "studioEnabled": true,
+  "readiness": {
+    "workspaceId": "studio_01df7f214f87472e802b2bc43b8d9165",
+    "artifactStorageConfigured": true,
+    "capabilities": [
+      "chatgpt-default-crop/1"
+    ]
+  },
+  "workerEnrollment": {
+    "enrolled": false,
+    "peerRegistered": false,
+    "reserved": false
+  },
+  "initialDeployment": "79e978ed-d68b-470b-b8b0-634713352eb4",
+  "enabledDeployment": "5c5c7cf1-d23b-474b-a2b9-48786f18fcb3",
+  "scope": "Authenticated readiness and device-scoped enrollment read only; credentials excluded. No task, page binding or provider prompt."
+}

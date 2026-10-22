@@ -1,3 +1,4 @@
+import {withUnmanagedCropChapter} from './managedCropProjection.js'
 /**
  * Page stitching — join a chapter's many short pages into a few tall ones.
  *
@@ -390,7 +391,7 @@ async function moveBack(names: string[], from: string, to: string): Promise<void
   }
 }
 
-export async function stitchChapter(chapter: ChapterRef, groups: unknown): Promise<StitchRecord> {
+async function stitchChapterLegacy(chapter: ChapterRef, groups: unknown): Promise<StitchRecord> {
   return withLock(chapter.id, async () => {
     const state = await getStitchState(chapter)
     if (state.record) throw new StitchError('This chapter is already stitched. Undo it first.', 409)
@@ -483,7 +484,7 @@ export async function stitchChapter(chapter: ChapterRef, groups: unknown): Promi
   })
 }
 
-export async function undoStitch(chapter: ChapterRef): Promise<void> {
+async function undoStitchLegacy(chapter: ChapterRef): Promise<void> {
   return withLock(chapter.id, async () => {
     const record = await readRecord(chapter.folderPath)
     if (!record) throw new StitchError('This chapter has no stitch to undo', 404)
@@ -530,9 +531,21 @@ export async function undoStitch(chapter: ChapterRef): Promise<void> {
 }
 
 /** Keep the stitch for good: drop the originals and their record. */
-export async function discardBackup(chapter: ChapterRef): Promise<void> {
+async function discardBackupLegacy(chapter: ChapterRef): Promise<void> {
   return withLock(chapter.id, async () => {
     if (!(await readRecord(chapter.folderPath))) throw new StitchError('This chapter has no stitch backup', 404)
     await fs.rm(backupDir(chapter.folderPath), { recursive: true, force: true })
   })
+}
+
+export async function stitchChapter(chapter: ChapterRef, groups: unknown):Promise<StitchRecord> {
+ return withUnmanagedCropChapter(chapter.folderPath,()=>stitchChapterLegacy(chapter,groups))
+}
+
+export async function undoStitch(chapter: ChapterRef):Promise<void> {
+ return withUnmanagedCropChapter(chapter.folderPath,()=>undoStitchLegacy(chapter))
+}
+
+export async function discardBackup(chapter: ChapterRef):Promise<void> {
+ return withUnmanagedCropChapter(chapter.folderPath,()=>discardBackupLegacy(chapter))
 }

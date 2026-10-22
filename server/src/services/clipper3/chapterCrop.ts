@@ -1,3 +1,5 @@
+import {readManagedChapterAssets} from '../managedChapterAssets.js'
+import {withUnmanagedCropChapter,withManagedCropReadSnapshot,readManagedCrop} from '../managedCropProjection.js'
 /**
  * Image Clipper 3.0 — cutting a whole chapter (Crop Sections), by hand or
  * automatically after Sync json.
@@ -102,7 +104,12 @@ export interface ChapterCropState {
  * Reads the chapter's Done pages and compares crops3/ with them. Throws when
  * the chapter has no readable manifest (not downloaded, or its pages deleted).
  */
-export async function readChapterCropState(chapter: Pick<CropChapter, 'folderPath' | 'series'>): Promise<ChapterCropState> {
+async function readChapterCropStateSnapshot(chapter: Pick<CropChapter, 'folderPath' | 'series'>): Promise<ChapterCropState> {
+  try {
+    const managed=await readManagedChapterAssets(chapter.folderPath)
+    if(managed)return {totalImages:managed.pages.length,targets:managed.pages.map(page=>({filename:page.filename,crops:extractCrops(page.pointers)})),fullyAttached:true,
+      chopped:managed.assets.length>0,outputs:{complete:true,files:managed.assets.length,missing:0,extra:0,changed:0}}
+  }catch { /* Existing page projections still report progress, never chapter completion. */ }
   const manifest = await getChapterManifest(chapter.folderPath)
   const pointed = await listPointedImageStems(chapter.folderPath)
   const described = await listMetadataImageStems(chapter.folderPath)
@@ -111,6 +118,8 @@ export async function readChapterCropState(chapter: Pick<CropChapter, 'folderPat
   const targets: CropTarget[] = []
   const expectedOutputs: string[] = []
   for (const img of manifest.images) {
+    const publication=await readManagedCrop(chapter.folderPath,img.filename)
+    if(publication) {targets.push({filename:img.filename,crops:extractCrops(JSON.parse(publication.pointers))});continue}
     const stem = stemOf(img.filename)
     if (!pointed.has(stem) || !described.has(stem)) continue
     const stored = await readImagePoints(chapter.folderPath, img.filename)
@@ -152,7 +161,7 @@ export async function readChapterCropState(chapter: Pick<CropChapter, 'folderPat
  * The caller checks `isChapterCropping` first; this claims the chapter itself
  * so the claim and the cut cannot drift apart.
  */
-export async function runChapterCrop(
+async function runChapterCropLegacy(
   io: Server,
   chapter: CropChapter,
   targets: CropTarget[],
@@ -313,4 +322,12 @@ export async function queueAutoCrop(
       })
   }
   return queued
+}
+
+export async function readChapterCropState(chapter:Pick<CropChapter,'folderPath'|'series'>):Promise<ChapterCropState> {
+ return withManagedCropReadSnapshot(()=>readChapterCropStateSnapshot(chapter))
+}
+export async function runChapterCrop(io:Server,chapter:CropChapter,targets:CropTarget[],opts:{auto?:boolean}={}):Promise<void> {
+ try {await withUnmanagedCropChapter(chapter.folderPath,()=>runChapterCropLegacy(io,chapter,targets,opts))}
+ catch(error) {io.emit('clipper3:crop-complete',{chapterId:chapter.id,chapterNumber:chapter.number,seriesId:chapter.seriesId,auto:opts.auto===true,error:error instanceof Error?error.message:String(error)})}
 }

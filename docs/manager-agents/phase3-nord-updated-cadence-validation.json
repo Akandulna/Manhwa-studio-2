@@ -1,0 +1,11 @@
+{
+  "checkedAt": "2026-10-19T12:50:14.611764+00:00",
+  "deviceId": "304527cb8fc1440a",
+  "apkVersion": "1.0.133",
+  "verified": false,
+  "passiveIdleWindowSecondsAtLeast": 225,
+  "nativeProcessHealthIntervalObserved": false,
+  "receiptOnlyRefreshTriggersNativeProcessSnapshot": false,
+  "finding": "Native health emission is event-driven and gated by a five-minute minimum in ManagerReports.capture. StudioRequests.answer refreshes scripts/crops/sync receipts, not KIND_PROCESS; a receipt refresh is not a valid native process-cadence trigger.",
+  "scope": "Passive observation and receipt-only diagnostic. No assertion that periodic health reporting or installed-phone forced-429 recovery passed. No production or provider run."
+}

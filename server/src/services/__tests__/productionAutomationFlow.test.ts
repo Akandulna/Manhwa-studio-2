@@ -2,11 +2,18 @@ import { describe, expect, it, vi } from 'vitest'
 import { buildProcessSeries, emptyStages, type ProcessChapter, type ProcessStage } from '../seriesProcessModel.js'
 
 const state = vi.hoisted(() => ({
+  settings:new Map<string,string>(),
   stages: {} as Record<string, { state: string }>, secondStages: null as Record<string, { state: string }> | null,
   failDevice: '', holdClipping: false, commands: [] as any[], scripts: [] as any[], audio: [] as any[], attached: false, selectedProfile: false, events: [] as any[], saves: [] as any[]
 }))
+const setting=vi.hoisted(()=>({
+ findUnique:async({where}:any)=>state.settings.has(where.key)?{key:where.key,value:state.settings.get(where.key)}:null,
+ findMany:async({where}:any)=>[...state.settings].filter(([key])=>key.startsWith(where.key.startsWith)).map(([key,value])=>({key,value})),
+ create:async({data}:any)=>{if(state.settings.has(data.key))throw new Error('duplicate setting');state.settings.set(data.key,data.value)},
+ updateMany:async({where,data}:any)=>{if(state.settings.get(where.key)!==where.value)return {count:0};state.settings.set(where.key,data.value);if(where.key.startsWith('productionAutomation:'))state.saves.push(JSON.parse(data.value));return {count:1}}
+}))
 vi.mock('../../index.js', () => ({ prisma: {
-  setting: { findMany: async () => [], upsert: async (args: any) => { state.saves.push(JSON.parse(args.update.value)) } },
+  $transaction:async(work:any)=>work({setting}),setting,
   chapter: { findMany: async () => [1, ...(state.secondStages ? [2] : [])].map(n => ({ id: `c${n}`, seriesId: 's1', number: n, folderPath: `Demo/Chapter ${n}`, series: { title: 'Demo', rootFolder: 'Demo' } })) },
   chapterScript: { findMany: async ({ where }: any) => state.scripts.filter(s => s.language === where.language) },
   audioSection: { findMany: async ({ where }: any) => state.audio.filter(s => s.language === where.language) }
@@ -62,7 +69,7 @@ vi.mock('../clipper3/chapterCrop.js', () => ({
   seriesSlug: () => 'demo', readChapterCropState: async () => ({ fullyAttached: state.attached }), queueAutoCrop: vi.fn(async () => [])
 }))
 
-const { productionAutomation, startProductionAutomation, getProductionStatus } = await import('../productionAutomation.js')
+const { productionAutomation, startProductionAutomation, getProductionStatus, reconcileManagedProduction } = await import('../productionAutomation.js')
 const { importPhoneScripts } = await import('../phoneScriptImport.js')
 const { fetchPhoneVoiceover } = await import('../phoneVoiceoverImport.js')
 const { fetchPhoneCrops } = await import('../phoneCropImport.js')
@@ -70,6 +77,17 @@ const { sendProfileCommand } = await import('../phoneProfiles.js')
 const { alignSectionInBackground } = await import('../alignment/alignmentService.js')
 
 describe('production service handoffs', () => {
+  it('requires the exact saved managed job revision without saving, claiming or activating on inspection',async()=>{
+    const saved={id:'retained',seriesId:'reconcile-series',revision:9,status:'interrupted',step:'clipping',message:'retained',createdAt:'fixture',updatedAt:'fixture',config:{device:'phone-a',profileId:'profile-2',clipper:{ai:'chatgpt',flow:'classic',tabs:1,chatGpt:{mode:null,model:null,effort:null}}}}
+    state.settings.set('productionAutomation:reconcile-series',JSON.stringify(saved))
+    const before=[...state.settings],commands=state.commands.length
+    await expect(reconcileManagedProduction('reconcile-series',{jobId:'retained',revision:8})).rejects.toThrow('changed')
+    await expect(reconcileManagedProduction('reconcile-series',{jobId:'retained',revision:9})).rejects.toThrow('saved managed')
+    await expect(reconcileManagedProduction('reconcile-series',{jobId:'retained',revision:-1})).rejects.toThrow('exact saved')
+    expect([...state.settings]).toEqual(before);expect(state.commands.length).toBe(commands)
+    state.settings.delete('productionAutomation:reconcile-series')
+  })
+
   it('runs scripts, fetches both voiceovers through the Mac aligner’s import path, then clips on the chosen device and stops for review', async () => {
     state.stages = emptyStages()
     for (const key of ['download', 'cleanup', 'stitch'] as ProcessStage[]) state.stages[key] = { state: 'done' }

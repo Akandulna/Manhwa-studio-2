@@ -1,0 +1,13 @@
+{
+  "filename": "page_005.jpg",
+  "cropCount": 4,
+  "hasMetadata": true,
+  "metadataValid": true,
+  "status": "done",
+  "checkedAt": "2026-10-20T06:24:32.674693+00:00",
+  "metadataValidFromMetadataEndpoint": true,
+  "metadataErrors": [],
+  "pointsSha256": "2051c4c24a6c001acf1280c18a9f879b197844ddac5266c6d7673ee7a3440503",
+  "metadataSha256": "0f55b4651838e19f9ef15ef1d6b1beda545c75651457c12d1b8ae1b8a4550ce3",
+  "scope": "Existing crop-reader integration after actual Nord/Neostopzone Plus default-model run and trusted publication; no visual review approval or cutting."
+}

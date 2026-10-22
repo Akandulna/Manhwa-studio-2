@@ -11,7 +11,7 @@
  * connection/phone presence changes as `phone:relay`.
  * "Refresh from phone" goes to the relay as a request message, and so do
  * the automation runs' start and stop (see sendAutomationCommand in r2Service) and the
- * screen controls (phoneScreen.ts). The phone's screen receipts (`screen`,
+ * screen controls (phoneScreen.ts). Run/profile controls use HTTP for an admission response. The phone's screen receipts (`screen`,
  * `screenshot`) are kept apart from the three status receipts and pushed as
  * `phone:screen` ({ device, kind }), so a screenshot doesn't reload the pages
  * that follow `phone:receipt`. A screenshot is kept nowhere but here, in
@@ -32,7 +32,9 @@ import WebSocket from 'ws'
 import type { Server } from 'socket.io'
 import { writeEnvVars } from '../utils/envFile.js'
 import { receiveLibraryManifest, scheduleLibraryPublish } from './librarySync.js'
+import { receiveManagerReport, receiveManagerIncident, recordLegacyManagerReceipt, deliverManagerReports, recordManagerFleet } from './managerReporting.js'
 import { notifySeriesProcessChanged, receiveDeviceProcess } from './seriesProcess.js'
+import { LEGACY_BROWSER_ACTIONS } from './managedTaskProtocol.js'
 
 export type ReceiptKind = 'sync' | 'scripts' | 'crops'
 
@@ -80,6 +82,7 @@ export interface PhoneRequestArgs {
   tabs?: number
   chapters?: string[]
   ai?: 'chatgpt' | 'aistudio' | 'gemini'
+  smallBatches?: boolean
   flow?: 'classic' | 'steps'
   language?: 'en' | 'hi'
   device?: string
@@ -389,13 +392,16 @@ function handle(text: string): void {
     return
   }
   switch (message.type) {
+    case 'manager:report': receiveManagerReport(message.body); break
+    case 'manager:incident': receiveManagerIncident(message.body); break
     case 'hello':
     case 'presence':
       phones = Number(message.phones) || 0
       presence = parseDevices(message.devices)
       seen = parseSeen(message.seen) ?? seen
       emitStatus()
-      if (message.type === 'hello') scheduleLibraryPublish()
+      recordManagerFleet(relayPhones())
+      if (message.type === 'hello') { scheduleLibraryPublish(); void deliverManagerReports() }
       break
     case 'receipt': {
       const { kind, body } = message
@@ -418,6 +424,7 @@ function handle(text: string): void {
       }
       if (!KINDS.has(kind)) return
       recordPhoneActivity(kind, device, body, at)
+      recordLegacyManagerReceipt(kind, device, body, at)
       const kinds = receipts.get(device) ?? new Map<ReceiptKind, { at: number; body: object }>()
       kinds.set(kind as ReceiptKind, { at, body })
       receipts.set(device, kinds)
@@ -441,7 +448,8 @@ function handle(text: string): void {
 /**
  * "Refresh from phone" through the relay: the phone answers by posting its
  * receipts with `answers: id`. Over the socket when it's up, else one HTTP
- * request. `phones` says whether Sleeper-Cell is open to answer right away;
+ * request. Run/profile controls always use HTTP for authority admission.
+ * `phones` says whether Sleeper-Cell is open to answer right away;
  * when it isn't, the relay keeps the request for when it opens. `action:
  * 'sync'` has the phone first check R2 for chapters just sent; a relay
  * deployed before actions existed drops it, and the phone only answers.
@@ -464,12 +472,14 @@ export async function sendPhoneRequest(
     ...(args.tabs ? { tabs: args.tabs } : {}),
     ...(args.chapters?.length ? { chapters: args.chapters } : {}),
     ...(args.ai ? { ai: args.ai } : {}),
+    ...(args.smallBatches !== undefined ? { smallBatches: args.smallBatches } : {}),
     ...(args.flow ? { flow: args.flow } : {}),
     ...(args.language ? { language: args.language } : {}),
     ...(args.profile ? { profile: args.profile } : {}),
     ...(args.chatGpt ? { chatGpt: args.chatGpt } : {})
   }
-  if (socket && connected && socket.readyState === WebSocket.OPEN) {
+  // Browser commands require the authority's admission response. Socket send alone cannot prove admission.
+  if ((!action || !LEGACY_BROWSER_ACTIONS.has(action)) && socket && connected && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: 'request', ...request }))
     const reached = args.device ? Number(presence.some(d => d.id === args.device)) : phones
     return { ...request, phones: reached }
@@ -479,7 +489,10 @@ export async function sendPhoneRequest(
     headers: { Authorization: `Bearer ${env.token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(request)
   })
-  if (!res.ok) throw new Error(relayHttpError(res.status))
+  if (!res.ok) {
+    if (res.status === 409) throw new Error('The phone is enrolled for managed work. Reconcile its managed tasks before using legacy run or profile controls.')
+    throw new Error(relayHttpError(res.status))
+  }
   const body = (await res.json().catch(() => ({}))) as { phones?: number }
   return { ...request, phones: Number(body.phones) || 0 }
 }

@@ -8,7 +8,7 @@ vi.mock('../../index.js', () => ({ prisma: { series: {
   findMany: async () => [{ id: 's', title: 'Demo', rootFolder: 'Demo', chapters: [] }]
 } } }))
 
-const { deleteCompressedSeriesVideos, scanStorage } = await import('../storageService.js')
+const { deleteCompressedSeriesVideos, scanStorage, removeWithin } = await import('../storageService.js')
 let root: string
 const previousRoot = process.env.DOWNLOAD_ROOT
 const write = async (file: string, data = 'video') => {
@@ -95,4 +95,14 @@ describe('render cleanup after compression', () => {
     }
     expect(await read('_video2/ch001_demo.mp4')).toBe('original')
   })
+  it('refuses recursive deletion above or inside a managed chapter before touching files', async () => {
+    await write('Chapter 001/.managed-crops/page.json', '{}')
+    await write('Chapter 001/page.png', 'protected')
+    for (const target of ['Demo', 'Demo/Chapter 001', 'Demo/Chapter 001/page.png']) {
+      await expect(removeWithin(path.join(root, target))).rejects.toThrow('Managed crop tasks')
+    }
+    expect(await read('Chapter 001/page.png')).toBe('protected')
+    expect(await removeWithin(path.join(root, 'Demo/_video2/ch001_demo.mp4'))).toBe(true)
+  })
+
 })

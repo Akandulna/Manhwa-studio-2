@@ -1,0 +1,44 @@
+{
+  "checkedAt": "2026-10-19T18:45:00.460Z",
+  "selectedByOwner": "anything pending",
+  "series": {
+    "id": "979f30e7-110a-433e-9150-680c6e1fb3b7",
+    "title": "Sandmancer of the Scorched Desert"
+  },
+  "chapter": {
+    "id": "01fef395-d351-41bc-911a-9b4e7e035cd8",
+    "number": 1
+  },
+  "page": {
+    "id": "4e3e6a40-b81a-4347-ba49-abce0df2c5d1",
+    "index": 1,
+    "ordinal": 1,
+    "filename": "page_001.jpg",
+    "bytes": 317920,
+    "sha256": "9966acd8c0fae11c398594fac034b8b1ca0e3d16c5ca615a66a1f67d89e520c2",
+    "width": 800,
+    "height": 8070
+  },
+  "folder": "Sandmancer of the Scorched Desert/Chapter 001",
+  "legacyPointsExist": false,
+  "legacyMetadataExist": false,
+  "managedBindingExists": false,
+  "phoneSourceHashMatches": true,
+  "provider": "chatgpt",
+  "deviceId": "304527cb8fc1440a",
+  "profileId": "profile-1",
+  "model": "provider-default",
+  "scope": "Owner-selected pending Sandmancer page: startup identity failure confirmed, task paused, actual phone stop acknowledged, unsent and capacity released. Source fix passes JVM tests but awaits a GitHub Actions APK; no output or publication.",
+  "updatedAt": "2026-10-19T18:48:36.362Z",
+  "activePilot": {
+    "taskId": "task:sha256:cee56902b889bc86272711d485ac7ad3de3af7b4bdc908a3ba6744a31e9ff7ba",
+    "state": "paused",
+    "lastObservedPhase": "stop_confirmed",
+    "submission": "unsent",
+    "stopCommandId": "a0184bc6-7ee4-4b73-b49c-45030de479c4",
+    "phoneStopAcknowledgmentPending": false,
+    "reserved": false,
+    "lastAuthorityCheck": "2026-10-19T19:12:49.013Z"
+  },
+  "pendingApkFixes": "phase3-nord-pilot-startup-fix-validation.json"
+}

@@ -1,0 +1,5402 @@
+{
+  "retrievedAt": "2026-10-20T05:03:21.812252+00:00",
+  "worker": "sleeper-cell-relay",
+  "startUtc": "2026-10-19T18:30:00Z",
+  "endUtc": "2026-10-20T05:00:48Z",
+  "startIst": "2026-10-20T00:00:00+05:30",
+  "endIst": "2026-10-20T10:30:48+05:30",
+  "workerTotals": {
+    "errors": 0,
+    "requests": 1943,
+    "subrequests": 1943
+  },
+  "workerByOutcome": {
+    "success": 1792,
+    "clientDisconnected": 140,
+    "responseStreamDisconnected": 11
+  },
+  "workerByIstHour": {
+    "00:00": 261,
+    "01:00": 390,
+    "02:00": 275,
+    "03:00": 194,
+    "04:00": 38,
+    "05:00": 60,
+    "06:00": 112,
+    "07:00": 167,
+    "08:00": 125,
+    "09:00": 99,
+    "10:00": 222
+  },
+  "durableObjectTotals": {
+    "errors": 119,
+    "requests": 2542
+  },
+  "durableObjectByType": {
+    "http": 1955,
+    "hibernation": 140,
+    "alarm": 447
+  },
+  "durableObjectByOutcome": {
+    "responseStreamDisconnected": {
+      "errors": 17,
+      "requests": 17
+    },
+    "success": {
+      "errors": 0,
+      "requests": 2423
+    },
+    "clientDisconnected": {
+      "errors": 102,
+      "requests": 102
+    }
+  },
+  "loggingSettings": {
+    "observability": null,
+    "logpush": false,
+    "tail_consumers": []
+  },
+  "scope": "Cloudflare GraphQL aggregate analytics for this relay only, through the stated end time. Separate Worker and Durable Object metrics; do not add them as a single request total. Per-URL/per-request logs were not retained. Outcome success is a platform execution status, not proof of HTTP 2xx; explicit HTTP 429 responses are not separately identifiable here.",
+  "workerMinuteGroups": [
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:03:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:29:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:39:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:42:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:02:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:38:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:05:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:22:00Z",
+        "status": "responseStreamDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:44:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:33:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:56:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:45:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:41:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 4,
+        "subrequests": 4
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:32:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:00:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:23:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:56:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:36:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:51:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:32:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:47:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:13:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:35:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:03:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:30:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:43:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:33:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:01:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T23:00:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:43:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:16:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:45:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:09:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 4,
+        "subrequests": 4
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:22:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:14:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 7,
+        "subrequests": 7
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:52:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:44:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:16:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 6,
+        "subrequests": 6
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:30:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 7,
+        "subrequests": 7
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:12:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 4,
+        "subrequests": 4
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:09:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:14:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:17:00Z",
+        "status": "responseStreamDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:59:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 19,
+        "subrequests": 19
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:09:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:18:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:11:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 20,
+        "subrequests": 20
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:53:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:57:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 4,
+        "subrequests": 4
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:50:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 5,
+        "subrequests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:38:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 5,
+        "subrequests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:44:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 4,
+        "subrequests": 4
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:38:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 15,
+        "subrequests": 15
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:26:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:39:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:34:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:38:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 15,
+        "subrequests": 15
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:42:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:45:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:49:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T23:43:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 5,
+        "subrequests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:42:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:38:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T23:44:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 7,
+        "subrequests": 7
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:45:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 12,
+        "subrequests": 12
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:36:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:10:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:57:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:57:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:26:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:47:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:28:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:30:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:30:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:30:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:20:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 4,
+        "subrequests": 4
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:26:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 79,
+        "subrequests": 79
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:46:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:51:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:13:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 7,
+        "subrequests": 7
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:44:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:08:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:47:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:42:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:10:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 13,
+        "subrequests": 13
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:29:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:07:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 7,
+        "subrequests": 7
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T23:14:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:17:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 9,
+        "subrequests": 9
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:17:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:34:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:09:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:45:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:38:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:44:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 4,
+        "subrequests": 4
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:06:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:35:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:00:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:42:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 7,
+        "subrequests": 7
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:12:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:58:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:59:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 11,
+        "subrequests": 11
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:03:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:56:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:01:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:28:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:38:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:00:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:53:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 5,
+        "subrequests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:24:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:13:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:42:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:22:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:54:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 4,
+        "subrequests": 4
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:57:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:13:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:24:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:27:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 18,
+        "subrequests": 18
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:52:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:10:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:48:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:37:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:23:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:10:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:09:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:50:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 49,
+        "subrequests": 49
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:32:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:11:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 104,
+        "subrequests": 104
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:58:00Z",
+        "status": "responseStreamDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:46:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 5,
+        "subrequests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:58:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:45:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 9,
+        "subrequests": 9
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:43:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:03:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 9,
+        "subrequests": 9
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:58:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:34:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:36:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:39:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:10:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:22:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:04:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:21:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:45:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 5,
+        "subrequests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:14:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:34:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:42:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:58:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:43:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:32:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 5,
+        "subrequests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:04:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:08:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:57:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:08:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:11:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 5,
+        "subrequests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:22:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:51:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:59:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 7,
+        "subrequests": 7
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:40:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:26:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:55:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:22:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:16:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:55:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:25:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 10,
+        "subrequests": 10
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:20:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:41:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:39:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 104,
+        "subrequests": 104
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:11:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 4,
+        "subrequests": 4
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:23:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:51:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 4,
+        "subrequests": 4
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:46:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:44:00Z",
+        "status": "responseStreamDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:18:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:47:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 5,
+        "subrequests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:31:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:51:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 33,
+        "subrequests": 33
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T23:48:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:04:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:47:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:34:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 5,
+        "subrequests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:45:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 4,
+        "subrequests": 4
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:13:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:41:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 6,
+        "subrequests": 6
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:06:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:16:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:37:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:35:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:38:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:38:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:53:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:04:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:02:00Z",
+        "status": "responseStreamDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:36:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 4,
+        "subrequests": 4
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:50:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:43:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:32:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 9,
+        "subrequests": 9
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:27:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:22:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:18:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 19,
+        "subrequests": 19
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:51:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:00:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:26:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:37:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 12,
+        "subrequests": 12
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:17:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:30:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:55:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:30:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:38:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:22:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:26:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:58:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 4,
+        "subrequests": 4
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:26:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:28:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:34:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:39:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:02:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 4,
+        "subrequests": 4
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:38:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:14:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:17:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 5,
+        "subrequests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:42:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:26:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:45:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 11,
+        "subrequests": 11
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:39:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:46:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:52:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:55:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:42:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:33:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:48:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:36:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:23:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 5,
+        "subrequests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:53:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:34:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:48:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 9,
+        "subrequests": 9
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:16:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:28:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:52:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 9,
+        "subrequests": 9
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:24:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:24:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:47:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 4,
+        "subrequests": 4
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:40:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 12,
+        "subrequests": 12
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:28:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:50:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:21:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:26:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:32:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:17:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 5,
+        "subrequests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:35:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:07:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:55:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:28:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 6,
+        "subrequests": 6
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:39:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:00:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 5,
+        "subrequests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:12:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:34:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:45:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:23:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 14,
+        "subrequests": 14
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:34:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:57:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 6,
+        "subrequests": 6
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:39:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:03:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:44:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:46:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:58:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 7,
+        "subrequests": 7
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:09:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:17:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:39:00Z",
+        "status": "responseStreamDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:24:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:51:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:49:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 4,
+        "subrequests": 4
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:02:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:26:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:12:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:46:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:32:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:01:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:47:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:46:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 15,
+        "subrequests": 15
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:55:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:52:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 18,
+        "subrequests": 18
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:35:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:06:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:07:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:35:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:21:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:55:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:01:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:18:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:51:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:32:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 4,
+        "subrequests": 4
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:24:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 4,
+        "subrequests": 4
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:39:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:21:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 9,
+        "subrequests": 9
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:16:00Z",
+        "status": "responseStreamDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:42:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 6,
+        "subrequests": 6
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:55:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 5,
+        "subrequests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:25:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:42:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:03:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:48:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:18:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:29:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:34:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:56:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:20:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:41:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 22,
+        "subrequests": 22
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:10:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:37:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 7,
+        "subrequests": 7
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:36:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:01:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:10:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:30:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:02:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:13:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 7,
+        "subrequests": 7
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:02:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:54:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:22:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 11,
+        "subrequests": 11
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:38:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:06:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 15,
+        "subrequests": 15
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:02:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:01:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:53:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:32:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:37:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:17:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:45:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:24:00Z",
+        "status": "responseStreamDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:17:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:09:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:13:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:33:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:24:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:32:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:10:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:49:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:48:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:49:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:48:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:26:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 25,
+        "subrequests": 25
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:53:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:36:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:20:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 15,
+        "subrequests": 15
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:04:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:28:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:05:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:40:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 14,
+        "subrequests": 14
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:30:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:05:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:46:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 5,
+        "subrequests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:30:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 7,
+        "subrequests": 7
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:46:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 6,
+        "subrequests": 6
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:54:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 14,
+        "subrequests": 14
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:48:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 4,
+        "subrequests": 4
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:53:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:03:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 5,
+        "subrequests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:27:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:19:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:22:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 16,
+        "subrequests": 16
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:49:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:41:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:12:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:16:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:33:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:27:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:13:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:30:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:46:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:20:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:42:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:58:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:40:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:58:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:38:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:34:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 37,
+        "subrequests": 37
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:42:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 5,
+        "subrequests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:29:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:25:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 20,
+        "subrequests": 20
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:26:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:04:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:40:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:47:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:36:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:16:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 3,
+        "subrequests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:31:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:20:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:43:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:20:00Z",
+        "status": "responseStreamDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:03:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:36:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:14:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:09:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:43:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 5,
+        "subrequests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:02:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 5,
+        "subrequests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:50:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T02:01:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:15:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:38:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:06:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:24:00Z",
+        "status": "responseStreamDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:16:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:50:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 7,
+        "subrequests": 7
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:29:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:57:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:14:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 49,
+        "subrequests": 49
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:25:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 10,
+        "subrequests": 10
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:12:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 15,
+        "subrequests": 15
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:18:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:50:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:08:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:56:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 7,
+        "subrequests": 7
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T18:41:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:18:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:02:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:46:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:02:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:24:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:06:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:13:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 5,
+        "subrequests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:18:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:07:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:19:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T05:00:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T03:47:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:52:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 6,
+        "subrequests": 6
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:19:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T21:37:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:12:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T20:18:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T01:26:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T19:02:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:35:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2,
+        "subrequests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T04:06:00Z",
+        "status": "clientDisconnected"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-20T00:13:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 8,
+        "subrequests": 8
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeMinute": "2026-10-19T22:22:00Z",
+        "status": "success"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1,
+        "subrequests": 1
+      }
+    }
+  ],
+  "durableObjectGroups": [
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-19T20:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "responseStreamDisconnected",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 5,
+        "requests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-19T22:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 106
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T03:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "clientDisconnected",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 21,
+        "requests": 21
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-19T19:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 304
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-19T18:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "hibernation"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 4
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T00:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "responseStreamDisconnected",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 1,
+        "requests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-19T20:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "alarm"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 60
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T00:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "alarm"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 40
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-19T23:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 15
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-19T19:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "hibernation"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 15
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T01:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "alarm"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 47
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-19T18:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 89
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T03:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "alarm"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 59
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T04:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 254
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T00:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "hibernation"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 15
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-19T21:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 326
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-19T19:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "responseStreamDisconnected",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 4,
+        "requests": 4
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T05:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-19T20:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 305
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T05:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "alarm"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-19T19:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "clientDisconnected",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 5,
+        "requests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-19T21:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "clientDisconnected",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 3,
+        "requests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T01:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "responseStreamDisconnected",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 2,
+        "requests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T03:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "hibernation"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 22
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T01:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 159
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T04:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "alarm"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 60
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T04:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "clientDisconnected",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 13,
+        "requests": 13
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T02:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "hibernation"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 18
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T03:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 101
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-19T18:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "clientDisconnected",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 1,
+        "requests": 1
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T04:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "responseStreamDisconnected",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 3,
+        "requests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-19T21:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "hibernation"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 12
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T00:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "clientDisconnected",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 15,
+        "requests": 15
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T00:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "clientDisconnected",
+        "type": "alarm"
+      },
+      "sum": {
+        "errors": 3,
+        "requests": 3
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T02:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 86
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-19T18:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "alarm"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 30
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-19T20:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "clientDisconnected",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 5,
+        "requests": 5
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-19T21:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "responseStreamDisconnected",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 2,
+        "requests": 2
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T00:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 92
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T04:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "hibernation"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 20
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T02:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "clientDisconnected",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 17,
+        "requests": 17
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-19T20:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "hibernation"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 18
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T01:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "hibernation"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 16
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T02:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "alarm"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 59
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-19T21:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "alarm"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 28
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-20T01:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "clientDisconnected",
+        "type": "http"
+      },
+      "sum": {
+        "errors": 19,
+        "requests": 19
+      }
+    },
+    {
+      "dimensions": {
+        "datetimeHour": "2026-10-19T19:00:00Z",
+        "scriptName": "sleeper-cell-relay",
+        "status": "success",
+        "type": "alarm"
+      },
+      "sum": {
+        "errors": 0,
+        "requests": 60
+      }
+    }
+  ]
+}

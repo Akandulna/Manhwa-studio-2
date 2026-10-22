@@ -15,7 +15,7 @@ import path from 'path';
 import { libraryDeviceId, scheduleLibraryCleanup } from '../services/librarySync.js';
 import { libraryControl, libraryControls, saveLibraryControls } from '../services/libraryControls.js';
 import { notifySeriesProcessChanged } from '../services/seriesProcess.js';
-import { productionAutomation, getProductionStatus } from '../services/productionAutomation.js';
+import { productionAutomation, getProductionStatus, reconcileManagedProduction, resumeManagedProduction, exportManagedProduction, adoptManagedProduction, pauseManagedProduction, handoffManagedProduction } from '../services/productionAutomation.js';
 import { parseProductionConfig } from '../services/productionAutomationModel.js';
 
 const router = Router();
@@ -28,6 +28,24 @@ router.post('/:id/automation', async (req, res) => {
   try { res.json(await productionAutomation.start(req.params.id, parseProductionConfig(req.body))); }
   catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
 });
+router.post('/:id/automation/reconcile', async (req, res) => {
+  try { res.json(await reconcileManagedProduction(req.params.id,req.body)); }
+  catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
+});
+router.post('/:id/automation/resume', async (req, res) => {
+  try { res.json(await resumeManagedProduction(req.params.id,req.body)); }
+  catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
+});
+router.post('/:id/automation/export-run', async (req, res) => {
+  try { res.json(await exportManagedProduction(req.params.id,req.body)); }
+  catch (error) { res.status(409).json({error:error instanceof Error?error.message:String(error)}); }
+});
+router.post('/:id/automation/adopt-run', async (req, res) => {
+  try { res.json(await adoptManagedProduction(req.params.id,req.body)); }
+  catch (error) { res.status(409).json({error:error instanceof Error?error.message:String(error)}); }
+});
+router.post('/:id/automation/pause-handoff',async(req,res)=>{try{res.json(await pauseManagedProduction(req.params.id,req.body))}catch(error){res.status(409).json({error:error instanceof Error?error.message:String(error)})}});
+router.post('/:id/automation/handoff',async(req,res)=>{try{res.json(await handoffManagedProduction(req.params.id,req.body))}catch(error){res.status(409).json({error:error instanceof Error?error.message:String(error)})}});
 router.post('/:id/automation/stop', async (req, res) => {
   try { res.json(await productionAutomation.cancel(req.params.id)); }
   catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }

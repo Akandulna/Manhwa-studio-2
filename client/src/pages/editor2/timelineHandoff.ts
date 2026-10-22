@@ -31,6 +31,12 @@
 import { videoApi2, type StoredTimeline2 } from '@/lib/api'
 import type { NarrationLanguage } from '@/lib/narrationLanguage'
 
+const MODEL_PREFIX = 'editor2:model:'
+
+export function getTimelineModel(chapterId: string, lang: NarrationLanguage): string | null {
+  return read(`${MODEL_PREFIX}${keyOf(chapterId, lang)}`)
+}
+
 const JSON_PREFIX = 'editor2:timeline-json:'
 const PROCESSED_PREFIX = 'editor2:processed:'
 const SCROLL_PREFIX = 'editor2:scroll:'
@@ -105,6 +111,7 @@ export function getTimelineJson(chapterId: string, lang: NarrationLanguage): str
  * the card must ask for processing rather than offering a stale preview.
  */
 export function setTimelineJson(chapterId: string, lang: NarrationLanguage, json: string): boolean {
+  if (getTimelineJson(chapterId, lang)?.trim() !== json.trim()) remove(`${MODEL_PREFIX}${keyOf(chapterId, lang)}`)
   if (getProcessedJson(chapterId, lang) !== json) clearProcessed(chapterId, lang)
   const ok = write(`${JSON_PREFIX}${keyOf(chapterId, lang)}`, json)
   if (ok) touch(chapterId, lang)
@@ -130,11 +137,27 @@ export function clearProcessed(chapterId: string, lang: NarrationLanguage): void
 
 /** Forget a chapter's paste entirely (used by the card's Clear button). */
 export function clearTimeline(chapterId: string, lang: NarrationLanguage): void {
+  remove(`${MODEL_PREFIX}${keyOf(chapterId, lang)}`)
   remove(`${JSON_PREFIX}${keyOf(chapterId, lang)}`)
   clearProcessed(chapterId, lang)
   // Pushed as an empty paste rather than deleted, so another browser still
   // holding the old one drops it instead of uploading it back.
   touch(chapterId, lang)
+}
+
+/** Persist a reset before allowing another phone send/fetch. Keep the empty
+ * row as a tombstone so stale browser and phone results cannot restore it. */
+export async function resetTimeline(chapterId: string, lang: NarrationLanguage): Promise<void> {
+  clearTimeline(chapterId, lang)
+  const key = keyOf(chapterId, lang)
+  const pending = pushTimers.get(key)
+  if (pending) clearTimeout(pending)
+  pushTimers.delete(key)
+  const row = await videoApi2.saveStoredTimeline(chapterId, lang, {
+    json: '', processedJson: null, updatedAt: localUpdatedAt(key)
+  })
+  applyStored(row, lang)
+  if (row.json || row.processedJson) throw new Error('The timeline changed elsewhere. Please reset it again.')
 }
 
 /**
@@ -227,6 +250,8 @@ async function pushLocal(chapterId: string, lang: NarrationLanguage): Promise<vo
 /** Overwrite this browser's copy with the server's. */
 function applyStored(row: StoredTimeline2, lang: NarrationLanguage): void {
   const key = keyOf(row.chapterId, lang)
+  if (row.model && row.json) write(`${MODEL_PREFIX}${key}`, row.model)
+  else remove(`${MODEL_PREFIX}${key}`)
   if (row.json) write(`${JSON_PREFIX}${key}`, row.json)
   else remove(`${JSON_PREFIX}${key}`)
   if (row.processedJson !== null) write(`${PROCESSED_PREFIX}${key}`, row.processedJson)
@@ -244,7 +269,7 @@ function reconcile(
   // A push still waiting on its debounce is newer than anything stored.
   if (pushTimers.has(key)) return
   const local = localUpdatedAt(key)
-  if (row && row.updatedAt > local) return applyStored(row, lang)
+  if (row && row.updatedAt >= local) return applyStored(row, lang)
   if (hasLocalState(key) && (!row || local > row.updatedAt)) return pushLocal(chapterId, lang)
 }
 

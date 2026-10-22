@@ -1,3 +1,5 @@
+import {managedCropBindingCount,withUnmanagedCropChapter} from '../managedCropProjection.js'
+import {readManagedChapterAssets} from '../managedChapterAssets.js'
 /**
  * Image Clipper 3.0 — whether a whole chapter's crops have been reviewed.
  *
@@ -183,6 +185,11 @@ export function effectiveReview(record: ChapterReview, writtenAt: number | null,
 
 /** The chapter's effective review (see `effectiveReview`): what the UI shows and the crop gate checks. */
 export async function readEffectiveReview(folderPath: string): Promise<ChapterReview> {
+  if(await managedCropBindingCount(folderPath)) {
+    try {const assets=await readManagedChapterAssets(folderPath);if(assets)return {reviewed:true,reviewedAt:assets.pages.map(page=>page.reviewedAt).sort().at(-1)??null,by:'cropped',cropped:true}}
+    catch { /* A chapter approval cannot replace a missing managed page review. */ }
+    return notReviewed()
+  }
   const { review, writtenAt } = await readReviewRecord(folderPath)
   return effectiveReview(review, writtenAt, await latestOutputTime(folderPath))
 }
@@ -206,8 +213,8 @@ export async function writeChapterReview(folderPath: string, review: ChapterRevi
 
 /** The desktop's own Mark reviewed / Unmark, from Preview. */
 export async function setDesktopReview(folderPath: string, reviewed: boolean): Promise<ChapterReview> {
-  return writeChapterReview(
+  return withUnmanagedCropChapter(folderPath,()=>writeChapterReview(
     folderPath,
     reviewed ? { reviewed: true, reviewedAt: new Date().toISOString(), by: 'desktop' } : notReviewed()
-  )
+  ))
 }

@@ -1,5 +1,8 @@
+import {managedCropBindingCount} from './managedCropProjection.js'
+import {onManagedCropProjectionChange} from './managedCropEvents.js'
 import fs from 'fs/promises'
 import { recordSeriesFileActivity, recordPhoneActivity } from './seriesActivity.js'
+import { recordLocalManagerChapter, recordLegacyManagerReceipt, managerChapterIdentity, managerCanDeclareRevision } from './managerReporting.js'
 import { watch, type FSWatcher } from 'fs'
 import path from 'path'
 import { createHash } from 'crypto'
@@ -44,6 +47,7 @@ export function receiveDeviceProcess(value: unknown): void {
   const prior = phoneProgress.get(body.deviceId)
   if (prior && Date.parse(prior.updatedAt) >= Date.parse(body.updatedAt)) return
   phoneProgress.set(body.deviceId, body)
+  recordLegacyManagerReceipt('process', body.deviceId, body, Date.now())
   recordPhoneActivity('process', body.deviceId, body)
   notifySeriesProcessChanged()
 }
@@ -60,12 +64,13 @@ export function notifySeriesProcessChanged(invalidateFiles = false): void {
 }
 
 async function localStages(chapter: any, title: string, timelines: any[]): Promise<ChapterStages> {
+  const managed=await managedCropBindingCount(chapter.folderPath)>0
   const hash = JSON.stringify([chapter, timelines])
   const generation = generations.get(chapter.folderPath) ?? 0
   const previous = cache.get(chapter.id)
-  if (previous?.hash === hash && previous.generation === generation) return structuredClone(previous.stages)
+  if (!managed && previous?.hash === hash && previous.generation === generation) return structuredClone(previous.stages)
   const result = emptyStages()
-  if (chapter.completedAt) {
+  if (chapter.completedAt && !managed) {
     for (const key of PROCESS_STAGES) result[key] = { state: 'done' }
   } else {
     const dir = path.join(root(), chapter.folderPath)
@@ -90,7 +95,7 @@ async function localStages(chapter: any, title: string, timelines: any[]): Promi
     }
     if (files.length) {
       // Skip the expensive crop validator for a chapter that has no crop artifacts yet.
-      const hasCrops = await fs.stat(path.join(dir, 'crop_points3')).then(() => true, () => false)
+      const hasCrops = await managedCropBindingCount(chapter.folderPath)>0 || await fs.stat(path.join(dir, 'crop_points3')).then(() => true, () => false)
       if (hasCrops) {
         const crops = await readChapterCropState({ folderPath: chapter.folderPath, series: { title } }).catch(() => null)
         if (crops) {
@@ -150,23 +155,35 @@ function mergeRemote(stages: ChapterStages, folder: string, name: string, replac
 async function scan(): Promise<ProcessSnapshot> {
   const rows = await prisma.series.findMany({ include: { chapters: { orderBy: { number: 'asc' }, include: { scripts: true, audioSections: { include: { audioFile: true } } } } }, orderBy: { title: 'asc' } })
   const timelines = await prisma.editor2Timeline.findMany()
+  const managerObservedAt = new Date().toISOString()
+  const managerChapters: Parameters<typeof recordLocalManagerChapter>[0][] = []
   const series = []
   for (const row of rows) {
     const control = await libraryControl(path.basename(row.rootFolder))
     if (control.deleted) continue
-    const [en, hi] = await Promise.all([listExistingExports(row.rootFolder, 'en'), listExistingExports(row.rootFolder, 'hi')])
+    const declaresRevision = await managerCanDeclareRevision(row.id,row.sourceSite).catch(() => false)
+    const [en, hi] = await Promise.all([listExistingExports(row.rootFolder, 'en',new Map(row.chapters.map(c=>[c.number,c.folderPath]))), listExistingExports(row.rootFolder, 'hi',new Map(row.chapters.map(c=>[c.number,c.folderPath])))])
     const chapters = []
     for (const c of row.chapters) {
       const stages = await localStages(c, row.title, timelines.filter(t => t.chapterId === c.id))
       const replacement = await readPageReplacement(c.folderPath)
+      const local = structuredClone(stages)
+      local.export_en = { state: !c.completedAt && en.has(c.number) ? 'done' : 'pending' }
+      local.export_hi = { state: !c.completedAt && hi.has(c.number) ? 'done' : 'pending' }
+      const identity = await managerChapterIdentity(c.id).catch(() => null)
+      managerChapters.push({ declaresRevision, observedAt: managerObservedAt, sharedSeriesId: identity?.seriesId, sharedChapterId: identity?.chapterId, seriesId: row.id, chapterId: c.id, title: row.title, folder: path.basename(row.rootFolder), name: path.basename(c.folderPath), stages: local, pageRevision: replacement?.revision ?? null, archived: !!c.completedAt })
       mergeRemote(stages, path.basename(row.rootFolder), path.basename(c.folderPath), replacement)
-      stages.export_en = { state: c.completedAt || en.has(c.number) ? 'done' : 'pending' }
-      stages.export_hi = { state: c.completedAt || hi.has(c.number) ? 'done' : 'pending' }
+      const managed=await managedCropBindingCount(c.folderPath)>0
+      if(managed) {stages.crop_json=local.crop_json;stages.crop=local.crop;stages.review=local.review}
+      stages.export_en = { state: (!managed && c.completedAt) || en.has(c.number) ? 'done' : 'pending' }
+      stages.export_hi = { state: (!managed && c.completedAt) || hi.has(c.number) ? 'done' : 'pending' }
       chapters.push({ id: c.id, name: path.basename(c.folderPath), number: c.number, stages, ...(replacement ? { pageRevision: replacement.revision } : {}) })
     }
     series.push(buildProcessSeries({ ...row, rootFolder: path.basename(row.rootFolder) }, chapters,
       Object.entries(control.parts ?? {}).filter(([, d]) => d.done).map(([n]) => Number(n))))
   }
+  // Flush one scan together so reporter batching does not persist the full projection per chapter.
+  for (const chapter of managerChapters) recordLocalManagerChapter(chapter)
   return { schema: 'series-process/1', deviceId: await libraryDeviceId(), updatedAt: new Date().toISOString(), series }
 }
 
@@ -240,3 +257,6 @@ export function startSeriesProcess(socket: Server): void {
   }).catch(error => console.error('[series-process] file watcher setup:', error))
   notifySeriesProcessChanged()
 }
+
+// Immutable publication can live outside DOWNLOAD_ROOT, beyond the filesystem watcher.
+onManagedCropProjectionChange(()=>notifySeriesProcessChanged(true))

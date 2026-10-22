@@ -98,10 +98,10 @@ export async function publishLibrary(): Promise<void> {
       for (const row of rows) if (row.chapters.some(c => c.phoneSend?.sentAt)) await updatePhoneIndexes(row.id)
       const manifest: LibraryManifest = {
         schema: 'manhwa-library/1', deviceId, device: 'Manhwa Studio', updatedAt: new Date().toISOString(),
-        controls, series: rows.map(s => ({ folder: path.basename(s.rootFolder), title: s.title, sourceSite: s.sourceSite,
+        controls, series: rows.map(s => ({ id: s.id, folder: path.basename(s.rootFolder), title: s.title, sourceSite: s.sourceSite,
           chapters: s.chapters.map(c => {
             const sent = c.phoneSend
-            return { name: path.basename(c.folderPath), number: c.number, title: c.title,
+            return { id: c.id, name: path.basename(c.folderPath), number: c.number, title: c.title,
               ...(sent?.sentAt && !sent.clearedAt && sent.key ? { key: sent.key, etag: sent.etag, sentAt: sent.sentAt.toISOString(), files: sent.files, bytes: sent.bytes, fingerprint: sent.fingerprint } : {}) }
           }) }))
       }
@@ -161,8 +161,12 @@ async function drainImports(): Promise<void> {
         // Preserve an existing origin's files and source downloads.
         if (owner.value !== device) continue
         for (const c of remote.chapters) {
-          await prisma.chapter.upsert({ where: { seriesId_number: { seriesId: series.id, number: c.number } },
+          const localChapter = await prisma.chapter.upsert({ where: { seriesId_number: { seriesId: series.id, number: c.number } },
             create: { seriesId: series.id, number: c.number, title: c.title, folderPath: `${remote.folder}/${c.name}`, status: 'pending' }, update: {} })
+          if (remote.id && c.id) {
+            const key = `managerIdentity:${localChapter.id}`, value = JSON.stringify({ seriesId: remote.id, chapterId: c.id })
+            await prisma.setting.upsert({ where: { key }, create: { key, value }, update: { value } }).catch(() => console.error('[managers] could not save origin identity mapping; legacy import continues'))
+          }
         }
       }
       io.emit('library:updated')

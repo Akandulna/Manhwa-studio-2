@@ -3,9 +3,11 @@ import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 
+let chapterFolders:string[]=[]
+
 vi.mock('../../index.js', () => ({ prisma: { series: {
   findUnique: async ({ where }: { where: { id: string } }) =>
-    where.id === 'missing' ? null : { rootFolder: 'Demo' }
+    where.id === 'missing' ? null : { rootFolder: 'Demo',chapters:chapterFolders.map(folderPath=>({folderPath})) }
 } } }))
 
 const { getSeriesCompletion2 } = await import('../videoEditor2Service.js')
@@ -22,6 +24,7 @@ beforeAll(async () => {
   process.env.DOWNLOAD_ROOT = root
 })
 beforeEach(async () => {
+  chapterFolders=[]
   await fs.rm(path.join(root, 'Demo'), { recursive: true, force: true })
 })
 afterAll(async () => {
@@ -75,4 +78,11 @@ describe('Editor 2.0 series completion', () => {
     await fs.symlink(path.join(root, 'Demo/saved/final.mp4'), path.join(root, 'Demo/_video2/compressed/final.mp4'))
     expect((await getSeriesCompletion2('s')).done).toBe(false)
   })
+  it('does not treat a pre-existing compressed video as managed series completion',async()=>{
+    await write('_video2/compressed/final.mp4')
+    chapterFolders=['Demo/Chapter 001']
+    await write('Chapter 001/.managed-crops/page.json','{}')
+    expect(await getSeriesCompletion2('s')).toEqual({done:false,compressedVideos:[]})
+  })
+
 })

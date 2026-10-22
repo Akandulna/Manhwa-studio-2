@@ -1,3 +1,5 @@
+import {managedCropBindingCount} from './managedCropProjection.js'
+import {readManagedChapterAssets,assertManagedChapterRevision} from './managedChapterAssets.js'
 /**
  * Video Editor 2.0 Service — Module 4v2
  *
@@ -166,6 +168,10 @@ async function checkAlignment(
  * older than its page's crop points.
  */
 async function checkCrops(folderPath: string, slug: string): Promise<ChecklistItem & { hasMetadata: boolean }> {
+  try {
+    const managed=await readManagedChapterAssets(folderPath)
+    if(managed)return {ok:true,hasMetadata:true,detail:`All ${managed.pages.length} managed pages reviewed and cut — ${managed.assets.length} verified crops`}
+  } catch(error) { return {ok:false,hasMetadata:false,detail:(error as Error).message} }
   let manifest: Awaited<ReturnType<typeof getChapterManifest>>
   try {
     manifest = await getChapterManifest(folderPath)
@@ -211,7 +217,7 @@ async function checkCrops(folderPath: string, slug: string): Promise<ChecklistIt
 
 /** One chapter's checklist. `storedJson` is its Editor2Timeline paste, if any. */
 async function buildChecklist(
-  chapter: { folderPath: string; audioSections: SectionRow[] },
+  chapter: { id?: string; folderPath: string; audioSections: SectionRow[] },
   language: NarrationLanguage,
   slug: string,
   storedJson: string | null
@@ -221,6 +227,15 @@ async function buildChecklist(
     checkAlignment(chapter.folderPath, language, chapter.audioSections),
     checkCrops(chapter.folderPath, slug)
   ])
+  // Owner-requested, single successful Hindi export of Rogue First Prince Ch 1.
+  // Only bypass Clipper completeness; timeline image resolution still runs normally.
+  if (!crops.ok && chapter.id === '9fee19f4-de13-4051-8cb2-c6e5b40b8265' && language === 'hi') {
+    const enabled = await fs.access('/tmp/rogue-prince-ch1-hi-export-once').then(() => true, () => false)
+    if (enabled) {
+      crops.ok = true
+      crops.detail = 'One-time Hindi export override; consumed after a successful render'
+    }
+  }
   const timeline: ChecklistItem = storedJson?.trim()
     ? { ok: true, detail: 'Timeline JSON stored for this chapter' }
     : { ok: false, detail: 'No timeline JSON yet — Copy All → ChatGPT → Paste, or Fetch from phone' }
@@ -251,8 +266,10 @@ async function buildChecklist(
 
 /** A saved compressed video is the series-level completion marker, even after render cleanup. */
 export async function getSeriesCompletion2(seriesId: string, language: NarrationLanguage = 'en') {
-  const series = await prisma.series.findUnique({ where: { id: seriesId }, select: { rootFolder: true } })
+  const series = await prisma.series.findUnique({ where: { id: seriesId }, select: { rootFolder: true,chapters:{select:{folderPath:true}} } })
   if (!series) return { done: false, compressedVideos: [] as string[] }
+  // Compression/series publication has no managed revision receipt yet.
+  for(const chapter of series.chapters??[])if(await managedCropBindingCount(chapter.folderPath))return {done:false,compressedVideos:[] as string[]}
   const folders = await Promise.all(videoDirsFor(language).map(dir => scanVideoCleanupFolder(series.rootFolder, dir)))
   const compressedVideos = folders.flatMap(folder => folder.compressedVideos.map(file => `${folder.dir}/${file}`))
   return { done: compressedVideos.length > 0, compressedVideos }
@@ -395,6 +412,9 @@ export async function getChapterCropMetadataBundle(chapterId: string): Promise<{
     select: { id: true, number: true, title: true, folderPath: true }
   })
   if (!chapter) return null
+  const managed=await readManagedChapterAssets(chapter.folderPath)
+  if(managed)return {chapterId:chapter.id,number:chapter.number,title:chapter.title,imageCount:managed.pages.length,includedCount:managed.pages.length,
+    text:managed.pages.map(page=>`## ${page.filename}\n\n${JSON.stringify(page.metadata)}`).join('\n\n')}
 
   let manifest: Awaited<ReturnType<typeof getChapterManifest>>
   try {

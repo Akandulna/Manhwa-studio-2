@@ -1,3 +1,4 @@
+import ManagedCropReview from '../sleeper/ManagedCropReview'
 /**
  * Clipper3Preview — Module 3 v3: Image Clipper 3.0
  *
@@ -170,7 +171,7 @@ function Clipper3ChapterPreview() {
         // Keep the original metadata text so Undo can restore removed crops
         // together with their descriptions and exported filenames.
         const entries = await Promise.all(
-          fresh.images.filter(img => img.status === 'done').map(async img => {
+          fresh.images.filter(img => img.status === 'done' && !img.managed).map(async img => {
             const [points, metadata] = await Promise.all([
               clipper3Api.getImagePoints(chapterId, img.filename).catch(() => null),
               clipper3Api.getImageMetadata(chapterId, img.filename).catch(() => ({ content: '' }))
@@ -273,7 +274,8 @@ function Clipper3ChapterPreview() {
     )
   }
 
-  const totalCrops = Object.values(session?.pages ?? {}).reduce((n, page) => n + page.file.crops.length, 0)
+  const managedChapter=!!data?.images.some(image=>image.managed)
+  const totalCrops = Object.values(session?.pages ?? {}).reduce((n, page) => n + page.file.crops.length, 0)+(data?.images.filter(image=>image.managed).reduce((total,image)=>total+image.cropCount,0)??0)
   const saveErrors = [...(session?.errors.entries() ?? [])]
   const unsaved = !!session?.pending || draggingFile != null
   const chapterLabel = `Chapter ${data.number}${data.title ? ` · ${data.title}` : ''}`
@@ -302,15 +304,15 @@ function Clipper3ChapterPreview() {
         <Badge variant="secondary" className="flex-shrink-0">
           {totalCrops} crop{totalCrops === 1 ? '' : 's'}
         </Badge>
-        {data.review && <ReviewBadge review={data.review} />}
+        {data.review && (managedChapter?<Badge variant={data.review.reviewed?'success':'secondary'}>{data.review.reviewed?'Managed cuts verified':'Managed page review / cut'}</Badge>:<ReviewBadge review={data.review} />)}
 
         <span
           role="status"
           className={`text-xs flex items-center gap-1 ${saveErrors.length ? 'text-red-500' : 'text-muted-foreground'}`}
-          title={saveErrors.map(([filename, message]) => `${filename}: ${message}`).join('\n') || 'All pages are editable. Changes save automatically after each adjustment.'}
+          title={saveErrors.map(([filename, message]) => `${filename}: ${message}`).join('\n') || (managedChapter?'Managed pages use their exact revision review controls. Other pages autosave.':'All pages are editable. Changes save automatically after each adjustment.')}
         >
           {saveErrors.length ? <AlertTriangle className="h-3 w-3" /> : unsaved ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
-          {saveErrors.length ? 'Save failed' : unsaved ? 'Saving…' : 'Autosave on'}
+          {saveErrors.length ? 'Save failed' : unsaved ? 'Saving…' : managedChapter?'Page review controls':'Autosave on'}
         </span>
         {saveErrors.length > 0 && (
           <Button variant="outline" size="sm" onClick={() => session?.retry()} disabled={session?.saving}>
@@ -379,7 +381,7 @@ function Clipper3ChapterPreview() {
               <div className="p-2 space-y-1">
                 {data.images.map((img, index) => {
                   const file = session?.pages[img.filename]?.file
-                  const cropCount = file?.crops.length ?? 0
+                  const cropCount = file?.crops.length ?? (img.managed?img.cropCount:0)
                   const isActive = activeFile === img.filename
                   return (
                     <div
@@ -427,6 +429,11 @@ function Clipper3ChapterPreview() {
           {data.images.map((img, index) => {
             const file = session?.pages[img.filename]?.file
             const isEven = index % 2 === 0
+            if(img.managed)return <div key={img.filename} ref={el=>{cardRefs.current[img.filename]=el}} data-filename={img.filename} className="w-full max-w-3xl rounded border bg-card p-3">
+              <p className="mb-2 text-sm font-medium">#{index+1} · {img.filename} · Managed page</p>
+              <p className="mb-3 text-sm text-muted-foreground">Review the proposed crops below. Use Adjust boundaries / flag feedback to save corrections before approving any cuts.</p>
+              {img.managed.pageId?<ManagedCropReview pageId={img.managed.pageId} taskId={img.managed.taskId} onChanged={()=>{void clipper3Api.getChapterReview(chapterId!).then(review=>setData(previous=>previous?{...previous,review}:previous))}}/>:<p>Sync the exact source page before reviewing this managed task.</p>}
+            </div>
             if (!file) return null
 
             return (
@@ -491,7 +498,7 @@ function Clipper3ChapterPreview() {
               lives here rather than in the header: reaching it means every
               page above was scrolled past. */}
           <div className="w-full max-w-xl mx-auto rounded-md border border-neutral-800 bg-card p-4 flex flex-wrap items-center gap-3">
-            {data.review?.reviewed && data.review.cropped ? (
+            {managedChapter ? <p className="text-sm">Review and cut each managed page using its controls above. Chapter completion follows those verified page results.</p> : data.review?.reviewed && data.review.cropped ? (
               // Cut already, which counts as reviewed: nothing to mark, and
               // Crop Sections stays available for a re-cut.
               <span className="text-sm flex items-center gap-1.5 text-green-500 min-w-0">

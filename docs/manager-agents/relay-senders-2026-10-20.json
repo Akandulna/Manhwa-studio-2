@@ -1,0 +1,358 @@
+{
+  "checkedAt": "2026-10-20T05:09:23.687Z",
+  "scope": "Latest authority-accepted health/report metadata during today IST, not a per-request or per-agent request-count log.",
+  "today": [
+    {
+      "manager": "issues",
+      "deviceId": "mac-6aadf4d3-c780-4562-bc6a-26138fcac411",
+      "sourceId": "mac-6aadf4d3-c780-4562-bc6a-26138fcac411/issues",
+      "lastAcceptedAt": "2026-10-20T05:07:07.569Z",
+      "originalObservedAt": "2026-10-20T05:07:06.519Z",
+      "transport": "Studio reporter"
+    },
+    {
+      "manager": "storage",
+      "deviceId": "mac-6aadf4d3-c780-4562-bc6a-26138fcac411",
+      "sourceId": "mac-6aadf4d3-c780-4562-bc6a-26138fcac411/storage",
+      "lastAcceptedAt": "2026-10-20T05:06:36.829Z",
+      "originalObservedAt": "2026-10-20T05:06:36.102Z",
+      "transport": "Studio reporter"
+    },
+    {
+      "manager": "studio",
+      "deviceId": "mac-6aadf4d3-c780-4562-bc6a-26138fcac411",
+      "sourceId": "mac-6aadf4d3-c780-4562-bc6a-26138fcac411/studio",
+      "lastAcceptedAt": "2026-10-20T05:07:07.517Z",
+      "originalObservedAt": "2026-10-20T05:07:06.519Z",
+      "transport": "Studio reporter"
+    },
+    {
+      "manager": "library",
+      "deviceId": "mac-6aadf4d3-c780-4562-bc6a-26138fcac411",
+      "sourceId": "mac-6aadf4d3-c780-4562-bc6a-26138fcac411/library",
+      "lastAcceptedAt": "2026-10-20T04:53:44.627Z",
+      "originalObservedAt": "2026-10-20T04:53:42.386Z",
+      "transport": "Studio reporter"
+    },
+    {
+      "manager": "preparation",
+      "deviceId": "mac-6aadf4d3-c780-4562-bc6a-26138fcac411",
+      "sourceId": "mac-6aadf4d3-c780-4562-bc6a-26138fcac411/preparation",
+      "lastAcceptedAt": "2026-10-20T04:53:44.657Z",
+      "originalObservedAt": "2026-10-20T04:53:42.386Z",
+      "transport": "Studio reporter"
+    },
+    {
+      "manager": "narration",
+      "deviceId": "mac-6aadf4d3-c780-4562-bc6a-26138fcac411",
+      "sourceId": "mac-6aadf4d3-c780-4562-bc6a-26138fcac411/narration",
+      "lastAcceptedAt": "2026-10-20T04:53:44.657Z",
+      "originalObservedAt": "2026-10-20T04:53:42.386Z",
+      "transport": "Studio reporter"
+    },
+    {
+      "manager": "clipping",
+      "deviceId": "mac-6aadf4d3-c780-4562-bc6a-26138fcac411",
+      "sourceId": "mac-6aadf4d3-c780-4562-bc6a-26138fcac411/clipping",
+      "lastAcceptedAt": "2026-10-20T04:53:44.657Z",
+      "originalObservedAt": "2026-10-20T04:53:42.386Z",
+      "transport": "Studio reporter"
+    },
+    {
+      "manager": "editor",
+      "deviceId": "mac-6aadf4d3-c780-4562-bc6a-26138fcac411",
+      "sourceId": "mac-6aadf4d3-c780-4562-bc6a-26138fcac411/editor",
+      "lastAcceptedAt": "2026-10-20T04:53:46.620Z",
+      "originalObservedAt": "2026-10-20T04:53:42.386Z",
+      "transport": "Studio reporter"
+    },
+    {
+      "manager": "device_clipping",
+      "deviceId": "legacy-304527cb8fc1440a-crops",
+      "sourceId": "legacy-304527cb8fc1440a-crops/device_clipping",
+      "lastAcceptedAt": "2026-10-19T21:25:58.383Z",
+      "originalObservedAt": "2026-10-19T21:25:53.113245Z",
+      "transport": "Studio forwarding legacy phone observations"
+    },
+    {
+      "manager": "device_clipping",
+      "deviceId": "legacy-6d659cf619a94099-crops",
+      "sourceId": "legacy-6d659cf619a94099-crops/device_clipping",
+      "lastAcceptedAt": "2026-10-20T04:39:17.658Z",
+      "originalObservedAt": "2026-10-20T01:50:23.011494Z",
+      "transport": "Studio forwarding legacy phone observations"
+    },
+    {
+      "manager": "device_narration",
+      "deviceId": "legacy-304527cb8fc1440a-scripts",
+      "sourceId": "legacy-304527cb8fc1440a-scripts/device_narration",
+      "lastAcceptedAt": "2026-10-19T21:25:55.145Z",
+      "originalObservedAt": "2026-10-19T21:25:52.456446Z",
+      "transport": "Studio forwarding legacy phone observations"
+    },
+    {
+      "manager": "device_narration",
+      "deviceId": "legacy-6d659cf619a94099-scripts",
+      "sourceId": "legacy-6d659cf619a94099-scripts/device_narration",
+      "lastAcceptedAt": "2026-10-19T21:25:54.772Z",
+      "originalObservedAt": "2026-10-19T21:25:52.319797Z",
+      "transport": "Studio forwarding legacy phone observations"
+    },
+    {
+      "manager": "voiceover",
+      "deviceId": "legacy-304527cb8fc1440a-scripts",
+      "sourceId": "legacy-304527cb8fc1440a-scripts/voiceover",
+      "lastAcceptedAt": "2026-10-19T21:25:58.423Z",
+      "originalObservedAt": "2026-10-19T21:25:52.456446Z",
+      "transport": "Studio forwarding legacy phone observations"
+    },
+    {
+      "manager": "voiceover",
+      "deviceId": "legacy-6d659cf619a94099-scripts",
+      "sourceId": "legacy-6d659cf619a94099-scripts/voiceover",
+      "lastAcceptedAt": "2026-10-19T21:25:55.187Z",
+      "originalObservedAt": "2026-10-19T21:25:52.319797Z",
+      "transport": "Studio forwarding legacy phone observations"
+    },
+    {
+      "manager": "fleet",
+      "deviceId": "mac-6aadf4d3-c780-4562-bc6a-26138fcac411",
+      "sourceId": "mac-6aadf4d3-c780-4562-bc6a-26138fcac411/fleet",
+      "lastAcceptedAt": "2026-10-20T04:53:41.974Z",
+      "originalObservedAt": "2026-10-20T04:53:41.572Z",
+      "transport": "Studio reporter"
+    },
+    {
+      "manager": "device_library",
+      "deviceId": "304527cb8fc1440a",
+      "sourceId": "304527cb8fc1440a/device_library",
+      "lastAcceptedAt": "2026-10-20T04:37:44.212Z",
+      "originalObservedAt": "2026-10-20T04:37:42.664323Z",
+      "transport": "native phone reporter"
+    },
+    {
+      "manager": "device_narration",
+      "deviceId": "304527cb8fc1440a",
+      "sourceId": "304527cb8fc1440a/device_narration",
+      "lastAcceptedAt": "2026-10-20T04:37:44.614Z",
+      "originalObservedAt": "2026-10-20T04:37:42.664323Z",
+      "transport": "native phone reporter"
+    },
+    {
+      "manager": "voiceover",
+      "deviceId": "304527cb8fc1440a",
+      "sourceId": "304527cb8fc1440a/voiceover",
+      "lastAcceptedAt": "2026-10-20T04:37:45.037Z",
+      "originalObservedAt": "2026-10-20T04:37:42.664323Z",
+      "transport": "native phone reporter"
+    },
+    {
+      "manager": "device_editor",
+      "deviceId": "304527cb8fc1440a",
+      "sourceId": "304527cb8fc1440a/device_editor",
+      "lastAcceptedAt": "2026-10-20T04:37:45.468Z",
+      "originalObservedAt": "2026-10-20T04:37:42.664323Z",
+      "transport": "native phone reporter"
+    },
+    {
+      "manager": "device_clipping",
+      "deviceId": "304527cb8fc1440a",
+      "sourceId": "304527cb8fc1440a/device_clipping",
+      "lastAcceptedAt": "2026-10-20T04:37:45.877Z",
+      "originalObservedAt": "2026-10-20T04:37:42.664323Z",
+      "transport": "native phone reporter"
+    },
+    {
+      "manager": "device",
+      "deviceId": "304527cb8fc1440a",
+      "sourceId": "304527cb8fc1440a/device",
+      "lastAcceptedAt": "2026-10-20T04:37:46.218Z",
+      "originalObservedAt": "2026-10-20T04:37:42.664323Z",
+      "transport": "native phone reporter"
+    },
+    {
+      "manager": "sync",
+      "deviceId": "304527cb8fc1440a",
+      "sourceId": "304527cb8fc1440a/sync",
+      "lastAcceptedAt": "2026-10-20T04:37:46.640Z",
+      "originalObservedAt": "2026-10-20T04:37:42.664323Z",
+      "transport": "native phone reporter"
+    },
+    {
+      "manager": "device_library",
+      "deviceId": "legacy-304527cb8fc1440a-sync",
+      "sourceId": "legacy-304527cb8fc1440a-sync/device_library",
+      "lastAcceptedAt": "2026-10-19T21:25:49.432Z",
+      "originalObservedAt": "2026-10-19T21:25:47.397384Z",
+      "transport": "Studio forwarding legacy phone observations"
+    },
+    {
+      "manager": "accounts",
+      "deviceId": "mac-6aadf4d3-c780-4562-bc6a-26138fcac411",
+      "sourceId": "mac-6aadf4d3-c780-4562-bc6a-26138fcac411/accounts",
+      "lastAcceptedAt": "2026-10-20T04:39:25.255Z",
+      "originalObservedAt": "2026-10-20T01:50:23.011494Z",
+      "transport": "Studio reporter"
+    },
+    {
+      "manager": "device_library",
+      "deviceId": "legacy-6d659cf619a94099-sync",
+      "sourceId": "legacy-6d659cf619a94099-sync/device_library",
+      "lastAcceptedAt": "2026-10-19T21:26:38.142Z",
+      "originalObservedAt": "2026-10-19T21:26:35.811202Z",
+      "transport": "Studio forwarding legacy phone observations"
+    },
+    {
+      "manager": "device_library",
+      "deviceId": "legacy-6d659cf619a94099-process",
+      "sourceId": "legacy-6d659cf619a94099-process/device_library",
+      "lastAcceptedAt": "2026-10-19T21:26:39.874Z",
+      "originalObservedAt": "2026-10-19T21:26:35.929028Z",
+      "transport": "Studio forwarding legacy phone observations"
+    },
+    {
+      "manager": "device_narration",
+      "deviceId": "legacy-6d659cf619a94099-process",
+      "sourceId": "legacy-6d659cf619a94099-process/device_narration",
+      "lastAcceptedAt": "2026-10-19T21:26:03.362Z",
+      "originalObservedAt": "2026-10-19T21:25:59.885444Z",
+      "transport": "Studio forwarding legacy phone observations"
+    },
+    {
+      "manager": "voiceover",
+      "deviceId": "legacy-6d659cf619a94099-process",
+      "sourceId": "legacy-6d659cf619a94099-process/voiceover",
+      "lastAcceptedAt": "2026-10-19T21:26:03.402Z",
+      "originalObservedAt": "2026-10-19T21:25:59.885444Z",
+      "transport": "Studio forwarding legacy phone observations"
+    },
+    {
+      "manager": "device_editor",
+      "deviceId": "legacy-6d659cf619a94099-process",
+      "sourceId": "legacy-6d659cf619a94099-process/device_editor",
+      "lastAcceptedAt": "2026-10-19T21:26:04.849Z",
+      "originalObservedAt": "2026-10-19T21:25:59.885444Z",
+      "transport": "Studio forwarding legacy phone observations"
+    },
+    {
+      "manager": "device_clipping",
+      "deviceId": "legacy-6d659cf619a94099-process",
+      "sourceId": "legacy-6d659cf619a94099-process/device_clipping",
+      "lastAcceptedAt": "2026-10-19T21:26:04.825Z",
+      "originalObservedAt": "2026-10-19T21:25:59.885444Z",
+      "transport": "Studio forwarding legacy phone observations"
+    },
+    {
+      "manager": "device_library",
+      "deviceId": "legacy-304527cb8fc1440a-process",
+      "sourceId": "legacy-304527cb8fc1440a-process/device_library",
+      "lastAcceptedAt": "2026-10-19T21:13:01.209Z",
+      "originalObservedAt": "2026-10-19T21:12:57.462161Z",
+      "transport": "Studio forwarding legacy phone observations"
+    },
+    {
+      "manager": "device_narration",
+      "deviceId": "legacy-304527cb8fc1440a-process",
+      "sourceId": "legacy-304527cb8fc1440a-process/device_narration",
+      "lastAcceptedAt": "2026-10-19T21:13:01.512Z",
+      "originalObservedAt": "2026-10-19T21:12:57.462161Z",
+      "transport": "Studio forwarding legacy phone observations"
+    },
+    {
+      "manager": "voiceover",
+      "deviceId": "legacy-304527cb8fc1440a-process",
+      "sourceId": "legacy-304527cb8fc1440a-process/voiceover",
+      "lastAcceptedAt": "2026-10-19T21:13:01.251Z",
+      "originalObservedAt": "2026-10-19T21:12:57.462161Z",
+      "transport": "Studio forwarding legacy phone observations"
+    },
+    {
+      "manager": "device_editor",
+      "deviceId": "legacy-304527cb8fc1440a-process",
+      "sourceId": "legacy-304527cb8fc1440a-process/device_editor",
+      "lastAcceptedAt": "2026-10-19T21:13:01.251Z",
+      "originalObservedAt": "2026-10-19T21:12:57.462161Z",
+      "transport": "Studio forwarding legacy phone observations"
+    },
+    {
+      "manager": "device_clipping",
+      "deviceId": "legacy-304527cb8fc1440a-process",
+      "sourceId": "legacy-304527cb8fc1440a-process/device_clipping",
+      "lastAcceptedAt": "2026-10-19T21:13:02.373Z",
+      "originalObservedAt": "2026-10-19T21:12:57.462161Z",
+      "transport": "Studio forwarding legacy phone observations"
+    },
+    {
+      "manager": "website_ui",
+      "deviceId": "304527cb8fc1440a",
+      "sourceId": "304527cb8fc1440a/website_ui",
+      "lastAcceptedAt": "2026-10-20T04:49:50.536Z",
+      "originalObservedAt": "2026-10-20T04:49:48.729313Z",
+      "transport": "native phone reporter"
+    },
+    {
+      "manager": "device_library",
+      "deviceId": "6d659cf619a94099",
+      "sourceId": "6d659cf619a94099/device_library",
+      "lastAcceptedAt": "2026-10-20T01:50:31.782Z",
+      "originalObservedAt": "2026-10-19T10:00:19.818328Z",
+      "transport": "native phone reporter"
+    },
+    {
+      "manager": "device_narration",
+      "deviceId": "6d659cf619a94099",
+      "sourceId": "6d659cf619a94099/device_narration",
+      "lastAcceptedAt": "2026-10-20T01:50:32.091Z",
+      "originalObservedAt": "2026-10-19T10:00:19.818328Z",
+      "transport": "native phone reporter"
+    },
+    {
+      "manager": "voiceover",
+      "deviceId": "6d659cf619a94099",
+      "sourceId": "6d659cf619a94099/voiceover",
+      "lastAcceptedAt": "2026-10-20T01:50:32.397Z",
+      "originalObservedAt": "2026-10-19T10:00:19.818328Z",
+      "transport": "native phone reporter"
+    },
+    {
+      "manager": "device_editor",
+      "deviceId": "6d659cf619a94099",
+      "sourceId": "6d659cf619a94099/device_editor",
+      "lastAcceptedAt": "2026-10-20T01:50:32.697Z",
+      "originalObservedAt": "2026-10-19T10:00:19.818328Z",
+      "transport": "native phone reporter"
+    },
+    {
+      "manager": "device_clipping",
+      "deviceId": "6d659cf619a94099",
+      "sourceId": "6d659cf619a94099/device_clipping",
+      "lastAcceptedAt": "2026-10-20T01:50:32.975Z",
+      "originalObservedAt": "2026-10-19T10:00:19.818328Z",
+      "transport": "native phone reporter"
+    },
+    {
+      "manager": "device",
+      "deviceId": "6d659cf619a94099",
+      "sourceId": "6d659cf619a94099/device",
+      "lastAcceptedAt": "2026-10-20T01:50:29.686Z",
+      "originalObservedAt": "2026-10-19T09:50:32.378371Z",
+      "transport": "native phone reporter"
+    },
+    {
+      "manager": "sync",
+      "deviceId": "6d659cf619a94099",
+      "sourceId": "6d659cf619a94099/sync",
+      "lastAcceptedAt": "2026-10-20T01:50:29.968Z",
+      "originalObservedAt": "2026-10-19T09:50:32.378371Z",
+      "transport": "native phone reporter"
+    },
+    {
+      "manager": "website_ui",
+      "deviceId": "6d659cf619a94099",
+      "sourceId": "6d659cf619a94099/website_ui",
+      "lastAcceptedAt": "2026-10-20T01:50:31.393Z",
+      "originalObservedAt": "2026-10-19T09:52:16.509311Z",
+      "transport": "native phone reporter"
+    }
+  ]
+}

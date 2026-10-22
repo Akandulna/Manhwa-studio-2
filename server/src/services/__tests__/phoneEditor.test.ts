@@ -7,11 +7,12 @@ import { GetObjectCommand, ListObjectsV2Command, PutObjectCommand } from '@aws-s
 
 // The bucket, as key → body.
 const bucket = new Map<string, string>()
+const modifiedAt = new Map<string, Date>()
 const settings = new Map<string, string>()
 let failPromptUpload = false
 let stagedFixtures = false
 
-interface TimelineRow { chapterId: string; language: string; json: string; processedJson: string | null; updatedAt: Date }
+interface TimelineRow { model?: string | null; chapterId: string; language: string; json: string; processedJson: string | null; updatedAt: Date }
 let rows: TimelineRow[] = []
 
 const chapters = [
@@ -79,7 +80,7 @@ vi.mock('../r2Service.js', () => ({
       }
       if (command instanceof ListObjectsV2Command) {
         const prefix = command.input.Prefix ?? ''
-        return { Contents: [...bucket.keys()].filter(k => k.startsWith(prefix)).map(Key => ({ Key })), IsTruncated: false }
+        return { Contents: [...bucket.keys()].filter(k => k.startsWith(prefix)).map(Key => ({ Key, LastModified: modifiedAt.get(Key) })), IsTruncated: false }
       }
       if (command instanceof GetObjectCommand) {
         const body = bucket.get(command.input.Key!)
@@ -114,6 +115,7 @@ function timelineBody(chapter: string, timeline: string, madeAt: string, languag
 
 beforeEach(() => {
   bucket.clear()
+  modifiedAt.clear()
   settings.clear()
   failPromptUpload = false
   stagedFixtures = false
@@ -311,6 +313,21 @@ describe('fetchPhoneTimelines', () => {
     expect(rows.find(r => r.chapterId === 'c3')!.json).toBe('{"mine":3}')
   })
 
+  it('retains the actual AI model and backfills identical timelines without clearing processing', async () => {
+    const json = '{"sections":[1]}'
+    const body = JSON.parse(timelineBody('Chapter 001', json, '2026-10-09T10:00:00Z'))
+    body.model = 'GPT-6 Astra'
+    bucket.set('Phone/editor/Demo/Chapter 001.timeline.json', JSON.stringify(body))
+    await fetchPhoneTimelines('s1', 'en')
+    expect(rows[0].model).toBe('GPT-6 Astra')
+    rows[0].model = null
+    rows[0].processedJson = json
+    const result = await fetchPhoneTimelines('s1', 'en')
+    expect(result.upToDate).toBe(1)
+    expect(rows[0].model).toBe('GPT-6 Astra')
+    expect(rows[0].processedJson).toBe(json)
+  })
+
   it('replaces an older paste', async () => {
     bucket.set('Phone/editor/Demo/Chapter 001.timeline.json', timelineBody('Chapter 001', '{"new":1}', '2026-10-09T10:00:00Z'))
     rows.push({ chapterId: 'c1', language: 'en', json: '{"old":1}', processedJson: '{"old":1}', updatedAt: new Date('2026-10-09T09:00:00Z') })
@@ -318,5 +335,23 @@ describe('fetchPhoneTimelines', () => {
     expect(result.imported).toHaveLength(1)
     expect(rows[0].json).toBe('{"new":1}')
     expect(rows[0].processedJson).toBeNull()
+  })
+
+  it('finds new chapters across every prefix and imports the latest copy of a modified timeline', async () => {
+    const oldKey = 'Phone/editor/Demo/Chapter 001.timeline.json'
+    const newKey = 'Manhwa/editor/Demo/Chapter 001.timeline.json'
+    bucket.set(oldKey, timelineBody('Chapter 001', '{"old":1}', '2026-10-09T09:00:00Z'))
+    bucket.set(newKey, timelineBody('Chapter 001', '{"new":1}', '2026-10-09T11:00:00Z'))
+    modifiedAt.set(oldKey, new Date('2026-10-09T09:00:00Z'))
+    modifiedAt.set(newKey, new Date('2026-10-09T11:00:00Z'))
+    bucket.set('editor/Demo/Chapter 002.timeline.json', timelineBody('Chapter 002', '{"new":2}', '2026-10-09T11:00:00Z'))
+    rows.push({ chapterId: 'c1', language: 'en', json: '{"old":1}', processedJson: '{"old":1}', updatedAt: new Date('2026-10-09T10:00:00Z') })
+
+    const result = await fetchPhoneTimelines('s1', 'en')
+    expect(result.found).toBe(2)
+    expect(result.imported.map(i => i.chapterId)).toEqual(['c1', 'c2'])
+    expect(result.failed).toEqual([])
+    expect(rows[0]).toMatchObject({ json: '{"new":1}', processedJson: null })
+    expect(rows[1].json).toBe('{"new":2}')
   })
 })

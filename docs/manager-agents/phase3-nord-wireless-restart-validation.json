@@ -1,0 +1,91 @@
+{
+  "phoneReopenedByUser": true,
+  "sourceWatermarks": [
+    {
+      "manager": "device_accounts",
+      "sequence": 11,
+      "observedAt": "2026-10-12T06:43:50.991Z",
+      "receivedAt": "2026-10-18T18:57:21.568Z"
+    },
+    {
+      "manager": "device_library",
+      "sequence": 248,
+      "observedAt": "2026-10-19T11:26:30.167594Z",
+      "receivedAt": "2026-10-19T11:26:32.242Z"
+    },
+    {
+      "manager": "device_narration",
+      "sequence": 249,
+      "observedAt": "2026-10-19T11:26:30.167594Z",
+      "receivedAt": "2026-10-19T11:26:32.545Z"
+    },
+    {
+      "manager": "voiceover",
+      "sequence": 249,
+      "observedAt": "2026-10-19T11:26:30.167594Z",
+      "receivedAt": "2026-10-19T11:26:32.790Z"
+    },
+    {
+      "manager": "device_editor",
+      "sequence": 248,
+      "observedAt": "2026-10-19T11:26:30.167594Z",
+      "receivedAt": "2026-10-19T11:26:33.056Z"
+    },
+    {
+      "manager": "device_clipping",
+      "sequence": 248,
+      "observedAt": "2026-10-19T11:26:30.167594Z",
+      "receivedAt": "2026-10-19T11:26:33.322Z"
+    },
+    {
+      "manager": "website_ui",
+      "sequence": 206,
+      "observedAt": "2026-10-19T11:26:36.518913Z",
+      "receivedAt": "2026-10-19T11:26:38.255Z"
+    },
+    {
+      "manager": "device",
+      "sequence": 248,
+      "observedAt": "2026-10-19T11:26:30.167594Z",
+      "receivedAt": "2026-10-19T11:26:33.586Z"
+    },
+    {
+      "manager": "sync",
+      "sequence": 248,
+      "observedAt": "2026-10-19T11:26:30.167594Z",
+      "receivedAt": "2026-10-19T11:26:33.810Z"
+    }
+  ],
+  "oldestFactObservedAt": "2026-10-12T06:41:52.006Z",
+  "oldestFactAcceptedAt": "2026-10-18T18:57:20.424Z",
+  "verifiedAt": "2026-10-19T11:27:46.229Z",
+  "deviceId": "304527cb8fc1440a",
+  "nativeProtocol": "manager-report/1",
+  "nativeFactsInStudio": 498,
+  "allNativeFactsAuthorityAccepted": true,
+  "replayedFactReports": 33,
+  "replayedManagers": [
+    "device_accounts",
+    "device_clipping",
+    "device_editor",
+    "device_library",
+    "device_narration",
+    "voiceover",
+    "website_ui"
+  ],
+  "sourceTimesPreserved": true,
+  "authorityTimesPreserved": true,
+  "legacyReceiptCorrelation": true,
+  "activeRunsBefore": 0,
+  "activeRunsAfter": 0,
+  "pendingStudioReports": 0,
+  "deliveryError": null,
+  "incidentCount": 3,
+  "scope": "Real installed-phone observations via production relay to Studio; diagnostic desktop reconnect and receipt-only refresh. No generation, synthetic reports, incident acknowledgments or artifact imports.",
+  "processIdBefore": 25449,
+  "processIdAfter": 25449,
+  "processExitVerified": false,
+  "activityReopenVerified": true,
+  "sourceSequenceAdvancedFromPreReopen": true,
+  "limitations": "User reopened app but Android retained PID 25449. This is activity re-entry/report replay evidence, not process-death durability. User asked for App info > Force stop > reopen for the separate process-exit check."
+}

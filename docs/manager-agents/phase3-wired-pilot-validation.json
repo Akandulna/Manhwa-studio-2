@@ -1,0 +1,31 @@
+{
+  "verifiedAt": "2026-10-19T13:50:51.687Z",
+  "defaultModelPolicy": true,
+  "boundBeforeClaim": true,
+  "kotlinSourceAndIdentityVerified": true,
+  "kotlinReceiptsAccepted": true,
+  "kotlinArtifactBytesAccepted": true,
+  "relayProcessRestart": true,
+  "immutableImportAndPublicationReplay": true,
+  "workerPublicationReconciliation": true,
+  "reconciledUnpairRevokedPeer": true,
+  "scope": "Synthetic single-page worker using actual Kotlin JVM codecs, real local Durable Object SQLite/emulated R2, and real Studio dispatch/source/filesystem/import code. Does not exercise Android SQLite, WebView, file chooser, real provider or installed phone.",
+  "serverRegression": {
+    "files": 55,
+    "tests": 423,
+    "failures": 0
+  },
+  "androidOfflineJvm": {
+    "tests": 318,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "serverBuildPassed": true,
+  "clientBuildPassed": true,
+  "relayTypecheckPassed": true,
+  "studioUiVisuallyReviewed": true,
+  "productionDispatchEnabled": false,
+  "apkBuiltOrInstalled": false,
+  "storageReadinessCheckedBeforeClaim": true
+}

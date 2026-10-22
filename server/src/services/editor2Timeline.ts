@@ -1,3 +1,4 @@
+import {readManagedChapterAssets,assertManagedChapterRevision} from './managedChapterAssets.js'
 /**
  * Editor 2.0 — timeline JSON processor.
  *
@@ -137,6 +138,8 @@ export interface PlanSection {
 
 export interface TimelinePlan {
   chapterId: string
+  cropFolder?: string
+  managedCropRevision?: string
   /** Narration language whose voice sections the timeline plays. */
   language: NarrationLanguage
   chapterNumber: number
@@ -251,6 +254,7 @@ function normalizeOutputName(name: string): string {
 // ============ Image resolution ============
 
 interface CropIndex {
+  managed?: NonNullable<Awaited<ReturnType<typeof readManagedChapterAssets>>>
   /** "<page stem>/<crop id>" -> crops3 filename. */
   byPair: Map<string, string>
   /** normalizeOutputName(file) -> the real crops3 filename. */
@@ -278,6 +282,9 @@ interface CropIndex {
  * most recently written one wins, since that is the cut the user last asked for.
  */
 async function buildCropFileIndex(folderPath: string): Promise<CropIndex> {
+  const managed=await readManagedChapterAssets(folderPath)
+  if(managed)return {managed,byPair:new Map(),byName:new Map(managed.assets.map(file=>[normalizeOutputName(file.filename),file.filename])),warnings:[]}
+
   const map = new Map<string, string>()
   const byName = new Map<string, { filename: string; mtimeMs: number }>()
   const warnings: string[] = []
@@ -426,7 +433,7 @@ export async function processTimelineJson(
   })
   if (!chapter) throw new Error('Chapter not found')
 
-  const { byPair: cropFiles, byName: cropNames, warnings } = await buildCropFileIndex(chapter.folderPath)
+  const { byPair: cropFiles, byName: cropNames, warnings, managed } = await buildCropFileIndex(chapter.folderPath)
   // Where the resolved crop filenames actually live, so the plan can carry an
   // absolute path for the renderer next to the URL the preview loads.
   const cropOutputDir = getOutputDir(chapter.folderPath)
@@ -522,9 +529,9 @@ export async function processTimelineJson(
           cropId,
           filename,
           url: filename
-            ? `/api/clipper3/chapters/${chapter.id}/output/${encodeURIComponent(filename)}`
+            ? managed ? `/api/video2/chapters/${chapter.id}/managed-image/${encodeURIComponent(filename)}?revision=${managed.revision}` : `/api/clipper3/chapters/${chapter.id}/output/${encodeURIComponent(filename)}`
             : null,
-          imagePath: filename ? path.resolve(cropOutputDir, filename) : null,
+          imagePath: filename ? managed ? managed.assets.find(file=>file.filename===filename)!.path : path.resolve(cropOutputDir, filename) : null,
           duration: perImage,
           startTime,
           endTime: startTime + perImage,
@@ -573,7 +580,10 @@ export async function processTimelineJson(
     throw new Error('None of the sections in the JSON could be matched to this chapter.')
   }
 
+  await assertManagedChapterRevision(chapter.folderPath,managed?.revision??null)
   return {
+    cropFolder:chapter.folderPath,
+    ...(managed?{managedCropRevision:managed.revision}:{}),
     chapterId: chapter.id,
     language,
     chapterNumber: chapter.number,

@@ -24,8 +24,11 @@ import Clipper3Preview from '@/pages/clipper3/Clipper3Preview'
 
 // Sleeper Cells: the phone app's status, its accounts, and its live progress
 import PhoneStatus from '@/pages/sleeper/PhoneStatus'
+import ManagedPilot from '@/pages/sleeper/ManagedPilot'
 import AccountsStatus from '@/pages/sleeper/AccountsStatus'
 import LiveProgress from '@/pages/sleeper/LiveProgress'
+import ManagerIssues from '@/pages/sleeper/ManagerIssues'
+import { ManagerProvider } from '@/hooks/useManagers'
 
 // Module 4: Editor 2.0
 import EditorLibrary2 from '@/pages/editor2/EditorLibrary2'
@@ -35,6 +38,7 @@ import Editor2Preview from '@/pages/editor2/Editor2Preview'
 function App() {
   return (
     <SocketProvider>
+      <ManagerProvider>
       <Layout>
         <Routes>
           {/* Module 1: Library & Downloader */}
@@ -65,8 +69,10 @@ function App() {
 
           {/* Sleeper Cells */}
           <Route path="/sleeper-cells" element={<PhoneStatus />} />
+          <Route path="/sleeper-cells/managed" element={<ManagedPilot />} />
           <Route path="/sleeper-cells/accounts" element={<AccountsStatus />} />
           <Route path="/sleeper-cells/live" element={<LiveProgress />} />
+          <Route path="/sleeper-cells/issues" element={<ManagerIssues />} />
 
           {/* Shared — Storage is a Settings tab */}
           <Route path="/storage" element={<Navigate to="/settings?tab=storage" replace />} />
@@ -75,6 +81,7 @@ function App() {
         </Routes>
       </Layout>
       <Toaster />
+      </ManagerProvider>
     </SocketProvider>
   )
 }

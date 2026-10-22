@@ -1,0 +1,85 @@
+{
+  "phoneReopenedByUser": false,
+  "sourceWatermarks": [
+    {
+      "manager": "device_accounts",
+      "sequence": 11,
+      "observedAt": "2026-10-12T06:43:50.991Z",
+      "receivedAt": "2026-10-18T18:57:21.568Z"
+    },
+    {
+      "manager": "device_library",
+      "sequence": 257,
+      "observedAt": "2026-10-19T12:41:58.303638Z",
+      "receivedAt": "2026-10-19T12:41:59.465Z"
+    },
+    {
+      "manager": "device_narration",
+      "sequence": 258,
+      "observedAt": "2026-10-19T12:41:58.303638Z",
+      "receivedAt": "2026-10-19T12:41:59.702Z"
+    },
+    {
+      "manager": "voiceover",
+      "sequence": 258,
+      "observedAt": "2026-10-19T12:41:58.303638Z",
+      "receivedAt": "2026-10-19T12:41:59.953Z"
+    },
+    {
+      "manager": "device_editor",
+      "sequence": 257,
+      "observedAt": "2026-10-19T12:41:58.303638Z",
+      "receivedAt": "2026-10-19T12:42:00.192Z"
+    },
+    {
+      "manager": "device_clipping",
+      "sequence": 257,
+      "observedAt": "2026-10-19T12:41:58.303638Z",
+      "receivedAt": "2026-10-19T12:42:00.455Z"
+    },
+    {
+      "manager": "website_ui",
+      "sequence": 210,
+      "observedAt": "2026-10-19T11:38:40.678904Z",
+      "receivedAt": "2026-10-19T11:38:41.609Z"
+    },
+    {
+      "manager": "device",
+      "sequence": 257,
+      "observedAt": "2026-10-19T12:41:58.303638Z",
+      "receivedAt": "2026-10-19T12:42:00.741Z"
+    },
+    {
+      "manager": "sync",
+      "sequence": 257,
+      "observedAt": "2026-10-19T12:41:58.303638Z",
+      "receivedAt": "2026-10-19T12:42:00.997Z"
+    }
+  ],
+  "oldestFactObservedAt": "2026-10-12T06:41:52.006Z",
+  "oldestFactAcceptedAt": "2026-10-18T18:57:20.424Z",
+  "verifiedAt": "2026-10-19T12:43:32.336Z",
+  "deviceId": "304527cb8fc1440a",
+  "nativeProtocol": "manager-report/1",
+  "nativeFactsInStudio": 498,
+  "allNativeFactsAuthorityAccepted": true,
+  "replayedFactReports": 33,
+  "replayedManagers": [
+    "device_accounts",
+    "device_clipping",
+    "device_editor",
+    "device_library",
+    "device_narration",
+    "voiceover",
+    "website_ui"
+  ],
+  "sourceTimesPreserved": true,
+  "authorityTimesPreserved": true,
+  "legacyReceiptCorrelation": true,
+  "activeRunsBefore": 0,
+  "activeRunsAfter": 0,
+  "pendingStudioReports": 0,
+  "deliveryError": null,
+  "incidentCount": 3,
+  "scope": "Real installed-phone observations via production relay to Studio; diagnostic desktop reconnect and receipt-only refresh. No generation, synthetic reports, incident acknowledgments or artifact imports."
+}

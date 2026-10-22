@@ -1,3 +1,4 @@
+import {withUnmanagedCropChapter,assertUnmanagedCropChapter} from './managedCropProjection.js'
 /**
  * Fetch crop JSON made on the Sleeper-Cell phone into `Processed/`.
  *
@@ -39,6 +40,7 @@
  * "Publish cropped chapters" for every series. Only an explicit page replacement removes those markers.
  */
 
+import { recordManagerTransfer } from './managerReporting.js'
 import fs from 'fs/promises'
 import path from 'path'
 import { GetObjectCommand, ListObjectsV2Command, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3'
@@ -356,10 +358,11 @@ async function backfillCropped(
     const folder = path.basename(chapter.folderPath)
     if (listing.cropped.has(folder)) continue
     try {
+      await assertUnmanagedCropChapter(chapter.folderPath)
       const stats = await chapterCropStats(chapter.folderPath, series.title)
       if (!stats) continue
       folders ??= await markerFolders(client, config, listing.folder, seriesName)
-      await putCroppedMarker(client, config, folders, buildCroppedMarker(seriesName, folder, stats))
+      await withUnmanagedCropChapter(chapter.folderPath,()=>putCroppedMarker(client, config, folders!, buildCroppedMarker(seriesName, folder, stats)))
       result.published.push(folder)
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
@@ -384,6 +387,7 @@ export async function publishChapterCropped(chapterId: string): Promise<{ keys: 
       select: { folderPath: true, seriesId: true, series: { select: { rootFolder: true, title: true } } }
     })
     if (!chapter) return null
+    return await withUnmanagedCropChapter(chapter.folderPath,async()=>{
     const stats = await chapterCropStats(chapter.folderPath, chapter.series.title)
     if (!stats) return null
 
@@ -396,6 +400,7 @@ export async function publishChapterCropped(chapterId: string): Promise<{ keys: 
     const chapterName = path.basename(chapter.folderPath)
     await putCroppedMarker(client, config, folders, buildCroppedMarker(seriesName, chapterName, stats))
     return { keys: folders.map(f => croppedMarkerKey(f, chapterName)) }
+    })
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     console.error(`[clipper3] publishing the cropped marker for chapter ${chapterId} failed:`, reason)
@@ -522,10 +527,14 @@ export async function fetchPhoneCrops(seriesId: string, chapterIds?: string[]): 
       continue
     }
 
+    let managerObjectVersion: string | null = null
     try {
+      await withUnmanagedCropChapter(chapter.folderPath,async()=>{
       if (zip.size > MAX_ZIP_BYTES) throw new Error(`The zip is unexpectedly large (${zip.size} bytes)`)
       const res = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: zip.key }))
       const body = Buffer.from(await res.Body!.transformToByteArray())
+      managerObjectVersion = res.VersionId ?? res.ETag ?? zip.etag ?? null
+      recordManagerTransfer({ seriesId, chapterId: chapter.id, stage: 'crop_json', phase: 'cloud', objectVersion: managerObjectVersion })
       const entries = readZip(body)
       const manifest = readZipManifest(entries)
       if (!matchesPageRevision(await readPageReplacement(chapter.folderPath), (manifest as { page_revision?: unknown } | null)?.page_revision)) {
@@ -562,9 +571,12 @@ export async function fetchPhoneCrops(seriesId: string, chapterIds?: string[]): 
         ...(review ? { applied: false } : {})
       }
       await fs.writeFile(path.join(processedDir, FETCH_MARKER), JSON.stringify(marker, null, 2) + '\n', 'utf-8')
+      recordManagerTransfer({ seriesId, chapterId: chapter.id, stage: 'crop_json', phase: 'imported', objectVersion: managerObjectVersion })
       result.fetched.push({ chapterId: chapter.id, chapterNumber: chapter.number, folder: zip.folder, pages, reviewed: review != null })
+      })
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
+      recordManagerTransfer({ seriesId, chapterId: chapter.id, stage: 'crop_json', phase: 'failed', objectVersion: managerObjectVersion })
       console.error(`[clipper3] fetching ${zip.key} failed:`, reason)
       result.failed.push({ folder: zip.folder, reason })
     }

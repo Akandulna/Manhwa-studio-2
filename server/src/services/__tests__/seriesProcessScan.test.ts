@@ -75,4 +75,38 @@ describe('series progress evidence', () => {
     expect(result.timeline_hi.state).toBe('done')
     expect(result.export_hi.state).toBe('pending')
   })
+  it('does not let legacy phone crop progress complete a managed chapter', async () => {
+    const { readChapterCropState } = await import('../clipper3/chapterCrop.js')
+    vi.mocked(readChapterCropState).mockResolvedValueOnce({ totalImages: 1, targets: [], fullyAttached: false, chopped: false, outputs: { complete: false, files: 0, missing: 0, extra: 0, changed: 1 } })
+    await fs.mkdir(path.join(root, 'Demo/Chapter 001/.managed-crops'), { recursive: true })
+    await fs.writeFile(path.join(root, 'Demo/Chapter 001/.managed-crops/page_001.json'), '{}')
+    receiveDeviceProcess({ schema: 'device-process/1', deviceId: 'legacy-crop-test', updatedAt: new Date().toISOString(), series: [{ folder: 'Demo', chapters: { 'Chapter 001': { stages: {
+      crop_json: { state: 'done', done: 1, total: 1 }, crop: { state: 'done' }, review:{state:'done'}
+    } } } }] })
+    const result = await states()
+    expect(result.crop_json.state).toBe('pending')
+    expect(result.crop.state).toBe('pending')
+    expect(result.review.state).toBe('pending')
+  })
+
+  it('invalidates the process snapshot when a private managed projection changes', async () => {
+    const { managedCropProjectionChanged } = await import('../managedCropEvents.js')
+    expect((await states()).download.state).toBe('done')
+    data.chapters[0].status = 'downloading'
+    managedCropProjectionChanged()
+    expect((await states()).download.state).toBe('active')
+  })
+
+  it('does not let an archive flag or an old MP4 complete managed crop and export stages',async()=>{
+    const {readChapterCropState}=await import('../clipper3/chapterCrop.js')
+    vi.mocked(readChapterCropState).mockResolvedValueOnce({totalImages:1,targets:[],fullyAttached:false,chopped:false,outputs:{complete:false,files:0,missing:0,extra:0,changed:1}})
+    data.chapters[0].completedAt=new Date().toISOString()
+    await fs.mkdir(path.join(root,'Demo/Chapter 001/.managed-crops'),{recursive:true})
+    await fs.writeFile(path.join(root,'Demo/Chapter 001/.managed-crops/page_001.json'),'{}')
+    await fs.mkdir(path.join(root,'Demo/_video2'),{recursive:true})
+    await fs.writeFile(path.join(root,'Demo/_video2/ch001_old.mp4'),'old render')
+    const result=await states()
+    expect(result.crop.state).not.toBe('done');expect(result.review.state).not.toBe('done');expect(result.export_en.state).toBe('pending')
+  })
+
 })

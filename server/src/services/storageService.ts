@@ -1,3 +1,4 @@
+import {managedCropScopePresent,withManagedCropWorkspaceLock} from './managedCropProjection.js'
 import { withSeriesActivity } from './seriesActivity.js'
 /**
  * Storage — what the local disk is actually holding, per series and chapter,
@@ -489,7 +490,7 @@ export async function scanStorage(): Promise<StorageOverview> {
 // which is the only form that can be trusted.
 
 /** Delete `target`, but only if it really resolves inside the download root. */
-export async function removeWithin(target: string): Promise<boolean> {
+async function removeWithinLegacy(target: string): Promise<boolean> {
   const root = path.resolve(process.env.DOWNLOAD_ROOT || './downloads')
   const resolved = path.resolve(target)
 
@@ -898,4 +899,11 @@ export async function getPublishedChapters(
   }
 
   return { chapters, series, completed, completedParts, scannedAt: new Date().toISOString() }
+}
+
+export async function removeWithin(target:string):Promise<boolean> {
+ return withManagedCropWorkspaceLock(async()=>{
+  if(await managedCropScopePresent(target))throw new Error('Managed crop tasks protect this path. Reconcile them before deletion.')
+  return removeWithinLegacy(target)
+ })
 }

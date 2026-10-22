@@ -1,0 +1,86 @@
+{
+  "checkedAt": "2026-10-20T05:28:53.587171+00:00",
+  "httpStatus": 200,
+  "selection": {
+    "checkedAt": "2026-10-20T05:27:34.654Z",
+    "series": "Sandmancer of the Scorched Desert",
+    "chapter": 1,
+    "chapterId": "01fef395-d351-41bc-911a-9b4e7e035cd8",
+    "page": {
+      "id": "1c029b7e-b8c1-4009-b792-956ed63a4d8c",
+      "index": 2,
+      "filename": "page_002.jpg",
+      "bytes": 923206,
+      "sha256": "fe02ea0d537d7962433d42fa69465a60fba564f179a0ed8f9e56310953c3a621",
+      "width": 800,
+      "height": 10602
+    },
+    "legacyPointsExist": false,
+    "legacyMetadataExist": false,
+    "managedBindingExists": false,
+    "deviceId": "304527cb8fc1440a",
+    "profileId": "profile-1",
+    "model": "provider-default",
+    "phoneSourceHashMatches": true,
+    "scope": "Owner-authorized next pending-page test. Prepared page 2 is unprocessed and byte-identical on Nord/Studio. Prior page-1 task remains paused/stop_confirmed/unsent. Fresh native handshake and explicit start remain required; no assignment or prompt yet."
+  },
+  "result": {
+    "schema": "managed-task/1",
+    "task": {
+      "workspaceId": "studio_01df7f214f87472e802b2bc43b8d9165",
+      "seriesId": "7c5ac077-2b43-478c-aadd-8116190d0a96",
+      "chapterId": "d5fd1a64-2eef-472d-aeea-8813307af423",
+      "pageId": "page_dd0c00a961fc780e2c1edebca38eaee080f8f06c8b50ae04ddd77838439dd1b0",
+      "id": "task:sha256:5511ea12ab4bac0d675625202775fe7ce9bf2e05ca74c0b63ac5f4797cf6fb51",
+      "fingerprint": "938936fab2536604ccd846d48a2af9e0762e21f8ed4e8fc30043e7118d67214a",
+      "spec": {
+        "version": "crop-page/1",
+        "provider": "chatgpt",
+        "product": "chatgpt-web",
+        "model": "provider-default",
+        "settings": {
+          "mode": null,
+          "effort": null
+        },
+        "pageRevision": "sha256:fe02ea0d537d7962433d42fa69465a60fba564f179a0ed8f9e56310953c3a621",
+        "promptVersion": "managed-chatgpt-default-crop/1",
+        "validatorVersion": "managed-crop-validator/1",
+        "dependencies": [
+          {
+            "id": "page_dd0c00a961fc780e2c1edebca38eaee080f8f06c8b50ae04ddd77838439dd1b0",
+            "revision": "sha256:fe02ea0d537d7962433d42fa69465a60fba564f179a0ed8f9e56310953c3a621",
+            "sha256": "fe02ea0d537d7962433d42fa69465a60fba564f179a0ed8f9e56310953c3a621"
+          }
+        ]
+      },
+      "state": "assigned",
+      "generation": 1,
+      "attemptId": "648fe673-bc64-4edb-91cb-b76031495041",
+      "canonical": null
+    },
+    "attempt": {
+      "id": "648fe673-bc64-4edb-91cb-b76031495041",
+      "activeCommandId": "2e81e3f1-de6e-4589-b271-7a76f09b436f",
+      "taskId": "task:sha256:5511ea12ab4bac0d675625202775fe7ce9bf2e05ca74c0b63ac5f4797cf6fb51",
+      "generation": 1,
+      "deviceId": "304527cb8fc1440a",
+      "profileId": "profile-1",
+      "accountId": null,
+      "leaseExpiresAt": "2026-10-20T05:33:53.444Z",
+      "phase": "assigned",
+      "submission": "unsent",
+      "checkpointRef": null
+    },
+    "commands": [
+      {
+        "id": "2e81e3f1-de6e-4589-b271-7a76f09b436f",
+        "taskId": "task:sha256:5511ea12ab4bac0d675625202775fe7ce9bf2e05ca74c0b63ac5f4797cf6fb51",
+        "attemptId": "648fe673-bc64-4edb-91cb-b76031495041",
+        "generation": 1,
+        "fingerprint": "938936fab2536604ccd846d48a2af9e0762e21f8ed4e8fc30043e7118d67214a",
+        "action": "start",
+        "phase": "queued"
+      }
+    ]
+  }
+}

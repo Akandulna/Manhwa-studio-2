@@ -60,3 +60,17 @@ those old copies. A phone that's gone can be removed with the bin icon on Phone 
 echo 'RELAY_TOKEN=local-test-token' > .dev.vars
 npm run dev                          # http://localhost:8787
 ```
+
+## Free-tier protection
+
+Persistent relay safety budgets, query bounds, client backoff and production validation are documented in [the free-tier budget](../docs/manager-agents/free-tier-budget.md). On-demand counters are available through Studio at `/api/managers/relay-usage`. These counters cover the relay, not account-wide incoming Worker requests.
+
+
+## Managed task pilot (source only, disabled by default)
+
+Separate Studio/device credentials and the `MANAGED_CROP_PAGE` flag gate the task API; see [Phase 3 configuration and boundaries](../docs/manager-agents/phase3.md). The shared observation token cannot authorize task ownership.
+
+Once a device is durably enrolled, legacy browser run/profile commands are rejected before forwarding, including broadcast commands and cached starts replayed at reconnect. This exclusion survives disabling the managed flag. Sync/receipt and screen observation remain available. Studio browser controls use HTTP to receive admission rather than infer it from a socket send. Reconcile enrolled tasks before rollback; do not remove enrollment/journals to bypass the exclusion. Managed execution and reconciled unenrollment are not yet integrated for rollout.
+
+
+Managed artifact uploads also require an optional `MANAGED_ARTIFACTS` R2 binding. It is absent from the production config. The adapter verifies actual immutable bytes before staging/publication and reserves at most 256 slots / 64 MB before writes. Use `wrangler.managed-test.jsonc` only with local `wrangler dev` for the artifact harness; it must not be deployed. See [artifact schema, destination validation and remaining rollout blockers](../docs/manager-agents/phase3.md#immutable-artifact-storage-and-studio-validation).

@@ -456,6 +456,7 @@ export default function PhoneStatus() {
 
   return (
     <SleeperPage icon={Smartphone} title="Phone Status" receipt={receipt}>
+      <p className="text-sm"><Link className="underline" to="/sleeper-cells/issues#website-ui-status">Website UI status and reporting path</Link> · <Link className="underline" to="/sleeper-cells/managed">Managed page pilot</Link></p>
       {!overview
         ? <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</p>
         : (

@@ -1,0 +1,24 @@
+{
+  "checkedAt": "2026-10-19T20:34:00.254Z",
+  "folder": "Sandmancer of the Scorched Desert/Chapter 001",
+  "alreadyUnlocked": true,
+  "archivedBindings": [],
+  "taskStates": [
+    {
+      "taskId": "task:sha256:cee56902b889bc86272711d485ac7ad3de3af7b4bdc908a3ba6744a31e9ff7ba",
+      "state": "paused",
+      "phase": "stop_confirmed",
+      "submission": "unsent",
+      "fingerprint": "ef480191274e08875d691483e480016815e9f1acbdeec71646f767e6735e869b"
+    }
+  ],
+  "activeLocalBindings": 0,
+  "scope": "Owner-requested temporary Studio crop access for Sandmancer chapter 1 only. No global guard, cloud task, source page, APK or phone pairing changed. Existing archives preserved.",
+  "restorePolicy": "Explicit reconciliation required; do not restore stale bindings automatically after edits.",
+  "verification": {
+    "checkedAt": "2026-10-19T20:34:07.354Z",
+    "chapterCropGuardPassed": true,
+    "pageCropGuardPassed": true,
+    "protectedScope": false
+  }
+}

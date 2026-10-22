@@ -1,0 +1,20 @@
+{
+  "checkedAt": "2026-10-19T18:21:21.332841+00:00",
+  "device": "192.168.1.34:40529",
+  "versionName": "1.0.135",
+  "versionCode": 1000135,
+  "releaseCertificateMatches": true,
+  "websiteUiProbePackaged": true,
+  "probeSha256": "656542fdbb645f32e3928b1b3a11f9c818e9f3636e1d5f829d996a5437a98b2e",
+  "quotaBackoffMarkersPackaged": true,
+  "managedPilotPrerequisitesPackaged": true,
+  "managedPilotMarkers": {
+    "workflowCapability": true,
+    "defaultModelPrompt": true,
+    "immutableUpload": true,
+    "durableActionGuard": true,
+    "explicitPhoneEntry": true
+  },
+  "probeMatchesCurrentSource": true,
+  "scope": "Installed APK packaging only. Does not prove five-minute cadence, Retry-After persistence or managed execution behavior. No installation or app-data change."
+}

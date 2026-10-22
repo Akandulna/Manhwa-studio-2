@@ -1,3 +1,4 @@
+import {readManagedChapterAssets,assertManagedChapterRevision} from './managedChapterAssets.js'
 /**
  * Editor 2.0 ⇄ the Sleeper-Cell phone app, through Cloudflare R2.
  *
@@ -173,6 +174,7 @@ async function buildPackage(
   language: NarrationLanguage,
   workflowMode: 'legacy' | 'staged' = 'legacy'
 ): Promise<BuiltPackage | { skip: string }> {
+  const managed=await readManagedChapterAssets(chapter.folderPath)
   const [timeline, metadata] = await Promise.all([
     getChapterTimelineBundle(chapter.id, language),
     getChapterCropMetadataBundle(chapter.id)
@@ -197,11 +199,12 @@ async function buildPackage(
 
   let images: string[] = []
   try {
-    images = (await fs.readdir(getOutputDir(chapter.folderPath))).filter(n => IMAGE_EXT.test(n)).sort()
+    images = managed ? managed.assets.map(file=>file.filename) : (await fs.readdir(getOutputDir(chapter.folderPath))).filter(n => IMAGE_EXT.test(n)).sort()
   } catch {
     // No crops3 folder: the phone then can't check image names, only the rest.
   }
 
+  await assertManagedChapterRevision(chapter.folderPath,managed?.revision??null)
   const chapterFolder = path.basename(chapter.folderPath)
   // This hash belongs to the script the fetched audio was actually voiced from,
   // rather than a Markdown file that may have been edited since that recording.
@@ -556,7 +559,7 @@ export interface EditorFetchResult {
   failed: { key: string; error: string }[]
 }
 
-interface ListedTimeline { key: string; chapterFolder: string }
+interface ListedTimeline { key: string; chapterFolder: string; modifiedAt: number }
 
 /** The phone writes under its own prefix, which may not match ours, so every place it may be is tried. */
 async function listTimelines(
@@ -567,9 +570,9 @@ async function listTimelines(
 ): Promise<ListedTimeline[]> {
   const folders = [...new Set([...(await phoneFolders(client, config)), config.prefix, ''])]
   const suffix = `${languageSuffix(language)}${TIMELINE_SUFFIX}`
+  const byChapter = new Map<string, ListedTimeline>()
   for (const folder of folders) {
     const base = `${folder}${EDITOR_FOLDER}${seriesFolder}/`
-    const found: ListedTimeline[] = []
     let token: string | undefined
     do {
       const page = await client.send(new ListObjectsV2Command({ Bucket: config.bucket, Prefix: base, ContinuationToken: token }))
@@ -579,13 +582,17 @@ async function listTimelines(
         const chapterFolder = name.slice(0, -suffix.length)
         // An English listing must not take a Hinglish file for a chapter named "… .hi".
         if (language === 'en' && chapterFolder.endsWith('.hi')) continue
-        if (chapterFolder) found.push({ key: object.Key, chapterFolder })
+        if (chapterFolder) {
+          const candidate = { key: object.Key, chapterFolder, modifiedAt: object.LastModified?.getTime() ?? 0 }
+          const previous = byChapter.get(chapterFolder)
+          // A phone can change prefixes; an old copy must not hide its latest upload.
+          if (!previous || candidate.modifiedAt > previous.modifiedAt) byChapter.set(chapterFolder, candidate)
+        }
       }
       token = page.IsTruncated ? page.NextContinuationToken : undefined
     } while (token)
-    if (found.length > 0) return found
   }
-  return []
+  return [...byChapter.values()]
 }
 
 /**
@@ -624,6 +631,7 @@ export async function fetchPhoneTimelines(seriesId: string, language: NarrationL
       const json = typeof body.timeline === 'string' ? body.timeline.trim() : ''
       if (!json) throw new Error('the timeline is empty')
       const madeAt = Date.parse(body.madeAt) || 0
+      const model = typeof body.model === 'string' ? body.model.trim() || null : null
 
       const where = { chapterId_language: { chapterId: chapter.id, language } }
       const existing = await prisma.editor2Timeline.findUnique({ where })
@@ -649,6 +657,14 @@ export async function fetchPhoneTimelines(seriesId: string, language: NarrationL
         }
       }
       if (existing && existing.json.trim() === json) {
+        // Backfill attribution for timelines imported before it was retained.
+        if (model && !existing.model) {
+          await prisma.editor2Timeline.upsert({
+            where,
+            create: { chapterId: chapter.id, language, json, model, processedJson: null, updatedAt: new Date() },
+            update: { model }
+          })
+        }
         result.upToDate++
         continue
       }
@@ -660,14 +676,14 @@ export async function fetchPhoneTimelines(seriesId: string, language: NarrationL
       const updatedAt = new Date(Math.max(Date.now(), (existing?.updatedAt.getTime() ?? 0) + 1))
       await prisma.editor2Timeline.upsert({
         where,
-        create: { chapterId: chapter.id, language, json, processedJson: null, updatedAt },
-        update: { json, processedJson: null, updatedAt }
+        create: { chapterId: chapter.id, language, json, model, processedJson: null, updatedAt },
+        update: { json, model, processedJson: null, updatedAt }
       })
       result.imported.push({
         chapterId: chapter.id,
         number: chapter.number,
         review: Array.isArray(body.review) ? body.review.length : 0,
-        model: typeof body.model === 'string' ? body.model : null
+        model
       })
     } catch (error) {
       result.failed.push({ key, error: errorMessage(error) })

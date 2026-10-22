@@ -1,3 +1,17 @@
+import {randomUUID} from 'node:crypto'
+import {handoffJob,type ProductionHandoffIntent} from './managedProductionHandoff.js'
+import {cropTaskIdentity} from './managedTaskProtocol.js'
+import {exportManagedRun,adoptManagedRun} from './managedProductionAdoption.js'
+import {resumeInspectedManagedProduction} from './managedProductionResume.js'
+import {inspectManagedProduction} from './managedProductionReconciliation.js'
+import {TaskConflict} from './managedTaskProtocol.js'
+import {managedProductionCoordinator} from './managedProductionCoordinator.js'
+import {ProductionJobStore} from './productionJobStore.js'
+import {productionJobDatabase} from './productionJobDatabase.js'
+import {managedPilotInput,managedPilotAuthority} from './managedPilotInput.js'
+import {ManagedCropPilot} from './managedCropPilot.js'
+import {runManagedFleet,stopManagedProduction} from './managedProduction.js'
+import { recordManagerAutomation } from './managerReporting.js'
 import path from 'path'
 import fs from 'fs/promises'
 import { setTimeout as delay } from 'timers/promises'
@@ -20,7 +34,7 @@ import { fetchPhoneCrops } from './phoneCropImport.js'
 import { syncChapterProcessed } from './clipper3/processedSync.js'
 import { seriesSlug, queueAutoCrop, readChapterCropState } from './clipper3/chapterCrop.js'
 
-const PREFIX = 'productionAutomation:'
+
 const LANGUAGES = ['en', 'hi'] as const
 let io: Server
 
@@ -93,6 +107,7 @@ async function ensurePages(job: ProductionJob, signal: AbortSignal, chapterIds: 
 type Report = (message: string, command?: ProductionJob['command']) => Promise<void>
 async function stopCommandPhones(job: ProductionJob) {
   if (!job.command) return
+  if(job.config.managedCrop)return managedProductionCoordinator.withLease(managedPilotAuthority(prisma),authority=>stopManagedProduction(authority,[...(job.command!.managedClaims??[]),...(job.pendingHandoff?[{taskId:job.pendingHandoff.taskId,claimEventId:job.pendingHandoff.newClaimEventId,deviceId:job.pendingHandoff.deviceId,profileId:job.pendingHandoff.profileId}]:[])],job.command!.managedTaskIds??[]))
   const data = await overview()
   const results = await Promise.allSettled((job.command.devices ?? [job.config.device]).map(async device => {
     const foreign = data.runs.some(r => r.device === device && (r.seriesId !== job.seriesId || r.kind !== job.command?.kind || job.command?.language && r.tabs.some(t => t.language !== job.command?.language)))
@@ -267,7 +282,38 @@ async function syncCrops(job: ProductionJob, signal: AbortSignal, report: Report
   }
 }
 
+async function managedProductionInputs(job:ProductionJob) {
+  const rows=await chapters(job),inputs=[]
+  for(const chapter of rows) {
+    const manifest=await getChapterManifest(chapter.folderPath)
+    const pages=await prisma.page.findMany({where:{chapterId:chapter.id,status:'done'}})
+    for(const image of manifest.images) {
+      const page=pages.find(p=>p.localPath&&path.basename(p.localPath)===image.filename)
+      if(!page)throw new Error('Sync every prepared source page before managed production')
+      inputs.push(await managedPilotInput(prisma,page.id))
+    }
+  }
+  return inputs
+}
+
 async function perform(step: ProductionStep, job: ProductionJob, signal: AbortSignal, report: Report) {
+  if(job.config.managedCrop) {
+    if(step==='review')return // Explicit review remains a separate page-level decision.
+    if(step!=='clipping')throw new Error('Managed production supports the crop-page workflow only')
+    const taskIds=new Set(job.command?.managedTaskIds??[])
+    const claims=new Map((job.command?.managedClaims??[]).map(c=>[c.taskId,c]))
+    await managedProductionCoordinator.withLease(managedPilotAuthority(prisma),authority=>runManagedFleet(productionDevices(job.config),signal,{
+      authority,
+      claims:[...claims.values()],
+      expectedTaskIds:job.resumedFrom?.preparedTaskIds,
+      inputs:()=>managedProductionInputs(job),
+      report:async(message,taskId,claim)=>{if(taskId)taskIds.add(taskId);if(claim)claims.set(claim.taskId,claim);await report(message,{kind:'clipper',devices:productionDevices(job.config).map(d=>d.device),sentAt:job.command?.sentAt??new Date().toISOString(),managedTaskIds:[...taskIds],managedClaims:[...claims.values()]})},
+      wait:signal=>delay(10_000,undefined,{signal})
+    }))
+    notifySeriesProcessChanged(true)
+    return
+  }
+
   if (step === 'preparation') {
     throw new Error('Complete Preparation before starting the Scripts → Voiceovers → Image Clipping automation.')
   } else if (step === 'scripts') {
@@ -293,13 +339,26 @@ async function perform(step: ProductionStep, job: ProductionJob, signal: AbortSi
   }
 }
 
+const productionJobs=new ProductionJobStore(productionJobDatabase(()=>prisma))
 export const productionAutomation = new ProductionRunner({
-  load: async () => (await prisma.setting.findMany({ where: { key: { startsWith: PREFIX } } })).flatMap(r => {
-    try { const j = JSON.parse(r.value); return j?.seriesId && j?.config?.device ? [j as ProductionJob] : [] } catch { return [] }
-  }),
-  save: async job => { const key = PREFIX + job.seriesId; const value = JSON.stringify(job); await prisma.setting.upsert({ where: { key }, create: { key, value }, update: { value } }) },
+  activate:()=>productionJobs.activate(),
+  load:()=>productionJobs.load(),
+  save:(job,expected)=>productionJobs.save(job,expected),
   series,
   validate: async (id, config) => {
+    if(config.managedCrop) {
+      if(config.parallelDevices?.length||config.clipper.ai!=='chatgpt'||config.clipper.tabs!==1||Object.values(config.clipper.chatGpt).some(value=>value!==null))throw new Error('Managed crop production requires explicit managed phones and default ChatGPT settings')
+      const data=await overview(),previous=(await productionAutomation.get(id)).job
+      const authority=managedPilotAuthority(prisma)
+      for(const target of productionDevices(config)){
+       if(!data.profiles.some(p=>p.device===target.device&&p.profileId===target.profileId))throw new Error('Choose every explicit managed phone/profile')
+       const retained=previous?.config.managedCrop&&productionDevices(previous.config).some(d=>d.device===target.device&&d.profileId===target.profileId)
+       if(!retained&&busy(data,target.device))throw new Error('A chosen managed phone is busy')
+       if(retained)await authority.ready();else await new ManagedCropPilot(authority).enroll(target.device,target.profileId)
+      }
+      return
+    }
+
     if ((await productionAutomation.get(id)).nextStep === 'preparation') throw new Error('Complete Preparation before starting production automation')
     if (!getR2Config()) throw new Error('Set up Cloudflare R2 before starting production automation')
     if (!relayStatus().configured || !relayStatus().connected) throw new Error('Connect the phone relay before starting production automation')
@@ -316,7 +375,7 @@ export const productionAutomation = new ProductionRunner({
   },
   perform,
   stop: stopCommandPhones,
-  emit: job => io?.emit('production:updated', job)
+  emit: job => { io?.emit('production:updated', job); recordManagerAutomation(job) }
 })
 
 /** A phone's finished JSON still needs fetching before the desktop can offer its review. */
@@ -330,3 +389,93 @@ export async function getProductionStatus(seriesId: string) {
 }
 
 export function startProductionAutomation(socket: Server) { io = socket; void productionAutomation.init().catch(error => console.error('[production]', error)) }
+
+
+/** Explicit read-only inspection: bypass scheduler activation and reject a changed saved job revision. */
+export async function reconcileManagedProduction(seriesId:string,expected:{jobId:string;revision:number}) {
+ if(!expected||Object.keys(expected).sort().join(',')!=='jobId,revision'||typeof expected.jobId!=='string'||!expected.jobId||!Number.isSafeInteger(expected.revision)||expected.revision<0)throw new TaskConflict('Choose the exact saved production job and revision')
+ const job=(await productionJobs.load()).find(j=>j.seriesId===seriesId)
+ if(!job||job.id!==expected.jobId||(job.revision??0)!==expected.revision)throw new TaskConflict('Saved production job changed. Refresh its status before reconciliation')
+ if(!job.config.managedCrop)throw new TaskConflict('Choose a saved managed crop production run')
+ const before=JSON.stringify(job)
+ const report=await inspectManagedProduction(job,managedPilotAuthority(prisma),await managedProductionInputs(job))
+ const after=(await productionJobs.load()).find(j=>j.seriesId===seriesId)
+ if(JSON.stringify(after)!==before)throw new TaskConflict('Saved production job changed during inspection. Refresh reconciliation')
+ return report
+}
+
+
+/** Explicit same-source/same-phone resume. The persisted original receipts remain immutable. */
+export async function resumeManagedProduction(seriesId:string,value:unknown) {
+ return resumeInspectedManagedProduction(seriesId,value,{
+  load:()=>productionJobs.load(),authority:managedPilotAuthority(prisma),coordinator:managedProductionCoordinator,
+  inputs:managedProductionInputs,launch:(job,approval)=>productionAutomation.start(seriesId,job.config,approval)
+ })
+}
+
+
+export async function exportManagedProduction(seriesId:string,expected:{jobId:string;revision:number}) {
+ if(!expected||Object.keys(expected).sort().join(',')!=='jobId,revision')throw new TaskConflict('Choose an exact saved job revision')
+ const job=(await productionJobs.load()).find(j=>j.seriesId===seriesId)
+ if(!job||job.id!==expected.jobId||(job.revision??0)!==expected.revision)throw new TaskConflict('Saved job changed before export')
+ const bundle=await exportManagedRun(job,managedPilotAuthority(prisma),await managedProductionInputs(job))
+ if(JSON.stringify((await productionJobs.load()).find(j=>j.seriesId===seriesId))!==JSON.stringify(job))throw new TaskConflict('Saved job changed during export')
+ return bundle
+}
+export async function adoptManagedProduction(seriesId:string,value:unknown) {
+ return adoptManagedRun(seriesId,value,{load:()=>productionJobs.load(),authority:managedPilotAuthority(prisma),coordinator:managedProductionCoordinator,inputs:managedProductionInputs,saveNew:async job=>{await productionJobs.activate();await productionJobs.save(job,null)}})
+}
+
+
+export async function pauseManagedProduction(seriesId:string,request:any) {
+ if(!request||Object.keys(request).sort().join(',')!=='jobId,revision,taskId'||typeof request.taskId!=='string')throw new TaskConflict('Choose the exact run revision and original task to pause')
+ const before=(await productionJobs.load()).find(j=>j.seriesId===seriesId)
+ if(!before||before.id!==request.jobId||(before.revision??0)!==request.revision||!before.command?.managedClaims?.some(c=>c.taskId===request.taskId))throw new TaskConflict('Choose an original task from the exact saved run before pausing')
+ const job=await productionAutomation.pauseManaged(seriesId,{jobId:request.jobId,revision:request.revision})
+ const claim=job.command?.managedClaims?.find(c=>c.taskId===request.taskId)
+ if(!claim)throw new TaskConflict('No original receipt for this run task; page-level reconciliation is required')
+ await managedProductionCoordinator.withLease(managedPilotAuthority(prisma),authority=>authority.operation({action:'pause_production_claim',taskId:claim.taskId,claimEventId:claim.claimEventId,eventId:'pause_'+claim.claimEventId}))
+ return job
+}
+export async function handoffManagedProduction(seriesId:string,request:any) {
+ if(!request||typeof request!=='object'||Array.isArray(request))throw new TaskConflict('Exact handoff request required')
+ await productionJobs.activate()
+ let job=(await productionJobs.load()).find(j=>j.seriesId===seriesId)
+ if(!job?.config.managedCrop||!['failed','interrupted'].includes(job.status)||job.id!==request.jobId||(job.revision??0)!==request.revision)throw new TaskConflict('Pause scheduling and refresh the exact retained run before handoff')
+ const originalVersion={id:job.id,revision:job.revision??0}
+ let intent=job.pendingHandoff
+ if(intent){
+  if(Object.keys(request).sort().join(',')!=='intentId,jobId,revision'||request.intentId!==intent.eventId)throw new TaskConflict('Finish this exact pending handoff before choosing another target')
+ }else{
+  if(Object.keys(request).sort().join(',')!=='attemptId,deviceId,fingerprint,generation,jobId,profileId,revision,stopCommandId,taskId'||![request.attemptId,request.deviceId,request.profileId,request.stopCommandId].every(v=>typeof v==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(v))||!Number.isSafeInteger(request.generation)||request.generation<1||!(/^[a-f0-9]{64}$/).test(request.fingerprint))throw new TaskConflict('Refresh the exact confirmed-unsent attempt and target')
+  const claim=job.command?.managedClaims?.find(c=>c.taskId===request.taskId)
+  if(!claim)throw new TaskConflict('Exact original run claim receipt required')
+  intent={eventId:randomUUID(),newClaimEventId:randomUUID(),claimEventId:claim.claimEventId,taskId:claim.taskId,attemptId:request.attemptId,generation:request.generation,fingerprint:request.fingerprint,stopCommandId:request.stopCommandId,deviceId:request.deviceId,profileId:request.profileId,createdAt:new Date().toISOString()}
+ }
+ const pending=intent
+ return managedProductionCoordinator.withLease(managedPilotAuthority(prisma),async authority=>{
+  await authority.ready(['production-handoff/1'])
+  const inputs=await managedProductionInputs(job!),matches=await Promise.all(inputs.map(async input=>({input,id:(await cropTaskIdentity(input.identity,input.spec)).taskId})))
+  const input=matches.find(row=>row.id===pending.taskId)?.input
+  if(!input)throw new TaskConflict('Exact unchanged source scope required for handoff')
+  const overview=await getPhoneOverview(null)
+  if(!overview.profiles.some(p=>p.device===pending.deviceId&&p.profileId===pending.profileId))throw new TaskConflict('Choose a known explicit target phone/profile')
+  if(!job!.pendingHandoff){
+   if(busy(overview,pending.deviceId)||(await productionJobs.load()).some(j=>j.id!==job!.id&&j.status==='running'&&productionDevices(j.config).some(d=>d.device===pending.deviceId)))throw new TaskConflict('The target has existing work; retain this task on its current owner')
+   const current=await authority.timeline(pending.taskId)
+   if(current.task.state!=='paused'||current.attempt?.id!==pending.attemptId||current.task.generation!==pending.generation||current.task.fingerprint!==pending.fingerprint||current.attempt.phase!=='stop_confirmed'||current.attempt.submission!=='unsent'||current.attempt.checkpointRef||current.attempt.activeCommandId!==pending.stopCommandId)throw new TaskConflict('Only an exact acknowledged paused unsent attempt can transfer')
+   await new ManagedCropPilot(authority).enroll(pending.deviceId,pending.profileId)
+   job={...job!,pendingHandoff:pending,revision:originalVersion.revision+1,updatedAt:new Date().toISOString(),message:'Handoff intent saved; confirming the original authority transfer.'}
+   await productionJobs.save(job,originalVersion) // Persist IDs before any transfer; lost replies retain recoverable intent.
+  }
+  const transferred=await new ManagedCropPilot(authority).transfer(input,{taskId:pending.taskId,attemptId:pending.attemptId,generation:pending.generation,fingerprint:pending.fingerprint,stopCommandId:pending.stopCommandId},pending.deviceId,pending.profileId,{claimEventId:pending.claimEventId,newClaimEventId:pending.newClaimEventId,eventId:pending.eventId})
+  const receipt=await authority.claimReceipt!(pending.taskId,pending.newClaimEventId)
+  if(receipt.status!=='recorded'||receipt.attemptId!==transferred.attempt?.id||receipt.generation!==pending.generation+1||receipt.deviceId!==pending.deviceId||receipt.profileId!==pending.profileId)throw new TaskConflict('Target claim acknowledgment does not match; retain the pending handoff')
+  const current=(await productionJobs.load()).find(j=>j.seriesId===seriesId)
+  if(!current||current.id!==job!.id||current.revision!==job!.revision||JSON.stringify(current.pendingHandoff)!==JSON.stringify(pending))throw new TaskConflict('Local handoff changed; reconcile its persisted intent')
+  const applied=handoffJob(current,pending,{attemptId:receipt.attemptId!,generation:receipt.generation!})
+  await productionJobs.save(applied,{id:current.id,revision:current.revision??0})
+  io?.emit('production:updated',applied)
+  return applied
+ })
+}

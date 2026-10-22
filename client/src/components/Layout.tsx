@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { useSocket } from '@/lib/socket'
 import { usePhoneRelay } from '@/hooks/usePhoneRelay'
+import ManagerNotifications from '@/components/ManagerNotifications'
 import {
   Library,
   Download,
@@ -131,6 +132,11 @@ export default function Layout({ children }: LayoutProps) {
       icon: <Activity className="h-5 w-5" />,
       label: 'Live Progress',
       href: '/sleeper-cells/live'
+    },
+    {
+      icon: <Activity className="h-5 w-5" />,
+      label: 'Production Issues',
+      href: '/sleeper-cells/issues'
     }
   ]
 
@@ -323,6 +329,7 @@ export default function Layout({ children }: LayoutProps) {
 
       {/* Main Content */}
       <main className="flex-1 overflow-auto">
+        <ManagerNotifications />
         <div className="h-full">
           {children}
         </div>

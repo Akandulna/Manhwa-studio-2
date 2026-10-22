@@ -1,0 +1,23 @@
+{
+  "checkedAt": "2026-10-20T05:34:35.802Z",
+  "series": "Sandmancer of the Scorched Desert",
+  "chapter": 1,
+  "chapterId": "01fef395-d351-41bc-911a-9b4e7e035cd8",
+  "page": {
+    "id": "91c4c75d-f030-47f4-9658-28fba5fb34f5",
+    "index": 3,
+    "filename": "page_003.jpg",
+    "bytes": 1358524,
+    "sha256": "0b6c0ab36fba5018ae68f19f3a9dfad15c984127faa92cb5139a4a773e0e79f1",
+    "width": 800,
+    "height": 10808
+  },
+  "legacyPointsExist": false,
+  "legacyMetadataExist": false,
+  "managedBindingExists": false,
+  "deviceId": "304527cb8fc1440a",
+  "profileId": "profile-1",
+  "model": "provider-default",
+  "scope": "Read-only preparation of a fresh pending page under owner authorization; no task assigned. Old paused attempts remain intact.",
+  "phoneSourceHashMatches": true
+}

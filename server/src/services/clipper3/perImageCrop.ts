@@ -1,3 +1,4 @@
+import {withUnmanagedCropWrite} from '../managedCropProjection.js'
 /**
  * Image Clipper 3.0 — cutting sections out of ONE image.
  *
@@ -85,7 +86,7 @@ function entryPixelRect(
  * Cut every crop of one image. Failures are per-crop and reported, never thrown,
  * so a single bad entry cannot lose the rest of the page's sections.
  */
-export async function cutImageCrops(opts: {
+async function cutImageCropsLegacy(opts: {
   folderPath: string
   imageFilename: string
   crops: Clipper3CropEntry[]
@@ -137,4 +138,8 @@ export async function cutImageCrops(opts: {
   }
 
   return { imageFilename, files, failed, warnings }
+}
+
+export async function cutImageCrops(opts:Parameters<typeof cutImageCropsLegacy>[0]):Promise<CutImageResult> {
+ return withUnmanagedCropWrite(opts.folderPath,opts.imageFilename,()=>cutImageCropsLegacy(opts))
 }

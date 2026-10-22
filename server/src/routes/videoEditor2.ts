@@ -1,3 +1,5 @@
+import {TaskConflict} from '../services/managedTaskProtocol.js'
+import {managedChapterImage} from '../services/managedChapterAssets.js'
 /**
  * Video Editor 2.0 routes — Module 4v2
  *
@@ -41,6 +43,15 @@ import { WorkflowReplyError } from '../services/editorWorkflow.js'
 
 export function initVideoEditor2Routes(io: Server): Router {
   const router = Router()
+  router.get('/chapters/:id/managed-image/:filename',async(req,res)=>{
+    try {
+      if(typeof req.query.revision!=='string'||!/^[a-f0-9]{64}$/.test(req.query.revision))throw new Error('Exact managed chapter revision required')
+      const chapter=await prisma.chapter.findUnique({where:{id:req.params.id},select:{folderPath:true}})
+      if(!chapter)return res.status(404).json({error:'Chapter not found'})
+      const bytes=await managedChapterImage(chapter.folderPath,req.query.revision,req.params.filename)
+      res.set('Cache-Control','no-store').type('png').send(bytes)
+    }catch(error){res.status(409).json({error:(error as Error).message})}
+  })
 
   // GET is read-only; POST accepts only the current task and writes a resumable checkpoint.
   router.get('/chapters/:id/staged-timeline', async (req, res) => {
@@ -127,6 +138,7 @@ export function initVideoEditor2Routes(io: Server): Router {
       if (!bundle) return res.status(404).json({ error: 'Chapter not found' })
       res.json(bundle)
     } catch (error) {
+      if(error instanceof TaskConflict)return res.status(409).json({error:error.message})
       console.error('[videoEditor2] building crop metadata bundle failed:', error)
       res.status(500).json({ error: 'Failed to collect the crop metadata' })
     }
@@ -170,11 +182,12 @@ export function initVideoEditor2Routes(io: Server): Router {
    * against these rows; updatedAt (epoch ms) decides which side is newer.
    * English and Hindi are separate rows: the same chapter is edited twice.
    */
-  const toStored = (row: { chapterId: string; language: string; json: string; processedJson: string | null; updatedAt: Date }) => ({
+  const toStored = (row: { chapterId: string; language: string; json: string; processedJson: string | null; model: string | null; updatedAt: Date }) => ({
     chapterId: row.chapterId,
     language: row.language as NarrationLanguage,
     json: row.json,
     processedJson: row.processedJson,
+    model: row.model,
     updatedAt: row.updatedAt.getTime()
   })
 
@@ -234,7 +247,7 @@ export function initVideoEditor2Routes(io: Server): Router {
       if (existing && existing.updatedAt.getTime() >= updatedAt) {
         return res.json(toStored(existing))
       }
-      const data = { json, processedJson, updatedAt: new Date(updatedAt) }
+      const data = { json, processedJson, model: existing?.json.trim() === json.trim() && json.trim() ? existing.model : null, updatedAt: new Date(updatedAt) }
       const row = await prisma.editor2Timeline.upsert({
         where: key,
         create: { chapterId, language, ...data },

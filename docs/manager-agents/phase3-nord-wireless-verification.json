@@ -1,0 +1,29 @@
+{
+  "checkedAt": "2026-10-19T11:10:52.655Z",
+  "version": "c3c2651e-c129-4775-a54a-5eb9e592e7f6",
+  "previousVersion": "2b02e41b-d1ee-4d9c-b7a9-6c191168ebac",
+  "reason": "Blocked existing report returned SQLITE_TOOBIG from monolithic manager projection; migrated transactionally to bounded chunk rows.",
+  "existingReportAcceptedAfterFix": true,
+  "pendingStudioReports": 0,
+  "deliveryError": null,
+  "activeRuns": 0,
+  "working": 0,
+  "managedExecutionDisabled": true,
+  "usage": {
+    "day": "2026-10-19",
+    "operations": 4204,
+    "rowsRead": 745074,
+    "rowsWritten": 23425,
+    "limits": {
+      "operations": 20000,
+      "rowsRead": 3000000,
+      "rowsWritten": 60000
+    },
+    "scope": "Relay-local counters since protection was deployed; not Cloudflare account-wide billing.",
+    "resetsAt": "2026-10-20T00:00:00.000Z"
+  },
+  "limitsScope": "Relay-local partial UTC-day counters only; not account-wide Cloudflare allowance certification.",
+  "restartCheck": "Confirmed recent Android boot (355.18 seconds uptime, boot count 3) and new Sleeper-Cell PID 6162 versus 25449 before reboot. Live receipt correlation/replay passed; persisted device/sync sequence 249, Website UI advanced to 208. Zero pending/error reports and zero active runs. No pre-reboot boot ID was captured.",
+  "forced429AndPersistence": "Not exercised on production",
+  "restartEvidence": "phase3-nord-reboot-validation.json"
+}

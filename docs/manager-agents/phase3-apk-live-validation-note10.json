@@ -1,0 +1,42 @@
+{
+  "checkedAt": "2026-10-19T05:43:00.980Z",
+  "usbDevice": "3466057e",
+  "relayDevice": "6d659cf619a94099",
+  "apk": {
+    "checkedAt": "2026-10-19T05:41:51.972562+00:00",
+    "device": "3466057e",
+    "versionName": "1.0.130",
+    "versionCode": 1000130,
+    "releaseCertificateMatches": true,
+    "websiteUiProbePackaged": true,
+    "probeSha256": "656542fdbb645f32e3928b1b3a11f9c818e9f3636e1d5f829d996a5437a98b2e",
+    "quotaBackoffMarkersPackaged": true,
+    "probeMatchesCurrentSource": true,
+    "scope": "Installed APK packaging only. Does not prove five-minute cadence, Retry-After persistence or managed execution behavior. No installation or app-data change."
+  },
+  "correlatedReceiptKinds": [
+    "scripts"
+  ],
+  "runsBefore": 1,
+  "runsAfter": 1,
+  "workingBefore": 0,
+  "workingAfter": 0,
+  "nativeFacts": 225,
+  "nativeReportingVerified": true,
+  "pendingStudioReports": 0,
+  "deliveryError": null,
+  "usage": {
+    "day": "2026-10-19",
+    "operations": 1388,
+    "rowsRead": 482219,
+    "rowsWritten": 8281,
+    "limits": {
+      "operations": 20000,
+      "rowsRead": 3000000,
+      "rowsWritten": 60000
+    },
+    "scope": "Relay-local counters since protection was deployed; not Cloudflare account-wide billing.",
+    "resetsAt": "2026-10-20T00:00:00.000Z"
+  },
+  "scope": "Real installed APK and receipt-only correlation. No generation/start/stop or synthetic production reports. Native reporter cadence, forced Retry-After/restart behavior and managed execution require separate checks."
+}

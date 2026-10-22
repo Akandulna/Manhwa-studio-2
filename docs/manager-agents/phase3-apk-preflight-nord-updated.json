@@ -1,0 +1,12 @@
+{
+  "checkedAt": "2026-10-19T12:42:53.968952+00:00",
+  "device": "adb-54a03a76-IIuz4X._adb-tls-connect._tcp",
+  "versionName": "1.0.133",
+  "versionCode": 1000133,
+  "releaseCertificateMatches": true,
+  "websiteUiProbePackaged": true,
+  "probeSha256": "656542fdbb645f32e3928b1b3a11f9c818e9f3636e1d5f829d996a5437a98b2e",
+  "quotaBackoffMarkersPackaged": true,
+  "probeMatchesCurrentSource": true,
+  "scope": "Installed APK packaging only. Does not prove five-minute cadence, Retry-After persistence or managed execution behavior. No installation or app-data change."
+}

@@ -1,3 +1,6 @@
+import type {ManagedRunBundle} from '../../../server/src/services/managedProductionAdoption'
+import type {ProductionReconciliation} from '../../../server/src/services/managedProductionReconciliation'
+export type {ProductionReconciliation}
 import type { NarrationLanguage } from './narrationLanguage'
 
 const API_BASE = '/api'
@@ -10,6 +13,12 @@ export const productionApi = {
   list: () => fetchApi<ProductionJob[]>('/library/automation'),
   get: (seriesId: string) => fetchApi<{ job: ProductionJob | null; nextStep: ProductionStep }>(`/series/${seriesId}/automation`),
   start: (seriesId: string, config: ProductionConfig) => fetchApi<ProductionJob>(`/series/${seriesId}/automation`, { method: 'POST', body: JSON.stringify(config) }),
+  pauseHandoff:(seriesId:string,request:{jobId:string;revision:number;taskId:string})=>fetchApi<ProductionJob>(`/series/${seriesId}/automation/pause-handoff`,{method:'POST',body:JSON.stringify(request)}),
+  handoff:(seriesId:string,request:Record<string,unknown>)=>fetchApi<ProductionJob>(`/series/${seriesId}/automation/handoff`,{method:'POST',body:JSON.stringify(request)}),
+  exportRun:(seriesId:string,expected:{jobId:string;revision:number})=>fetchApi<ManagedRunBundle>(`/series/${seriesId}/automation/export-run`,{method:'POST',body:JSON.stringify(expected)}),
+  adoptRun:(seriesId:string,bundle:unknown)=>fetchApi<ProductionJob>(`/series/${seriesId}/automation/adopt-run`,{method:'POST',body:JSON.stringify(bundle)}),
+  resume: (seriesId:string,expected:{jobId:string;revision:number;scopeDigest:string}) => fetchApi<ProductionJob>(`/series/${seriesId}/automation/resume`,{method:'POST',body:JSON.stringify(expected)}),
+  reconcile: (seriesId:string,expected:{jobId:string;revision:number}) => fetchApi<ProductionReconciliation>(`/series/${seriesId}/automation/reconcile`,{method:'POST',body:JSON.stringify(expected)}),
   stop: (seriesId: string) => fetchApi<ProductionJob>(`/series/${seriesId}/automation/stop`, { method: 'POST' })
 }
 
@@ -539,6 +548,7 @@ export interface CropRepairResult {
 
 /** A chapter's Editor 2.0 paste as the server stores it. json "" = cleared. */
 export interface StoredTimeline2 {
+  model?: string | null
   chapterId: string
   language: NarrationLanguage
   json: string
@@ -731,6 +741,8 @@ export interface TimelinePlan {
 
 export interface Clipper3Image {
   filename: string
+  /** Immutable managed pages use their revision-bound review/cut controls. */
+  managed?: {pageId:string|null;taskId:string}|null
   /** The image's own pixel size — the space its JSON is normalized against. */
   width: number
   height: number
@@ -1860,7 +1872,7 @@ export interface PhoneAutomation {
   /** How Image Clipper last ran there; null from builds before it was sent. */
   clipper?: { ai: PhoneClipperAi; flow: PhoneClipperFlow; tabs: number; chatGpt?: PhoneChatGptSettings | null } | null
   /** Editor 2.0's tabs last used there; null from builds whose Editor 2.0 run takes neither tabs nor a share of a split. */
-  editor?: { tabs: number; staged?: boolean; chatGpt?: PhoneChatGptSettings } | null
+  editor?: { tabs: number; staged?: boolean; ai?: 'chatgpt' | 'aistudio'; providers?: string[]; smallBatches?: boolean; chatGpt?: PhoneChatGptSettings } | null
   /** The runs that take a share of a split (a `chapters` list); empty or left out from builds before. */
   chapterRuns?: PhoneRunKind[]
   /** A run going there takes a split's start of it as its new scope, keeping what it's on; builds before would start over. */
@@ -1884,6 +1896,8 @@ export interface PhoneAutomationOptions {
   seriesId?: string
   tabs?: number
   ai?: PhoneClipperAi
+  /** Editor: match one audio section per request and resume accepted checkpoints. */
+  smallBatches?: boolean
   flow?: PhoneClipperFlow
   /** Image Clipper on ChatGPT: mode, model and effort; the phone keeps them for its later runs. */
   chatGpt?: PhoneChatGptSettings
@@ -2429,4 +2443,11 @@ export const pagePreviewApi = {
   /** Live pages use the stitcher's thumb/image endpoints; this one reads the bin. */
   binThumbUrl: (id: string, filename: string) =>
     `${API_BASE}/page-preview/chapters/${id}/bin/${encodeURIComponent(filename)}/thumb`
+}
+
+import type { ManagerOverview } from '../../../server/src/services/managerProtocol'
+export type { ManagerOverview }
+export const managersApi = {
+  get: () => fetchApi<ManagerOverview>('/managers'),
+  acknowledge: (incidentId: string, notificationId: string) => fetchApi('/managers/acknowledge', { method: 'POST', body: JSON.stringify({ incidentId, notificationId }) })
 }

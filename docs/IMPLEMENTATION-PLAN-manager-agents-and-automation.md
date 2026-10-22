@@ -1,7 +1,7 @@
 # Implementation Plan: Manager Agents and Reliable Automation
 
 **Date:** 18 October 2026  
-**Status:** Planning only; no application implementation started  
+**Status:** Phase 0 validated; Phase 1 implemented, production relay deployed, Studio and Nord pilot reporting enabled; broader rollout gates remain; Phase 2 implemented and locally validated; compatible production relay and Nord 1.0.128 ChatGPT composer baseline/control pilot verified; remaining device rollout gates open; Phase 3 authority/authenticated transport/Android journal/legacy admission guards/immutable artifact adapters/crop read projections/immutable local cutting implemented and locally tested, executor/publication integration in progress
 **Specification:** [PRD v1.1](PRD-manager-agents-and-automation.md)  
 **Scope:** Manhwa Studio, Sleeper-Cell, and the Cloudflare relay
 
@@ -94,9 +94,13 @@ Work packages:
 
 **Exit gate:** each external action has a defined intent/acknowledgment/checkpoint boundary; every existing dispatch path is classified as integrated, blocked during managed execution, or unsupported. Ownership expiry and request uncertainty have distinct handling.
 
+**Phase 0 artifacts:** [Foundation and validation record](manager-agents/README.md), including protocol decisions, source inventory, module ownership, migration design, versioned wire schema, shared TypeScript/Kotlin fixtures, safety transitions, and A01–A32 traceability. Contract checks, TypeScript compilation, Android JVM decoding fixtures, and existing live receipt delivery/replay pass; Phase 1 observational runtime is now implemented separately from future task ownership. See [validation evidence and limitations](manager-agents/validation.md).
+
 **Rollout/rollback:** documentation and fixtures only; no new production behavior.
 
 ## 4. Phase 1 — Unified observations and Issues Manager
+
+**Implementation status (19 October 2026):** source implementation complete across Studio, relay and Sleeper-Cell; local suites and relay process-restart replay passed. Defaults remain off; production relay, local Studio and Nord pilot are now enabled and native installed-phone delivery/replay plus user-confirmed app reopen passed. The synthetic phone-output → cloud → Mac trace passes; a new real chapter import remains a broader rollout gate. See [handoff](manager-agents/phase1.md) and [validation evidence](manager-agents/validation.md).
 
 **Outcome:** The owner can see trustworthy progress and blockers before managers start changing execution behavior.
 
@@ -122,6 +126,8 @@ Work packages:
 
 ## 5. Phase 2 — Website UI Monitor Agent
 
+**Implementation status (19 October 2026):** source implementation and local acceptance checks complete for all three providers, with durable device-manager routing, baseline review/verification, passive hooks, deferred audits and Studio evidence views. The phone switch remains off. Production relay deployment, a new GitHub Actions APK, real-page baseline review, visual QA and device overhead/crash instrumentation remain release gates. See [Phase 2 handoff](manager-agents/phase2.md).
+
 **Outcome:** UI changes in ChatGPT, Gemini, and Google AI Studio reach the user through the exact requested chain.
 
 Work packages:
@@ -146,6 +152,8 @@ Work packages:
 **Rollout/rollback:** observe one device first, then all enrolled devices. Detection thresholds can be disabled per provider/variant while incidents and previous baselines are retained. No adapter self-repair is enabled here.
 
 ## 6. Phase 3 — Durable task authority and one-device pilot
+
+**Implementation status (20 October 2026):** single-page managed Android execution, immutable upload, trusted Studio publication and crop-reader integration passed live on Nord/Saran (Free), Abhishek (Go) and Neostopzone (Plus), under the default-model policy. Go/Plus completed-task restarts passed. A real saved-before-ack result survived process exit and lease expiry, then uploaded/published through explicit saved-only reconciliation on APK 1.0.142 without a new prompt or lease reset; actual native reconciliation and post-publication process restart passed. Full ProductionRunner integration, downstream managed chapter review/cut/Editor completion, revised-input detach/rebinding and remaining unknown-submission/cancellation acceptance still block the full Phase 3 exit gate. See [current handoff](manager-agents/phase3.md) and [live evidence](manager-agents/validation.md).
 
 **Outcome:** One supported workflow executes with durable identity, ownership, command tracking, and publication checks.
 

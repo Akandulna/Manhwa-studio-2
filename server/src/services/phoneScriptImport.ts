@@ -33,6 +33,7 @@
  */
 
 import { createHash } from 'crypto'
+import { recordManagerTransfer } from './managerReporting.js'
 import fs from 'fs/promises'
 import path from 'path'
 import { GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3'
@@ -395,35 +396,42 @@ export async function importPhoneScripts(
   for (const chapter of chapters) {
     const phone = byFolder.get(path.basename(chapter.folderPath))
     if (!phone?.script) continue
-    const scriptPath = path.join(getFullFolderPath(chapter.folderPath), scriptFileName(language))
-    const replacement = await fs.readFile(path.join(path.dirname(scriptPath), `.script-replacement${language === 'hi' ? '.hi' : ''}.json`), 'utf-8')
-      .then(text => JSON.parse(text)).catch((e: NodeJS.ErrnoException) => { if (e.code === 'ENOENT') return null; throw e })
-    if (replacement) {
-      const current = await fs.readFile(scriptPath, 'utf-8')
-      if (current.trim() !== phone.script.trim()) throw new Error(`Chapter ${chapter.number}: the phone still has a different script. Sync the replacement to Sleeper-Cell first.`)
-      // Preserve the exact replacement bytes: its audio and revision hashes use them.
-      continue
+    recordManagerTransfer({ seriesId,chapterId:chapter.id,stage:`script_${language}`,phase:'cloud',objectVersion:zip.etag })
+    try {
+      const scriptPath = path.join(getFullFolderPath(chapter.folderPath), scriptFileName(language))
+      const replacement = await fs.readFile(path.join(path.dirname(scriptPath), `.script-replacement${language === 'hi' ? '.hi' : ''}.json`), 'utf-8')
+        .then(text => JSON.parse(text)).catch((e: NodeJS.ErrnoException) => { if (e.code === 'ENOENT') return null; throw e })
+      if (replacement) {
+        const current = await fs.readFile(scriptPath, 'utf-8')
+        if (current.trim() !== phone.script.trim()) throw new Error(`Chapter ${chapter.number}: the phone still has a different script. Sync the replacement to Sleeper-Cell first.`)
+        // Preserve the exact replacement bytes: its audio and revision hashes use them.
+        continue
+      }
+      await fs.writeFile(scriptPath, phone.script + '\n', 'utf-8')
+      const data = {
+        mode: 'manual',
+        provider: 'sleeper-cell',
+        model: null,
+        scriptPath,
+        status: 'done',
+        rollingSummary: phone.summary,
+        closingParagraph: phone.closing,
+        error: null,
+        // A Hinglish script carries the English it came from (stale when that
+        // differs from the desktop's) and the phone's review issues, if any.
+        ...(language === 'hi' ? { sourceSha256: phone.sourceSha256, review: encodeReview(phone.review) } : {})
+      }
+      await prisma.chapterScript.upsert({
+        where: { chapterId_language: { chapterId: chapter.id, language } },
+        update: data,
+        create: { chapterId: chapter.id, language, ...data }
+      })
+      imported++
+      recordManagerTransfer({ seriesId,chapterId:chapter.id,stage:`script_${language}`,phase:'imported',objectVersion:zip.etag })
+    } catch (error) {
+      recordManagerTransfer({ seriesId,chapterId:chapter.id,stage:`script_${language}`,phase:'failed',objectVersion:zip.etag })
+      throw error
     }
-    await fs.writeFile(scriptPath, phone.script + '\n', 'utf-8')
-    const data = {
-      mode: 'manual',
-      provider: 'sleeper-cell',
-      model: null,
-      scriptPath,
-      status: 'done',
-      rollingSummary: phone.summary,
-      closingParagraph: phone.closing,
-      error: null,
-      // A Hinglish script carries the English it came from (stale when that
-      // differs from the desktop's) and the phone's review issues, if any.
-      ...(language === 'hi' ? { sourceSha256: phone.sourceSha256, review: encodeReview(phone.review) } : {})
-    }
-    await prisma.chapterScript.upsert({
-      where: { chapterId_language: { chapterId: chapter.id, language } },
-      update: data,
-      create: { chapterId: chapter.id, language, ...data }
-    })
-    imported++
   }
 
   const aboutUpdated = language === 'en' && (preview.about === 'set' || preview.about === 'replace') && !!parsed.about

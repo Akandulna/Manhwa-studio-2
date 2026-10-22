@@ -1,0 +1,82 @@
+{
+  "verifiedAt": "2026-10-18T17:27:33.309Z",
+  "receiptRoundTrip": "passed",
+  "studioCorrelation": "passed",
+  "diagnosticDesktopReplay": "passed",
+  "replayPreservedTimestamps": true,
+  "phones": [
+    {
+      "deviceId": "304527cb8fc1440a",
+      "kinds": [
+        {
+          "kind": "sync",
+          "observedAt": "2026-10-18T17:27:27.835662Z",
+          "receivedAtMs": 1792344449222,
+          "correlated": true
+        },
+        {
+          "kind": "scripts",
+          "observedAt": "2026-10-18T17:27:26.435463Z",
+          "receivedAtMs": 1792344447834,
+          "correlated": true
+        },
+        {
+          "kind": "crops",
+          "observedAt": "2026-10-18T17:27:27.461740Z",
+          "receivedAtMs": 1792344448973,
+          "correlated": true
+        }
+      ],
+      "managedProtocolAdvertised": false
+    },
+    {
+      "deviceId": "6d659cf619a94099",
+      "kinds": [
+        {
+          "kind": "sync",
+          "observedAt": "2026-10-18T17:27:32.108989Z",
+          "receivedAtMs": 1792344452727,
+          "correlated": true
+        },
+        {
+          "kind": "scripts",
+          "observedAt": "2026-10-18T17:27:28.155225Z",
+          "receivedAtMs": 1792344449014,
+          "correlated": true
+        },
+        {
+          "kind": "crops",
+          "observedAt": "2026-10-18T17:27:30.718874Z",
+          "receivedAtMs": 1792344452214,
+          "correlated": true
+        }
+      ],
+      "managedProtocolAdvertised": false
+    }
+  ],
+  "activeRunsBefore": 0,
+  "activeRunsAfter": 0,
+  "newManagerRuntime": "not implemented in Phase 0",
+  "scope": "Existing phone \u2192 production relay \u2192 Studio receipt round trip; diagnostic desktop reconnect. No generation, phone disconnect, app restart, or canonical publication performed.",
+  "androidUsb": {
+    "model": "CPH2467",
+    "androidRelease": "15",
+    "sleeperCellVersion": "1.0.123",
+    "versionCode": 1000123
+  },
+  "testResults": {
+    "androidJvmFullSuite": {
+      "tests": 273,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "androidFixtureFocusedRerun": "passed",
+    "serverFocused": {
+      "files": 5,
+      "tests": 36,
+      "failures": 0
+    },
+    "isolatedRelayLibraryAndProcessReplay": "passed"
+  }
+}

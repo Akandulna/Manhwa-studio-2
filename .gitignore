@@ -12,6 +12,9 @@ build/
 # Downloads folder
 downloads/
 
+# Private immutable managed-pilot output
+/server/private/managed-crops/
+
 # Environment files (keep .env.example)
 .env
 .env.local

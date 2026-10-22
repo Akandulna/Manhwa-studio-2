@@ -1,0 +1,50 @@
+{
+  "checkedAt": "2026-10-19T18:41:58.287Z",
+  "status": 200,
+  "taskId": "task:sha256:30fa8bbd2591315c2cdbdbd569c95f98ea1d517d1328eddd7849f829c2e2a623",
+  "response": {
+    "task": {
+      "workspaceId": "studio_01df7f214f87472e802b2bc43b8d9165",
+      "seriesId": "775891fa-bdfd-47b2-bb1d-a0c109341fa8",
+      "chapterId": "9fee19f4-de13-4051-8cb2-c6e5b40b8265",
+      "pageId": "page_dc2d76cec7161e74baa6d4f5c4e08f0729e71022ebcb583061564ad4be7debe0",
+      "id": "task:sha256:30fa8bbd2591315c2cdbdbd569c95f98ea1d517d1328eddd7849f829c2e2a623",
+      "fingerprint": "64ea935c79a1daf5551df2dd38a63ad1e5f7f8f55aee832361fb2da2ab89a55b",
+      "spec": {
+        "version": "crop-page/1",
+        "provider": "chatgpt",
+        "product": "chatgpt-web",
+        "model": "provider-default",
+        "settings": {
+          "mode": null,
+          "effort": null
+        },
+        "pageRevision": "sha256:155d022b85274a5237814223fb6a570f2cb81b5d17fd5ddde61dead2d79181a5",
+        "promptVersion": "managed-chatgpt-default-crop/1",
+        "validatorVersion": "managed-crop-validator/1",
+        "dependencies": [
+          {
+            "id": "page_dc2d76cec7161e74baa6d4f5c4e08f0729e71022ebcb583061564ad4be7debe0",
+            "revision": "sha256:155d022b85274a5237814223fb6a570f2cb81b5d17fd5ddde61dead2d79181a5",
+            "sha256": "155d022b85274a5237814223fb6a570f2cb81b5d17fd5ddde61dead2d79181a5"
+          }
+        ]
+      },
+      "state": "paused",
+      "generation": 1,
+      "attemptId": "7e2d55db-f448-45b4-a655-d811f92c2840",
+      "canonical": null
+    },
+    "command": {
+      "id": "b01e8aee-1a82-4c12-bca4-60c6611fc118",
+      "taskId": "task:sha256:30fa8bbd2591315c2cdbdbd569c95f98ea1d517d1328eddd7849f829c2e2a623",
+      "attemptId": "7e2d55db-f448-45b4-a655-d811f92c2840",
+      "generation": 1,
+      "fingerprint": "64ea935c79a1daf5551df2dd38a63ad1e5f7f8f55aee832361fb2da2ab89a55b",
+      "action": "stop",
+      "phase": "stop_requested"
+    }
+  },
+  "reason": "Owner-observed blank composer; authority stuck at started/unsent. Request pause before debugging and prevent further provider actions.",
+  "scope": "Pause intent only. Does not invent a phone stop acknowledgment, release reservations, clear bindings, or create another attempt."
+}

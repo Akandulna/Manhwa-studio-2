@@ -1,0 +1,49 @@
+{
+  "date": "2026-10-19",
+  "environment": "isolated localhost Wrangler Durable Object; synthetic devices only",
+  "productionChanged": false,
+  "apkBuiltOrInstalled": false,
+  "server": {
+    "files": 49,
+    "tests": 368,
+    "passed": true
+  },
+  "androidJvm": {
+    "tests": 303,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "instrumentedSqliteOrPhoneCrash": false
+  },
+  "builds": {
+    "server": true,
+    "relayTypecheck": true
+  },
+  "durableObject": {
+    "enrolledBrowserActionsRejected": 9,
+    "broadcastBrowserActionsRejected": 9,
+    "unenrolledTargetBrowserActionsAllowed": 9,
+    "httpConflict": true,
+    "correlatedSocketRejection": true,
+    "queuedStartBeforeEnrollmentWithheldOnReconnect": true,
+    "syncAllowed": true,
+    "restartedWithManagedConfigurationAbsent": true,
+    "managedEndpointDisabledAfterRestart": true,
+    "enrollmentStillFencesLegacyAfterRestart": true
+  },
+  "androidSource": [
+    "ClipperRun",
+    "AutoRun",
+    "EditorRun",
+    "VoiceoverRun",
+    "Automation.onRemote",
+    "MainActivity automation intent/deferred start",
+    "RemoteProfiles",
+    "ManagedCommandJournal pairing/acceptance monitor"
+  ],
+  "limitations": [
+    "Pure JVM ownership tests and source compilation do not prove device SQLite process-death durability.",
+    "Real managed executor/ProductionRunner planning, artifact publication and installed-phone acceptance remain pending.",
+    "Direct user activity in provider pages is outside these guarded run entry points."
+  ]
+}

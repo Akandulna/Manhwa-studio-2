@@ -1,3 +1,4 @@
+import {withUnmanagedCropChapter} from './managedCropProjection.js'
 import fs from 'fs/promises'
 import path from 'path'
 import { randomUUID } from 'crypto'
@@ -70,7 +71,7 @@ export async function filterReplacedCropFacts<T extends object>(body: T): Promis
 const safe = (value: string) => !!value && !value.startsWith('.') && !/[/\\\0]/.test(value)
 
 /** Back up clipping only. Scripts, voiceover, alignment and source page files are never moved. */
-export async function resetChapterClipping(folderPath: string, replacement: PageReplacement): Promise<void> {
+async function resetChapterClippingLegacy(folderPath: string, replacement: PageReplacement): Promise<void> {
   if ((await readPageReplacement(folderPath))?.revision === replacement.revision) return
   const dir = chapterDir(folderPath)
   const seriesDir = path.dirname(dir)
@@ -91,4 +92,8 @@ export async function resetChapterClipping(folderPath: string, replacement: Page
   const temp = path.join(dir, `${PAGE_REPLACEMENT_FILE}.tmp`)
   await fs.writeFile(temp, JSON.stringify(replacement))
   await fs.rename(temp, path.join(dir, PAGE_REPLACEMENT_FILE))
+}
+
+export async function resetChapterClipping(folderPath: string, replacement: PageReplacement):Promise<void> {
+ return withUnmanagedCropChapter(folderPath,()=>resetChapterClippingLegacy(folderPath,replacement))
 }

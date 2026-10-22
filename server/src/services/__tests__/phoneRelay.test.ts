@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { WebSocketServer, type WebSocket } from 'ws'
+import { createServer } from 'node:http'
 import type { AddressInfo } from 'net'
 
 // R2 must not be touched while the relay is set up.
@@ -34,7 +35,19 @@ vi.mock('../../utils/envFile.js', () => ({ writeEnvVars: async () => {} }))
 // A stand-in for the relay Worker: checks the token, sends hello + a stored receipt, records what it's sent.
 const received: string[] = []
 let desktop: WebSocket | null = null
-const relay = new WebSocketServer({ port: 0 })
+const httpRequests: string[] = []
+let rejectBrowserControl = false
+const httpRelay = createServer(async (req, res) => {
+  expect(req.url).toBe('/request')
+  expect(req.headers.authorization).toBe('Bearer t0ken')
+  let raw = ''; for await (const chunk of req) raw += chunk
+  httpRequests.push(raw)
+  if (rejectBrowserControl) { res.writeHead(409).end(JSON.stringify({ error: 'Managed enrollment' })); return }
+  received.push(JSON.stringify({ type: 'request', ...JSON.parse(raw) }))
+  res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ phones: 1 }))
+})
+const relay = new WebSocketServer({ server: httpRelay })
+httpRelay.listen(0)
 relay.on('connection', (ws, req) => {
   expect(req.headers.authorization).toBe('Bearer t0ken')
   expect(req.url).toBe('/ws?role=desktop')
@@ -63,9 +76,19 @@ const until = async (check: () => boolean) => {
   expect(check()).toBe(true)
 }
 
-afterAll(() => relay.close())
+afterAll(() => { relay.close(); httpRelay.close() })
 
 describe('phone relay', () => {
+  it('surfaces managed admission rejection without falling back to socket dispatch', async () => {
+    await until(() => relayStatus().connected)
+    rejectBrowserControl = true
+    const before = received.length
+    try {
+      await expect(sendAutomationCommand('start', { seriesId: 's1' })).rejects.toThrow('enrolled for managed work')
+      expect(httpRequests).toHaveLength(1)
+      expect(received).toHaveLength(before)
+    } finally { rejectBrowserControl = false }
+  })
   it('serves receipts the relay pushed, without R2', async () => {
     await until(() => emitted.some(e => e.event === 'phone:receipt'))
     expect(relayStatus()).toMatchObject({ configured: true, connected: true, phones: 1 })
@@ -136,6 +159,14 @@ describe('phone relay', () => {
     await expect(sendAutomationCommand('stop', { after: true })).rejects.toThrow('this build can only stop it now')
   })
 
+  it('rejects explicit Editor choices on old receipts instead of silently using ChatGPT', async () => {
+    emitted.length = 0
+    desktop!.send(JSON.stringify({ type: 'receipt', kind: 'crops', at: 4, body: { series: {}, automation: { runs: ['clipper', 'editor'], editor: { tabs: 1 } } } }))
+    await until(() => emitted.some(e => e.event === 'phone:receipt'))
+    await expect(sendAutomationCommand('start', { kind: 'editor', seriesId: 's1', ai: 'aistudio', smallBatches: true })).rejects.toThrow('Update Sleeper-Cell')
+    await expect(sendAutomationCommand('start', { kind: 'editor', seriesId: 's1', ai: 'gemini' })).rejects.toThrow('Editor supports ChatGPT or AI Studio')
+  })
+
   it('starts the other runs on a build that has them, and stops whichever is going', async () => {
     emitted.length = 0
     desktop!.send(JSON.stringify({
@@ -168,11 +199,25 @@ describe('phone relay', () => {
     })
 
     const editorChoices = { mode: 'Chat' as const, model: 'Selected model', effort: 'High' }
-    const editor = await sendAutomationCommand('start', { kind: 'editor', seriesId: 's1', tabs: 2, ai: 'chatgpt', language: 'hi', chatGpt: editorChoices })
+    const editor = await sendAutomationCommand('start', { kind: 'editor', seriesId: 's1', tabs: 2, language: 'hi', chatGpt: editorChoices })
     await until(() => received.some(m => m.includes(editor.id)))
     expect(JSON.parse(received.find(m => m.includes(editor.id))!)).toEqual({
       type: 'request', id: editor.id, requestedAt: editor.requestedAt, action: 'editor_start', series: 'Solo Hero', tabs: 2, language: 'hi', chatGpt: editorChoices
     })
+
+    emitted.length = 0
+    desktop!.send(JSON.stringify({ type: 'receipt', kind: 'crops', at: 5, body: {
+      series: {}, automation: { runs: ['clipper', 'narration', 'editor', 'voiceover'], stopAfter: true, clipperStopping: true,
+        editor: { tabs: 3, staged: true, ai: 'aistudio', providers: ['chatgpt', 'aistudio'], smallBatches: true }
+      }
+    } }))
+    await until(() => emitted.some(e => e.event === 'phone:receipt'))
+    expect((await getPhoneOverview(null)).automation?.editor).toMatchObject({ ai: 'aistudio', providers: ['chatgpt', 'aistudio'], smallBatches: true, tabs: 3 })
+    for (const ai of ['chatgpt', 'aistudio'] as const) for (const smallBatches of [true, false]) {
+      const sent = await sendAutomationCommand('start', { kind: 'editor', seriesId: 's1', ai, smallBatches, tabs: 3, language: 'hi' })
+      await until(() => received.some(m => m.includes(sent.id)))
+      expect(JSON.parse(received.find(m => m.includes(sent.id))!)).toMatchObject({ action: 'editor_start', ai, smallBatches, tabs: 3, language: 'hi' })
+    }
 
     const voice = await sendAutomationCommand('start', { kind: 'voiceover', seriesId: 's1', tabs: 4 })
     await until(() => received.some(m => m.includes(voice.id)))

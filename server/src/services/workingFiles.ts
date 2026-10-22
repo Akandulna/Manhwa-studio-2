@@ -1,3 +1,4 @@
+import {managedCropScopePresent,withManagedCropWorkspaceLock} from './managedCropProjection.js'
 import fs from 'fs/promises'
 import path from 'path'
 
@@ -8,7 +9,7 @@ function keepFile(name: string, parents: string[]): boolean {
 }
 
 /** Preview and deletion use the same traversal. Never follow symlinks. */
-export async function workingFiles(folder: string, remove = false): Promise<number> {
+async function workingFilesLegacy(folder: string, remove = false): Promise<number> {
   const configuredRoot = path.resolve(process.env.DOWNLOAD_ROOT || './downloads')
   const root = await fs.realpath(configuredRoot)
   const requested = path.resolve(folder)
@@ -37,4 +38,14 @@ export async function workingFiles(folder: string, remove = false): Promise<numb
     return bytes
   }
   return walk(base, [])
+}
+
+export async function workingFiles(folder:string,remove=false):Promise<number> {
+ return withManagedCropWorkspaceLock(async()=>{
+  if(await managedCropScopePresent(folder)) {
+   if(remove)throw new Error('Managed crop tasks protect this working folder. Reconcile them before cleanup.')
+   return 0
+  }
+  return workingFilesLegacy(folder,remove)
+ })
 }

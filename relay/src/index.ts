@@ -74,10 +74,16 @@
  */
 
 import { DurableObject } from 'cloudflare:workers'
+import { ManagerAuthority } from './managerAuthority'
+import { DailyRelayBudget, RelayBudgetExceeded } from './dailyBudget'
+import { ManagedTaskApi, managedEnabled, managedPrincipal, type ManagedTaskEnvironment } from './managedTaskApi'
+import { legacyRequestBlocked, ManagedLegacyConflict } from './managedLegacyFence'
 
-export interface Env {
+export interface Env extends ManagedTaskEnvironment {
   RELAY: DurableObjectNamespace<Relay>
   RELAY_TOKEN: string
+  /** Optional lower operation cap, principally for isolated validation. Cannot raise the default. */
+  RELAY_DAILY_OPERATIONS?: string
 }
 
 type Role = 'desktop' | 'phone'
@@ -108,6 +114,12 @@ function tokenMatches(given: string | null, expected: string): boolean {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const managedPath = new URL(request.url).pathname.startsWith('/managed/')
+    if (managedPath) {
+      if (!managedEnabled(env)) return Response.json({ error: 'Managed execution is disabled' }, { status: 503 })
+      if (!managedPrincipal(request,env)) return Response.json({ error: 'Managed task authentication required' }, { status: 401 })
+      return env.RELAY.get(env.RELAY.idFromName('main')).fetch(request)
+    }
     if (!env.RELAY_TOKEN) return new Response('RELAY_TOKEN is not set on the Worker', { status: 500 })
     const url = new URL(request.url)
     const header = request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '') ?? null
@@ -136,6 +148,7 @@ interface StoredRequest {
   profile?: string
   /** Image Clipper's ChatGPT mode, model and effort, which the phone keeps for its later runs too. */
   chatGpt?: ChatGptSettings
+  smallBatches?: boolean
 }
 
 /** What a phone socket carries across hibernation; `at` is when it connected. */
@@ -198,11 +211,15 @@ const DEVICE_TAG = 'device:'
 
 export class Relay extends DurableObject<Env> {
   private sql: SqlStorage
+  private managers!: ManagerAuthority
+  private budget: DailyRelayBudget
+  private initialized = false
+  private tasks: ManagedTaskApi | null = null
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
-    this.sql = ctx.storage.sql
-    this.migrate()
+    this.budget = new DailyRelayBudget(ctx.storage.sql, () => Date.now(), Number(env.RELAY_DAILY_OPERATIONS) || undefined)
+    this.sql = this.budget.sql
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'))
   }
 
@@ -210,7 +227,15 @@ export class Relay extends DurableObject<Env> {
    * Receipts and requests are kept per phone. The first relay kept one of each,
    * from the one phone there was: those move over as the old app's (device "").
    */
+  private initialize(): void {
+    if (this.initialized) return
+    this.migrate()
+    this.managers = new ManagerAuthority(this.sql, this.ctx.storage)
+    this.initialized = true
+  }
   private migrate(): void {
+    this.sql.exec('CREATE TABLE IF NOT EXISTS relay_schema (id TEXT PRIMARY KEY, value TEXT NOT NULL)')
+    if (this.sql.exec("SELECT value FROM relay_schema WHERE id = 'receipts-v1'").toArray().length) return
     this.sql.exec(
       'CREATE TABLE IF NOT EXISTS phone_receipts (device TEXT NOT NULL, kind TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL, ' +
         'PRIMARY KEY (device, kind))'
@@ -241,10 +266,50 @@ export class Relay extends DurableObject<Env> {
     }
     // Stored by the first build that carried screenshots.
     for (const kind of PASS_ONLY) this.sql.exec('DELETE FROM phone_receipts WHERE kind = ?', kind)
+    this.sql.exec("INSERT INTO relay_schema (id,value) VALUES ('receipts-v1','1')")
   }
 
   async fetch(request: Request): Promise<Response> {
+    // Usage remains readable when normal work is paused; no reporting payload is exposed here.
+    if (new URL(request.url).pathname === '/usage' && request.method === 'GET') return Response.json(this.budget.snapshot())
+    try { this.budget.begin() } catch {
+      // Consume the request before answering: cancelling alone leaves the forwarded stream unread.
+      const reader = request.body?.getReader()
+      if (reader) while (!(await reader.read()).done) { /* drain without retaining payload bytes */ }
+      return this.budget.response()
+    }
+    try { this.initialize(); return await this.handleFetch(request) }
+    catch (error) { if (error instanceof RelayBudgetExceeded) return this.budget.response(); throw error }
+    finally { this.budget.flush() }
+  }
+  private async handleFetch(request: Request): Promise<Response> {
     const url = new URL(request.url)
+    if (url.pathname.startsWith('/managed/')) {
+      if (!managedEnabled(this.env)) return Response.json({ error: 'Managed execution is disabled' }, { status: 503 })
+      if (!managedPrincipal(request,this.env)) return Response.json({ error: 'Managed task authentication required' }, { status: 401 })
+      this.tasks ??= new ManagedTaskApi(this.sql,work => this.ctx.storage.transactionSync(work),this.env)
+      return this.tasks.handle(request)
+    }
+    if (request.method === 'POST' && url.pathname === '/manager/report') {
+      const text = await request.text()
+      if (text.length > 256_000) return new Response('Manager report too large', { status: 413 })
+      try {
+        const result = this.managers.accept(JSON.parse(text), url.searchParams.get('device') ?? '')
+        if (!result.duplicate) {
+          const incidents = this.managers.state().incidents
+          const affected = new Set(result.report.facts.flatMap(f => f.condition ? [JSON.stringify([f.condition.cause,f.condition.resource])] : []))
+          if (result.report.acknowledgment) affected.add(result.report.acknowledgment.incidentId)
+          for (const ws of this.sockets('desktop')) {
+            ws.send(JSON.stringify({ type: 'manager:report', body: result.report }))
+            for (const id of affected) if (incidents[id]) ws.send(JSON.stringify({ type: 'manager:incident', body: incidents[id] }))
+          }
+        }
+        return Response.json(result)
+      } catch (error) {
+        if (error instanceof RelayBudgetExceeded) throw error
+        return new Response(error instanceof Error ? error.message : 'Invalid manager report', { status: 400 })
+      }
+    }
     if (url.pathname === '/ws') return await this.accept(request, url)
     if (request.method === 'POST' && url.pathname.startsWith('/receipt/')) {
       // Read before any answer: the runtime faults on a body left unread.
@@ -259,8 +324,13 @@ export class Relay extends DurableObject<Env> {
       )
     }
     if (request.method === 'POST' && url.pathname === '/request') {
-      const stored = this.storeRequest(await request.json().catch(() => null))
-      return stored ? Response.json({ ok: true, phones: stored.phones }) : new Response('Bad request', { status: 400 })
+      try {
+        const stored = this.storeRequest(await request.json().catch(() => null))
+        return stored ? Response.json({ ok: true, phones: stored.phones }) : new Response('Bad request', { status: 400 })
+      } catch (error) {
+        if (error instanceof ManagedLegacyConflict) return Response.json({ error: error.message }, { status: 409 })
+        throw error
+      }
     }
     if (request.method === 'POST' && url.pathname === '/forget') {
       const { device } = ((await request.json().catch(() => null)) ?? {}) as { device?: unknown }
@@ -270,7 +340,7 @@ export class Relay extends DurableObject<Env> {
     }
     if (request.method === 'GET' && url.pathname === '/state') {
       const receipts = this.sql.exec<{ device: string; kind: string; at: number; size: number }>(
-        'SELECT device, kind, at, length(body) AS size FROM phone_receipts'
+        'SELECT device, kind, at, length(body) AS size FROM phone_receipts LIMIT 5000'
       ).toArray()
       return Response.json({
         receipts,
@@ -293,21 +363,30 @@ export class Relay extends DurableObject<Env> {
     const device = role === 'phone' ? url.searchParams.get('device') ?? '' : ''
     if (device && !DEVICE_ID.test(device)) return new Response('Bad device id', { status: 400 })
 
+    // Bound registered-device tables and prepare replay before accepting a socket, so quota errors
+    // cannot leave an upgraded client with a partial replay or an orphaned connection.
+    const registered = this.seen()
+    if (role === 'phone' && device && !registered.some(p => p.id === device) && registered.length >= 8) return new Response('Pilot supports at most eight registered phones', { status: 429, headers: { 'Retry-After': '86400' } })
+    if (this.sockets(role).length >= (role === 'phone' ? 8 : 4)) return new Response('Relay connection safety limit reached', { status: 429, headers: { 'Retry-After': '300' } })
+    const replay = role === 'desktop' ? this.managers.replay() : []
+    const incidents = role === 'desktop' ? Object.values(this.managers.state().incidents) : []
     const { 0: client, 1: server } = new WebSocketPair()
     // The role stays the first tag (see roleOf).
     this.ctx.acceptWebSocket(server, device ? [role, DEVICE_TAG + device] : [role])
     if (role === 'desktop') {
       const devices = this.devices()
       server.send(JSON.stringify({ type: 'hello', phones: devices.length, devices, seen: this.seen(), request: this.lastRequest('') }))
-      for (const row of this.sql.exec<{ device: string; kind: string; body: string; at: number }>('SELECT device, kind, body, at FROM phone_receipts')) {
+      for (const row of this.sql.exec<{ device: string; kind: string; body: string; at: number }>('SELECT device, kind, body, at FROM phone_receipts LIMIT 5000')) {
         server.send(receiptMessage(row.kind, row.device, row.body, row.at))
       }
+      for (const report of replay) server.send(JSON.stringify({ type: 'manager:report', body: report }))
+      for (const incident of incidents) server.send(JSON.stringify({ type: 'manager:incident', body: incident }))
     } else {
       const name = (url.searchParams.get('name') ?? '').trim().slice(0, MAX_NAME)
       const at = Date.now()
       server.serializeAttachment({ device, name, at } satisfies PhoneAttachment)
       // Shared library catalogs go to phones too. Replayed on reconnect, including when the origin is offline.
-      for (const row of this.sql.exec<{ device: string; kind: string; body: string; at: number }>("SELECT device, kind, body, at FROM phone_receipts WHERE kind IN ('library', 'process') AND device != ?", device)) {
+      for (const row of this.sql.exec<{ device: string; kind: string; body: string; at: number }>("SELECT device, kind, body, at FROM phone_receipts WHERE kind IN ('library', 'process') AND device != ? LIMIT 5000", device)) {
         server.send(receiptMessage(row.kind, row.device, row.body, row.at))
       }
       if (device) {
@@ -319,12 +398,18 @@ export class Relay extends DurableObject<Env> {
       }
       for (const pending of this.requestsFor(device)) server.send(JSON.stringify({ type: 'request', ...pending }))
       this.broadcastPresence()
-      if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(at + CHECK_MS)
+      if ((await this.ctx.storage.getAlarm()) === null) { this.budget.alarmWrite(); await this.ctx.storage.setAlarm(at + CHECK_MS) }
     }
     return new Response(null, { status: 101, webSocket: client })
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    try { this.budget.begin() } catch { ws.send(JSON.stringify({ type: 'relay:budget', retryAfter: this.budget.retryAfter() })); return }
+    try { this.initialize(); await this.handleSocketMessage(ws,message) }
+    catch (error) { if (error instanceof RelayBudgetExceeded) ws.send(JSON.stringify({ type: 'relay:budget', retryAfter: this.budget.retryAfter() })); else throw error }
+    finally { this.budget.flush() }
+  }
+  private async handleSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     if (typeof message !== 'string' || this.roleOf(ws) !== 'desktop') return
     let parsed: unknown
     try {
@@ -333,16 +418,28 @@ export class Relay extends DurableObject<Env> {
       return
     }
     if ((parsed as { type?: unknown })?.type !== 'request') return
-    const stored = this.storeRequest(parsed)
-    if (stored) ws.send(JSON.stringify({ type: 'requested', id: stored.request.id, phones: stored.phones }))
+    try {
+      const stored = this.storeRequest(parsed)
+      if (stored) ws.send(JSON.stringify({ type: 'requested', id: stored.request.id, phones: stored.phones }))
+    } catch (error) {
+      if (!(error instanceof ManagedLegacyConflict)) throw error
+      const id = (parsed as { id?: unknown } | null)?.id
+      ws.send(JSON.stringify({ type: 'request:rejected', id: typeof id === 'string' ? id : null, error: error.message }))
+    }
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
-    this.closed(ws, code, reason)
+    this.closeWithBudget(ws, code, reason)
   }
 
   async webSocketError(ws: WebSocket): Promise<void> {
-    this.closed(ws)
+    this.closeWithBudget(ws)
+  }
+
+  private closeWithBudget(ws: WebSocket, code?: number, reason?: string): void {
+    try { this.budget.begin() } catch { try { ws.close() } catch {} return }
+    try { this.initialize(); this.closed(ws,code,reason) } catch (error) { if (!(error instanceof RelayBudgetExceeded)) throw error }
+    finally { this.budget.flush() }
   }
 
   private closed(ws: WebSocket, code?: number, reason?: string): void {
@@ -362,6 +459,16 @@ export class Relay extends DurableObject<Env> {
    * others were last heard, and settles phones left marked connected by a socket that is gone (as after a deploy).
    */
   async alarm(): Promise<void> {
+    try { this.budget.begin() } catch {
+      // One wake at UTC reset, rather than continuing to write every minute while paused.
+      await this.ctx.storage.setAlarm(Date.now() + Number(this.budget.retryAfter()) * 1000)
+      return
+    }
+    try { this.initialize(); await this.handleAlarm() }
+    catch (error) { if (!(error instanceof RelayBudgetExceeded)) throw error }
+    finally { this.budget.flush() }
+  }
+  private async handleAlarm(): Promise<void> {
     const now = Date.now()
     let dropped = false
     for (const ws of this.sockets('phone')) {
@@ -385,14 +492,14 @@ export class Relay extends DurableObject<Env> {
       dropped = true
     }
     const connected = new Set(this.devices().map(d => d.id))
-    for (const row of this.sql.exec<{ device: string }>('SELECT device FROM phone_seen WHERE left IS NULL').toArray()) {
+    for (const row of this.sql.exec<{ device: string }>('SELECT device FROM phone_seen WHERE left IS NULL LIMIT 5000').toArray()) {
       if (!connected.has(row.device)) {
         this.sql.exec("UPDATE phone_seen SET left = 'lost' WHERE device = ?", row.device)
         dropped = true
       }
     }
     if (dropped) this.broadcastPresence()
-    if (this.sockets('phone').length) await this.ctx.storage.setAlarm(now + CHECK_MS)
+    if (this.sockets('phone').length) { this.budget.alarmWrite(); await this.ctx.storage.setAlarm(now + CHECK_MS) }
   }
 
   /** Notes how phone `device` went, at `at`, unless another socket of it is still open (it reconnected). */
@@ -403,7 +510,7 @@ export class Relay extends DurableObject<Env> {
 
   /** Every phone with an id that ever connected, and how it last went (see `seen` above). */
   private seen(): SeenPhone[] {
-    return this.sql.exec<{ device: string; name: string; at: number; left: string | null }>('SELECT device, name, at, left FROM phone_seen')
+    return this.sql.exec<{ device: string; name: string; at: number; left: string | null }>('SELECT device, name, at, left FROM phone_seen LIMIT 5000')
       .toArray()
       .map(row => ({ id: row.device, name: row.name, at: row.at, left: (row.left as Left | null) ?? null }))
   }
@@ -420,6 +527,8 @@ export class Relay extends DurableObject<Env> {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return new Response('Receipt must be a JSON object', { status: 400 })
     }
+    const known = new Set(this.sql.exec<{device:string}>('SELECT device FROM phone_receipts LIMIT 65').toArray().map(r => r.device))
+    if (!known.has(device) && known.size >= 8) return new Response('Pilot supports receipts from at most eight phones', { status: 429, headers: { 'Retry-After': '86400' } })
     if (device && replacesLegacy) this.forget('')
     const at = Date.now()
     if (PASS_ONLY.has(kind)) {
@@ -457,9 +566,9 @@ export class Relay extends DurableObject<Env> {
 
   /** Saves a request and passes it to the phone it's for, or every phone. Null when it isn't a valid request. */
   private storeRequest(value: unknown): { request: StoredRequest; phones: number } | null {
-    const { id, requestedAt, action, device, series, tabs, chapters, ai, flow, language, profile, chatGpt } = (value ?? {}) as {
+    const { id, requestedAt, action, device, series, tabs, chapters, ai, flow, language, profile, chatGpt, smallBatches } = (value ?? {}) as {
       id?: unknown; requestedAt?: unknown; action?: unknown; device?: unknown; series?: unknown; tabs?: unknown; chapters?: unknown
-      ai?: unknown; flow?: unknown; language?: unknown; profile?: unknown; chatGpt?: unknown
+      ai?: unknown; flow?: unknown; language?: unknown; profile?: unknown; chatGpt?: unknown; smallBatches?: unknown
     }
     if (typeof id !== 'string' || !id || id.length > 100) return null
     if (device !== undefined && device !== null && (typeof device !== 'string' || (device && !DEVICE_ID.test(device)))) return null
@@ -487,13 +596,29 @@ export class Relay extends DurableObject<Env> {
         request.chatGpt = parsed
       }
     }
+    if (started === 'editor_start') {
+      if (ai !== undefined) {
+        if (ai !== 'chatgpt' && ai !== 'aistudio') return null
+        request.ai = ai
+      }
+      if (smallBatches !== undefined) {
+        if (typeof smallBatches !== 'boolean') return null
+        request.smallBatches = smallBatches
+      }
+      if (chatGpt !== undefined) {
+        const parsed = chatGptSettings(chatGpt)
+        if (!parsed) return null
+        request.chatGpt = parsed
+      }
+    }
     if (started === 'narration_start' && typeof ai === 'string' && NARRATION_AIS.has(ai)) request.ai = ai
     if (LANGUAGE_ACTIONS.has(started) && typeof language === 'string' && LANGUAGES.has(language)) request.language = language
     if (PROFILE_ACTIONS.has(started)) {
       if (typeof profile !== 'string' || !profile || profile.length > MAX_PROFILE) return null
       request.profile = profile
     }
-    const options = { ai: request.ai, flow: request.flow, language: request.language, profile: request.profile, chatGpt: request.chatGpt }
+    if (legacyRequestBlocked(this.sql, request.action, request.device ?? '')) throw new ManagedLegacyConflict()
+    const options = { ai: request.ai, flow: request.flow, language: request.language, profile: request.profile, chatGpt: request.chatGpt, smallBatches: request.smallBatches }
     this.sql.exec(
       'INSERT INTO phone_requests (target, id, requested_at, action, series, tabs, chapters, options) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ' +
         'ON CONFLICT(target) DO UPDATE SET id = excluded.id, requested_at = excluded.requested_at, action = excluded.action, ' +
@@ -514,6 +639,7 @@ export class Relay extends DurableObject<Env> {
     if (device) requests.push(this.lastRequest(device))
     return requests
       .filter((r): r is StoredRequest => r !== null)
+      .filter(r => !legacyRequestBlocked(this.sql, r.action, device))
       .sort((a, b) => (Date.parse(a.requestedAt) || 0) - (Date.parse(b.requestedAt) || 0))
   }
 
@@ -538,13 +664,14 @@ export class Relay extends DurableObject<Env> {
     }
     if (row.options) {
       try {
-        const { ai, flow, language, profile, chatGpt } =
-          JSON.parse(row.options) as Pick<StoredRequest, 'ai' | 'flow' | 'language' | 'profile' | 'chatGpt'>
+        const { ai, flow, language, profile, chatGpt, smallBatches } =
+          JSON.parse(row.options) as Pick<StoredRequest, 'ai' | 'flow' | 'language' | 'profile' | 'chatGpt' | 'smallBatches'>
         if (ai) request.ai = ai
         if (flow) request.flow = flow
         if (language) request.language = language
         if (profile) request.profile = profile
         if (chatGpt) request.chatGpt = chatGpt
+        if (typeof smallBatches === 'boolean') request.smallBatches = smallBatches
       } catch {
         // Written by storeRequest, so always JSON.
       }

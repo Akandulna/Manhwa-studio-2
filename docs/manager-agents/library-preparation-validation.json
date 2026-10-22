@@ -1,0 +1,30 @@
+{
+  "checkedAt": "2026-10-19T19:31:38.912657+00:00",
+  "rootCause": "Origin preparation was coupled to PhoneSender.run and missing from the successful-download/startup backlog path; no visible Library preparation screen.",
+  "changes": [
+    "Default-on persistent local WorkManager queue after each downloader finishes and on application startup; no R2/auto-send requirement.",
+    "Library and series menu controls plus an action from the automation preparation gate.",
+    "Origin-only processing; receiver copies wait for the origin.",
+    "Retained originals and recovery journal; atomic completion receipt and output-file/size checks.",
+    "Resume interrupted installs even when raw pages already moved to backup; keep Library refresh from classifying the in-progress install as deleted files.",
+    "Protect retained managed task chapters and existing crop/review work; preparation excludes provider starts and managed command acceptance.",
+    "Publish process receipt after changed local batches, with no new cloud polling loop.",
+    "Reject unsafe or incomplete recovery journals before restoring files; disabling automatic mode stops subsequent automatic chapters after the current install completes."
+  ],
+  "tests": {
+    "tests": 331,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "testCommand": "./gradlew testDebugUnitTest --offline",
+  "installedPhone": {
+    "version": "1.0.135",
+    "downloadedSandmancerChapterDirectories": 20,
+    "preparationReceipts": 0
+  },
+  "apkBuiltOrInstalled": false,
+  "runtimeAcceptancePending": true,
+  "limits": "JVM tests exercise planning, admission and real-filesystem receipt/recovery policy. Android bitmap transformation, WorkManager lifecycle and screen rendering require the updated GitHub Actions APK on the Nord.",
+  "preflight": "nord-library-preparation-apk-preflight.json"
+}

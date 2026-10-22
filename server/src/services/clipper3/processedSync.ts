@@ -1,3 +1,4 @@
+import {withUnmanagedCropChapter} from '../managedCropProjection.js'
 /**
  * Image Clipper 3.0 — importing hand-produced crop JSON from `Processed/`.
  *
@@ -384,7 +385,7 @@ export interface SyncChapterInput {
  * stay 'skipped'. A real run then marks the review applied, so desktop edits
  * made after it are protected by the normal rule again.
  */
-export async function syncChapterProcessed(input: SyncChapterInput): Promise<ChapterSyncResult> {
+async function syncChapterProcessedLegacy(input: SyncChapterInput): Promise<ChapterSyncResult> {
   if (pageReplacementActive(input.folderPath)) throw new Error('This chapter’s pages are being replaced')
   const result: ChapterSyncResult = {
     chapterId: input.chapterId,
@@ -598,7 +599,7 @@ export interface UnsyncChapterInput {
  * pending state with a leftover file, and leaving the leftover behind would
  * have the next sync skip logic see something the user just asked to remove.
  */
-export async function unsyncChapterProcessed(
+async function unsyncChapterProcessedLegacy(
   input: UnsyncChapterInput
 ): Promise<ChapterUnsyncResult> {
   const result: ChapterUnsyncResult = {
@@ -649,4 +650,12 @@ export async function unsyncChapterProcessed(
   }
 
   return result
+}
+
+export async function syncChapterProcessed(input: SyncChapterInput):Promise<ChapterSyncResult> {
+ return withUnmanagedCropChapter(input.folderPath,()=>syncChapterProcessedLegacy(input))
+}
+
+export async function unsyncChapterProcessed(input: UnsyncChapterInput):Promise<ChapterUnsyncResult> {
+ return withUnmanagedCropChapter(input.folderPath,()=>unsyncChapterProcessedLegacy(input))
 }

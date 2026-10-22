@@ -1,0 +1,24 @@
+{
+  "checkedAt": "2026-10-20T07:11:58.293264+00:00",
+  "series": "Sandmancer of the Scorched Desert",
+  "chapter": 1,
+  "chapterId": "01fef395-d351-41bc-911a-9b4e7e035cd8",
+  "page": {
+    "id": "040e7dd7-2fc9-42f4-a2f1-6c14bdc5be09",
+    "index": 6,
+    "filename": "page_006.jpg",
+    "bytes": 1224234,
+    "sha256": "b18044a1bdaff837d3119b55756251654e7e2079f3d394694d46081968bcb449",
+    "width": 800,
+    "height": 12526
+  },
+  "deviceId": "304527cb8fc1440a",
+  "profileId": "profile-2",
+  "profileName": "Neostopzone",
+  "ownerDeclaredPlan": "Plus",
+  "model": "provider-default",
+  "legacyPointsExist": false,
+  "legacyMetadataExist": false,
+  "phoneSourceHashMatches": true,
+  "scope": "Fresh pending source for saved-before-ack process-restart verification; not assigned yet."
+}

@@ -1,0 +1,22 @@
+{
+  "checkedAt": "2026-10-19T20:42:16.542246+00:00",
+  "command": "./gradlew testDebugUnitTest --offline",
+  "result": "passed",
+  "totals": {
+    "tests": 337,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "sourceSha256": {
+    "app/src/main/java/com/sleepercell/browser/manhwa/ManagedPreparationRelease.kt": "2fd4836b0cee4ba7d765156b6a643266fb145d4674e5eb51d59ffde2ee6f2d35",
+    "app/src/main/java/com/sleepercell/browser/manhwa/ManagedCommandJournal.kt": "22ab53a6fc23280371f5364f881bbc63b38bc5b00f4686d24574d0b672386263",
+    "app/src/main/java/com/sleepercell/browser/manhwa/ManagedRelayClient.kt": "b130ca863d68adda2ae6cdf759d0b21c97e9a15eb1e46bdf62de52ea693f1e0e",
+    "app/src/main/java/com/sleepercell/browser/ui/master/PagePreparationFragment.kt": "10397506b06e7594e0adbad7b7b5762ca146df4d1f7077970d75d55aafeeeb36",
+    "app/src/test/java/com/sleepercell/browser/manhwa/ManagedPreparationReleaseTest.kt": "a4af15cdc8705e92e828e47b47d8a835767a1fa7e689573ab75455b71b599501"
+  },
+  "installedVersion": "1.0.137",
+  "installedReleaseFeature": false,
+  "phoneReleaseAndPreparationAcceptance": "pending signed GitHub Actions APK, native cancellation acknowledgment, explicit chapter release, valid on-device preparation receipt",
+  "scope": "JVM source validation and read-only installed APK packaging. No local APK build or installation."
+}

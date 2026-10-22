@@ -1,0 +1,144 @@
+{
+  "checkedAt": "2026-10-19T21:14:11.798823+00:00",
+  "device": "Nord CPH2467",
+  "apkVersion": "1.0.138",
+  "series": "Sandmancer of the Scorched Desert",
+  "chapter": 1,
+  "receipt": {
+    "version": 2,
+    "outputs": {
+      "page_001.jpg": 825345,
+      "page_002.jpg": 923206,
+      "page_003.jpg": 1358524,
+      "page_004.jpg": 1098524,
+      "page_005.jpg": 1053206,
+      "page_006.jpg": 1224234,
+      "page_007.jpg": 955612,
+      "page_008.jpg": 970220,
+      "page_009.jpg": 1341527,
+      "page_010.jpg": 1286637,
+      "page_011.jpg": 1110820,
+      "page_012.jpg": 536931,
+      "page_013.jpg": 933459,
+      "page_014.jpg": 1038366,
+      "page_015.jpg": 946820,
+      "page_016.jpg": 1178486,
+      "page_017.jpg": 1493252
+    },
+    "preparedAt": "2026-10-19T21:12:56.234424Z"
+  },
+  "receiptMatchesInstallJournal": true,
+  "allOutputFilesMatchRecordedSizes": true,
+  "allOutputImagesDecode": true,
+  "allOutputsWithinAndroidPreparationLimits": true,
+  "originalCount": 29,
+  "retainedOriginalsPresent": true,
+  "originalPageOneSha256": "9966acd8c0fae11c398594fac034b8b1ca0e3d16c5ca615a66a1f67d89e520c2",
+  "originalPageOneMatchesPilotInput": true,
+  "outputCount": 17,
+  "outputs": [
+    {
+      "name": "page_001.jpg",
+      "bytes": 825345,
+      "width": 800,
+      "height": 10576
+    },
+    {
+      "name": "page_002.jpg",
+      "bytes": 923206,
+      "width": 800,
+      "height": 10602
+    },
+    {
+      "name": "page_003.jpg",
+      "bytes": 1358524,
+      "width": 800,
+      "height": 10808
+    },
+    {
+      "name": "page_004.jpg",
+      "bytes": 1098524,
+      "width": 800,
+      "height": 11561
+    },
+    {
+      "name": "page_005.jpg",
+      "bytes": 1053206,
+      "width": 800,
+      "height": 10779
+    },
+    {
+      "name": "page_006.jpg",
+      "bytes": 1224234,
+      "width": 800,
+      "height": 12526
+    },
+    {
+      "name": "page_007.jpg",
+      "bytes": 955612,
+      "width": 800,
+      "height": 11647
+    },
+    {
+      "name": "page_008.jpg",
+      "bytes": 970220,
+      "width": 800,
+      "height": 11956
+    },
+    {
+      "name": "page_009.jpg",
+      "bytes": 1341527,
+      "width": 800,
+      "height": 13044
+    },
+    {
+      "name": "page_010.jpg",
+      "bytes": 1286637,
+      "width": 800,
+      "height": 12024
+    },
+    {
+      "name": "page_011.jpg",
+      "bytes": 1110820,
+      "width": 800,
+      "height": 11358
+    },
+    {
+      "name": "page_012.jpg",
+      "bytes": 536931,
+      "width": 800,
+      "height": 10948
+    },
+    {
+      "name": "page_013.jpg",
+      "bytes": 933459,
+      "width": 800,
+      "height": 11270
+    },
+    {
+      "name": "page_014.jpg",
+      "bytes": 1038366,
+      "width": 800,
+      "height": 11904
+    },
+    {
+      "name": "page_015.jpg",
+      "bytes": 946820,
+      "width": 800,
+      "height": 11704
+    },
+    {
+      "name": "page_016.jpg",
+      "bytes": 1178486,
+      "width": 800,
+      "height": 11828
+    },
+    {
+      "name": "page_017.jpg",
+      "bytes": 1493252,
+      "width": 800,
+      "height": 11094
+    }
+  ],
+  "scope": "Read-only pull and verification of real phone output. Confirms preparation commit, complete retained original list and image decode/size bounds. Does not certify visual gutter quality, unwanted-page classification, Library UI rendering, R2 synchronization or a new managed pilot. No phone file mutation or provider prompt."
+}

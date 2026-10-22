@@ -1,3 +1,5 @@
+import {managedCropBinding,readManagedCrop,assertUnmanagedCropChapter} from '../services/managedCropProjection.js'
+import {TaskConflict} from '../services/managedTaskProtocol.js'
 import { withSeriesActivity } from '../services/seriesActivity.js'
 /**
  * Image Clipper 3.0 — per-image crop artifacts and cutting.
@@ -113,7 +115,8 @@ async function findChapter(chapterId: string) {
       title: true,
       folderPath: true,
       seriesId: true,
-      series: { select: { title: true } }
+      series: { select: { title: true } },
+      pages:{select:{id:true,localPath:true}}
     }
   })
 }
@@ -259,6 +262,8 @@ export function initClipper3Routes(io: Server): Router {
       const doneFiles: string[] = []
       const images = await Promise.all(
         manifest.images.map(async img => {
+          const binding=await managedCropBinding(chapter.folderPath,img.filename)
+          const publication=binding?await readManagedCrop(chapter.folderPath,img.filename):null
           const stem = stemOf(img.filename)
           const hasArtifact = pointed.has(stem)
           const hasMetadata = described.has(stem)
@@ -279,7 +284,7 @@ export function initClipper3Routes(io: Server): Router {
               const metadataText = await readImageMetadata(chapter.folderPath, img.filename)
               if (metadataText != null) {
                 exportedNames = expectedExportedFilenames(seriesSlug(chapter.series.title), img.filename, crops)
-                const validation = validateMetadata(
+                const validation = publication ? {isValid:true,errors:[] as string[]} : validateMetadata(
                   metadataText,
                   crops.map(c => c.id),
                   exportedNames,
@@ -302,6 +307,7 @@ export function initClipper3Routes(io: Server): Router {
 
           return {
             filename: img.filename,
+            managed:binding?{taskId:binding.task.id,pageId:chapter.pages?.find(page=>page.localPath&&path.basename(page.localPath)===img.filename)?.id??null}:null,
             width: img.width,
             height: img.height,
             hasPoints: hasArtifact,
@@ -639,6 +645,7 @@ export function initClipper3Routes(io: Server): Router {
       await setDesktopReview(chapter.folderPath, reviewed)
       res.json(await readEffectiveReview(chapter.folderPath))
     } catch (error) {
+      if(error instanceof TaskConflict)return res.status(409).json({error:'This chapter contains managed pages. Review and cut each exact page in its Preview controls; chapter-wide approval cannot replace those reviews.'})
       console.error('[clipper3] saving chapter review failed:', error)
       res.status(500).json({ error: 'Failed to save the chapter review' })
     }
@@ -660,6 +667,7 @@ export function initClipper3Routes(io: Server): Router {
       const chapterId = req.params.id
       const chapter = await findChapter(chapterId)
       if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+      await assertUnmanagedCropChapter(chapter.folderPath)
       if (isChapterCropping(chapterId)) {
         return res.status(409).json({ error: 'This chapter is already being cropped' })
       }
@@ -685,6 +693,7 @@ export function initClipper3Routes(io: Server): Router {
       void runChapterCrop(io, chapter, targets)
       res.json({ started: true, images: targets.length })
     } catch (error) {
+      if(error instanceof TaskConflict)return res.status(409).json({error:'Use the exact managed page review/cut controls in Preview for this chapter.'})
       console.error('[clipper3] starting crop failed:', error)
       res.status(500).json({ error: 'Failed to start cropping' })
     }

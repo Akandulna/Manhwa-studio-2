@@ -462,6 +462,7 @@ model VideoEditEvent {
 // the same chapters as processed. One row per chapter and narration language
 // (English and Hindi are edited as separate videos), plain id (no relation).
 model Editor2Timeline {
+  model         String?  // AI recorded by the phone for this exact timeline
   chapterId     String
   language      String   @default("en") // en | hi
   json          String   // "" once cleared — kept so other browsers drop their copy too

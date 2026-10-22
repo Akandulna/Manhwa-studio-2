@@ -1,0 +1,13 @@
+{
+  "filename": "page_004.jpg",
+  "cropCount": 5,
+  "hasMetadata": true,
+  "metadataValid": true,
+  "status": "done",
+  "checkedAt": "2026-10-20T06:09:31.943819+00:00",
+  "metadataValidFromMetadataEndpoint": true,
+  "metadataErrors": [],
+  "pointsSha256": "0b41376a7043a960d2aff6297a5b01da80ab36de1760a70f31443612f373ca10",
+  "metadataSha256": "0c10c7b5ccbc4159d56a5eb72e61d7fb63a8f3ddcfbffd62d466d7b868707bd0",
+  "scope": "Read-only existing crop reader validation after actual Go-profile managed publication. No visual review approval or cutting."
+}

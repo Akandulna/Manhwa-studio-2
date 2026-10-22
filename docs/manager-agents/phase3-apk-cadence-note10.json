@@ -1,0 +1,165 @@
+{
+  "checkedAt": "2026-10-19T05:49:25.383Z",
+  "device": "6d659cf619a94099",
+  "apkVersion": "1.0.130",
+  "windowSeconds": 330,
+  "receiptRefreshes": 6,
+  "correlatedReceiptKinds": [
+    "scripts",
+    "crops",
+    "sync"
+  ],
+  "nativeFacts": 225,
+  "allNativeFactsAuthorityAccepted": true,
+  "healthIntervals": [],
+  "fiveMinuteCadenceVerified": false,
+  "reports": [
+    {
+      "manager": "device_accounts",
+      "sequence": 1,
+      "observedAt": "2026-10-16T14:28:25.017Z",
+      "receivedAt": "2026-10-19T05:42:38.337Z",
+      "factCount": 2,
+      "arrivedAt": "2026-10-19T05:43:56.614Z"
+    },
+    {
+      "manager": "device_accounts",
+      "sequence": 2,
+      "observedAt": "2026-10-16T14:28:43.701Z",
+      "receivedAt": "2026-10-19T05:42:38.739Z",
+      "factCount": 2,
+      "arrivedAt": "2026-10-19T05:43:56.616Z"
+    },
+    {
+      "manager": "device_accounts",
+      "sequence": 3,
+      "observedAt": "2026-10-16T14:28:59.544Z",
+      "receivedAt": "2026-10-19T05:42:39.105Z",
+      "factCount": 2,
+      "arrivedAt": "2026-10-19T05:43:56.616Z"
+    },
+    {
+      "manager": "device_accounts",
+      "sequence": 4,
+      "observedAt": "2026-10-16T14:29:17.737Z",
+      "receivedAt": "2026-10-19T05:42:39.570Z",
+      "factCount": 2,
+      "arrivedAt": "2026-10-19T05:43:56.616Z"
+    },
+    {
+      "manager": "device_accounts",
+      "sequence": 5,
+      "observedAt": "2026-10-16T14:29:39.775Z",
+      "receivedAt": "2026-10-19T05:42:40.054Z",
+      "factCount": 2,
+      "arrivedAt": "2026-10-19T05:43:56.616Z"
+    },
+    {
+      "manager": "device_accounts",
+      "sequence": 6,
+      "observedAt": "2026-10-16T14:30:09.814Z",
+      "receivedAt": "2026-10-19T05:42:40.581Z",
+      "factCount": 2,
+      "arrivedAt": "2026-10-19T05:43:56.616Z"
+    },
+    {
+      "manager": "device_accounts",
+      "sequence": 7,
+      "observedAt": "2026-10-16T14:30:35.142Z",
+      "receivedAt": "2026-10-19T05:42:41.146Z",
+      "factCount": 2,
+      "arrivedAt": "2026-10-19T05:43:56.616Z"
+    },
+    {
+      "manager": "device_accounts",
+      "sequence": 8,
+      "observedAt": "2026-10-16T14:31:02.665Z",
+      "receivedAt": "2026-10-19T05:42:41.652Z",
+      "factCount": 2,
+      "arrivedAt": "2026-10-19T05:43:56.616Z"
+    },
+    {
+      "manager": "device_accounts",
+      "sequence": 9,
+      "observedAt": "2026-10-16T14:31:31.608Z",
+      "receivedAt": "2026-10-19T05:42:42.150Z",
+      "factCount": 2,
+      "arrivedAt": "2026-10-19T05:43:56.616Z"
+    },
+    {
+      "manager": "device_accounts",
+      "sequence": 10,
+      "observedAt": "2026-10-16T14:31:44.098Z",
+      "receivedAt": "2026-10-19T05:42:42.578Z",
+      "factCount": 2,
+      "arrivedAt": "2026-10-19T05:43:56.616Z"
+    },
+    {
+      "manager": "device_accounts",
+      "sequence": 11,
+      "observedAt": "2026-10-16T14:32:12.555Z",
+      "receivedAt": "2026-10-19T05:42:43.099Z",
+      "factCount": 2,
+      "arrivedAt": "2026-10-19T05:43:56.616Z"
+    },
+    {
+      "manager": "device_library",
+      "sequence": 1,
+      "observedAt": "2026-10-19T05:42:38.485988Z",
+      "receivedAt": "2026-10-19T05:42:43.502Z",
+      "factCount": 80,
+      "arrivedAt": "2026-10-19T05:43:56.617Z"
+    },
+    {
+      "manager": "device_narration",
+      "sequence": 1,
+      "observedAt": "2026-10-19T05:42:38.485988Z",
+      "receivedAt": "2026-10-19T05:42:44.026Z",
+      "factCount": 100,
+      "arrivedAt": "2026-10-19T05:43:56.617Z"
+    },
+    {
+      "manager": "device_narration",
+      "sequence": 2,
+      "observedAt": "2026-10-19T05:42:38.485988Z",
+      "receivedAt": "2026-10-19T05:42:44.441Z",
+      "factCount": 34,
+      "arrivedAt": "2026-10-19T05:43:56.617Z"
+    }
+  ],
+  "pendingReports": 0,
+  "deliveryError": null,
+  "runsBefore": 1,
+  "runsAfter": 1,
+  "usageBefore": {
+    "day": "2026-10-19",
+    "operations": 1434,
+    "rowsRead": 482814,
+    "rowsWritten": 8497,
+    "limits": {
+      "operations": 20000,
+      "rowsRead": 3000000,
+      "rowsWritten": 60000
+    },
+    "scope": "Relay-local counters since protection was deployed; not Cloudflare account-wide billing.",
+    "resetsAt": "2026-10-20T00:00:00.000Z"
+  },
+  "usageAfter": {
+    "day": "2026-10-19",
+    "operations": 1679,
+    "rowsRead": 494329,
+    "rowsWritten": 9517,
+    "limits": {
+      "operations": 20000,
+      "rowsRead": 3000000,
+      "rowsWritten": 60000
+    },
+    "scope": "Relay-local counters since protection was deployed; not Cloudflare account-wide billing.",
+    "resetsAt": "2026-10-20T00:00:00.000Z"
+  },
+  "retryAfterRuntimeVerified": false,
+  "scope": "Live native reporting while existing receipts were requested once per minute. No generation/start/stop, synthetic reports, forced production quota exhaustion or settings reset. Health-only device/sync source intervals verify cadence; APK markers alone do not prove runtime Retry-After persistence.",
+  "cadenceResult": "inconclusive_no_device_or_sync_health_samples",
+  "reason": "The receipt-only refresh path sends scripts, crops and sync receipts directly; it did not trigger a fresh process snapshot during this window. Captured native reports were existing account observations. The five-minute setting throttles health records when process evidence is captured; it does not create a periodic capture timer.",
+  "noAdditionalNativeBatchesDuringWindow": true
+}

@@ -273,7 +273,9 @@ function Clipper3ChapterImageList() {
             for the whole chapter to be reviewed (Preview or Master phone). */}
         <span
           title={
-            doneCount === 0
+            data.images.some(image=>image.managed)
+              ? 'Use Preview to review and cut each exact managed page'
+              : doneCount === 0
               ? 'No image has crop pointers yet'
               : !data.review?.reviewed
                 ? 'Mark reviewed first (Preview or Master phone)'
@@ -284,7 +286,7 @@ function Clipper3ChapterImageList() {
             variant="outline"
             size="sm"
             onClick={startCropSections}
-            disabled={isCropping || doneCount === 0 || !data.review?.reviewed}
+            disabled={isCropping || doneCount === 0 || !data.review?.reviewed || data.images.some(image=>image.managed)}
           >
             {isCropping ? (
               <Loader2 className="h-4 w-4 mr-1 animate-spin" />

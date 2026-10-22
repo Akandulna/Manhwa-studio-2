@@ -1,0 +1,6 @@
+{
+  "checkedAt": "2026-10-19T12:45:08.005Z",
+  "status": 503,
+  "managedExecutionDisabled": true,
+  "scope": "Invalid unauthenticated operation used solely to check the production feature gate. No task or enrollment."
+}

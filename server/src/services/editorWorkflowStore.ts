@@ -1,3 +1,4 @@
+import {readManagedChapterAssets,assertManagedChapterRevision} from './managedChapterAssets.js'
 import fs from 'fs/promises'
 import path from 'path'
 import { prisma } from '../index.js'
@@ -20,13 +21,15 @@ export async function chapterEditorWorkflow(chapterId: string, language: Narrati
   if (!chapter) throw new Error('Chapter not found')
   const blockers = await getChapterBlockers(chapterId, language)
   if (blockers?.length) throw new Error(`Chapter is not ready: ${blockers.join(', ')}`)
+  const managed=await readManagedChapterAssets(chapter.folderPath)
   const [timeline, metadata, names, audio] = await Promise.all([
-    getChapterTimelineBundle(chapterId, language), getChapterCropMetadataBundle(chapterId), fs.readdir(getOutputDir(chapter.folderPath)),
+    getChapterTimelineBundle(chapterId, language), getChapterCropMetadataBundle(chapterId), managed ? Promise.resolve(managed.assets.map(file=>file.filename)) : fs.readdir(getOutputDir(chapter.folderPath)),
     prisma.audioSection.findMany({ where: { chapterId, language }, include: { audioFile: true }, orderBy: { index: 'asc' } })
   ])
   const images = names.filter(n => /\.(png|jpe?g|webp)$/i.test(n)).sort()
   const workflow = buildEditorWorkflow(timeline?.text ?? '', metadata?.text ?? '', images, null,
     audio.map(s => ({ number: s.index + 1, durationSec: s.audioFile?.durationMs ? s.audioFile.durationMs / 1000 : null })))
+  await assertManagedChapterRevision(chapter.folderPath,managed?.revision??null)
   return { workflow, folder: getSourceFolderPath(chapter.folderPath) }
 }
 

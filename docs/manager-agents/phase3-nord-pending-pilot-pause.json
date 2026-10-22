@@ -1,0 +1,32 @@
+{
+  "checkedAt": "2026-10-19T18:48:22.571Z",
+  "taskId": "task:sha256:cee56902b889bc86272711d485ac7ad3de3af7b4bdc908a3ba6744a31e9ff7ba",
+  "state": "paused",
+  "lastObservedAttempt": {
+    "id": "ef0dcaed-6a75-4423-9276-e65ec9f44c80",
+    "activeCommandId": "e6e4e723-62c6-4fa4-8497-4554e6a868be",
+    "taskId": "task:sha256:cee56902b889bc86272711d485ac7ad3de3af7b4bdc908a3ba6744a31e9ff7ba",
+    "generation": 1,
+    "deviceId": "304527cb8fc1440a",
+    "profileId": "profile-1",
+    "accountId": null,
+    "leaseExpiresAt": "2026-10-19T18:51:02.188Z",
+    "phase": "started",
+    "submission": "unsent",
+    "checkpointRef": null
+  },
+  "command": {
+    "id": "a0184bc6-7ee4-4b73-b49c-45030de479c4",
+    "taskId": "task:sha256:cee56902b889bc86272711d485ac7ad3de3af7b4bdc908a3ba6744a31e9ff7ba",
+    "attemptId": "ef0dcaed-6a75-4423-9276-e65ec9f44c80",
+    "generation": 1,
+    "fingerprint": "ef480191274e08875d691483e480016815e9f1acbdeec71646f767e6735e869b",
+    "action": "stop",
+    "phase": "stop_requested"
+  },
+  "reason": "Different genuinely pending page stalled at the same started/unsent phase; pause rather than retry or submit manually.",
+  "phoneStopAcknowledgmentPending": false,
+  "scope": "Studio pause followed by actual Nord stop confirmation; submission unsent and authority reservation released. Pairing, binding and task history retained.",
+  "phoneStopConfirmedAt": "2026-10-19T19:12:49.013Z",
+  "capacityReleased": true
+}

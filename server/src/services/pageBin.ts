@@ -1,3 +1,4 @@
+import {withUnmanagedCropChapter} from './managedCropProjection.js'
 /**
  * Page bin — remove unwanted pages (credits, ads, recruitment banners) from a
  * downloaded chapter, with a way back.
@@ -154,7 +155,7 @@ async function syncCounts(chapterId: string, delta: number): Promise<void> {
   })
 }
 
-export async function deletePages(chapter: ChapterRef, filenames: unknown): Promise<number> {
+async function deletePagesLegacy(chapter: ChapterRef, filenames: unknown): Promise<number> {
   const names = asNames(filenames)
   return withLock(chapter.id, async () => {
     const blockers = await chapterBlockers(chapter)
@@ -221,7 +222,7 @@ export async function deletePages(chapter: ChapterRef, filenames: unknown): Prom
   })
 }
 
-export async function restorePages(chapter: ChapterRef, filenames: unknown): Promise<number> {
+async function restorePagesLegacy(chapter: ChapterRef, filenames: unknown): Promise<number> {
   const names = asNames(filenames)
   return withLock(chapter.id, async () => {
     const blockers = await chapterBlockers(chapter)
@@ -273,10 +274,22 @@ export async function restorePages(chapter: ChapterRef, filenames: unknown): Pro
 }
 
 /** Delete everything in the bin for good. */
-export async function emptyBin(chapter: ChapterRef): Promise<number> {
+async function emptyBinLegacy(chapter: ChapterRef): Promise<number> {
   return withLock(chapter.id, async () => {
     const count = (await readBin(chapter.folderPath)).length
     await fs.rm(binDir(chapter.folderPath), { recursive: true, force: true })
     return count
   })
+}
+
+export async function deletePages(chapter: ChapterRef, filenames: unknown):Promise<number> {
+ return withUnmanagedCropChapter(chapter.folderPath,()=>deletePagesLegacy(chapter,filenames))
+}
+
+export async function restorePages(chapter: ChapterRef, filenames: unknown):Promise<number> {
+ return withUnmanagedCropChapter(chapter.folderPath,()=>restorePagesLegacy(chapter,filenames))
+}
+
+export async function emptyBin(chapter: ChapterRef):Promise<number> {
+ return withUnmanagedCropChapter(chapter.folderPath,()=>emptyBinLegacy(chapter))
 }

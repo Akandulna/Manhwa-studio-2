@@ -197,12 +197,13 @@ export function initR2Routes(io: Server): Router {
 
   router.post('/phone/automation', async (req: Request, res: Response) => {
     try {
-      const { command, kind, seriesId, tabs, ai, flow, language, device, split, after, chatGpt, assignments } = req.body ?? {}
+      const { command, kind, seriesId, tabs, ai, flow, language, device, split, after, chatGpt, assignments, smallBatches } = req.body ?? {}
       if (command !== 'start' && command !== 'stop') throw new Error('command must be start or stop')
       if (kind !== undefined && !PHONE_RUN_KINDS.includes(kind)) throw new Error(`kind must be one of ${PHONE_RUN_KINDS.join(', ')}`)
       if (ai !== undefined && ai !== 'chatgpt' && ai !== 'aistudio' && ai !== 'gemini') throw new Error('ai must be chatgpt, aistudio or gemini')
       if (flow !== undefined && flow !== 'classic' && flow !== 'steps') throw new Error('flow must be classic or steps')
       if (language !== undefined && language !== 'en' && language !== 'hi') throw new Error('language must be en or hi')
+      if (smallBatches !== undefined && (kind !== 'editor' || typeof smallBatches !== 'boolean')) throw new Error('smallBatches must be true or false for Editor')
       if (after !== undefined && typeof after !== 'boolean') throw new Error('after must be true or false')
       if (seriesId !== undefined && (typeof seriesId !== 'string' || !seriesId)) throw new Error('seriesId must be a series id')
       if (tabs !== undefined && typeof tabs !== 'number') throw new Error('tabs must be a number')
@@ -211,7 +212,7 @@ export function initR2Routes(io: Server): Router {
       if (device !== undefined && split) throw new Error('Pick one phone or split, not both')
       if (assignments !== undefined && (!split || !isAssignments(assignments))) throw new Error('assignments must go with split, as { <phone id>: [chapter folders] }')
       const choices = chatGpt === undefined || chatGpt === null ? undefined : parseChatGptSettings(chatGpt)
-      res.json(await sendAutomationCommand(command, { kind, seriesId, tabs, ai, flow, chatGpt: choices, language, device, split, after, assignments }))
+      res.json(await sendAutomationCommand(command, { kind, seriesId, tabs, ai, flow, chatGpt: choices, language, device, split, after, assignments, smallBatches }))
     } catch (error) {
       console.error('Phone automation command failed:', error)
       res.status(400).json({ error: message(error, 'Could not reach the phone') })

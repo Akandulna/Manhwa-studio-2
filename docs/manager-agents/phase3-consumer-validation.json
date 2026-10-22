@@ -1,0 +1,45 @@
+{
+  "date": "2026-10-19",
+  "productionChanged": false,
+  "productionPageBound": false,
+  "apkBuiltOrInstalled": false,
+  "server": {
+    "files": 51,
+    "tests": 400
+  },
+  "builds": [
+    "server TypeScript",
+    "relay TypeScript"
+  ],
+  "android": {
+    "sourceChanged": false,
+    "priorJvmTests": 307,
+    "installedApkCheckedThisMilestone": false
+  },
+  "newChecks": {
+    "projectionAndIntegrationTests": 12,
+    "processTests": 2,
+    "recursiveDeletionTest": 1,
+    "readerCloudRequests": 0,
+    "legacyFallbackForBoundPages": false,
+    "oldPngCannotCompleteManagedCut": true,
+    "sourceHashAndFilenameRechecked": true,
+    "lostAcknowledgmentRecovery": true,
+    "bindingCompareAndSwap": true,
+    "cleanupPreservesBindings": true
+  },
+  "localIntegration": {
+    "authority": "persisted local Wrangler Durable Object SQL",
+    "objects": "persisted local R2 emulation",
+    "newProcessRestoredPublication": true,
+    "existingReadersConsumeVerifiedPublication": true,
+    "legacyEditRejected": true,
+    "result": "synthetic explicit empty crop/metadata arrays"
+  },
+  "remaining": [
+    "Real executor/ProductionRunner registration and dispatch",
+    "Revision-fenced managed cutter and downstream review/timeline consumers",
+    "Explicit reconciled unbinding",
+    "Installed-phone acceptance and instrumented crash validation"
+  ]
+}

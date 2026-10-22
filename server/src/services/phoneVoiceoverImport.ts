@@ -34,6 +34,7 @@
  */
 
 import crypto from 'crypto'
+import { recordManagerTransfer } from './managerReporting.js'
 import fs from 'fs/promises'
 import path from 'path'
 import { GetObjectCommand, ListObjectsV2Command, type S3Client } from '@aws-sdk/client-s3'
@@ -517,10 +518,13 @@ export async function fetchPhoneVoiceover(
 
     for (const [i, { zip, chapter, audioDir }] of todo.entries()) {
       onProgress?.({ chapterNumber: chapter.number, current: i + 1, total: todo.length })
+      let managerObjectVersion: string | null = null
       try {
         if (zip.size > MAX_ZIP_BYTES) throw new Error(`The zip is unexpectedly large (${zip.size} bytes)`)
         const res = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: zip.key }))
         const body = Buffer.from(await res.Body!.transformToByteArray())
+        managerObjectVersion = res.VersionId ?? res.ETag ?? zip.etag ?? null
+        recordManagerTransfer({ seriesId,chapterId:chapter.id,stage:`voice_${language}`,phase:'cloud',objectVersion:managerObjectVersion })
         const voiceover = parseVoiceoverZip(readZip(body), language)
         const replacement = await fs.readFile(path.join(chapterDir(chapter.folderPath), `.script-replacement${language === 'hi' ? '.hi' : ''}.json`), 'utf-8')
           .then(text => JSON.parse(text) as { sha256?: string }).catch((e: NodeJS.ErrnoException) => { if (e.code === 'ENOENT') return null; throw e })
@@ -538,6 +542,7 @@ export async function fetchPhoneVoiceover(
           scriptSha256: voiceover.scriptSha256
         }
         await fs.writeFile(path.join(audioDir, FETCH_MARKER), JSON.stringify(marker, null, 2) + '\n', 'utf-8')
+        recordManagerTransfer({ seriesId,chapterId:chapter.id,stage:`voice_${language}`,phase:'imported',objectVersion:managerObjectVersion })
         result.fetched.push({
           chapterId: chapter.id,
           chapterNumber: chapter.number,
@@ -548,6 +553,7 @@ export async function fetchPhoneVoiceover(
         })
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error)
+        recordManagerTransfer({ seriesId,chapterId:chapter.id,stage:`voice_${language}`,phase:'failed',objectVersion:managerObjectVersion })
         console.error(`[voiceover] fetching ${zip.key} failed:`, reason)
         result.failed.push({ folder: zip.folder, reason })
       }

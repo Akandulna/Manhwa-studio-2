@@ -20,7 +20,7 @@ vi.mock('../../index.js', () => ({ prisma: {
   chapter: { upsert: async ({ where, create }: any) => {
     const match = state.chapters.find(c => c.seriesId === where.seriesId_number.seriesId && c.number === where.seriesId_number.number)
     if (match) return match
-    state.chapters.push(create); return create
+    const row = { id:`local-chapter-${state.chapters.length}`, ...create }; state.chapters.push(row); return row
   } }
 } }))
 vi.mock('../r2Service.js', () => ({ getR2Config: () => null, createClient: vi.fn() }))
@@ -104,6 +104,21 @@ describe('shared library catalog', () => {
     expect(state.chapters).toHaveLength(0)
   })
 
+  it('maps optional origin UUIDs without changing local IDs or library ownership', async () => {
+    const manifest:any = catalog()
+    manifest.series[0].id='origin-series-id'
+    manifest.series[0].chapters[0].id='origin-chapter-id'
+    receiveLibraryManifest(manifest)
+    await vi.waitFor(() => expect(state.settings.has('managerIdentity:local-chapter-0')).toBe(true))
+    expect(JSON.parse(state.settings.get('managerIdentity:local-chapter-0')!)).toEqual({ seriesId:'origin-series-id',chapterId:'origin-chapter-id' })
+    expect(state.chapters[0].id).toBe('local-chapter-0')
+    expect(state.settings.get('libraryOwner:s0')).toBe('nord')
+  })
+  it('rejects unsafe optional identity metadata and still accepts legacy manifests', () => {
+    const manifest:any=catalog();manifest.series[0].id='../unsafe'
+    expect(parseLibraryManifest(manifest)).toBeNull()
+    expect(parseLibraryManifest(catalog())).not.toBeNull()
+  })
   it('rejects unsafe folders, foreign chapter keys, null entries and incomplete versions', () => {
     for (const bad of [null, {}, { ...catalog(), series: [null] }, { ...catalog(), series: [{ ...catalog().series[0], folder: '../Demo' }] },
       { ...catalog(), series: [{ ...catalog().series[0], chapters: [{ name: 'Chapter 001', number: 1, key: 'scripts/private.zip' }] }] }]) {

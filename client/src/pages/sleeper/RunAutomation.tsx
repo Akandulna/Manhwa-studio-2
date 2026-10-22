@@ -112,11 +112,11 @@ export const AUTOMATIONS: Automation[] = [
     name: 'Editor 2.0 timelines',
     icon: Clapperboard,
     does: 'Makes each chapter’s timeline from its package',
-    ai: 'ChatGPT',
+    ai: 'ChatGPT or AI Studio',
     tabs: { unit: 'chapter' },
     language: true,
     split: true,
-    fixed: 'Send chapters from Editor 2.0 first. Updated phones support resumable small batches and the model selected below; older phones use GPT-6 Astra.'
+    fixed: 'Send chapters from Editor 2.0 first. Small batches save each accepted audio section and resume after interruptions. AI Studio uses the model selected in that phone profile. Sign in to the selected provider before starting.'
   }
 ]
 
@@ -133,6 +133,15 @@ const AI_CHOICES: Choice<PhoneClipperAi>[] = [
   { value: 'chatgpt', label: 'ChatGPT', hint: 'Uses the ChatGPT accounts’ image uploads; switches account at each limit.' },
   { value: 'aistudio', label: 'AI Studio', hint: 'Gemini in AI Studio at High thinking, against each profile’s own Gemini limit.' },
   { value: 'gemini', label: 'Gemini', hint: 'Uses Gemini on the web in the phone’s selected profile.' }
+]
+
+const EDITOR_AI_CHOICES: Choice<'chatgpt' | 'aistudio'>[] = [
+  { value: 'chatgpt', label: 'ChatGPT', hint: 'Small batches work with the account’s available model, including free accounts.' },
+  { value: 'aistudio', label: 'AI Studio', hint: 'Uses the model selected in AI Studio in the phone’s profile.' }
+]
+const EDITOR_METHOD_CHOICES: Choice<'batches' | 'full'>[] = [
+  { value: 'batches', label: 'Small batches', hint: 'Matches one complete audio section per request and saves accepted sections for resume.' },
+  { value: 'full', label: 'Full package', hint: 'Sends the full chapter prompt. Packages with a batch plan always use batches.' }
 ]
 
 const FLOW_CHOICES: Choice<PhoneClipperFlow>[] = [
@@ -262,6 +271,18 @@ function Choices<T extends string>({ label, choices, value, onChange, disabled }
   )
 }
 
+export function EditorSettings({ ai, smallBatches, onAiChange, onSmallBatchesChange, disabled }: {
+  ai: 'chatgpt' | 'aistudio'; smallBatches: boolean
+  onAiChange: (ai: 'chatgpt' | 'aistudio') => void
+  onSmallBatchesChange: (value: boolean) => void
+  disabled?: string
+}) {
+  return <>
+    <Choices label="AI" choices={EDITOR_AI_CHOICES} value={ai} onChange={onAiChange} disabled={disabled} />
+    <Choices label="Method" choices={EDITOR_METHOD_CHOICES} value={smallBatches ? 'batches' : 'full'} onChange={v => onSmallBatchesChange(v === 'batches')} disabled={disabled} />
+  </>
+}
+
 function TabChoices({ value, onChange, each, unit, disabled }: {
   value: number; onChange: (n: number) => void; each: boolean; unit: string; disabled?: string
 }) {
@@ -374,6 +395,9 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
   const [clipTabs, setClipTabs] = useState(last?.tabs ?? resume?.tabs ?? DEFAULT_TABS)
   const [voiceTabs, setVoiceTabs] = useState(DEFAULT_TABS)
   const [editorTabs, setEditorTabs] = useState(editorLast?.tabs ?? 1)
+  const [editorAi, setEditorAi] = useState<'chatgpt' | 'aistudio'>(editorLast?.ai ?? 'chatgpt')
+  const [smallBatches, setSmallBatches] = useState(editorLast?.smallBatches ?? true)
+  const choosesEditor = editorLast?.providers?.includes('chatgpt') && editorLast.providers.includes('aistudio') && typeof editorLast.smallBatches === 'boolean'
   const [language, setLanguage] = useState<NarrationLanguage>('en')
   const [split, setSplit] = useState(false)
   const [chatGpt, setChatGpt] = useState<PhoneChatGptSettings>(last?.chatGpt ?? NO_CHATGPT_CHOICES)
@@ -468,7 +492,8 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
       ...(automation.clipper && choosesChatGpt && ai === 'chatgpt'
         ? { chatGpt: hasChoices(profiles.find(p => p.selected) ?? null) === false ? NO_CHATGPT_CHOICES : chatGpt }
         : {}),
-      ...(kind === 'editor' && editorLast?.staged ? { chatGpt: editorChatGpt } : {}),
+      ...(kind === 'editor' && choosesEditor ? { ai: editorAi, smallBatches } : {}),
+      ...(kind === 'editor' && editorAi === 'chatgpt' && editorLast?.staged ? { chatGpt: hasChoices(profiles.find(p => p.selected) ?? null) === false ? NO_CHATGPT_CHOICES : editorChatGpt } : {}),
       ...(automation.language ? { language } : {}),
       ...(splitting && plan
         ? { split: true, assignments: Object.fromEntries(planned.map(t => [t.device, t.chapters])) }
@@ -593,7 +618,8 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
                 </>
               )}
 
-              {kind === 'editor' && editorLast?.staged && <ChatGptChoices phone={phone} profiles={profiles} relay={relay} screen={screen} value={editorChatGpt} onChange={setEditorChatGpt} now={now} />}
+              {kind === 'editor' && <EditorSettings ai={editorAi} smallBatches={smallBatches} onAiChange={setEditorAi} onSmallBatchesChange={setSmallBatches} disabled={choosesEditor ? undefined : `Update Sleeper-Cell on ${phone.name} and refresh Phone Status to choose Editor AI and small batches.`} />}
+              {kind === 'editor' && editorAi === 'chatgpt' && editorLast?.staged && <ChatGptChoices phone={phone} profiles={profiles} relay={relay} screen={screen} value={editorChatGpt} onChange={setEditorChatGpt} now={now} />}
               {automation.language && <Choices label="Language" choices={LANGUAGE_CHOICES} value={language} onChange={setLanguage} />}
 
               {automation.tabs && (

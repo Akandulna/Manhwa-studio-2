@@ -65,7 +65,8 @@ import {
   Wrench,
   FileCheck2,
   Smartphone,
-  Download
+  Download,
+  RotateCcw
 } from 'lucide-react'
 
 import { useWakeLock } from '@/hooks/useWakeLock'
@@ -74,10 +75,12 @@ import { CompletedBadge, completedRowClass } from '@/components/PublishedBadge'
 import { SeriesDoneBadge } from './SeriesDoneBadge'
 import { chapterList, phoneEditorApi, loadSavedEditorPrompt as readSavedPrompt } from './phoneEditor'
 import { LanguageTabs } from '@/components/LanguageTabs'
+import { TimelineModelBadge } from './TimelineModelBadge'
 import { StagedTimelineDialog } from './StagedTimelineDialog'
 import { LANGUAGE_LABEL, useNarrationLanguage, withLang, type NarrationLanguage } from '@/lib/narrationLanguage'
 import {
   clearTimeline,
+  resetTimeline,
   collectProcessed,
   getExpanded,
   getScrollTop,
@@ -224,7 +227,7 @@ export default function EditorChapterList2() {
   const [repairingNames, setRepairingNames] = useState(false)
 
   // Send to phone / Fetch from phone, while one is in flight.
-  const [phoneBusy, setPhoneBusy] = useState<'send' | 'fetch' | null>(null)
+  const [phoneBusy, setPhoneBusy] = useState<'send' | 'fetch' | 'reset' | null>(null)
   const [stagedChapter, setStagedChapter] = useState<Editable2Chapter | null>(null)
   const [phoneWorkflow, setPhoneWorkflow] = useState<'legacy' | 'staged'>(() => localStorage.getItem('editor2.phoneWorkflow') === 'staged' ? 'staged' : 'legacy')
 
@@ -453,6 +456,35 @@ export default function EditorChapterList2() {
         variant: 'destructive'
       })
     } finally {
+      setPhoneBusy(null)
+    }
+  }
+
+  async function resetChapters(chapterIds: string[]) {
+    if (phoneBusy || starting || exporting || processingAll) return
+    setPhoneBusy('reset')
+    let count = 0
+    try {
+      for (const id of chapterIds) {
+        await resetTimeline(id, language)
+        count++
+      }
+      setExportJob(null)
+      setCropScan(null)
+      toast({
+        title: `Reset ${count} chapter${count === 1 ? '' : 's'}`,
+        description: 'Send to phone, generate a new timeline there, then Fetch from phone and Process again. Source assets and existing videos are kept.'
+      })
+    } catch (error) {
+      toast({ title: 'Reset could not finish', description: `${count} chapters reset. ${error instanceof Error ? error.message : 'Please retry.'}`, variant: 'destructive' })
+    } finally {
+      const restored: Record<string, string> = {}
+      for (const ch of chapters) {
+        const json = getTimelineJson(ch.id, language)
+        if (json) restored[ch.id] = json
+      }
+      setPasted(restored)
+      setProcessedTick(t => t + 1)
       setPhoneBusy(null)
     }
   }
@@ -1000,6 +1032,14 @@ export default function EditorChapterList2() {
           Fetch from phone
         </Button>
 
+        <Button variant="outline" size="sm" className="h-8 flex-shrink-0"
+          disabled={phoneBusy !== null || starting || exporting || processingAll !== null || scanningNames || repairingNames || chapters.every(ch => completedPart(ch.id) !== null)}
+          onClick={() => void resetChapters(chapters.filter(ch => completedPart(ch.id) === null).map(ch => ch.id))}
+          title={`Clear timelines and processing state for unpublished ${LANGUAGE_LABEL[language]} chapters so you can generate them again`}>
+          {phoneBusy === 'reset' ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RotateCcw className="h-3 w-3 mr-1" />}
+          Reset timelines
+        </Button>
+
         {/* Export All — every processed chapter in one action. It does not
             wait for the whole series: whatever is ready now gets rendered,
             and the chapters processed later are picked up next time. */}
@@ -1174,6 +1214,7 @@ export default function EditorChapterList2() {
                   <span className="text-xs text-muted-foreground truncate flex-1 min-w-0">
                     {ch.title || <span className="opacity-50">Untitled</span>}
                   </span>
+                  {getTimelineJson(ch.id, language) && <TimelineModelBadge chapterId={ch.id} language={language} />}
                   <CompletedBadge part={completed} label={`Part ${completed} done`} />
                 </div>
               )
@@ -1210,6 +1251,8 @@ export default function EditorChapterList2() {
                   <span className="text-xs text-muted-foreground truncate flex-1 min-w-0">
                     {ch.title || <span className="opacity-50">Untitled</span>}
                   </span>
+
+                  {content && <TimelineModelBadge chapterId={ch.id} language={language} />}
 
                   {/* The checklist compressed to a row of icons, so the
                       state reads at a glance without opening anything. */}
@@ -1259,7 +1302,7 @@ export default function EditorChapterList2() {
                           <span className="text-muted-foreground">Cancelled</span>
                         )}
                       </span>
-                    ) : exportedRow && !reexportReady ? (
+                    ) : done && exportedRow && !reexportReady ? (
                       /* No job running — the standing state from the folder
                          scan, which is what makes "Exported" survive a reload
                          rather than living only inside a finished job. */
@@ -1296,6 +1339,12 @@ export default function EditorChapterList2() {
                       Preview, which keeps the common case quiet. */}
                   <div className="flex items-center gap-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
                     <Button variant="outline" size="sm" className="h-7 text-xs" disabled={!ch.inputsReady} onClick={() => setStagedChapter(ch)} title="Build or resume a timeline with small AI prompts">Small batches</Button>
+                    <Button variant="outline" size="sm" className="h-7 text-xs"
+                      disabled={phoneBusy !== null || starting || exporting || processingAll !== null || scanningNames || repairingNames || pasting !== null}
+                      onClick={() => void resetChapters([ch.id])}
+                      title="Clear this timeline and processing state, then send to phone to generate it again">
+                      <RotateCcw className="h-3 w-3 mr-1" /> Reset
+                    </Button>
                     {!done && (
                       <>
                         <Button

@@ -1,0 +1,35 @@
+{
+  "checkedAt": "2026-10-20T06:15:23.087238+00:00",
+  "httpStatus": 200,
+  "result": {
+    "deviceId": "304527cb8fc1440a",
+    "enrolled": false
+  },
+  "previousProfile": "Abhishek / Default / Go",
+  "nextProfile": "Neostopzone / profile-2 / Plus",
+  "scope": "Guarded idle cloud unenrollment for owner-authorized Plus test. Go publication and history preserved; native Finish unpairing and Plus pairing remain required.",
+  "wrongProfileRecovery": {
+    "checkedAt": "2026-10-20T06:19:22.540097+00:00",
+    "ownerReported": "Wrong profile selected and Pair pressed before switching; native guard blocked credential/profile change.",
+    "priorEnrollment": {
+      "enrolled": false,
+      "peerRegistered": true,
+      "reserved": false
+    },
+    "unpairHttpStatus": 200,
+    "result": {
+      "deviceId": "304527cb8fc1440a",
+      "enrolled": false
+    },
+    "nextStep": "Native Finish unpairing; then select Neostopzone and re-pair. No Plus task created."
+  },
+  "nativePairing": {
+    "checkedAt": "2026-10-20T06:21:15.545859+00:00",
+    "ownerReported": "Paired as Neostopzone",
+    "enrollmentRead": {
+      "enrolled": false,
+      "peerRegistered": true,
+      "reserved": false
+    }
+  }
+}

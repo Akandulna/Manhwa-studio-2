@@ -1,0 +1,17 @@
+{
+  "device": "Nord",
+  "versionName": "1.0.133",
+  "lastUpdateTime": "2026-10-19 18:11:53",
+  "packagedMarkers": {
+    "sharedPersistentRateLimitPause": true,
+    "httpDateRetryAfter": true,
+    "journal": true,
+    "checkpointFences": false,
+    "legacyAdmission": true,
+    "durableLegacyExclusion": true,
+    "immutableArtifactUpload": false,
+    "structuredCropValidator": false,
+    "partialTransportCapability": false
+  },
+  "scope": "Read-only DEX marker checks; not Android execution, SQLite crash durability or successful enrollment."
+}

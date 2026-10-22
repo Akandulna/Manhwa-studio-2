@@ -1,0 +1,67 @@
+{
+  "schema": "website-ui-controls/1",
+  "status": "selector catalogue and required controls; not accepted live baselines",
+  "providers": [
+    "chatgpt",
+    "gemini",
+    "aistudio"
+  ],
+  "workflows": {
+    "composer_empty": [
+      "composer",
+      "upload"
+    ],
+    "composer_ready": [
+      "composer",
+      "upload",
+      "send"
+    ],
+    "model_menu": [
+      "model"
+    ],
+    "upload_menu": [
+      "upload"
+    ],
+    "response_actions": [
+      "response_actions"
+    ]
+  },
+  "scope": [
+    "provider",
+    "workflow",
+    "viewport",
+    "locale",
+    "theme",
+    "local profile reference"
+  ],
+  "profileVariant": "unknown unless future inventory proves a variant; never inferred from subscription or names",
+  "evidence": [
+    "control presence/ambiguity",
+    "allowlisted control labels",
+    "SVG icon fingerprint",
+    "coarse viewport location",
+    "computed appearance fingerprint"
+  ],
+  "excluded": [
+    "conversation text",
+    "prompt contents",
+    "response contents",
+    "raw HTML",
+    "account names/emails",
+    "full URLs",
+    "screenshots"
+  ],
+  "policy": {
+    "normalProbeMinimumMs": 15000,
+    "confirmationDelayMs": 2500,
+    "confirmationMinimumMs": 2000,
+    "confirmationMaximumGapMs": 300000,
+    "maximumIdleViewsPerMinute": 2,
+    "auditDueMs": 86400000,
+    "verificationEvidenceMaximumAgeMs": 120000,
+    "automaticNavigation": false,
+    "automaticSubmission": false,
+    "automaticBaselineAcceptance": false
+  },
+  "releaseStatus": "off by default; live selector/overhead validation pending"
+}

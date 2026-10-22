@@ -1,0 +1,12 @@
+{
+  "checkedAt": "2026-10-19T11:06:27.731042+00:00",
+  "device": "192.168.1.49:37747",
+  "versionName": "1.0.132",
+  "versionCode": 1000132,
+  "releaseCertificateMatches": true,
+  "websiteUiProbePackaged": true,
+  "probeSha256": "656542fdbb645f32e3928b1b3a11f9c818e9f3636e1d5f829d996a5437a98b2e",
+  "quotaBackoffMarkersPackaged": true,
+  "probeMatchesCurrentSource": true,
+  "scope": "Installed APK packaging only. Does not prove five-minute cadence, Retry-After persistence or managed execution behavior. No installation or app-data change."
+}

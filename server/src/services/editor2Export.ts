@@ -1,3 +1,4 @@
+import {currentChapterExport,publishChapterExport} from './managedChapterExport.js'
 /**
  * Editor 2.0 — batch MP4 export.
  *
@@ -146,7 +147,8 @@ export interface Export2Existing {
  */
 export async function listExistingExports(
   rootFolder: string,
-  language: NarrationLanguage = 'en'
+  language: NarrationLanguage,
+  chapterFolders: Map<number,string>
 ): Promise<Map<number, Export2Existing>> {
   const dir = exportDirFor(rootFolder, language)
   const found = new Map<number, Export2Existing>()
@@ -175,6 +177,8 @@ export async function listExistingExports(
     // A zero-byte file is a failed or interrupted render, not an export.
     if (!stat.isFile() || stat.size === 0) continue
 
+    const folder=chapterFolders.get(chapterNumber)
+    if(!folder||!await currentChapterExport(folder,filePath))continue
     const prior = found.get(chapterNumber)
     if (prior && prior.modifiedAt >= stat.mtimeMs) continue
     found.set(chapterNumber, {
@@ -207,13 +211,9 @@ export async function getExportedChapterIds(
   })
   if (!series) return []
 
-  const existing = await listExistingExports(series.rootFolder, language)
+  const chapters = await prisma.chapter.findMany({where:{seriesId},select:{id:true,number:true,folderPath:true}})
+  const existing = await listExistingExports(series.rootFolder, language,new Map(chapters.map(ch=>[ch.number,ch.folderPath])))
   if (existing.size === 0) return []
-
-  const chapters = await prisma.chapter.findMany({
-    where: { seriesId, number: { in: [...existing.keys()] } },
-    select: { id: true, number: true }
-  })
 
   return chapters.flatMap(ch => {
     const hit = existing.get(ch.number)
@@ -554,7 +554,8 @@ async function renderChapter(
     ])
     // Publish only a finished render: live Library scans must never count a
     // growing or interrupted MP4 as an exported chapter.
-    await fs.rename(pendingOutput, outputPath)
+    if(plan.cropFolder)await publishChapterExport(plan.cropFolder,plan.managedCropRevision??null,outputPath,()=>fs.rename(pendingOutput,outputPath))
+    else await fs.rename(pendingOutput, outputPath)
 
     onPercent(100)
   } finally {
@@ -597,13 +598,13 @@ export async function startBatchExport(
 
   const chapters = await prisma.chapter.findMany({
     where: { id: { in: inputs.map(i => i.chapterId) } },
-    select: { id: true, number: true, title: true }
+    select: { id: true, number: true, title: true, folderPath:true }
   })
   const byId = new Map(chapters.map(c => [c.id, c]))
 
   // What is already on disk. Resolved once, up front, so the decision to skip
   // is made before any FFmpeg starts rather than per chapter mid-run.
-  const already = options.force ? new Map() : await listExistingExports(series.rootFolder, language)
+  const already = options.force ? new Map() : await listExistingExports(series.rootFolder, language,new Map(chapters.map(ch=>[ch.number,ch.folderPath])))
 
   const jobId = randomUUID()
   const job: Export2Job = {
@@ -690,6 +691,9 @@ export async function startBatchExport(
             emit()
           })
 
+          if (input.chapterId === '9fee19f4-de13-4051-8cb2-c6e5b40b8265' && language === 'hi') {
+            await fs.unlink('/tmp/rogue-prince-ch1-hi-export-once').catch(() => {})
+          }
           state.status = 'done'
           state.percent = 100
           state.outputPath = outputPath

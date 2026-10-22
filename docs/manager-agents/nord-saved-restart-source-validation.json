@@ -1,0 +1,38 @@
+{
+  "checkedAt": "2026-10-20T06:34:36.043885+00:00",
+  "scope": "Saved-result-before-acknowledgment recovery verification prerequisite; no live recovery run or new provider prompt yet.",
+  "android": {
+    "offlineJvmTests": 339,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "command": "./gradlew testDebugUnitTest --offline",
+    "apkBuiltOrInstalledLocally": false
+  },
+  "studio": {
+    "targetedFiles": [
+      "managedPilot.test.ts",
+      "relayRecovery.test.ts",
+      "managedArtifactInterop.test.ts"
+    ],
+    "tests": 12,
+    "failures": 0,
+    "initialRestrictedNetworkRun": "11 passed, one loopback HTTP fixture timed out; rerun with localhost access passed all 12"
+  },
+  "diffCheck": "passed in both repositories",
+  "installedApk": {
+    "version": "1.0.140",
+    "releaseCertificateMatches": true,
+    "savedRestartPrerequisitesPackaged": false,
+    "preflightExitCode": 2
+  },
+  "implementation": {
+    "control": "Pause next new managed run after saving (restart verification)",
+    "default": false,
+    "oneUseConsumedBeforeProviderWork": true,
+    "pauseBoundary": "After saveCheckpoint returns from SQLite transaction, before result_saved receipt delivery or artifact upload",
+    "resume": "Existing saved-result path delivers pending receipt and uploads immutable checkpoint without opening chat or submitting a prompt",
+    "limits": "Existing authority, lease, reservation and budget guards remain; no bypass or background polling."
+  },
+  "next": "GitHub Actions APK containing these source changes, then actual owner-armed checkpoint/force-stop/reopen recovery on a fresh pending page."
+}

@@ -1,0 +1,13 @@
+{
+  "checkedAt": "2026-10-20T06:11:55.549980+00:00",
+  "deviceId": "304527cb8fc1440a",
+  "profileId": "Default",
+  "profileName": "Abhishek",
+  "ownerDeclaredPlan": "Go",
+  "ownerReportedMessage": "Verified publication retained; this phone is reconciled.",
+  "evidenceType": "Owner confirmation of native message; not direct private-journal inspection",
+  "restartCheck": "Owner force-stopped/reopened app and reported: No managed page assigned. Start the single page pilot in studio first.",
+  "restartAuthorityCheckedAt": "2026-10-20T06:15:22.967350+00:00",
+  "publicationUnchanged": true,
+  "attemptId": "a0a79e02-f5d3-4f2d-bc8b-fe31097df7dc"
+}
