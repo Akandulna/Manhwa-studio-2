@@ -1,3 +1,5 @@
+import {SavedImportRecovery} from './savedImportRecovery'
+import {savedImportRecoveryApi} from './savedImportRecoveryApi'
 import {accountApi} from './accountApi'
 import {AccountWaiting} from './accountAuthority'
 import {exact,accountIdValid,ACCOUNTS_SCHEMA} from '../../server/src/services/managedAccountsProtocol'
@@ -11,6 +13,7 @@ import {DEFAULT_CROP_CAPABILITY,SLICED_CROP_CAPABILITY} from '../../server/src/s
 export interface ManagedTaskEnvironment {
   MANAGED_ARTIFACTS?: ManagedArtifactBucket
   RELAY_TOKEN?: string
+  MANAGED_SAVED_IMPORT_RECOVERY?: string
   MANAGED_CROP_PAGE?: string
   MANAGED_WORKSPACE_ID?: string
   MANAGED_STUDIO_TOKEN?: string
@@ -45,14 +48,19 @@ export function managedPrincipal(request:Request,env:ManagedTaskEnvironment):Tas
 }
 export class ManagedTaskApi {
  private authority:TaskAuthority
+ private savedImportRecovery:SavedImportRecovery
  constructor(private sql:TaskSql,transaction:<T>(work:()=>T)=>T,private env:ManagedTaskEnvironment,private now=()=>new Date().toISOString()) {
   this.authority=new TaskAuthority(sql,transaction,now)
+  this.savedImportRecovery=new SavedImportRecovery(sql,transaction,this.authority,()=>Date.parse(now()))
  }
  async handle(request:Request):Promise<Response> {
   const actor=managedPrincipal(request,this.env)
   if(!actor)return Response.json({error:'Managed task authentication required'},{status:401})
   try {
    const url=new URL(request.url)
+   if(url.pathname==='/managed/recovery/saved-import'){
+    return await savedImportRecoveryApi(request,actor,this.savedImportRecovery,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_ARTIFACTS,this.env.MANAGED_SAVED_IMPORT_RECOVERY==='1')
+   }
    if(url.pathname.startsWith('/managed/accounts')) {
     if(request.method==='POST'&&url.pathname==='/managed/accounts/select') {
      if(actor.role!=='studio')return Response.json({error:'Studio authority required'},{status:403})
