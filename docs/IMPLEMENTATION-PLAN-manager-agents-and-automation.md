@@ -1,7 +1,7 @@
 # Implementation Plan: Manager Agents and Reliable Automation
 
 **Date:** 18 October 2026  
-**Status:** Phase 0 validated; Phase 1 implemented, production relay deployed, Studio and Nord pilot reporting enabled; broader rollout gates remain; Phase 2 implemented and locally validated; compatible production relay and Nord 1.0.128 ChatGPT composer baseline/control pilot verified; remaining device rollout gates open; Phase 3 authority/authenticated transport/Android journal/legacy admission guards/immutable artifact adapters/crop read projections/immutable local cutting implemented and locally tested, executor/publication integration in progress
+**Status:** Phase 4 is complete for the managed default-ChatGPT crop-page workflow on two installed phones; see the [current sign-off](../../MAPI/Sleeper-cell-main/docs/managed-phase4-acceptance.md). The subsequent Sandmancer Chapter 002 production pilot completed reviewed cuts, corrected narration, fresh voiceover/alignment, a provider-generated timeline and a verified MP4. Phase 5 audits, confirmed account links, scoped quota evidence, atomic account reservations and policy-based initial selection are implemented and locally validated for the managed crop workflow; deployment and installed-device acceptance are pending. Earlier phase implementation paragraphs below retain their milestone dates and must be read with the latest acceptance record.
 **Specification:** [PRD v1.1](PRD-manager-agents-and-automation.md)  
 **Scope:** Manhwa Studio, Sleeper-Cell, and the Cloudflare relay
 
@@ -201,6 +201,8 @@ Work packages:
 **Rollout/rollback:** two-device pilot before wider enrollment. On failure, stop new assignments and reconcile existing ones; retain completed checkpoints and incident history. Expiring leases is not a substitute for reconciling uncertain website activity.
 
 ## 8. Phase 5 — Accounts Manager and execution routing
+
+**Source status (22 October 2026):** The requested audit/reservation/selection runtime is implemented across relay, Studio and phone for the enrolled default-ChatGPT crop workflow. Audits run under shared and local idle ownership, claims pin policies and account capacity atomically, and ineligible work waits explicitly. See the [runtime handoff](../../MAPI/Sleeper-cell-main/docs/managed-phase5-runtime.md) for tests, compatibility and remaining release gates. No Phase 5 installed-device acceptance or Phase 6 recovery enablement is claimed.
 
 **Outcome:** Automation can select an eligible website/profile, account health is checked every 24–48 hours, and shared quotas are respected across devices.
 

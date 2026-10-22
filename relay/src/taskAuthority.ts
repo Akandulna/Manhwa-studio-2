@@ -1,3 +1,4 @@
+import {AccountAuthority,AccountWaiting} from './accountAuthority'
 import type {LocalManagedAttempt} from '../../server/src/services/managedReconnect'
 /** Phase 3 authority foundation. Transport must supply an authenticated principal; no socket-send means execution. */
 export type TaskSqlValue = string | number | ArrayBuffer | null
@@ -12,6 +13,7 @@ const digest=(v:unknown):v is string=>typeof v==='string' && /^[a-f0-9]{64}$/.te
 import type { ManagedArtifactRecord as Artifact } from '../../server/src/services/managedCropArtifact'
 const CAPS=['managed-task/1','attempt-fencing/1','command-journal/1','artifact-publication/1']
 export class TaskAuthority {
+  readonly accounts:AccountAuthority
   constructor(private sql:TaskSql,private transaction:<T>(work:()=>T)=>T,private now=()=>new Date().toISOString(),private uuid=()=>crypto.randomUUID()) {
     for(const table of ['tasks','attempts','commands','artifacts','enrollment','peers','uploads','recoveries','upload_only_reports','cancelled_submission_reports','cancelled_unknown_reports','claim_stops','coordinators','production_attempts']) sql.exec(`CREATE TABLE IF NOT EXISTS managed_${table} (id TEXT PRIMARY KEY, body TEXT NOT NULL)`)
     sql.exec('CREATE TABLE IF NOT EXISTS managed_artifact_budget (id INTEGER PRIMARY KEY CHECK(id=1), bytes INTEGER NOT NULL, slots INTEGER NOT NULL)')
@@ -22,6 +24,7 @@ export class TaskAuthority {
     sql.exec("CREATE INDEX IF NOT EXISTS managed_artifacts_task ON managed_artifacts(json_extract(body,'$.taskId'),json_extract(body,'$.attemptId'))")
     sql.exec("CREATE INDEX IF NOT EXISTS managed_tasks_page ON managed_tasks(json_extract(body,'$.workspaceId'),json_extract(body,'$.pageId'))")
     sql.exec('CREATE TABLE IF NOT EXISTS managed_events (id TEXT PRIMARY KEY, payload TEXT NOT NULL, result TEXT NOT NULL, at TEXT NOT NULL)')
+    this.accounts=new AccountAuthority(sql,transaction,()=>Date.parse(this.now()))
   }
   private get<T>(table:string,key:string):T|null {const row=this.sql.exec<{body:string}>(`SELECT body FROM managed_${table} WHERE id = ?`,key).toArray()[0];return row?JSON.parse(row.body):null}
   private put(table:string,key:string,value:unknown):void{this.sql.exec(`INSERT INTO managed_${table} (id,body) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body`,key,JSON.stringify(value))}
@@ -141,12 +144,13 @@ export class TaskAuthority {
   }
   claim(actor:TaskPrincipal,eventId:string,taskId:string,deviceId:string,profileId:string,accountId:string|null,coordinator?:CoordinatorFence) {
     this.studio(actor);if(!id(deviceId)||!id(profileId)||!(accountId===null||id(accountId)))throw new TaskConflict('Invalid device/profile/account reference')
-    return this.once(actor,eventId,{action:'claim',taskId,deviceId,profileId,accountId},()=>{
+    try {return this.once(actor,eventId,{action:'claim',taskId,deviceId,profileId,accountId},()=>{
       if(this.get('claim_stops',eventId))throw new TaskConflict('Production claim was stopped before dispatch')
       const result=this.allocate(taskId,deviceId,profileId,accountId)
       if(coordinator)this.put('production_attempts',result.attempt.id,{taskId,claimEventId:eventId})
       return result
     },()=>coordinator?this.requireCoordinator(this.task(taskId).workspaceId,coordinator):this.requirePilotControl(taskId))
+    }catch(error){if(error instanceof AccountWaiting)this.accounts.waiting(taskId,error.selection);throw error}
   }
   /** Both the stop acknowledgment and target are exact; never transfers unknown or saved work. */
   transfer(actor:TaskPrincipal,eventId:string,taskId:string,attemptId:string,generation:number,fingerprint:string,stopCommandId:string,deviceId:string,profileId:string,production?:{coordinator:CoordinatorFence;claimEventId:string;newClaimEventId:string}) {
@@ -188,6 +192,8 @@ export class TaskAuthority {
       const priorPages=this.sql.exec<{body:string}>("SELECT body FROM managed_tasks WHERE json_extract(body,'$.workspaceId') = ? AND json_extract(body,'$.pageId') = ? AND id <> ? LIMIT 1001",task.workspaceId,task.pageId,task.id).toArray()
       if(priorPages.length>1000||priorPages.some(row=>{const prior=JSON.parse(row.body) as CropTask;return prior.attemptId&&this.sql.exec('SELECT resource FROM managed_reservations WHERE attempt_id = ? LIMIT 1',prior.attemptId).toArray().length>0}))throw new TaskConflict('Page revision remains reserved; reconcile its current owner')
       const attempt:CropAttempt={id:this.uuid(),activeCommandId:this.uuid(),taskId,generation:task.generation+1,deviceId,profileId,accountId,leaseExpiresAt:new Date(Date.parse(this.now())+300000).toISOString(),phase:'assigned',submission:'unsent',checkpointRef:null}
+      const accountSelection=this.accounts.reserve(task,attempt)
+      if(accountSelection)attempt.accountSelection=accountSelection
       for(const resource of [`page:${task.workspaceId}:${task.pageId}`,`device:${deviceId}`,`browser:${deviceId}`,`profile:${deviceId}:${profileId}`]) {
         if(this.sql.exec('SELECT attempt_id FROM managed_reservations WHERE resource = ?',resource).toArray().length)throw new TaskConflict('Device/browser/profile remains reserved')
         this.sql.exec('INSERT INTO managed_reservations (resource,attempt_id) VALUES (?,?)',resource,attempt.id)
@@ -196,6 +202,12 @@ export class TaskAuthority {
       const command={id:attempt.activeCommandId,taskId,attemptId:attempt.id,generation:attempt.generation,fingerprint:task.fingerprint,action:'start',phase:'queued'}
       this.put('attempts',attempt.id,attempt);this.put('tasks',task.id,task);this.put('commands',command.id,command)
       return {task,attempt,command}
+  }
+  selectAccount(actor:TaskPrincipal,taskId:string,targets?:{deviceId:string;profileId:string}[]) {
+    this.studio(actor)
+    const selection=this.transaction(()=>this.accounts.select(actor,this.task(taskId),targets))
+    if(selection.state==='waiting')this.accounts.waiting(taskId,selection)
+    return selection
   }
   artifact(actor:TaskPrincipal,artifactId:string) {
     this.studio(actor);const artifact=this.get<Artifact>('artifacts',artifactId)
@@ -411,6 +423,7 @@ export class TaskAuthority {
       if(!receipt) {
         const prior=this.get<{taskId:string}>('claim_stops',claimEventId)
         if(prior&&prior.taskId!==taskId)throw new TaskConflict('Claim stop belongs to another task')
+        this.accounts.clearWaiting(taskId)
         this.put('claim_stops',claimEventId,{taskId})
         return {taskId,claimEventId,blockedBeforeClaim:true}
       }
@@ -430,6 +443,7 @@ export class TaskAuthority {
   private applyStop(taskId:string,cancel:boolean) {
       const task=this.task(taskId);if(task.state==='cancelled'&&!cancel)throw new TaskConflict('Cancelled work cannot be resumed by a pause')
       if(task.state==='verified_complete')throw new TaskConflict('Verified result is already committed')
+      this.accounts.clearWaiting(taskId)
       task.state=cancel?'cancelled':'paused';this.put('tasks',task.id,task)
       if(!task.attemptId)return {task,command:null}
       const attempt=this.get<CropAttempt>('attempts',task.attemptId)!

@@ -53,6 +53,8 @@ export class ManagedProductionCoordinator {
   await this.serial(()=>this.enter(authority))
   const fields=()=>{if(!this.fence)throw new TaskConflict('Missing production coordinator');return this.fence}
   const fenced:PilotAuthority={...authority,
+   ...(authority.selectAccount?{selectAccount:async(taskId:string,targets?:{deviceId:string;profileId:string}[])=>{await this.guard(authority);return authority.selectAccount!(taskId,targets)}}:{}),
+   ...(authority.accounts?{accounts:async(body?:Record<string,unknown>)=>{await this.guard(authority);return authority.accounts!(body)}}:{}),
    operation:async op=>{
     await this.guard(authority)
     if(String(op.action).startsWith('coordinator_'))throw new TaskConflict('Coordinator lifecycle is private')

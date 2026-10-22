@@ -743,3 +743,43 @@ describe('managed two-phone production scheduling',()=>{
   expect(e.db.prepare('SELECT * FROM managed_reservations').all()).toHaveLength(4)
  })
 })
+
+describe('Phase 5 account-aware production dispatch',()=>{
+ async function accounts(e:Awaited<ReturnType<typeof setup>>,capacity:boolean){
+  const call=async(body:Record<string,unknown>)=>{const r=await e.request('/managed/accounts/operation',{schema:'managed-accounts/1',workspaceId:'workspace',eventId:randomUUID(),...body});const raw=await r.json();expect(r.status,JSON.stringify(raw)).toBe(200);return raw.result}
+  for(const token of [phone,foreign])await e.operation({action:'hello',capabilities:[...MANAGED_CAPABILITIES,DEFAULT_CROP_CAPABILITY,SLICED_CROP_CAPABILITY,'worker-reconnect/1','account-audit/1','account-selection/1'],profileIds:['profile'],apkVersion:'1.0.999'},token)
+  await e.pilot.enroll('foreign','profile')
+  await call({action:'policy',policy:{revision:1,stage:'crop_json',enabled:true,auditsEnabled:true,allowed:[{provider:'chatgpt',product:'chatgpt-web',model:'provider-default',mode:null,effort:null}],preferredProfiles:['foreign/profile','phone/profile'],allowUnknownQuota:false,allowEstimatedQuota:false,criticalMaxAgeHours:24,contextPortable:false}})
+  for(const deviceId of ['phone','foreign']){const p=await call({action:'observe',deviceId,profileId:'profile',check:{checkedAt:'2026-10-19T00:00:00Z',chatGpt:{signedIn:true,email:'same@example.com',plan:null},gemini:{signedIn:false}}});await call({action:'confirm',deviceId,profileId:'profile',product:'chatgpt',candidate:p.observation.sites.chatgpt.candidate,accountId:'shared',maxConcurrent:1})}
+  if(capacity)await call({action:'quota',profileId:null,quota:{accountId:'shared',scope:{provider:'openai',product:'chatgpt',model:'*',project:null,feature:'crop_json'},state:'available',evidence:'owner_supplied',observedAt:Date.parse('2026-10-19T00:00:00Z'),recheckAt:null}})
+  e.authority.selectAccount=async(taskId,targets)=>{const r=await e.request('/managed/accounts/select',{schema:'managed-accounts/1',workspaceId:'workspace',taskId,targets:targets??null});const raw=await r.json();expect(r.status,JSON.stringify(raw)).toBe(200);return raw.result}
+ }
+ it('ranks the approved fleet before initial dispatch and serializes shared capacity through publication',async()=>{
+  const e=await setup();await accounts(e,true)
+  const sourceFile=path.join(path.dirname(e.input.sourceFile),'page2.png');await fs.copyFile(e.input.sourceFile,sourceFile)
+  const second={...e.input,identity:{...e.input.identity,pageId:'page2'},sourceFile,filename:'page2.png',destination:path.join(path.dirname(e.input.destination),'private2'),spec:{...e.input.spec,dependencies:[{...e.input.spec.dependencies[0],id:'page2'}]}}
+  const inputs=[e.input,second],claims:ManagedProductionClaim[]=[],manager=new ManagedProductionCoordinator()
+  await manager.withLease(e.authority,authority=>runManagedFleet([{device:'phone',profileId:'profile'},{device:'foreign',profileId:'profile'}],new AbortController().signal,{
+   authority,inputs:async()=>inputs,report:async(_message,_task,claim)=>{if(claim&&!claims.some(c=>c.taskId===claim.taskId))claims.push(claim)},wait:async(_signal,device)=>{
+    await new Promise(resolve=>setTimeout(resolve,0))
+    expect(e.db.prepare("SELECT resource FROM managed_reservations WHERE resource LIKE 'account:%'").all().length).toBeLessThanOrEqual(1)
+    const token=device==='foreign'?foreign:phone,assignment=(await(await e.request('/managed/inbox',undefined,token)).json()).assignments[0]
+    if(assignment?.attempt.phase==='assigned')await e.saved(assignment,false,inputs.find(i=>i.identity.pageId===assignment.task.pageId)!,token)
+   }
+  }))
+  expect(claims).toHaveLength(2);expect(claims[0].deviceId).toBe('foreign')
+  for(const claim of claims){const current=await e.authority.timeline(claim.taskId);expect(current.task.state).toBe('verified_complete');expect(current.attempt!.accountSelection!.policy.revision).toBe(1)}
+  expect(e.db.prepare('SELECT * FROM managed_reservations').all()).toHaveLength(0)
+ })
+ it('keeps production waiting when no quota qualifies and honors cancellation before any worker command',async()=>{
+  const e=await setup();await accounts(e,false);const controller=new AbortController(),claims:ManagedProductionClaim[]=[],messages:string[]=[]
+  const manager=new ManagedProductionCoordinator()
+  await expect(manager.withLease(e.authority,authority=>runManagedProduction('phone','profile',controller.signal,{
+   authority,inputs:async()=>[e.input],report:async(message,_task,claim)=>{messages.push(message);if(claim&&!claims.some(c=>c.taskId===claim.taskId))claims.push(claim)},wait:async()=>{controller.abort()}
+  }))).rejects.toThrow()
+  expect(messages.some(m=>m.includes('Waiting for eligible account: quota_unknown'))).toBe(true)
+  expect(e.db.prepare('SELECT * FROM managed_attempts').all()).toHaveLength(0)
+  await stopManagedProduction(e.authority,claims)
+  expect((await e.authority.claimReceipt!(claims[0].taskId,claims[0].claimEventId)).status).toBe('blocked_before_claim')
+ })
+})

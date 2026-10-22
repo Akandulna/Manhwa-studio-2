@@ -1,0 +1,121 @@
+{
+  "task": {
+    "workspaceId": "fixture-workspace",
+    "seriesId": "series",
+    "chapterId": "chapter",
+    "pageId": "a",
+    "id": "task:sha256:731f51d27f36820f0183ade5ad827e165ae60ffa547c5db25cf34387543a8c6d",
+    "fingerprint": "3c308b14d3354a4576abc57d8be9201d8a891efbf2a79751be73cea667ef5044",
+    "spec": {
+      "version": "crop-page/1",
+      "provider": "chatgpt",
+      "product": "chatgpt-web",
+      "model": "provider-default",
+      "settings": {
+        "mode": null,
+        "effort": null
+      },
+      "pageRevision": "r1",
+      "promptVersion": "managed-chatgpt-sliced-crop/1",
+      "validatorVersion": "managed-crop-validator/1",
+      "dependencies": [
+        {
+          "id": "page",
+          "revision": "r1",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    },
+    "state": "assigned",
+    "generation": 1,
+    "attemptId": "690a9ff5-0888-43de-9c35-620c59d9b111",
+    "canonical": null
+  },
+  "attempt": {
+    "id": "690a9ff5-0888-43de-9c35-620c59d9b111",
+    "activeCommandId": "5669f857-df71-470a-a412-2733353b0c6a",
+    "taskId": "task:sha256:731f51d27f36820f0183ade5ad827e165ae60ffa547c5db25cf34387543a8c6d",
+    "generation": 1,
+    "deviceId": "local-phone-1",
+    "profileId": "profile",
+    "accountId": "shared",
+    "leaseExpiresAt": "2026-10-22T14:49:27.561Z",
+    "phase": "assigned",
+    "submission": "unsent",
+    "checkpointRef": null,
+    "accountSelection": {
+      "policy": {
+        "revision": 1,
+        "stage": "crop_json",
+        "enabled": true,
+        "auditsEnabled": true,
+        "allowed": [
+          {
+            "provider": "chatgpt",
+            "product": "chatgpt-web",
+            "model": "provider-default",
+            "mode": null,
+            "effort": null
+          }
+        ],
+        "preferredProfiles": [
+          "local-phone-2/profile",
+          "local-phone-1/profile"
+        ],
+        "allowUnknownQuota": false,
+        "allowEstimatedQuota": false,
+        "criticalMaxAgeHours": 24,
+        "contextPortable": false
+      },
+      "selectedAt": 1792680267561,
+      "accountId": "shared",
+      "observationAt": 1792680267499,
+      "quotaEvidence": [
+        {
+          "accountId": "shared",
+          "scope": {
+            "provider": "openai",
+            "product": "chatgpt",
+            "model": "*",
+            "project": null,
+            "feature": "crop_json"
+          },
+          "state": "available",
+          "evidence": "owner_supplied",
+          "observedAt": 1792680267536,
+          "recheckAt": null
+        }
+      ],
+      "configuration": {
+        "version": "crop-page/1",
+        "provider": "chatgpt",
+        "product": "chatgpt-web",
+        "model": "provider-default",
+        "settings": {
+          "mode": null,
+          "effort": null
+        },
+        "pageRevision": "r1",
+        "promptVersion": "managed-chatgpt-sliced-crop/1",
+        "validatorVersion": "managed-crop-validator/1",
+        "dependencies": [
+          {
+            "id": "page",
+            "revision": "r1",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ]
+      },
+      "reason": "Fresh signed-in identity, approved configuration, scoped quota policy and atomic shared capacity"
+    }
+  },
+  "command": {
+    "id": "5669f857-df71-470a-a412-2733353b0c6a",
+    "taskId": "task:sha256:731f51d27f36820f0183ade5ad827e165ae60ffa547c5db25cf34387543a8c6d",
+    "attemptId": "690a9ff5-0888-43de-9c35-620c59d9b111",
+    "generation": 1,
+    "fingerprint": "3c308b14d3354a4576abc57d8be9201d8a891efbf2a79751be73cea667ef5044",
+    "action": "start",
+    "phase": "queued"
+  }
+}

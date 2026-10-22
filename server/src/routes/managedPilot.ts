@@ -27,6 +27,10 @@ export function initManagedPilotRoutes(db:PrismaClient):Router {
   return pilotAuthority(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db))
  }
  const service=()=>new ManagedCropPilot(authority())
+ router.get('/accounts',async(_req,res)=>{try{const a=authority();await a.ready(['managed-accounts/1']);res.set('Cache-Control','no-store').json(await a.accounts!())}catch(error){res.status(409).json({error:error instanceof Error?error.message:'Managed accounts unavailable'})}})
+ router.post('/accounts',async(req,res)=>{try{const a=authority();await a.ready(['managed-accounts/1']);const body=req.body;if(!body||typeof body!=='object'||Array.isArray(body)||JSON.stringify(body).length>30000||!['policy','confirm','quota','cadence','observe'].includes(body.action)||['schema','workspaceId'].some(k=>k in body))throw new Error('Supported bounded account action required');res.json(await a.accounts!(body))}catch(error){res.status(409).json({error:error instanceof Error?error.message:'Account update unavailable'})}})
+ router.post('/accounts/select',async(req,res)=>{try{const {taskId:id,targets,...extra}=req.body??{};if(Object.keys(extra).length||!taskId(id))throw new Error('Exact task required');const a=authority();await a.ready(['managed-accounts/1']);res.json(await a.selectAccount!(id,targets))}catch(error){res.status(409).json({error:error instanceof Error?error.message:'Selection unavailable'})}})
+
  const input=(pageId:string)=>managedPilotInput(db,pageId)
  async function reviewPage(pageId:string) {
   if(!identifier(pageId))throw new Error('Choose an exact source page')

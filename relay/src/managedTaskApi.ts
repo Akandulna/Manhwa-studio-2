@@ -1,3 +1,6 @@
+import {accountApi} from './accountApi'
+import {AccountWaiting} from './accountAuthority'
+import {exact,accountIdValid,ACCOUNTS_SCHEMA} from '../../server/src/services/managedAccountsProtocol'
 import {parseManagedReconnect} from '../../server/src/services/managedReconnect'
 import { TaskAuthority, type TaskSql } from './taskAuthority'
 import { artifactHash, artifactRef, validateManagedCrop, type ManagedArtifactRecord } from '../../server/src/services/managedCropArtifact'
@@ -50,10 +53,23 @@ export class ManagedTaskApi {
   if(!actor)return Response.json({error:'Managed task authentication required'},{status:401})
   try {
    const url=new URL(request.url)
+   if(url.pathname.startsWith('/managed/accounts')) {
+    if(request.method==='POST'&&url.pathname==='/managed/accounts/select') {
+     if(actor.role!=='studio')return Response.json({error:'Studio authority required'},{status:403})
+     if(url.search)throw new TaskConflict('Unexpected selection query')
+     let body:any;try{body=JSON.parse(new TextDecoder().decode(await boundedBody(request.body,8000)))}catch{throw new TaskConflict('Bounded selection body required')}
+     exact(body,['schema','workspaceId','taskId','targets'])
+     if(body.schema!==ACCOUNTS_SCHEMA||body.workspaceId!==this.env.MANAGED_WORKSPACE_ID||typeof body.taskId!=='string'||!/^task:sha256:[a-f0-9]{64}$/.test(body.taskId)||!(body.targets===null||Array.isArray(body.targets)&&body.targets.length>0&&body.targets.length<=32))throw new TaskConflict('Exact task and candidate scope required')
+     if(body.targets)for(const target of body.targets){exact(target,['deviceId','profileId']);if(!accountIdValid(target.deviceId)||!accountIdValid(target.profileId))throw new TaskConflict('Exact candidate required')}
+     this.authority.assertWorkspace(body.taskId,this.env.MANAGED_WORKSPACE_ID!)
+     return Response.json({schema:ACCOUNTS_SCHEMA,result:this.authority.selectAccount(actor,body.taskId,body.targets??undefined)})
+    }
+    return await accountApi(request,actor,this.authority.accounts,this.env.MANAGED_WORKSPACE_ID!,Date.parse(this.now()))
+   }
    if(request.method==='GET'&&url.pathname==='/managed/readiness') {
     if(actor.role!=='studio')return Response.json({error:'Studio authority required'},{status:403})
     if(url.search)throw new TaskConflict('Unexpected readiness query')
-    return Response.json({schema:'managed-task/1',result:{workspaceId:this.env.MANAGED_WORKSPACE_ID,artifactStorageConfigured:!!this.env.MANAGED_ARTIFACTS,capabilities:['managed-artifact-status/1','worker-reconnect/1','unsent-transfer/1','production-claim-stop/1','production-coordinator/1','production-reconciliation/1','obsolete-unsent-stop/1','production-handoff/1',DEFAULT_CROP_CAPABILITY,SLICED_CROP_CAPABILITY,'expired-saved-recovery/1','upload-only-reconciliation/1','cancelled-submission-discard/1','cancelled-unknown-abandonment/1']}})
+    return Response.json({schema:'managed-task/1',result:{workspaceId:this.env.MANAGED_WORKSPACE_ID,artifactStorageConfigured:!!this.env.MANAGED_ARTIFACTS,capabilities:['managed-accounts/1','managed-artifact-status/1','worker-reconnect/1','unsent-transfer/1','production-claim-stop/1','production-coordinator/1','production-reconciliation/1','obsolete-unsent-stop/1','production-handoff/1',DEFAULT_CROP_CAPABILITY,SLICED_CROP_CAPABILITY,'expired-saved-recovery/1','upload-only-reconciliation/1','cancelled-submission-discard/1','cancelled-unknown-abandonment/1']}})
    }
    if(request.method==='GET'&&url.pathname==='/managed/coordinator'){if(actor.role!=='studio')return Response.json({error:'Studio authority required'},{status:403});if(url.search)throw new TaskConflict('Unexpected coordinator query');return Response.json({schema:'managed-task/1',result:this.authority.coordinator(actor,this.env.MANAGED_WORKSPACE_ID!)})}
    if(request.method==='GET'&&url.pathname.startsWith('/managed/production-claims/')){
@@ -195,6 +211,6 @@ export class ManagedTaskApi {
     }
    }
    return Response.json({schema:'managed-task/1',result})
-  }catch(error){if(error instanceof TaskConflict)return Response.json({error:error.message},{status:409});throw error}
+  }catch(error){if(error instanceof AccountWaiting)return Response.json({schema:'managed-task/1',result:{waiting:error.selection}},{status:200});if(error instanceof TaskConflict)return Response.json({error:error.message},{status:409});throw error}
  }
 }

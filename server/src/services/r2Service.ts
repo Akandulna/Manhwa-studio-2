@@ -1,3 +1,4 @@
+import { parseAccountInventory, type PhoneAccountInventory } from './accountInventory.js'
 import { withSeriesActivity, recordPhoneActivity } from './seriesActivity.js'
 /**
  * Cloudflare R2: settings, the free-plan guard, and what the Sleeper-Cell phone
@@ -718,6 +719,8 @@ export interface PhoneProfileCheck {
   checkedAt: string
   chatGpt: PhoneSiteCheck | null
   gemini: PhoneSiteCheck | null
+  /** Validated passive evidence; absent on older or malformed receipts. */
+  accountInventory?: PhoneAccountInventory
 }
 
 /** A ChatGPT setting's choices in one mode, as the phone read them off the account. */
@@ -867,7 +870,7 @@ export function parseUploadProfiles(raw: unknown): PhoneUploadProfile[] {
       ...phoneOf(entry),
       profileId: typeof entry.profileId === 'string' && entry.profileId ? entry.profileId : entry.id,
       chatGpt: parseChatGptProfile(entry.chatGpt),
-      check: parseProfileCheck(entry.check),
+      check: parseProfileCheck(entry.check, typeof entry.profileId === 'string' && entry.profileId ? entry.profileId : entry.id),
       usage: parseChatGptUsage(entry.usage)
     })
   }
@@ -875,14 +878,16 @@ export function parseUploadProfiles(raw: unknown): PhoneUploadProfile[] {
 }
 
 /** A profile's `check` (ProfileCheck.kt on the phone), dropping anything malformed. */
-function parseProfileCheck(raw: unknown): PhoneProfileCheck | null {
+function parseProfileCheck(raw: unknown, profileId: string): PhoneProfileCheck | null {
   if (!isObject(raw) || !isTime(raw.checkedAt)) return null
   const site = (value: unknown): PhoneSiteCheck | null => {
     if (!isObject(value)) return null
     const text = (v: unknown) => (typeof v === 'string' && v ? v : null)
     return { signedIn: value.signedIn === true, email: text(value.email), plan: text(value.plan), error: text(value.error) }
   }
-  return { checkedAt: raw.checkedAt, chatGpt: site(raw.chatGpt), gemini: site(raw.gemini) }
+  const inventory = parseAccountInventory(raw.accountInventory, profileId, raw.checkedAt)
+  return { checkedAt: raw.checkedAt, chatGpt: site(raw.chatGpt), gemini: site(raw.gemini),
+    ...(inventory ? { accountInventory: inventory } : {}) }
 }
 
 /** A profile's `usage` (ChatGptUsage.kt on the phone), dropping anything malformed. */

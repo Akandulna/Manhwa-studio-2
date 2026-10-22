@@ -1,3 +1,4 @@
+import ManagedAccountsPanel from './ManagedAccountsPanel'
 /**
  * Accounts — every browser profile on the phones (one ChatGPT and one Google
  * account each): its plans, ChatGPT's image limit over the rolling 3 hours, and
@@ -467,6 +468,7 @@ export default function AccountsStatus() {
 
   return (
     <SleeperPage icon={Users} title="Accounts" receipt={receipt}>
+      <ManagedAccountsPanel/>
       {overview && (
         <>
           <Card className="mb-6">

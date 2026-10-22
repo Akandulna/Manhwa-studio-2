@@ -1731,10 +1731,41 @@ export interface PhoneSiteCheck {
   error: string | null
 }
 
+/** Passive phone evidence only. Candidate keys do not authorize account merging or routing. */
+export interface PhoneAccountFact {
+  value: string | null
+  evidence: 'observed' | 'unknown'
+  observedAt: string
+}
+export interface PhoneAccountFacts {
+  login: PhoneAccountFact
+  identity: PhoneAccountFact
+  plan: PhoneAccountFact
+  candidateAccountKey: string | null
+  confirmedAccountId: null
+}
+export interface PhoneAccountSite {
+  provider: 'openai' | 'google'
+  product: 'chatgpt' | 'gemini_apps'
+  current: PhoneAccountFacts
+  lastSuccessfulCheck: { checkedAt: number; facts: PhoneAccountFacts } | null
+  auditDueAt: number | null
+  quotaEvidence: never[]
+}
+export interface PhoneAccountInventory {
+  schema: 'sleeper-cell-account-inventory/1'
+  profileId: string
+  checkedAt: number
+  auditCadenceHours: 24
+  sites: { chatGpt: PhoneAccountSite; gemini: PhoneAccountSite }
+}
+
 export interface PhoneProfileCheck {
   checkedAt: string
   chatGpt: PhoneSiteCheck | null
   gemini: PhoneSiteCheck | null
+  /** Validated passive evidence; absent on older or malformed receipts. */
+  accountInventory?: PhoneAccountInventory
 }
 
 /** A mode's choices, as the phone read them off the ChatGPT account. */

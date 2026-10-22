@@ -12,6 +12,7 @@ export interface CropAttempt {
   id:string;taskId:string;generation:number;deviceId:string;profileId:string;accountId:string|null;activeCommandId:string
   leaseExpiresAt:string;phase:'assigned'|'accepted'|'started'|'submission_intent'|'submitted'|'result_saved'|'stop_requested'|'stop_confirmed'|'published'
   submission:'unsent'|'unknown'|'submitted'|'saved';checkpointRef:string|null
+  accountSelection?:import('./managedAccountsProtocol.js').AccountSelectionPin
 }
 export class TaskConflict extends Error {}
 export function canonicalJson(value:unknown):string {
@@ -35,7 +36,7 @@ export async function cropTaskIdentity(identity:CropIdentity,spec:CropSpec):Prom
 }
 
 export const MANAGED_CAPABILITIES = ['managed-task/1','attempt-fencing/1','command-journal/1','artifact-publication/1'] as const
-export const MANAGED_KNOWN_CAPABILITIES = [...MANAGED_CAPABILITIES,'managed-transport/1','chatgpt-default-crop/1','chatgpt-sliced-crop/1','worker-reconnect/1'] as const
+export const MANAGED_KNOWN_CAPABILITIES = [...MANAGED_CAPABILITIES,'managed-transport/1','chatgpt-default-crop/1','chatgpt-sliced-crop/1','worker-reconnect/1','account-audit/1','account-selection/1'] as const
 interface Envelope {schema:'managed-task/1';workspaceId:string;eventId:string}
 export interface ProductionClaimReceipt {taskId:string;claimEventId:string;status:'missing'|'blocked_before_claim'|'recorded';fingerprint?:string;attemptId?:string;generation?:number;deviceId?:string;profileId?:string;accountId?:string|null}
 export interface CoordinatorFence {coordinatorId:string;coordinatorGeneration:number}
