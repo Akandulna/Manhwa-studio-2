@@ -6,7 +6,7 @@ import {accountIdValid as id,profileKey,scopeKey,scopeMatches,taskScope,parseAcc
 export class AccountWaiting extends TaskConflict {constructor(public selection:AccountSelection){super('No eligible account/profile; waiting')}}
 /** Shares the task authority's SQLite transaction and reservation table. No timers or provider requests here. */
 export class AccountAuthority {
- constructor(private sql:TaskSql,private transaction:<T>(work:()=>T)=>T,private clock=()=>Date.now()) {
+ constructor(private sql:TaskSql,private transaction:<T>(work:()=>T)=>T,private clock=()=>Date.now(),private reviewedPageQuarantine:(resource:string,attemptId:string)=>boolean=()=>false) {
   for(const name of ['profiles','accounts','quotas','policies','audits','events','waiting','issues'])sql.exec(`CREATE TABLE IF NOT EXISTS managed_account_${name} (id TEXT PRIMARY KEY, body TEXT NOT NULL)`)
  }
  private get<T>(table:string,key:string):T|null {const r=this.sql.exec<{body:string}>(`SELECT body FROM managed_account_${table} WHERE id = ?`,key).toArray()[0];return r?JSON.parse(r.body):null}
@@ -29,7 +29,11 @@ export class AccountAuthority {
   this.put('profiles',key,fresh);return fresh
  }
  policy():AccountPolicy|null{return this.get('policies','crop_json')}
- setPolicy(actor:TaskPrincipal,eventId:string,value:unknown){this.studio(actor);const policy=parseAccountPolicy(value);return this.once(actor,eventId,{policy},()=>{const old=this.policy();if(policy.revision!==(old?.revision??0)+1)throw new TaskConflict('Policy revision changed; reload before editing');if(policy.enabled&&!old?.enabled&&this.sql.exec('SELECT resource FROM managed_reservations LIMIT 1').toArray().length)throw new TaskConflict('Reconcile existing reservations before enabling account routing');this.put('policies','crop_json',policy);if(policy.enabled)this.put('policies','routing-established',{enabled:true});return policy})}
+ private hasBlockingReservations(){
+  const rows=this.sql.exec<{resource:string;attempt_id:string}>('SELECT resource,attempt_id FROM managed_reservations LIMIT 1001').toArray()
+  return rows.length>1000||rows.some(row=>!this.reviewedPageQuarantine(row.resource,row.attempt_id))
+ }
+ setPolicy(actor:TaskPrincipal,eventId:string,value:unknown){this.studio(actor);const policy=parseAccountPolicy(value);return this.once(actor,eventId,{policy},()=>{const old=this.policy();if(policy.revision!==(old?.revision??0)+1)throw new TaskConflict('Policy revision changed; reload before editing');if(policy.enabled&&!old?.enabled&&this.hasBlockingReservations())throw new TaskConflict('Reconcile existing reservations before enabling account routing');this.put('policies','crop_json',policy);if(policy.enabled)this.put('policies','routing-established',{enabled:true});return policy})}
  private issue(p:ManagedAccountProfile,product:AccountProduct,reason:string|null){const key=p.id+'/'+product;const old=this.get<any>('issues',key);if(reason)this.put('issues',key,{id:key,deviceId:p.deviceId,profileId:p.profileId,product,reason,firstSeenAt:old?.firstSeenAt??this.clock(),lastSeenAt:this.clock(),resolvedAt:null});else if(old&&!old.resolvedAt)this.put('issues',key,{...old,resolvedAt:this.clock()})}
  observe(actor:TaskPrincipal,eventId:string,device:string,profile:string,observation:AccountObservation){if(actor.role==='phone'&&actor.deviceId!==device)throw new TaskConflict('Foreign account observation');return this.once(actor,eventId,{device,profile,observation},()=>this.saveObservation(device,profile,observation))}
  private saveObservation(device:string,profile:string,observation:AccountObservation){

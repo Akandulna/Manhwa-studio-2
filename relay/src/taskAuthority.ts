@@ -24,7 +24,7 @@ export class TaskAuthority {
     sql.exec("CREATE INDEX IF NOT EXISTS managed_artifacts_task ON managed_artifacts(json_extract(body,'$.taskId'),json_extract(body,'$.attemptId'))")
     sql.exec("CREATE INDEX IF NOT EXISTS managed_tasks_page ON managed_tasks(json_extract(body,'$.workspaceId'),json_extract(body,'$.pageId'))")
     sql.exec('CREATE TABLE IF NOT EXISTS managed_events (id TEXT PRIMARY KEY, payload TEXT NOT NULL, result TEXT NOT NULL, at TEXT NOT NULL)')
-    this.accounts=new AccountAuthority(sql,transaction,()=>Date.parse(this.now()))
+    this.accounts=new AccountAuthority(sql,transaction,()=>Date.parse(this.now()),(resource,attemptId)=>this.reviewedPageQuarantine(resource,attemptId))
   }
   private get<T>(table:string,key:string):T|null {const row=this.sql.exec<{body:string}>(`SELECT body FROM managed_${table} WHERE id = ?`,key).toArray()[0];return row?JSON.parse(row.body):null}
   private put(table:string,key:string,value:unknown):void{this.sql.exec(`INSERT INTO managed_${table} (id,body) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body`,key,JSON.stringify(value))}
@@ -246,6 +246,16 @@ export class TaskAuthority {
     }
     if(this.get('uploads',task.id)||this.sql.exec("SELECT id FROM managed_artifacts WHERE json_extract(body,'$.attemptId') = ? LIMIT 1",attempt.id).toArray().length)throw new TaskConflict('Retained artifact evidence requires separate reconciliation')
     return owner
+  }
+  /** Reviewed page quarantines still fence their original page, but hold no reusable execution capacity. */
+  private reviewedPageQuarantine(resource:string,attemptId:string):boolean {
+    if(!resource.startsWith('page:'))return false
+    try {
+      const report=this.get<CancelledUnknownReport>('cancelled_unknown_reports',attemptId)
+      if(!report||!id(report.id)||!id(report.resolutionEventId)||!Number.isFinite(Date.parse(report.resolvedAt??''))||!Number.isFinite(Date.parse(report.reportedAt))||Date.parse(report.resolvedAt!)<Date.parse(report.reportedAt)||Date.parse(report.resolvedAt!)>Date.parse(this.now()))return false
+      const {task,attempt}=this.cancelledUnknownContext({role:'studio'},report)
+      return attempt.id===attemptId&&report.workspaceId===task.workspaceId&&resource===`page:${task.workspaceId}:${task.pageId}`
+    } catch { return false }
   }
   /** Explicit Studio review only. Historical unknown outcome and source binding remain unchanged. */
   resolveUploadOnly(actor:TaskPrincipal,eventId:string,taskId:string,attemptId:string,generation:number,fingerprint:string,reportId:string,stopCommandId:string,confirmUploadOnly:boolean) {

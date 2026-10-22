@@ -39,6 +39,51 @@ async function setup(submission='unknown',expired=true,promptVersion=LEGACY_CROP
  return {authority:()=>new TaskAuthority(sql,tx,()=>new Date(now).toISOString()),db,send,ok,report,resolve,reservations,timeline,identity,spec,task,checkpoint}
 }
 describe('explicit abandonment of a cancelled unknown outcome',()=>{
+ const policy=(revision:number,enabled:boolean)=>({revision,stage:'crop_json',enabled,auditsEnabled:true,allowed:[{provider:'chatgpt',product:'chatgpt-web',model:'provider-default',mode:null,effort:null}],preferredProfiles:[],allowUnknownQuota:false,allowEstimatedQuota:false,criticalMaxAgeHours:24,contextPortable:false})
+ it('enables account routing after reviewed abandonment without releasing or reinterpreting the original page',async()=>{
+  const s=await setup();s.authority().accounts.setPolicy({role:'studio'},'policy_initial',policy(1,false))
+  await s.ok(s.report,phone)
+  expect(()=>s.authority().accounts.setPolicy({role:'studio'},'policy_early',policy(2,true))).toThrow('Reconcile existing reservations')
+  await s.ok(s.resolve)
+  const before=await s.timeline(),reservations=s.reservations()
+  expect(s.authority().accounts.setPolicy({role:'studio'},'policy_enable',policy(2,true)).enabled).toBe(true)
+  expect(await s.timeline()).toEqual(before);expect(s.reservations()).toEqual(reservations)
+  expect((await s.send({action:'claim',taskId:s.task.id,deviceId:'phone',profileId:'profile',accountId:null})).status).toBe(409)
+  expect((await s.send({action:'plan',identity:s.identity,spec:{...s.spec,pageRevision:'r2'}})).status).toBe(409)
+  const next=await s.ok({action:'plan',identity:{...s.identity,pageId:'other'},spec:s.spec});expect(next.state).toBe('queued')
+ })
+ it.each(['device:other','browser:other','profile:other:profile','account:other:0','page:workspace:orphan'])('keeps %s blocking routing beside a reviewed quarantine',async resource=>{
+  const s=await setup();await s.ok(s.report,phone);await s.ok(s.resolve)
+  s.db.prepare('INSERT INTO managed_reservations (resource,attempt_id) VALUES (?,?)').run(resource,'unresolved')
+  const before=s.reservations()
+  expect(()=>s.authority().accounts.setPolicy({role:'studio'},'policy_enable',policy(1,true))).toThrow('Reconcile existing reservations')
+  expect(s.authority().accounts.policy()).toBeNull();expect(s.reservations()).toEqual(before)
+ })
+ it('rejects a page-only hold whose worker evidence has not received owner review',async()=>{
+  const s=await setup();await s.ok(s.report,phone)
+  s.db.prepare("DELETE FROM managed_reservations WHERE resource NOT LIKE 'page:%'").run()
+  expect(s.reservations()).toHaveLength(1)
+  expect(()=>s.authority().accounts.setPolicy({role:'studio'},'policy_enable',policy(1,true))).toThrow('Reconcile existing reservations')
+  expect(s.authority().accounts.policy()).toBeNull();expect(s.reservations()).toHaveLength(1)
+ })
+ it.each([{resolutionEventId:null},{resolvedAt:null},{resolvedAt:'invalid'},{resolvedAt:'2099-01-01T00:00:00Z'},{workspaceId:'other'},{generation:2},{fingerprint:'c'.repeat(64)},{stopCommandId:'other'}])('rejects incomplete or stale reviewed quarantine evidence %j',async change=>{
+  const s=await setup();await s.ok(s.report,phone);await s.ok(s.resolve)
+  const row=s.db.prepare('SELECT body FROM managed_cancelled_unknown_reports WHERE id = ?').get(s.report.attemptId)
+  s.db.prepare('UPDATE managed_cancelled_unknown_reports SET body = ? WHERE id = ?').run(JSON.stringify({...JSON.parse(row.body),...change}),s.report.attemptId)
+  const before=s.reservations()
+  expect(()=>s.authority().accounts.setPolicy({role:'studio'},'policy_enable',policy(1,true))).toThrow('Reconcile existing reservations')
+  expect(s.reservations()).toEqual(before)
+ })
+ it.each(['artifact','upload','changed_stop','wrong_page'])('rechecks %s before allowing routing over a reviewed quarantine',async change=>{
+  const s=await setup();await s.ok(s.report,phone);await s.ok(s.resolve)
+  if(change==='artifact')s.db.prepare('INSERT INTO managed_artifacts (id,body) VALUES (?,?)').run('late',JSON.stringify({attemptId:s.report.attemptId}))
+  if(change==='upload')s.db.prepare('INSERT INTO managed_uploads (id,body) VALUES (?,?)').run(s.task.id,JSON.stringify({attemptId:s.report.attemptId}))
+  if(change==='changed_stop')s.db.prepare('UPDATE managed_commands SET body = json_set(body,\'$.phase\',\'stop_requested\') WHERE id = ?').run(s.report.stopCommandId)
+  if(change==='wrong_page')s.db.prepare('UPDATE managed_reservations SET resource = ? WHERE attempt_id = ?').run('page:workspace:other',s.report.attemptId)
+  const before=s.reservations()
+  expect(()=>s.authority().accounts.setPolicy({role:'studio'},'policy_enable',policy(1,true))).toThrow('Reconcile existing reservations')
+  expect(s.reservations()).toEqual(before)
+ })
  it('requires exact worker evidence and separate owner review, releases only capacity and keeps the page quarantined',async()=>{
   const s=await setup(),before=await s.timeline();expect(s.reservations()).toHaveLength(4)
   expect((await s.send(s.resolve)).status).toBe(409)
