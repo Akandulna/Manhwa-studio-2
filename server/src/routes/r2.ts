@@ -1,3 +1,4 @@
+import {hiddenLibrarySeriesIds} from '../services/libraryControls.js'
 /**
  * Cloudflare R2 API: settings, sending chapters to the Sleeper-Cell phones, their status, and getting their chapters.
  *
@@ -179,7 +180,9 @@ export function initR2Routes(io: Server): Router {
     try {
       const fresh = req.query.fresh === '1'
       const sync = await getPhoneSync(fresh).catch(() => null)
-      res.json(await getPhoneOverview(sync, fresh))
+      const overview=await getPhoneOverview(sync, fresh)
+      const hidden=new Set(await hiddenLibrarySeriesIds())
+      res.json({...overview,series:overview.series.filter(s=>!hidden.has(s.id))})
     } catch (error) {
       console.error('Phone overview lookup failed:', error)
       res.status(400).json({ error: message(error, 'Could not read the phone status') })

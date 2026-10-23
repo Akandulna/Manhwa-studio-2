@@ -227,15 +227,6 @@ async function buildChecklist(
     checkAlignment(chapter.folderPath, language, chapter.audioSections),
     checkCrops(chapter.folderPath, slug)
   ])
-  // Owner-requested, single successful Hindi export of Rogue First Prince Ch 1.
-  // Only bypass Clipper completeness; timeline image resolution still runs normally.
-  if (!crops.ok && chapter.id === '9fee19f4-de13-4051-8cb2-c6e5b40b8265' && language === 'hi') {
-    const enabled = await fs.access('/tmp/rogue-prince-ch1-hi-export-once').then(() => true, () => false)
-    if (enabled) {
-      crops.ok = true
-      crops.detail = 'One-time Hindi export override; consumed after a successful render'
-    }
-  }
   const timeline: ChecklistItem = storedJson?.trim()
     ? { ok: true, detail: 'Timeline JSON stored for this chapter' }
     : { ok: false, detail: 'No timeline JSON yet — Copy All → ChatGPT → Paste, or Fetch from phone' }

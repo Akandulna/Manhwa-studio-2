@@ -691,9 +691,6 @@ export async function startBatchExport(
             emit()
           })
 
-          if (input.chapterId === '9fee19f4-de13-4051-8cb2-c6e5b40b8265' && language === 'hi') {
-            await fs.unlink('/tmp/rogue-prince-ch1-hi-export-once').catch(() => {})
-          }
           state.status = 'done'
           state.percent = 100
           state.outputPath = outputPath

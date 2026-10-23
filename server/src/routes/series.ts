@@ -13,7 +13,7 @@ import { Server } from 'socket.io';
 import { reconcileQuietly } from '../services/diskReconcile.js';
 import path from 'path';
 import { libraryDeviceId, scheduleLibraryCleanup } from '../services/librarySync.js';
-import { libraryControl, libraryControls, saveLibraryControls } from '../services/libraryControls.js';
+import { libraryControl, libraryControls, saveLibraryControls, hiddenLibraryFolders } from '../services/libraryControls.js';
 import { notifySeriesProcessChanged } from '../services/seriesProcess.js';
 import { productionAutomation, getProductionStatus, reconcileManagedProduction, resumeManagedProduction, exportManagedProduction, adoptManagedProduction, pauseManagedProduction, handoffManagedProduction } from '../services/productionAutomation.js';
 import { parseProductionConfig } from '../services/productionAutomationModel.js';
@@ -51,11 +51,26 @@ router.post('/:id/automation/stop', async (req, res) => {
   catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
 });
 
+// Reversible visibility only: retains files, durable authority and diagnostic evidence.
+router.get('/archived', async (_req,res) => {
+  try { const folders=(await libraryControls()).filter(c=>c.archived?.done&&!c.deleted).map(c=>c.folder);res.json(await prisma.series.findMany({where:{rootFolder:{in:folders}},select:{id:true,title:true,rootFolder:true}})); }
+  catch { res.status(500).json({error:'Archive inventory unavailable'}); }
+});
+router.post('/:id/archive', async (req,res) => {
+  try {
+    if(Object.keys(req.body??{}).join(',')!=='archived'||typeof req.body.archived!=='boolean')throw new Error('Explicit archive or restore decision required');
+    const row=await prisma.series.findUnique({where:{id:req.params.id}});if(!row)throw new Error('Series not found');
+    const prior=await libraryControl(row.rootFolder);if(prior.deleted)throw new Error('Series is being deleted');
+    await saveLibraryControls([{folder:row.rootFolder,archived:{at:Math.max(Date.now(),(prior.archived?.at??0)+1),deviceId:await libraryDeviceId(),done:req.body.archived}}]);
+    scheduleLibraryPublish();notifySeriesProcessChanged();res.json({archived:req.body.archived,retained:true});
+  } catch(error) { res.status(409).json({error:error instanceof Error?error.message:'Archive unavailable'}); }
+});
+
 // Get all series
 router.get('/', async (req: Request, res: Response) => {
   try {
     await reconcileQuietly();
-    const deleted = (await libraryControls()).filter(c => c.deleted).map(c => c.folder);
+    const deleted = await hiddenLibraryFolders();
     const series = await prisma.series.findMany({
       where: { rootFolder: { notIn: deleted } },
       include: {

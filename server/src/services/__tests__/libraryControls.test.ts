@@ -37,6 +37,18 @@ describe('shared library actions', () => {
     }
     expect(state.settings.size).toBe(0)
   })
+  it('archives without deleting files or cloud evidence, survives stale sync and supports restore', async () => {
+    await fs.mkdir(path.join(root,'Archived'),{recursive:true});await fs.writeFile(path.join(root,'Archived/evidence'),'retain')
+    await saveLibraryControls([{folder:'Archived',archived:d(10)}])
+    await saveLibraryControls([{folder:'Archived'}])
+    expect((await libraryControl('Archived')).archived?.done).toBe(true)
+    await purgeDeletedLibrarySeries()
+    expect(await fs.readFile(path.join(root,'Archived/evidence'),'utf8')).toBe('retain')
+    expect(state.send).not.toHaveBeenCalled();expect(state.cancel).not.toHaveBeenCalled()
+    await saveLibraryControls([{folder:'Archived',archived:d(11,false)}])
+    await saveLibraryControls([{folder:'Archived',archived:d(10)}])
+    expect((await libraryControl('Archived')).archived?.done).toBe(false)
+  })
   it('retains a durable deletion decision when cloud deletion fails, then retries it', async () => {
     await saveLibraryControls([{ folder: 'Demo', deleted: d(1) }])
     state.send.mockResolvedValueOnce({ Contents: [{ Key: 'manhwa/Demo/ch.zip' }] }).mockResolvedValueOnce({ Errors: [{ Key: 'manhwa/Demo/ch.zip' }] })

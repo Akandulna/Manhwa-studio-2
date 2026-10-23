@@ -1,3 +1,4 @@
+import {hiddenLibraryFolders} from '../services/libraryControls.js'
 import { withSeriesActivity } from '../services/seriesActivity.js'
 /**
  * Narration API Routes
@@ -161,8 +162,10 @@ async function runPhoneFetch(
 router.get('/series', async (req: Request, res: Response) => {
   try {
     const language = requestLanguage(req)
+    const hidden=await hiddenLibraryFolders()
     const [series, counts] = await Promise.all([
       prisma.series.findMany({
+        where:{rootFolder:{notIn:hidden}},
         include: {
           chapters: {
             where: { status: 'done' },

@@ -1,3 +1,4 @@
+import {hiddenLibraryFolders} from '../services/libraryControls.js'
 import {managedCropBinding,readManagedCrop,assertUnmanagedCropChapter} from '../services/managedCropProjection.js'
 import {TaskConflict} from '../services/managedTaskProtocol.js'
 import { withSeriesActivity } from '../services/seriesActivity.js'
@@ -143,7 +144,9 @@ export function initClipper3Routes(io: Server): Router {
   router.get('/series', async (_req: Request, res: Response) => {
     try {
       await reconcileQuietly()
+      const hidden=await hiddenLibraryFolders()
       const series = await prisma.series.findMany({
+        where:{rootFolder:{notIn:hidden}},
         select: {
           id: true,
           title: true,

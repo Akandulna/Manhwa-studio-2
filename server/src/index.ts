@@ -1,3 +1,4 @@
+import {initManagedMaintenanceRoutes} from './routes/managedMaintenance.js';
 import express from 'express';
 import cors from 'cors';
 import fs from 'fs';
@@ -91,6 +92,7 @@ app.use('/api/stitch', initStitchRoutes());          // Library: stitch a chapte
 app.use('/api/page-preview', initPagePreviewRoutes()); // Library: preview a chapter's pages and delete unwanted ones
 app.use('/api/r2', initR2Routes(io));                // Cloud backup: upload series folders to Cloudflare R2
 app.use('/api/managed-pilot',initManagedPilotRoutes(prisma));
+app.use('/api/managed-maintenance',initManagedMaintenanceRoutes(prisma));
 app.get('/api/managers', async (_req, res) => {
   try { res.json(await managerOverview()); }
   catch { res.status(503).json({ error: 'Manager reporting is unavailable. Existing production is unaffected.' }); }

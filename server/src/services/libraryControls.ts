@@ -15,6 +15,8 @@ export async function libraryControl(folder: string): Promise<LibraryControl> {
   return row ? JSON.parse(row.value) : { folder }
 }
 export async function isLibraryDeleted(folder: string): Promise<boolean> { return !!(await libraryControl(folder)).deleted }
+export async function hiddenLibraryFolders(): Promise<string[]> { return (await libraryControls()).filter(c => c.deleted || c.archived?.done).map(c => c.folder) }
+export async function hiddenLibrarySeriesIds(): Promise<string[]> { const folders=await hiddenLibraryFolders();return (await prisma.series.findMany({where:{rootFolder:{in:folders}},select:{id:true}})).map(s=>s.id) }
 export function saveLibraryControls(incoming: LibraryControl[]): Promise<boolean> {
   if (!validControls(incoming)) return Promise.reject(new Error('Invalid library actions'))
   const next = saving.catch(() => {}).then(async () => {

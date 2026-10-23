@@ -54,6 +54,8 @@ export async function bindManagedCrop(folder:string,filename:string,task:CropTas
   const id=await cropTaskIdentity({workspaceId,seriesId,chapterId,pageId},task.spec)
   if(task.id!==id.taskId||task.fingerprint!==id.fingerprint)throw new TaskConflict('Authenticated plan identity required')
   await resolveManagedCropInput({workspaceId,seriesId,chapterId,pageId},task.spec,path.join(chapter(folder),filename))
+  const retired=path.join(chapter(folder),DIRECTORY,'retired',keyOf(filename)+'.receipt.json')
+  try { const receipt=JSON.parse(await fs.readFile(retired,'utf8'));if(receipt.taskId===task.id)throw new TaskConflict('This pilot was retired; its original task cannot be enrolled again') }catch(error:any){if(error.code!=='ENOENT')throw error}
   const prior=await loadBinding(folder,filename)
   const binding:Binding={schema:'managed-crop-binding/1',filename,destination,task:structuredClone(task)}
   if(prior?.task.id===task.id){if(prior.destination!==destination||prior.filename!==filename)throw new TaskConflict('Existing managed binding differs');return}
