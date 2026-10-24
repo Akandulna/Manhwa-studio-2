@@ -1,3 +1,10 @@
+import {productionRecoveryDisposition} from './productionRecoveryDisposition.js'
+import {productionCandidateHandoff} from './managedProductionCandidateHandoff.js'
+import {resolveManagedCropInput} from './managedArtifactImport.js'
+import {automationRecoveryForDatabase} from './automationRecoveryDatabase.js'
+import {restoreManagedProductionProjection} from './managedProductionRecovery.js'
+import {savedImportRecoveryTransport} from './managedSavedImportRecovery.js'
+import {relayPauseForDatabase} from './relayDeliveryPause.js'
 import {randomUUID} from 'node:crypto'
 import {handoffJob,type ProductionHandoffIntent} from './managedProductionHandoff.js'
 import {cropTaskIdentity} from './managedTaskProtocol.js'
@@ -307,6 +314,13 @@ async function perform(step: ProductionStep, job: ProductionJob, signal: AbortSi
       claims:[...claims.values()],
       expectedTaskIds:job.resumedFrom?.preparedTaskIds,
       inputs:()=>managedProductionInputs(job),
+      restoreVerified:(input,signal)=>restoreManagedProductionProjection(input,signal,{
+        authority,diagnoses:automationRecoveryForDatabase(prisma),
+        transport:savedImportRecoveryTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(prisma)),
+        refreshInput:async()=>{const page=await prisma.page.findFirst({where:{localPath:path.join(input.folder,input.filename),chapter:{seriesId:job.seriesId}}});if(!page)throw new TaskConflict('Original production page is unavailable');return managedPilotInput(prisma,page.id)},
+        enabled:()=>process.env.MANAGED_AUTOMATIC_RECOVERY==='1'&&process.env.MANAGED_SAVED_IMPORT_RECOVERY==='1',
+        wait:(ms,signal)=>delay(ms,undefined,{signal}),report:message=>report(message)
+      }),
       report:async(message,taskId,claim)=>{if(taskId)taskIds.add(taskId);if(claim)claims.set(claim.taskId,claim);await report(message,{kind:'clipper',devices:productionDevices(job.config).map(d=>d.device),sentAt:job.command?.sentAt??new Date().toISOString(),managedTaskIds:[...taskIds],managedClaims:[...claims.values()]})},
       wait:signal=>delay(10_000,undefined,{signal})
     }))
@@ -445,6 +459,7 @@ export async function handoffManagedProduction(seriesId:string,request:any) {
  const originalVersion={id:job.id,revision:job.revision??0}
  let intent=job.pendingHandoff
  if(intent){
+  if(intent.accountCandidateId)throw new TaskConflict('Use the separately approved production candidate handoff controls')
   if(Object.keys(request).sort().join(',')!=='intentId,jobId,revision'||request.intentId!==intent.eventId)throw new TaskConflict('Finish this exact pending handoff before choosing another target')
  }else{
   if(Object.keys(request).sort().join(',')!=='attemptId,deviceId,fingerprint,generation,jobId,profileId,revision,stopCommandId,taskId'||![request.attemptId,request.deviceId,request.profileId,request.stopCommandId].every(v=>typeof v==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(v))||!Number.isSafeInteger(request.generation)||request.generation<1||!(/^[a-f0-9]{64}$/).test(request.fingerprint))throw new TaskConflict('Refresh the exact confirmed-unsent attempt and target')
@@ -468,6 +483,7 @@ export async function handoffManagedProduction(seriesId:string,request:any) {
    job={...job!,pendingHandoff:pending,revision:originalVersion.revision+1,updatedAt:new Date().toISOString(),message:'Handoff intent saved; confirming the original authority transfer.'}
    await productionJobs.save(job,originalVersion) // Persist IDs before any transfer; lost replies retain recoverable intent.
   }
+  if(job!.adoptedFrom?.importedPendingHandoffId===pending.eventId){const original=await authority.claimReceipt!(pending.taskId,pending.newClaimEventId);if(original.status!=='recorded'||original.generation!==pending.generation+1||original.deviceId!==pending.deviceId||original.profileId!==pending.profileId)throw new TaskConflict('Imported legacy handoff is unacknowledged; no transfer may be replayed')}
   const transferred=await new ManagedCropPilot(authority).transfer(input,{taskId:pending.taskId,attemptId:pending.attemptId,generation:pending.generation,fingerprint:pending.fingerprint,stopCommandId:pending.stopCommandId},pending.deviceId,pending.profileId,{claimEventId:pending.claimEventId,newClaimEventId:pending.newClaimEventId,eventId:pending.eventId})
   const receipt=await authority.claimReceipt!(pending.taskId,pending.newClaimEventId)
   if(receipt.status!=='recorded'||receipt.attemptId!==transferred.attempt?.id||receipt.generation!==pending.generation+1||receipt.deviceId!==pending.deviceId||receipt.profileId!==pending.profileId)throw new TaskConflict('Target claim acknowledgment does not match; retain the pending handoff')
@@ -478,4 +494,25 @@ export async function handoffManagedProduction(seriesId:string,request:any) {
   io?.emit('production:updated',applied)
   return applied
  })
+}
+
+export async function accountHandoffManagedProduction(seriesId:string,request:unknown){
+ await productionJobs.activate()
+ const result=await productionCandidateHandoff(seriesId,request,{
+  load:()=>productionJobs.load(),save:(job,expected)=>productionJobs.save(job,expected),authority:managedPilotAuthority(prisma),coordinator:managedProductionCoordinator,
+  inputs:managedProductionInputs,verify:async input=>(await resolveManagedCropInput(input.identity,input.spec,input.sourceFile)).source,
+  enabled:()=>process.env.MANAGED_AUTOMATIC_RECOVERY==='1'&&process.env.MANAGED_CANDIDATE_ADOPTION==='1'&&process.env.MANAGED_ACCOUNT_HANDOFF==='1',
+  validateTarget:async(job,intent,existing)=>{
+   const overview=await getPhoneOverview(null)
+   if(!overview.profiles.some(p=>p.device===intent.deviceId&&p.profileId===intent.profileId))throw new TaskConflict('Known explicit target phone/profile required')
+   if(!existing&&(busy(overview,intent.deviceId)||(await productionJobs.load()).some(j=>j.id!==job.id&&j.status==='running'&&productionDevices(j.config).some(d=>d.device===intent.deviceId))))throw new TaskConflict('Target has existing production work')
+  }
+ })
+ io?.emit('production:updated',result);return result
+}
+
+export async function disposeManagedProductionRecovery(seriesId:string,request:unknown){
+ await productionJobs.activate()
+ const result=await productionRecoveryDisposition(seriesId,request,{load:()=>productionJobs.load(),save:(job,expected)=>productionJobs.save(job,expected),authority:managedPilotAuthority(prisma),coordinator:managedProductionCoordinator})
+ io?.emit('production:updated',result.job);return result
 }

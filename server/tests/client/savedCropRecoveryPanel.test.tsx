@@ -115,3 +115,13 @@ describe('saved crop recovery panel rendering',()=>{
   const s=setup();s.session.select(target);render(s.session);render(s.session);expect(s.perform).not.toHaveBeenCalled();expect(s.session.getSnapshot().inspection).toBeNull()
  })
 })
+describe('shared saved-upload and local-import budget projection',()=>{
+ it('blocks restoration when an earlier upload exhausted the shared budget or remains pending',async()=>{
+  for(const budget of [{used:3,uiUsed:0,nextEligibleAt:0,pending:false,exhausted:true},{used:1,uiUsed:0,nextEligibleAt:0,pending:true,exhausted:false}]){
+   const s=setup();s.view={...inspection(),budget};await s.ready();expect(s.session.gate('run').allowed).toBe(false);expect(s.session.gate('enable').allowed).toBe(false)
+  }
+ })
+ it('rejects malformed aggregate budgets rather than silently showing only local attempts',async()=>{
+  const s=setup();s.perform.mockResolvedValueOnce({...inspection(),budget:{used:4,uiUsed:0,nextEligibleAt:0,pending:false,exhausted:true}});s.session.select(target);await s.session.perform('inspect');expect(s.session.getSnapshot().current).toBe(false)
+ })
+})

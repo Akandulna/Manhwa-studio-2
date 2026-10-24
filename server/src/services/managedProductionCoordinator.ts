@@ -53,6 +53,22 @@ export class ManagedProductionCoordinator {
   await this.serial(()=>this.enter(authority))
   const fields=()=>{if(!this.fence)throw new TaskConflict('Missing production coordinator');return this.fence}
   const fenced:PilotAuthority={...authority,
+   ...(authority.recoveryDisposition?{recoveryDisposition:async(op:Record<string,unknown>)=>{
+    await this.guard(authority,true)
+    if(!['inspect','apply','resolve','receipt','proof'].includes(String(op.action)))throw new TaskConflict('Exact production recovery disposition operation required')
+    return authority.recoveryDisposition!({...op,...(op.action==='apply'&&(op.intent as any)?.production?{coordinator:fields()}:{})})
+   }}:{}),
+   ...(authority.accountHandoff?{accountHandoff:async(op:Record<string,unknown>)=>{
+    await this.guard(authority,true)
+    if(!['status','approve','finalize'].includes(String(op.action)))throw new TaskConflict('Production coordinator supports explicit handoff approval/commit/status only')
+    if(op.action==='approve'){
+     const approval=op.approval as any
+     if(!approval?.production)throw new TaskConflict('Exact production candidate approval required')
+     return authority.accountHandoff!({...op,approval:{...approval,production:{...approval.production,...fields()}}})
+    }
+    return authority.accountHandoff!({...op,...(op.action==='finalize'?fields():{})})
+   }}:{}),
+   ...(authority.candidateAdoptionStatus?{candidateAdoptionStatus:async(unit:Record<string,unknown>,target:{deviceId:string;profileId:string})=>{await this.guard(authority);return authority.candidateAdoptionStatus!(unit,target)}}:{}),
    ...(authority.selectAccount?{selectAccount:async(taskId:string,targets?:{deviceId:string;profileId:string}[])=>{await this.guard(authority);return authority.selectAccount!(taskId,targets)}}:{}),
    ...(authority.accounts?{accounts:async(body?:Record<string,unknown>)=>{await this.guard(authority);return authority.accounts!(body)}}:{}),
    operation:async op=>{

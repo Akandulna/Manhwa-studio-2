@@ -1,3 +1,5 @@
+import { RelayReconnect } from './relayReconnect.js'
+import { beforeRelaySend, beforeRelaySocket, relayFetch, relayRetryDelay, recordRelayBudget, recordRelayUpgrade, learnRelayFeatures } from './relayTraffic.js'
 /**
  * Live link to the Sleeper-Cell phone through the relay Worker (relay/ in this
  * repo): a Cloudflare Worker + Durable Object that keeps the phone's last
@@ -143,12 +145,13 @@ export interface RelayStatus {
 const PING_MS = 50_000
 /** Nothing heard (not even "pong") for this long means the socket is dead, e.g. after the Mac slept. */
 const DEAD_MS = 2 * PING_MS + 10_000
-const RETRY_MS = [2_000, 5_000, 15_000, 30_000, 60_000]
+const reconnect = new RelayReconnect()
 /** A connection that stayed up this long resets the backoff. */
 const STABLE_MS = 60_000
 /** Bound DNS/TLS/upgrade waits too: the heartbeat only runs after open. */
 const HANDSHAKE_MS = 15_000
 
+let connectionGeneration=0
 let io: Server | null = null
 let socket: WebSocket | null = null
 let connected = false
@@ -159,8 +162,6 @@ let presence: { id: string; name: string }[] = []
 let seen = new Map<string, { at: number; left: PhoneLeft | null }>()
 let lastError: string | null = null
 let lastReceiptAt: number | null = null
-let attempt = 0
-let openedAt = 0
 let lastHeard = 0
 let retryTimer: NodeJS.Timeout | null = null
 let pingTimer: NodeJS.Timeout | null = null
@@ -297,36 +298,58 @@ function socketUrl(base: string): string {
   return url.toString()
 }
 
-function scheduleReconnect(): void {
-  const delay = RETRY_MS[Math.min(attempt, RETRY_MS.length - 1)]
-  attempt++
-  retryTimer = setTimeout(connect, delay)
+async function scheduleReconnect(generation=connectionGeneration): Promise<void> {
+  if (retryTimer) return
+  const delay = reconnect.next()
+  if (delay === null) return
+  try {
+    const wait = await relayRetryDelay(delay,true)
+    if(wait>delay&&generation===connectionGeneration){lastError='Relay paused until '+new Date(Date.now()+wait).toLocaleString();emitStatus()}
+    if (generation===connectionGeneration && !retryTimer && !socket) retryTimer = setTimeout(() => { retryTimer = null; void connect() }, Math.min(wait,2_147_000_000))
+  } catch { lastError = 'Unable to read the relay safety pause'; emitStatus() }
 }
 
-function connect(): void {
+async function connect(): Promise<void> {
+  if (socket) return
   clearTimers()
+  const generation=connectionGeneration
   const env = relayEnv()
   if (!env) return
 
   let ws: WebSocket
   try {
+    await beforeRelaySocket()
+    if (socket || generation!==connectionGeneration) return
+    reconnect.begin()
     ws = new WebSocket(socketUrl(env.url), {
-      headers: { Authorization: `Bearer ${env.token}` },
+      headers: { Authorization: `Bearer ${env.token}`, 'X-Relay-Client': 'studio/traffic-v1', 'X-Relay-Connection': randomUUID() },
       handshakeTimeout: HANDSHAKE_MS
     })
   } catch (error) {
     lastError = error instanceof Error ? error.message : String(error)
     emitStatus()
-    scheduleReconnect()
+    void scheduleReconnect(generation)
     return
   }
   socket = ws
 
+  let rejection = Promise.resolve()
+  ws.on('unexpected-response', (request, response) => {
+    if (socket !== ws) { response.resume(); request.destroy(); return }
+    if (response.statusCode === 401 || response.statusCode === 403) reconnect.blockAuthentication()
+    if (response.statusCode === 429) rejection = recordRelayUpgrade(response.headers['retry-after'],response.headers['x-relay-rejection']).catch(() => { reconnect.blockAuthentication(); lastError = 'Unable to persist the relay safety pause' })
+    lastError = `Relay refused connection (HTTP ${response.statusCode})`
+    response.resume()
+    request.destroy()
+    ws.terminate()
+  })
   ws.on('open', () => {
     if (socket !== ws) return
     connected = true
     lastError = null
-    openedAt = lastHeard = Date.now()
+    learnRelayFeatures([])
+    reconnect.open()
+    lastHeard = Date.now()
     pingTimer = setInterval(() => heartbeat(ws), PING_MS)
     console.log('Phone relay: connected')
     emitStatus()
@@ -340,7 +363,7 @@ function connect(): void {
     // 'close' follows and schedules the retry.
     if (socket === ws) lastError = error.message
   })
-  ws.on('close', () => {
+  ws.on('close', async () => {
     if (socket !== ws) return
     socket = null
     const wasConnected = connected
@@ -350,8 +373,8 @@ function connect(): void {
     clearTimers()
     if (wasConnected) console.log('Phone relay: disconnected')
     emitStatus()
-    if (Date.now() - openedAt > STABLE_MS) attempt = 0
-    scheduleReconnect()
+    await rejection
+    void scheduleReconnect(generation)
   })
 }
 
@@ -385,13 +408,14 @@ function parseSeen(raw: unknown): Map<string, { at: number; left: PhoneLeft | nu
 
 function handle(text: string): void {
   if (text === 'pong') return
-  let message: { type?: string; kind?: string; device?: unknown; at?: number; body?: unknown; phones?: number; devices?: unknown; seen?: unknown }
+  let message: { type?: string; kind?: string; retryAfter?: unknown; features?: unknown; device?: unknown; at?: number; body?: unknown; phones?: number; devices?: unknown; seen?: unknown }
   try {
     message = JSON.parse(text)
   } catch {
     return
   }
   switch (message.type) {
+    case 'relay:budget': void recordRelayBudget(message.retryAfter).catch(() => { socket?.terminate() }); break
     case 'manager:report': receiveManagerReport(message.body); break
     case 'manager:incident': receiveManagerIncident(message.body); break
     case 'hello':
@@ -401,7 +425,7 @@ function handle(text: string): void {
       seen = parseSeen(message.seen) ?? seen
       emitStatus()
       recordManagerFleet(relayPhones())
-      if (message.type === 'hello') { scheduleLibraryPublish(); void deliverManagerReports() }
+      if (message.type === 'hello') { learnRelayFeatures(message.features??[]); scheduleLibraryPublish(); void deliverManagerReports() }
       break
     case 'receipt': {
       const { kind, body } = message
@@ -478,13 +502,14 @@ export async function sendPhoneRequest(
     ...(args.profile ? { profile: args.profile } : {}),
     ...(args.chatGpt ? { chatGpt: args.chatGpt } : {})
   }
+  await beforeRelaySend()
   // Browser commands require the authority's admission response. Socket send alone cannot prove admission.
   if ((!action || !LEGACY_BROWSER_ACTIONS.has(action)) && socket && connected && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: 'request', ...request }))
     const reached = args.device ? Number(presence.some(d => d.id === args.device)) : phones
     return { ...request, phones: reached }
   }
-  const res = await fetch(`${env.url}/request`, {
+  const res = await relayFetch(`${env.url}/request`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${env.token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(request)
@@ -529,6 +554,8 @@ export async function updateRelayConfig(update: RelayConfigUpdate): Promise<void
   else if (update.token?.trim()) vars.RELAY_TOKEN = update.token.trim()
   await writeEnvVars(vars)
 
+  connectionGeneration++
+  clearTimers()
   // Drop the old socket without letting its close handler schedule a retry.
   const old = socket
   socket = null
@@ -537,7 +564,7 @@ export async function updateRelayConfig(update: RelayConfigUpdate): Promise<void
   presence = []
   seen = new Map()
   lastError = null
-  attempt = 0
+  reconnect.reset()
   receipts.clear()
   screens.clear()
   old?.terminate()
@@ -553,7 +580,7 @@ export async function updateRelayConfig(update: RelayConfigUpdate): Promise<void
 export async function forgetPhone(device: string): Promise<void> {
   const env = relayEnv()
   if (!env) throw new Error('The phone relay is not set up')
-  const res = await fetch(`${env.url}/forget`, {
+  const res = await relayFetch(`${env.url}/forget`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${env.token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ device })
@@ -573,7 +600,7 @@ export async function testRelay(): Promise<{ receipts: { kind: string; at: numbe
   if (!env) throw new Error('Enter the relay URL and token first')
   let res: Response
   try {
-    res = await fetch(`${env.url}/state`, { headers: { Authorization: `Bearer ${env.token}` } })
+    res = await relayFetch(`${env.url}/state`, { headers: { Authorization: `Bearer ${env.token}` } })
   } catch (error) {
     throw new Error(`Could not reach the relay: ${error instanceof Error ? error.message : String(error)}`)
   }

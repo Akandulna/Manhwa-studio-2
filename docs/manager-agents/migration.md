@@ -1,5 +1,7 @@
 # Migration, compatibility, privacy, and rollout design
 
+**24 October continuation update:** Read the [completed agent-reporting and Cloudflare usage scope](../../../MAPI/Sleeper-cell-main/docs/agent-reporting-continuation-update.md) before continuing overlapping work. Source implementation and local validation are complete; rollout, installed acceptance and measured savings remain pending. Reconcile older pending items with that update; reuse the delivered implementation rather than starting it again. Other phase gates remain unchanged.
+
 ## Proposed persistence (not installed)
 
 Relay: additive versioned tables `manager_schema`, `entity_mappings`, `manager_events`, `manager_observations`, `managed_tasks`, `managed_attempts`, `managed_commands`, `managed_artifacts`, `managed_reservations`, `manager_incidents`, `manager_incident_events`, `manager_notifications`, `manager_accounts`, `manager_ui_changes`. Unique workspace/event ID, task identity tuple, task/generation, command/attempt, cause/resource active incident, consumer/notification ID, and reservation resource constraints are required. The claim transaction checks enrollment/current revision, writes attempt+command intent+all reservations together, or writes nothing. Incident impacts/history are child records or append events, not overwritten text. Acknowledgment is a separate nullable timestamp, independent of resolved status. Recurrence reopens the cause/resource incident and increments its occurrence generation; exact event replay never creates a new alert.

@@ -1,12 +1,27 @@
 import type {PrismaClient} from '@prisma/client'
-const sharedPauses=new WeakMap<PrismaClient,RelayDeliveryPause>()
+import { createHash } from 'node:crypto'
+const sharedPauses=new WeakMap<PrismaClient,Map<string,RelayDeliveryPause>>()
 /** Reporting and managed calls share one durable pause and write queue. */
-export function relayPauseForDatabase(db:PrismaClient):RelayDeliveryPause {
-  let pause=sharedPauses.get(db)
-  if(!pause){const key='managerReporting.relayPauseUntil';pause=new RelayDeliveryPause({
-    load:async()=>(await db.setting.findUnique({where:{key}}))?.value??null,
+export function relayPauseForDatabase(db:PrismaClient, socketRole?:'desktop'):RelayDeliveryPause {
+  const identity=(process.env.RELAY_URL??'').trim().replace(/\/+$/,'')
+  const scope=createHash('sha256').update(identity+(socketRole?'|socket:'+socketRole:'')).digest('hex')
+  let pauses=sharedPauses.get(db)
+  if(!pauses){pauses=new Map();sharedPauses.set(db,pauses)}
+  let pause=pauses.get(scope)
+  if(!pause){const key='managerReporting.relayPauseUntil/'+scope;pause=new RelayDeliveryPause({
+    load:async()=>{
+      const existing=await db.setting.findUnique({where:{key}})
+      if(existing)return existing.value
+      if(socketRole)return null
+      // Import the old singleton only for the first configured authority.
+      const migration='managerReporting.relayPauseScope'
+      const marker=await db.setting.findUnique({where:{key:migration}})
+      if(marker&&marker.value!==scope)return null
+      if(!marker)await db.setting.upsert({where:{key:migration},create:{key:migration,value:scope},update:{}})
+      return (await db.setting.findUnique({where:{key:'managerReporting.relayPauseUntil'}}))?.value??null
+    },
     save:async value=>{await db.setting.upsert({where:{key},create:{key,value},update:{value}})}
-  });sharedPauses.set(db,pause)}
+  });pauses.set(scope,pause)}
   return pause
 }
 /** Durable HTTP Retry-After gate. Shared by every source in a reporting drain. */
@@ -34,6 +49,7 @@ export class RelayDeliveryPause {
       this.until = parsed
     })
   }
+  async remainingMs(): Promise<number> { await this.ready; await this.writes; return Math.max(0,this.until-this.now()) }
   async isPaused(): Promise<boolean> { await this.ready; await this.writes; return this.now() < this.until }
   async beforeSend(): Promise<void> { if (await this.isPaused()) throw new RelayDeliveryPaused() }
   async record(header: string | null): Promise<void> {

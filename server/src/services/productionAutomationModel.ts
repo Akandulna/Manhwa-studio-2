@@ -21,6 +21,9 @@ export interface ProductionJob {
   revision?: number
   /** Explicit inspection decision persisted before resuming any original claim. */
   pendingHandoff?:import('./managedProductionHandoff.js').ProductionHandoffIntent
+  portableFamilyReceipts?:import('./recoveryDispositionProtocol.js').DispositionReceipt[]
+  pendingRecoveryDisposition?:import('./recoveryDispositionProtocol.js').DispositionIntent
+  recoveryDispositionHistory?:import('./productionRecoveryDisposition.js').ProductionDispositionHistory[]
   handoffHistory?:import('./managedProductionHandoff.js').ProductionHandoffReceipt[]
   adoptedFrom?: import('./managedProductionAdoption.js').ManagedAdoptionReceipt
   resumedFrom?: import('./managedProductionResume.js').ProductionResumeApproval

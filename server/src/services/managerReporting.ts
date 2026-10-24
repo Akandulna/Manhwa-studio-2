@@ -1,3 +1,4 @@
+import {managerRecoveryFact} from './managerRecoveryFact.js'
 import path from 'node:path'
 import fs from 'node:fs/promises'
 import { createHash } from 'node:crypto'
@@ -6,7 +7,8 @@ import type { Server } from 'socket.io'
 import { ManagerStore } from './managerStore.js'
 import { encodeManagerState, decodeManagerState } from './managerStoreCodec.js'
 import { RelayDeliveryPause,relayPauseForDatabase } from './relayDeliveryPause.js'
-import { sendManagerReport } from './managerReportDelivery.js'
+import { hasRelayFeature } from './relayTraffic.js'
+import { sendManagerBatch, sendManagerReport } from './managerReportDelivery.js'
 import { MANAGERS, currentManagerObservations, parseManagerReport, type ManagerFact, type ManagerId, type ManagerIncident, type ManagerObservation, type ManagerOverview, type ManagerReport, type ManagerStage } from './managerProtocol.js'
 import type { ChapterStages, ProcessStage } from './seriesProcessModel.js'
 
@@ -21,6 +23,17 @@ let delivery: Promise<void> | null = null
 let reportingError: string | null = null
 let remapTimer: NodeJS.Timeout | null = null
 const chapters = new Map<string, { seriesId: string; chapterId: string; title: string; name: string; revision: string | null; archived: boolean; sharedChapterId?: string; sharedSeriesId?: string; ambiguous?: boolean }>()
+const nativeFacts=new Map<string,ManagerFact>()
+const nativeKey=(device:string,fact:ManagerFact)=>JSON.stringify([device,fact.scope.seriesId,fact.scope.chapterId,fact.scope.profileId,fact.stage,fact.stage==='account'?fact.key:null])
+function indexNative(report:ManagerReport):void {
+  if(report.source.deviceId.startsWith('legacy-')||report.source.deviceId.startsWith('mac-'))return
+  for(const fact of report.facts)nativeFacts.set(nativeKey(report.source.deviceId,fact),fact)
+}
+function nativeCovers(device:string,body:any,kind:string,fact:ManagerFact):boolean {
+  if(body.managerCoverage?.schema!=='native-manager-coverage/1'||!Array.isArray(body.managerCoverage.kinds)||!body.managerCoverage.kinds.includes(kind))return false
+  const native=nativeFacts.get(nativeKey(device,fact))
+  return !!native&&native.workState===fact.workState&&native.inputRevision===fact.inputRevision&&native.done===fact.done&&native.total===fact.total
+}
 const legacy = new Map<string, { device: string; kind: string; body: any; at: number }>()
 const localStages = new Map<string, ChapterStages>()
 const enabled = () => process.env.MANAGER_OBSERVATIONS === '1'
@@ -44,43 +57,56 @@ export function startManagerReporting(db: PrismaClient, socket: Server): void {
   store = new ManagerStore({
     load: async () => { const row = await db.setting.findUnique({ where: { key: KEY } }); return row ? decodeManagerState(row.value) : null },
     save: async state => { const value = await encodeManagerState(state); await db.setting.upsert({ where: { key: KEY }, create: { key: KEY, value }, update: { value } }) }
-  }, () => { reportingError = null; notify() })
+  }, () => { reportingError = null; notify() },undefined,true)
   const retry = setInterval(() => { void observe('issues',[],new Date().toISOString()).catch(failure); void observe('studio',[],new Date().toISOString()).catch(failure); void deliverManagerReports() }, 30_000); retry.unref()
-  void store.snapshot().then(async () => { await observe('issues',[],new Date().toISOString()); await observe('studio',[],new Date().toISOString()); await deliverManagerReports() }).catch(failure)
+  void store.snapshot().then(async state => { for(const observation of Object.values(state.projection.observations))indexNative({schema:'manager-report/1',eventId:observation.eventId,source:observation.source,observedAt:observation.observedAt,facts:[observation]}); await observe('issues',[],new Date().toISOString()); await observe('studio',[],new Date().toISOString()); await deliverManagerReports() }).catch(failure)
 }
 const pendingObservations = new Map<string, { manager: ManagerId; facts: Map<string,ManagerFact>; at: string; device?: string; waiters: { resolve: () => void; reject: (error: unknown) => void }[] }>()
 let observationTimer: NodeJS.Timeout | null = null
+let observationDue=0
 async function observe(manager: ManagerId, facts: ManagerFact[], at: string, device?: string): Promise<void> {
   if (!store) return
   return new Promise<void>((resolve,reject) => {
     const key = JSON.stringify([manager,device,at])
     const pending = pendingObservations.get(key) ?? { manager,facts:new Map<string,ManagerFact>(),at,device,waiters:[] }
-    for (const fact of facts) pending.facts.set(fact.key,fact)
+    const ordinary=(fact:ManagerFact)=>!fact.websiteUi&&!fact.condition&&['running','queued','waiting'].includes(fact.workState)
+    for (const fact of facts) {
+      if(ordinary(fact))for(const prior of pendingObservations.values()) {
+        if(prior.manager!==manager||prior.device!==device||Date.parse(prior.at)>Date.parse(at))continue
+        const old=prior.facts.get(fact.key)
+        if(old&&ordinary(old)&&old.inputRevision===fact.inputRevision&&JSON.stringify(old.scope)===JSON.stringify(fact.scope))prior.facts.delete(fact.key)
+      }
+      pending.facts.set(fact.key,fact)
+    }
     pending.waiters.push({ resolve,reject }); pendingObservations.set(key,pending)
+    const wait=facts.some(f=>f.websiteUi||f.condition?.state==='action_required'||['failed','awaiting_review','verified_complete'].includes(f.workState))?500:5_000
+    if(observationTimer&&Date.now()+wait<observationDue){clearTimeout(observationTimer);observationTimer=null}
     if (!observationTimer) {
+      observationDue=Date.now()+wait
       observationTimer = setTimeout(() => {
         observationTimer = null
         const batches = [...pendingObservations.values()]; pendingObservations.clear()
         void (async () => {
           for (const batch of batches) {
-            try { await store!.observe(batch.manager,[...batch.facts.values()],batch.at,batch.device); batch.waiters.forEach(w => w.resolve()) }
+            try { await store!.observe(batch.manager,[...batch.facts.values()],batch.at,batch.device,[...batch.facts.values()].some(f=>f.workState==='running')?300_000:900_000); batch.waiters.forEach(w => w.resolve()) }
             catch (error) { batch.waiters.forEach(w => w.reject(error)) }
           }
           void deliverManagerReports()
         })()
-      },50)
+      },wait)
       observationTimer.unref()
     }
   })
 }
 export async function deliverManagerReports(): Promise<void> {
-  if (!store) return
-  try { if (await deliveryPause!.isPaused()) return }
+  if (!store || !database) return
+  const pause=relayPauseForDatabase(database)
+  try { if (await pause.isPaused()) return }
   catch (error) { failure(error); return }
   if (delivery) return delivery
   const url = process.env.RELAY_URL?.trim().replace(/\/+$/, ''), token = process.env.RELAY_TOKEN?.trim()
   if (!url || !token) return
-  delivery = store.drain(report => sendManagerReport(url, token, report, deliveryPause!)).catch(failure).finally(() => { delivery = null })
+  delivery = store.drain(report => sendManagerReport(url, token, report, pause),hasRelayFeature('manager-batch/1')?reports=>sendManagerBatch(url,token,reports,pause):undefined).catch(failure).finally(() => { delivery = null })
   return delivery
 }
 let incomingReports: ManagerReport[] = []
@@ -89,6 +115,7 @@ export function receiveManagerReport(body: unknown): void {
   if (!store) return
   const parsed = parseManagerReport(body)
   if (!parsed?.receivedAt) return
+  indexNative(parsed)
   incomingReports.push(parsed)
   if (!incomingTimer) {
     incomingTimer = setTimeout(() => {
@@ -141,6 +168,7 @@ export function recordLegacyManagerReceipt(kind: string, device: string, body: a
   const key = JSON.stringify([device,kind]), prior = legacy.get(key)
   if (prior && Date.parse(prior.body.updatedAt) > Date.parse(body.updatedAt)) return
   legacy.set(key, { kind,device,body,at:receivedAt })
+
   const series = Array.isArray(body.series) ? body.series : Object.entries(body.series ?? {}).map(([folder, data]) => ({ folder, ...(data as object) }))
   const grouped = new Map<ManagerId, ManagerFact[]>()
   for (const s of series) for (const [name, raw] of Object.entries(s.chapters ?? {})) {
@@ -168,12 +196,12 @@ export function recordLegacyManagerReceipt(kind: string, device: string, body: a
       // A phone's zip receipt is a claim, not independent cloud verification.
       if (chapter.zip?.uploadedAt) fact.availability.push({ destination: 'cloud', state: 'unknown', evidenceRef: `legacy-upload-claim:${device}:${kind}` })
       const manager: ManagerId = status.stage === 'crop_json' || status.stage === 'review' ? 'device_clipping' : status.stage.startsWith('voice') ? 'voiceover' : status.stage.startsWith('script') ? 'device_narration' : status.stage.startsWith('timeline') ? 'device_editor' : 'device_library'
-      grouped.set(manager, [...(grouped.get(manager) ?? []), fact])
+      if(!nativeCovers(device,body,kind,fact))grouped.set(manager, [...(grouped.get(manager) ?? []), fact])
     }
   }
   // Keep original source timestamp; no dashboard clock is used for fact freshness.
   for (const [manager,facts] of grouped) void observe(manager, facts, body.updatedAt, `legacy-${device}-${kind}`).catch(failure)
-  if (kind === 'crops') { recordPassiveAccounts(device, body); if (Array.isArray(body.profiles)) void observe('accounts',[],body.updatedAt).catch(failure) }
+  if (kind === 'crops') { recordPassiveAccounts(device, body) }
 }
 function recordPassiveAccounts(device: string, body: any): void {
   for (const profile of Array.isArray(body.profiles) ? body.profiles : []) {
@@ -189,7 +217,7 @@ function recordPassiveAccounts(device: string, body: any): void {
       fact.availability = [{ destination: `phone:${device}`, state: known && observation.signedIn ? 'validated' : 'unknown', evidenceRef: `profile-check:${device}:${profile.id}:${provider}` }]
       // Profiles are not grouped into shared accounts until account identity has explicit confirmation.
       fact.condition = !known ? null : { cause: 'sign_in', resource: `${device}/${profile.id}/${provider}`, state: observation.signedIn ? 'resolved' : 'action_required', severity: 'warning', summary: 'A browser profile needs sign-in.', nextAction: 'Open Accounts, sign in on that phone, then run its existing profile check.' }
-      void observe('device_accounts', [fact], check.checkedAt, `legacy-${device}-accounts`).catch(failure)
+      if(!nativeCovers(device,body,'crops',fact))void observe('device_accounts', [fact], check.checkedAt, `legacy-${device}-accounts`).catch(failure)
     }
   }
 }
@@ -230,7 +258,7 @@ export async function managerOverview(): Promise<ManagerOverview> {
     const key = JSON.stringify([deviceOf(h.source.deviceId),h.source.manager])
     if (!logicalHealth.has(key) || Date.parse(logicalHealth.get(key)!.observedAt) < Date.parse(h.observedAt)) logicalHealth.set(key,h)
   }
-  const health = [...logicalHealth.values()].map(h => ({ id: h.source.manager, name: MANAGERS[h.source.manager], deviceId: deviceOf(h.source.deviceId), observedAt: h.observedAt, state: now - Date.parse(h.observedAt) > 15 * 60_000 ? 'last_known' : 'reporting', authorityAccepted: !!h.receivedAt }))
+  const health = [...logicalHealth.values()].map(h => ({ id: h.source.manager, name: MANAGERS[h.source.manager], deviceId: deviceOf(h.source.deviceId), observedAt: h.observedAt, state: now - Date.parse(h.observedAt) > 45 * 60_000 ? 'last_known' : 'reporting', authorityAccepted: !!h.receivedAt }))
   const phoneMissing = [...phoneDevices].flatMap(deviceId => Object.entries(MANAGERS).slice(12).filter(([id]) => !health.some(h => h.deviceId === deviceId && h.id === id)).map(([id,name]) => ({ id,name,deviceId,observedAt:null,state:'not_reporting',authorityAccepted:false })))
   const missing = Object.entries(MANAGERS).slice(0,12).filter(([id]) => !health.some(h => h.id === id)).map(([id,name]) => ({ id,name,deviceId:null,observedAt:null,state:'not_reporting',authorityAccepted:false }))
   const value: ManagerOverview = { enabled: true, error: reportingError, pendingReports: state.outbox.length, pendingAcknowledgments: state.outbox.flatMap(r => r.acknowledgment ? [r.acknowledgment.incidentId] : []), deliveryError: state.lastDeliveryError, observations: projected, incidents: Object.values(state.projection.incidents).map(i => ({ ...i, impacts: Object.fromEntries(Object.entries(i.impacts).map(([key,impact]) => {
@@ -316,9 +344,17 @@ export async function managerRelayUsage(): Promise<unknown> {
   if (typeof raw.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(raw.day) || !raw.limits || typeof raw.limits !== 'object') throw new Error('Invalid relay usage')
   const limits = raw.limits as Record<string,unknown>
   if (names.some(k => !Number.isSafeInteger(raw[k]) || Number(raw[k]) < 0 || !Number.isSafeInteger(limits[k]) || Number(limits[k]) <= 0)) throw new Error('Invalid relay usage counters')
-  const value = { day: raw.day, ...Object.fromEntries(names.map(k => [k,raw[k]])), limits: Object.fromEntries(names.map(k => [k,limits[k]])), scope: 'Relay-local counters since protection was deployed; not Cloudflare account-wide billing.', resetsAt: `${raw.day}T00:00:00Z` }
+  const signals=raw.signals&&typeof raw.signals==='object'&&!Array.isArray(raw.signals)?Object.fromEntries(Object.entries(raw.signals as Record<string,unknown>).filter(([k,v])=>/^(http_|manager_|alarm)/.test(k)&&k.length<40&&Number.isSafeInteger(v)&&Number(v)>=0).slice(0,16)):{}
+  const rows=raw.rows&&typeof raw.rows==='object'&&!Array.isArray(raw.rows)?Object.fromEntries(Object.entries(raw.rows as Record<string,unknown>).filter(([k,v])=>/^(http_|manager_|ws_|alarm|checkpoint|other)/.test(k)&&k.length<40&&!!v&&typeof v==='object'&&['read','written'].every(n=>Number.isSafeInteger((v as any)[n])&&(v as any)[n]>=0)).slice(0,24).map(([k,v])=>[k,{read:(v as any).read,written:(v as any).written}])):{}
+  const value = { signals, rows, day: raw.day, ...Object.fromEntries(names.map(k => [k,raw[k]])), limits: Object.fromEntries(names.map(k => [k,limits[k]])), scope: 'Relay-local counters since protection was deployed; not Cloudflare account-wide billing.', resetsAt: `${raw.day}T00:00:00Z` }
   // The next reset is the following UTC midnight.
   value.resetsAt = new Date(Date.parse(value.resetsAt) + 86_400_000).toISOString()
   relayUsageCache = { url,at:Date.now(),value }
   return value
+}
+
+/** Recovery controllers report after their transaction; Issues/monitoring never execute the playbook. */
+export function recordManagerRecovery(diagnosis:import('./automationRecovery.js').RecoveryDiagnosis):void {
+ if(!store)return
+ void observe('automation',[managerRecoveryFact(diagnosis)],new Date(diagnosis.evidence.observedAt).toISOString()).catch(failure)
 }

@@ -1,3 +1,6 @@
+import {ManagedSavedImportRecovery,savedImportDestinationId,type SavedImportRecoveryTransport} from '../src/services/managedSavedImportRecovery.js'
+import {ManagedArtifactDestination,resolveManagedCropInput} from '../src/services/managedArtifactImport.js'
+import {SAVED_IMPORT_SCHEMA} from '../src/services/managedSavedImportRecoveryProtocol.js'
 import {exportManagedRun,adoptManagedRun,parseManagedRunBundle} from '../src/services/managedProductionAdoption.js'
 import {resumeInspectedManagedProduction} from '../src/services/managedProductionResume.js'
 import {inspectManagedProduction} from '../src/services/managedProductionReconciliation.js'
@@ -128,12 +131,23 @@ describe('wired managed single-page pilot',()=>{
   await expect(e.operation({action:'claim',taskId:task.id,deviceId:'phone',profileId:'profile',accountId:null})).rejects.toThrow('default')
   expect(e.db.prepare('SELECT * FROM managed_attempts').all()).toHaveLength(0)
  })
- it('imports verified bytes and reuses publication after lost ACK',async()=>{
+ it('retains a lost publication ACK and restores only through the shared recovery ledger',async()=>{
   const e=await setup(),assigned=await e.pilot.start(e.input,'phone','profile');await e.saved(assigned)
   const publish=e.authority.artifacts.publish;let lost=true
   e.authority.artifacts.publish=async op=>{const r=await publish(op);if(lost){lost=false;throw new Error('lost publish ACK')}return r}
   await expect(e.pilot.import(e.input,assigned.task.id)).rejects.toThrow('lost publish ACK')
+  const publishAgain=vi.spyOn(e.authority.artifacts,'publish')
+  await expect(new ManagedCropPilot(e.authority).import(e.input,assigned.task.id)).rejects.toThrow('Use saved crop recovery')
+  expect(publishAgain).not.toHaveBeenCalled()
+  e.env.MANAGED_SAVED_IMPORT_RECOVERY='1'
+  const timeline=await e.authority.timeline(assigned.task.id),artifactId=timeline.task.canonical!.split('/').at(-1)!,saved=await e.authority.artifacts.load(artifactId)
+  const destination=new ManagedArtifactDestination(e.input.destination),destinationId=await savedImportDestinationId(destination)
+  const f={workspaceId:'workspace',taskId:assigned.task.id,attemptId:timeline.attempt!.id,generation:timeline.task.generation,fingerprint:timeline.task.fingerprint,artifactId,sha256:saved.record.sha256}
+  const transport:SavedImportRecoveryTransport={singleAttempt:true,globalEnabled:true,artifacts:e.authority.artifacts,call:async(action,fence,destinationId,details)=>{const r=await e.request('/managed/recovery/saved-import',{schema:SAVED_IMPORT_SCHEMA,action,fence,destinationId,details});const body=await r.json();if(r.status!==200)throw new Error(body.error);return body.result}}
+  await transport.call('control',f,destinationId,{revision:0,enabled:true,paused:false,cancelled:false})
+  await new ManagedSavedImportRecovery(transport).run(f,'original_publication_restore',destination,()=>resolveManagedCropInput(e.input.identity,e.input.spec,e.input.sourceFile),new AbortController().signal)
   const result=await new ManagedCropPilot(e.authority).import(e.input,assigned.task.id)
+  expect(publishAgain).not.toHaveBeenCalled()
   expect(result.task.state).toBe('verified_complete');expect(await readManagedCrop('chapter','page.png')).toMatchObject({taskId:assigned.task.id})
   expect((await e.pilot.start(e.input,'phone','profile')).task.state).toBe('verified_complete')
   expect(e.db.prepare('SELECT * FROM managed_attempts').all()).toHaveLength(1)

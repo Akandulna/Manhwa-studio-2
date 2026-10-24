@@ -9,6 +9,7 @@ export interface RecoveryEpisode {
   actions: { id: string; phase: 'reserved' | 'executing' | 'safe_failure' | 'unknown' | 'verified'; at: number; finishedAt: number | null }[]
 }
 export interface RecoveryInspection {
+  budget?:{used:number;uiUsed:number;nextEligibleAt:number;pending:boolean;exhausted:boolean}
   target: RecoveryTarget; observedAt: number; globalEnabled: boolean; canonical: boolean; sourceMatches: boolean
   localState: 'missing' | 'verified' | 'conflict' | 'unknown'; episode: RecoveryEpisode | null
 }
@@ -45,6 +46,8 @@ function validateInspection(v: RecoveryInspection, target: RecoveryTarget, now: 
   if (!Number.isSafeInteger(v.observedAt) || v.observedAt <= 0 || v.observedAt > now || now - v.observedAt >= 120_000 ||
     ![v.globalEnabled, v.canonical, v.sourceMatches].every(b => typeof b === 'boolean') ||
     !['missing', 'verified', 'conflict', 'unknown'].includes(v.localState)) throw new Error('Inspection is invalid or stale. Inspect again.')
+  const b=v.budget
+  if(b&&(!Number.isSafeInteger(b.used)||b.used<0||b.used>3||b.uiUsed!==0||!Number.isSafeInteger(b.nextEligibleAt)||b.nextEligibleAt<0||typeof b.pending!=='boolean'||b.exhausted!==(b.used>=3)))throw new Error('Invalid shared recovery budget.')
   const e = v.episode
   if (e === null) return
   if (!e || !Number.isSafeInteger(e.revision) || e.revision < 1 ||
@@ -117,8 +120,9 @@ export class SavedCropRecoverySession {
     if (last?.phase === 'verified') return deny('A prior restore is recorded. Inspect the current local files.')
     if (v.localState === 'conflict') return deny('Local files conflict with the saved result. Keep them for review.')
     if (v.localState !== 'missing') return deny('Local file state is unknown. Inspect again.')
-    if ((e?.actions.length ?? 0) >= 3) return deny('The three-attempt recovery limit has been reached.')
-    if (e && this.now() < e.nextEligibleAt) return deny('Recovery is waiting for its next eligible time.')
+    if (v.budget?.pending) return deny('Original recovery action needs reconciliation.')
+    if ((v.budget?.used??e?.actions.length ?? 0) >= 3) return deny('The three-attempt recovery limit has been reached.')
+    if (this.now() < (v.budget?.nextEligibleAt??e?.nextEligibleAt??0)) return deny('Recovery is waiting for its next eligible time.')
     if (action === 'enable' && e?.enabled && !e.paused) return deny('This recovery is already enabled.')
     if (action === 'run' && (!e?.enabled || e.paused)) return deny('Enable this inspected recovery first.')
     if (!this.state.confirmed) return deny('Confirm this exact saved result and destination.')

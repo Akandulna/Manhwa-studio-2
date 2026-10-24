@@ -1,0 +1,126 @@
+{
+  "original": {
+    "id": "original_job",
+    "revision": 1,
+    "seriesId": "series",
+    "config": {
+      "managedCrop": true,
+      "device": "one",
+      "profileId": "profile",
+      "clipper": {
+        "ai": "chatgpt",
+        "flow": "classic",
+        "tabs": 1,
+        "chatGpt": {
+          "mode": null,
+          "model": null,
+          "effort": null
+        }
+      }
+    },
+    "status": "interrupted",
+    "step": "clipping",
+    "message": "Unused handoff disposition intent retained. Reconcile this original decision before choosing another target.",
+    "createdAt": "2026-10-23T00:06:40.000Z",
+    "updatedAt": "2026-10-23T00:06:40.000Z",
+    "command": {
+      "kind": "clipper",
+      "sentAt": "2026-10-23T00:06:40.000Z",
+      "managedTaskIds": [
+        "task:sha256:7887aeaa9de5e38286807d2fe32a9d35c7fca218ea682ed594fd90c5a3a7645c"
+      ],
+      "managedClaims": [
+        {
+          "taskId": "task:sha256:7887aeaa9de5e38286807d2fe32a9d35c7fca218ea682ed594fd90c5a3a7645c",
+          "claimEventId": "event_31",
+          "deviceId": "one",
+          "profileId": "profile"
+        }
+      ]
+    },
+    "pendingHandoff": {
+      "eventId": "production_id_1",
+      "newClaimEventId": "production_id_2",
+      "claimEventId": "event_31",
+      "taskId": "task:sha256:7887aeaa9de5e38286807d2fe32a9d35c7fca218ea682ed594fd90c5a3a7645c",
+      "attemptId": "id_33",
+      "generation": 1,
+      "fingerprint": "5733d593073cebaf324c4fd9b419b8303a6984009857c996b13572fb0f7e3750",
+      "stopCommandId": "id_41",
+      "deviceId": "two",
+      "profileId": "profile",
+      "accountCandidateId": "adopt_one",
+      "createdAt": "2026-10-23T00:06:40.000Z"
+    }
+  },
+  "receipt": {
+    "schema": "recovery-family-disposition/1",
+    "intent": {
+      "schema": "recovery-family-disposition/1",
+      "eventId": "production_id_3",
+      "unit": {
+        "workspaceId": "workspace",
+        "taskId": "task:sha256:7887aeaa9de5e38286807d2fe32a9d35c7fca218ea682ed594fd90c5a3a7645c",
+        "attemptId": "id_33",
+        "generation": 1,
+        "fingerprint": "5733d593073cebaf324c4fd9b419b8303a6984009857c996b13572fb0f7e3750"
+      },
+      "mode": "close_unused",
+      "reference": {
+        "unit": {
+          "workspaceId": "workspace",
+          "taskId": "task:sha256:7887aeaa9de5e38286807d2fe32a9d35c7fca218ea682ed594fd90c5a3a7645c",
+          "attemptId": "id_33",
+          "generation": 1,
+          "fingerprint": "5733d593073cebaf324c4fd9b419b8303a6984009857c996b13572fb0f7e3750"
+        },
+        "ledger": "managed_account_handoff_episodes",
+        "actionId": "production_id_1"
+      },
+      "production": {
+        "jobId": "original_job",
+        "claimEventId": "event_31",
+        "newClaimEventId": "production_id_2",
+        "candidateId": "adopt_one"
+      },
+      "inspectedAt": 1792714000000,
+      "inspectionToken": "df49b4a3e0fe74ee907b684c283618975b700b5c789a6962366b2699cf89afad",
+      "confirmation": "Close only this unused recovery approval; preserve its charge and evidence. Do not resume or resend work."
+    },
+    "root": {
+      "workspaceId": "workspace",
+      "taskId": "task:sha256:7887aeaa9de5e38286807d2fe32a9d35c7fca218ea682ed594fd90c5a3a7645c",
+      "attemptId": "id_33",
+      "generation": 1,
+      "fingerprint": "5733d593073cebaf324c4fd9b419b8303a6984009857c996b13572fb0f7e3750"
+    },
+    "receivedAt": 1792714000000,
+    "state": "applied",
+    "beforeBudget": {
+      "used": 2,
+      "uiUsed": 0,
+      "nextEligibleAt": 0,
+      "pending": true,
+      "exhausted": false
+    },
+    "afterBudget": {
+      "used": 2,
+      "uiUsed": 0,
+      "nextEligibleAt": 1792714030000,
+      "pending": false,
+      "exhausted": false
+    },
+    "closed": {
+      "fromPhase": "prepared",
+      "toPhase": "safe_failure"
+    },
+    "successorClaimBlocked": "production_id_2",
+    "stop": null,
+    "ownershipChanged": false,
+    "executionAllowed": false,
+    "handoffAllowed": false,
+    "resendAllowed": false,
+    "budgetReset": false,
+    "automaticallyResumed": false
+  }
+}

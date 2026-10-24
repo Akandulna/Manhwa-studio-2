@@ -1,3 +1,8 @@
+import {parseProductionCandidateHandoff,type ProductionCandidateHandoff,parseHandoffRecord} from '../../server/src/services/accountHandoffProtocol'
+import {recordReleasedRecoveryLineage} from './recoveryLineage'
+import {recoveryUnitKey} from '../../server/src/services/automationRecoveryPolicy'
+import {parseCorrectionRecord} from '../../server/src/services/correctionRecoveryProtocol'
+import {initRecoveryBudget,assertRecoveryControls,assertRecoveryReservation,sharedRecoveryBudget} from './recoveryBudget'
 import {AccountAuthority,AccountWaiting} from './accountAuthority'
 import type {LocalManagedAttempt} from '../../server/src/services/managedReconnect'
 /** Phase 3 authority foundation. Transport must supply an authenticated principal; no socket-send means execution. */
@@ -14,7 +19,8 @@ import type { ManagedArtifactRecord as Artifact } from '../../server/src/service
 const CAPS=['managed-task/1','attempt-fencing/1','command-journal/1','artifact-publication/1']
 export class TaskAuthority {
   readonly accounts:AccountAuthority
-  constructor(private sql:TaskSql,private transaction:<T>(work:()=>T)=>T,private now=()=>new Date().toISOString(),private uuid=()=>crypto.randomUUID()) {
+  constructor(private sql:TaskSql,private transaction:<T>(work:()=>T)=>T,private now=()=>new Date().toISOString(),private uuid=()=>crypto.randomUUID(),private handoffEnabled=()=>false) {
+    initRecoveryBudget(sql)
     for(const table of ['tasks','attempts','commands','artifacts','enrollment','peers','uploads','recoveries','upload_only_reports','cancelled_submission_reports','cancelled_unknown_reports','claim_stops','coordinators','production_attempts']) sql.exec(`CREATE TABLE IF NOT EXISTS managed_${table} (id TEXT PRIMARY KEY, body TEXT NOT NULL)`)
     sql.exec('CREATE TABLE IF NOT EXISTS managed_artifact_budget (id INTEGER PRIMARY KEY CHECK(id=1), bytes INTEGER NOT NULL, slots INTEGER NOT NULL)')
     sql.exec('CREATE TABLE IF NOT EXISTS managed_reservations (resource TEXT PRIMARY KEY, attempt_id TEXT NOT NULL)')
@@ -171,9 +177,12 @@ export class TaskAuthority {
         if(!enrollment?.capabilities.includes('worker-reconnect/1')||!peer?.capabilities.includes('worker-reconnect/1')||!peer.profileIds.includes(enrollment.profileId)||device===deviceId&&(enrollment.profileId!==profileId||Date.parse(this.now())-Date.parse(peer.receivedAt)>15*60_000))throw new TaskConflict('Both phones need native reconnect support and the target needs a fresh paired handshake')
       }
       if(this.sql.exec('SELECT resource FROM managed_reservations WHERE attempt_id = ? LIMIT 1',attemptId).toArray().length||this.sql.exec("SELECT id FROM managed_artifacts WHERE json_extract(body,'$.taskId') = ? LIMIT 1",taskId).toArray().length||this.get('uploads',taskId))throw new TaskConflict('Retained reservations or output prevent transfer')
+      const sourceUnit={workspaceId:task.workspaceId,taskId:task.id,attemptId:attempt.id,generation:attempt.generation,fingerprint:task.fingerprint}
+      assertRecoveryReservation(this.sql,sourceUnit,eventId,Date.parse(this.now()))
       // Same immutable task/spec, new generation. Old attempt/commands stay historical.
       task.state='queued';task.attemptId=null;this.put('tasks',task.id,task)
       const next=this.allocate(taskId,deviceId,profileId,null)
+      recordReleasedRecoveryLineage(this.sql,sourceUnit,{...sourceUnit,attemptId:next.attempt.id,generation:next.attempt.generation},eventId,stopCommandId,next.command.id,Date.parse(this.now()))
       if(production){
        const claim={action:'claim',taskId,deviceId,profileId,accountId:null}
        this.sql.exec('INSERT INTO managed_events (id,payload,result,at) VALUES (?,?,?,?)',production.newClaimEventId,canonicalJson([actor,claim]),JSON.stringify(next),this.now())
@@ -181,6 +190,45 @@ export class TaskAuthority {
       }
       return next
     },()=>production?this.requireCoordinator(this.task(taskId).workspaceId,production.coordinator):this.requirePilotControl(taskId))
+  }
+  assertAccountHandoffCoordinator(unit:import('../../server/src/services/automationRecoveryPolicy').RecoveryUnit,fence:CoordinatorFence){
+    this.assertWorkspace(unit.taskId,unit.workspaceId);this.requireCoordinator(unit.workspaceId,fence)
+  }
+  assertAccountHandoffScope(unit:import('../../server/src/services/automationRecoveryPolicy').RecoveryUnit,production?:ProductionCandidateHandoff,coordinator?:CoordinatorFence){
+    this.assertWorkspace(unit.taskId,unit.workspaceId)
+    if(!production)this.requirePilotControl(unit.taskId)
+    else {
+      parseProductionCandidateHandoff(production)
+      if(!coordinator)throw new TaskConflict('Current production coordinator required')
+      this.requireCoordinator(unit.workspaceId,coordinator)
+      const registration=this.get<{taskId:string;claimEventId:string}>('production_attempts',unit.attemptId),receipt=this.productionClaim({role:'studio'},unit.taskId,production.claimEventId)
+      if(registration?.taskId!==unit.taskId||registration.claimEventId!==production.claimEventId||receipt.status!=='recorded'||receipt.attemptId!==unit.attemptId||receipt.generation!==unit.generation||receipt.fingerprint!==unit.fingerprint||production.newClaimEventId===production.claimEventId||this.sql.exec('SELECT id FROM managed_events WHERE id = ?',production.newClaimEventId).toArray().length||this.get('claim_stops',production.newClaimEventId))throw new TaskConflict('Exact original production receipt and unused successor claim required')
+    }
+    this.owned({role:'studio'},unit.taskId,unit.attemptId,unit.generation,unit.fingerprint)
+  }
+  allocateAccountHandoff(unit:import('../../server/src/services/automationRecoveryPolicy').RecoveryUnit,actionId:string,context:any,production?:{identity:ProductionCandidateHandoff;coordinator:CoordinatorFence}) {
+    const actor={role:'studio'} as const;this.assertAccountHandoffScope(unit,production?.identity,production?.coordinator)
+    const {task,attempt}=this.owned(actor,unit.taskId,unit.attemptId,unit.generation,unit.fingerprint)
+    const row=this.sql.exec<{body:string}>('SELECT body FROM managed_account_handoff_episodes WHERE id = ?',recoveryUnitKey(unit)).toArray()[0],r=row?parseHandoffRecord(JSON.parse(row.body)):null,a=r?.actions.find(a=>a.id===actionId)
+    if(a?.production&&(!production||canonicalJson(a.production)!==canonicalJson(production.identity))||!a?.production&&production)throw new TaskConflict('Original handoff production mode mismatch')
+    if(!a||a.phase!=='executing'||!r?.enabled||r.paused||r.cancelled||canonicalJson(a.candidate.context)!==canonicalJson(context)||Date.parse(this.now())>=a.expiresAt)throw new TaskConflict('Original executing handoff transaction required')
+    const stop=this.get<any>('commands',attempt.activeCommandId)
+    if(task.state!=='paused'||task.canonical||attempt.phase!=='stop_confirmed'||attempt.submission!=='unsent'||attempt.checkpointRef||!attempt.accountSelection||!attempt.accountId||attempt.accountId===context.accountId||stop?.action!=='stop'||stop.phase!=='stop_confirmed'||stop.taskId!==task.id||stop.attemptId!==attempt.id||stop.generation!==attempt.generation||stop.fingerprint!==task.fingerprint)throw new TaskConflict('Exact independent account and confirmed-unsent source release required')
+    if(this.sql.exec('SELECT resource FROM managed_reservations WHERE attempt_id = ? LIMIT 1',attempt.id).toArray().length||this.sql.exec("SELECT id FROM managed_artifacts WHERE json_extract(body,'$.taskId') = ? LIMIT 1",task.id).toArray().length||this.get('uploads',task.id))throw new TaskConflict('Original output or reservation retained')
+    assertRecoveryControls(this.sql,unit)
+    task.state='queued';task.attemptId=null;this.put('tasks',task.id,task)
+    const next=this.allocate(task.id,context.target.deviceId,context.target.profileId,context.accountId)
+    const handoff={schema:'retained-candidate-command/1',actionId,candidateId:a.candidate.id,unit,context}
+    const command={...next.command,handoff};this.put('commands',command.id,command)
+    recordReleasedRecoveryLineage(this.sql,unit,{...unit,attemptId:next.attempt.id,generation:next.attempt.generation},actionId,stop.id,command.id,Date.parse(this.now()))
+    const result={...next,command}
+    if(production){
+      const {newClaimEventId}=production.identity
+      const claim={action:'claim',taskId:task.id,deviceId:context.target.deviceId,profileId:context.target.profileId,accountId:context.accountId}
+      this.sql.exec('INSERT INTO managed_events (id,payload,result,at) VALUES (?,?,?,?)',newClaimEventId,canonicalJson([actor,claim]),JSON.stringify(result),this.now())
+      this.put('production_attempts',next.attempt.id,{taskId:task.id,claimEventId:newClaimEventId})
+    }
+    return result
   }
   private allocate(taskId:string,deviceId:string,profileId:string,accountId:string|null) {
       const task=this.task(taskId),enrolled=this.get<{profileId:string;capabilities:string[]}>('enrollment',deviceId)
@@ -357,13 +405,15 @@ export class TaskAuthority {
       return {task,attempt,cancelledUnknownReport:report}
     })
   }
-  checkpoint(actor:TaskPrincipal,eventId:string,taskId:string,attemptId:string,generation:number,fingerprint:string,phase:'accepted'|'started'|'submission_intent'|'submitted'|'result_saved'|'stop_confirmed',checkpointRef:string|null,commandId:string) {
+  checkpoint(actor:TaskPrincipal,eventId:string,taskId:string,attemptId:string,generation:number,fingerprint:string,phase:'accepted'|'started'|'submission_intent'|'submitted'|'result_saved'|'stop_confirmed',checkpointRef:string|null,commandId:string,correction=false) {
     if(actor.role!=='phone')throw new TaskConflict('Authenticated worker required')
     if(checkpointRef!==null && !/^checkpoint\/[A-Za-z0-9_-]{1,128}$/.test(checkpointRef))throw new TaskConflict('Opaque checkpoint reference required')
     return this.once(actor,eventId,{action:'checkpoint',taskId,attemptId,generation,fingerprint,phase,checkpointRef,commandId},()=>{
       const {task,attempt}=this.owned(actor,taskId,attemptId,generation,fingerprint)
       const command=this.get<{taskId:string;attemptId:string;generation:number;fingerprint:string;action:string;phase:string}>('commands',commandId)
       if(!command||commandId!==attempt.activeCommandId||command.taskId!==taskId||command.attemptId!==attemptId||command.generation!==generation||command.fingerprint!==fingerprint||(phase==='stop_confirmed'&&command.action!=='stop'))throw new TaskConflict('Checkpoint must acknowledge the current exact command')
+      if(['started','submission_intent'].includes(phase))this.assertHandoffExecution(task,attempt)
+      if(phase==='result_saved'&&!correction&&this.correctionRecord(task,attempt))throw new TaskConflict('Use the original budgeted correction checkpoint; ordinary completion cannot bypass enrollment')
       const allowed:Record<string,string[]>={assigned:['accepted'],accepted:['started','stop_confirmed'],started:['submission_intent','stop_confirmed'],submission_intent:['submitted','result_saved','stop_confirmed'],submitted:['result_saved','stop_confirmed'],result_saved:['stop_confirmed'],stop_requested:['stop_confirmed']}
       if(!allowed[attempt.phase]?.includes(phase))throw new TaskConflict('Invalid checkpoint transition; do not replay a submission')
       if(phase!=='stop_confirmed'&&(task.state==='paused'||task.state==='cancelled'||Date.parse(attempt.leaseExpiresAt)<=Date.parse(this.now()))) {
@@ -391,6 +441,8 @@ export class TaskAuthority {
     if(actor.role!=='phone'||!/^checkpoint\/[A-Za-z0-9_-]{1,128}$/.test(checkpointRef))throw new TaskConflict('Authenticated saved checkpoint required')
     return this.once(actor,eventId,{action:'recover_saved',taskId,attemptId,generation,fingerprint,checkpointRef,commandId},()=>{
       const {task,attempt}=this.owned(actor,taskId,attemptId,generation,fingerprint)
+      const correction=this.correctionRecord(task,attempt),corrected=correction?.actions.at(-1)
+      if(correction&&(corrected?.phase!=='verified'||corrected.checkpointRef!==checkpointRef))throw new TaskConflict('Reconcile the original budgeted correction; expired saved recovery cannot adopt another output')
       const command=this.get<{action:string;taskId:string;attemptId:string;generation:number;fingerprint:string}>('commands',commandId)
       if(!command||commandId!==attempt.activeCommandId||command.action!=='start'||command.taskId!==taskId||command.attemptId!==attemptId||command.generation!==generation||command.fingerprint!==fingerprint)throw new TaskConflict('Recovery requires the original current start command')
       if(!['running','uncertain'].includes(task.state)||task.canonical||Date.parse(attempt.leaseExpiresAt)>Date.parse(this.now())||!['submission_intent','submitted','result_saved'].includes(attempt.phase)||!['unknown','submitted','saved'].includes(attempt.submission))throw new TaskConflict('Only an expired current saved outcome can be reconciled')
@@ -405,10 +457,23 @@ export class TaskAuthority {
       return {task,attempt,permitted:true,recoveryOnly:true}
     })
   }
+  private assertHandoffExecution(task:CropTask,attempt:CropAttempt) {
+    const command=this.get<any>('commands',attempt.activeCommandId),h=command?.handoff;if(!h)return
+    const row=this.sql.exec<{body:string}>('SELECT body FROM managed_account_handoff_episodes WHERE id = ?',recoveryUnitKey(h.unit)).toArray()[0],r=row?parseHandoffRecord(JSON.parse(row.body)):null,a=r?.actions.find(a=>a.id===h.actionId),c=h.context
+    if(!this.handoffEnabled()||!r?.enabled||r.paused||r.cancelled||a?.phase!=='verified'||a.result.attempt.id!==attempt.id||a.result.command.id!==command.id||canonicalJson(a.result.command.handoff)!==canonicalJson(h)||attempt.accountId!==c.accountId)throw new TaskConflict('Exact account handoff execution is off or held')
+    this.accounts.assertRetainedHandoff(task,attempt)
+    assertRecoveryControls(this.sql,h.unit)
+    if(sharedRecoveryBudget(this.sql,h.unit).pending)throw new TaskConflict('Another original recovery outcome remains pending')
+    const review=this.sql.exec<{body:string}>('SELECT body FROM managed_target_context_reviews WHERE id = ?',c.reviewId).toArray()[0],policy=this.sql.exec<{body:string}>("SELECT body FROM managed_account_policies WHERE id = 'crop_json'").toArray()[0]
+    if(!review||JSON.parse(review.body).withdrawnAt!==null||!policy||canonicalJson(JSON.parse(policy.body))!==canonicalJson(attempt.accountSelection?.policy)||!attempt.accountSelection?.policy.contextPortable)throw new TaskConflict('Original requirements or pinned account policy changed')
+    const latest=this.sql.exec<{id:string}>('SELECT id FROM managed_target_context_reviews WHERE target_key = (SELECT target_key FROM managed_target_context_reviews WHERE id = ?) ORDER BY rowid DESC LIMIT 1',c.reviewId).toArray()[0]
+    if(latest?.id!==c.reviewId)throw new TaskConflict('Original context requirements were superseded')
+  }
   renew(actor:TaskPrincipal,eventId:string,taskId:string,attemptId:string,generation:number,fingerprint:string) {
     if(actor.role!=='phone')throw new TaskConflict('Authenticated worker required')
     return this.once(actor,eventId,{action:'renew',taskId,attemptId,generation,fingerprint},()=>{
       const {task,attempt}=this.owned(actor,taskId,attemptId,generation,fingerprint)
+      this.assertHandoffExecution(task,attempt)
       if(['paused','cancelled','superseded','verified_complete','uncertain'].includes(task.state)||Date.parse(attempt.leaseExpiresAt)<=Date.parse(this.now())) {
         if(!['paused','cancelled','superseded','verified_complete'].includes(task.state))task.state='uncertain'
         this.put('tasks',task.id,task);return {task,attempt,permitted:false}
@@ -462,10 +527,22 @@ export class TaskAuthority {
       this.put('commands',command.id,command);return {task,command}
   }
   /** Allocate one immutable upload slot per task before any asynchronous object writes. */
+  private correctionRecord(task:CropTask,attempt:CropAttempt) {
+    const key=recoveryUnitKey({workspaceId:task.workspaceId,taskId:task.id,attemptId:attempt.id,generation:attempt.generation,fingerprint:task.fingerprint})
+    const row=this.sql.exec<{body:string}>('SELECT body FROM managed_correction_recovery_episodes WHERE id = ?',key).toArray()[0]
+    return row?parseCorrectionRecord(JSON.parse(row.body)):null
+  }
+  private correctionArtifact(task:CropTask,attempt:CropAttempt,hash:string) {
+    const r=this.correctionRecord(task,attempt);if(!r)return
+    const a=r.actions.at(-1)
+    if(!r.enabled||r.paused||r.cancelled||a?.phase!=='verified'||a.checkpointRef!==attempt.checkpointRef||a.artifactHash!==hash)throw new TaskConflict('Exact approved correction artifact and active controls required')
+    assertRecoveryControls(this.sql,r.fence.unit)
+  }
   reserveArtifact(actor:TaskPrincipal,taskId:string,attemptId:string,generation:number,fingerprint:string,artifactId:string,ref:string,sha256:string,bytes:number) {
     if(actor.role!=='phone'||!id(artifactId)||!digest(sha256)||!Number.isSafeInteger(bytes)||bytes<1||bytes>1_000_000)throw new TaskConflict('Invalid immutable upload slot')
     return this.transaction(()=>{
       const {task,attempt}=this.owned(actor,taskId,attemptId,generation,fingerprint)
+      this.correctionArtifact(task,attempt,sha256)
       if(attempt.submission!=='saved'||!attempt.checkpointRef||ref!==`managed/${task.workspaceId}/${task.id.slice(12)}/${attemptId}/${artifactId}`)throw new TaskConflict('Save a durable result before allocating its upload')
       const slot={taskId,attemptId,generation,fingerprint,artifactId,ref,sha256,bytes}
       const old=this.get<unknown>('uploads',taskId)
@@ -481,6 +558,7 @@ export class TaskAuthority {
     return this.once(actor,eventId,{action:'stage',taskId,attemptId,generation,fingerprint,artifactId,ref,contentHash},()=>{
       const {task,attempt}=this.owned(actor,taskId,attemptId,generation,fingerprint)
       if(attempt.submission!=='saved'||!attempt.checkpointRef)throw new TaskConflict('Save a durable checkpoint before staging')
+      this.correctionArtifact(task,attempt,contentHash)
       const expected=`managed/${task.workspaceId}/${task.id.slice(12)}/${attemptId}/${artifactId}`
       if(ref!==expected)throw new TaskConflict('Immutable attempt-scoped artifact reference required')
       const artifact:Artifact={id:artifactId,taskId,attemptId,generation,fingerprint,ref,sha256:contentHash,validated:false,validationRef:null}
@@ -493,6 +571,7 @@ export class TaskAuthority {
     if(!/^validation\/[A-Za-z0-9_-]{1,128}$/.test(validationRef))throw new TaskConflict('Trusted destination validation receipt required')
     return this.once(actor,eventId,{action:recovered?'publish_recovered':'publish',taskId,attemptId,generation,fingerprint,artifactId,contentHash,validationRef},()=>{
       const {task,attempt}=this.owned(actor,taskId,attemptId,generation,fingerprint),artifact=this.get<Artifact>('artifacts',artifactId)
+      this.correctionArtifact(task,attempt,contentHash)
       const recovery=this.get<{commandId:string;checkpointRef:string;taskId:string;generation:number;fingerprint:string}>('recoveries',attemptId)
       const validRecovery=recovered&&task.state==='uncertain'&&Date.parse(attempt.leaseExpiresAt)<=Date.parse(this.now())&&recovery?.commandId===attempt.activeCommandId&&recovery.checkpointRef===attempt.checkpointRef&&recovery.taskId===taskId&&recovery.generation===generation&&recovery.fingerprint===fingerprint
       if((recovered?!validRecovery:(['paused','cancelled','superseded','uncertain','verified_complete'].includes(task.state)||Date.parse(attempt.leaseExpiresAt)<=Date.parse(this.now())))||attempt.phase!=='result_saved'||!artifact||artifact.taskId!==taskId||artifact.attemptId!==attemptId||artifact.generation!==generation||artifact.fingerprint!==fingerprint||artifact.sha256!==contentHash)throw new TaskConflict('Publication fence rejected stale, unvalidated or cancelled work')

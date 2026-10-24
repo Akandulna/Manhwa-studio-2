@@ -1,3 +1,6 @@
+import { deliverSnapshot, snapshotDigest } from './snapshotDelivery.js'
+import { r2Snapshot, snapshotJournal } from './snapshotDestinations.js'
+import { relayFetch, relayRetryDelay } from './relayTraffic.js'
 import {managedCropBindingCount} from './managedCropProjection.js'
 import {onManagedCropProjectionChange} from './managedCropEvents.js'
 import fs from 'fs/promises'
@@ -19,7 +22,7 @@ import { createClient, getR2Config } from './r2Service.js'
 import { libraryDeviceId } from './librarySync.js'
 import { libraryControl } from './libraryControls.js'
 import { readPageReplacement, type PageReplacement } from './chapterPageReplacement.js'
-import { buildProcessSeries, emptyStages, mergeStage, PROCESS_STAGES, stage,
+import { buildProcessSeries, emptyStages, mergeStage, PROCESS_STAGES, stage, processPublishDelay,
   type ChapterStages, type ProcessSnapshot } from './seriesProcessModel.js'
 
 type RemoteChapter = { stages?: Partial<ChapterStages>; pageRevision?: string }
@@ -36,6 +39,8 @@ const cache = new Map<string, { hash: string; generation: number; stages: Chapte
 let publishTimer: NodeJS.Timeout | null = null
 let publishing = false
 let publishedHash = ''
+/** When the last publication began: the relay receives process snapshots at most every PROCESS_PUBLISH_INTERVAL_MS. */
+let publishStartedAt = 0
 
 const root = () => path.resolve(process.env.DOWNLOAD_ROOT || './downloads')
 const content = async (file: string) => (await fs.stat(file).catch(() => null))?.size ?? 0
@@ -208,32 +213,32 @@ function schedulePublish(): void {
   publishTimer = setTimeout(() => {
     publishTimer = null
     publishing = true
+    publishStartedAt = Date.now()
     void (async () => {
       if (!snapshot) return
       const outgoing = snapshot
       const hash = createHash('sha256').update(JSON.stringify(outgoing.series)).digest('hex')
-      if (hash === publishedHash) return
+      // Destination acknowledgments survive restart; the local hash is only a scheduling hint.
       const config = getR2Config()
-      if (config) {
-        const client = createClient(config)
-        try { await client.send(new PutObjectCommand({ Bucket: config.bucket, Key: `${config.prefix}progress/${outgoing.deviceId}.json`, Body: JSON.stringify(outgoing), ContentType: 'application/json' })) }
-        finally { client.destroy() }
-      }
+      const targets=[]
+      if(config)targets.push(r2Snapshot('r2:'+snapshotDigest(config),()=>createClient(config),config.bucket,`${config.prefix}progress/${outgoing.deviceId}.json`))
       const url = process.env.RELAY_URL?.trim().replace(/\/+$/, '')
-      if (url && process.env.RELAY_TOKEN) {
-        const response = await fetch(`${url}/receipt/process?device=${outgoing.deviceId}`, { method: 'POST', headers: { Authorization: `Bearer ${process.env.RELAY_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify(outgoing), signal: AbortSignal.timeout(30_000) })
-        if (!response.ok) throw new Error(`Process relay returned ${response.status}`)
-      }
+      if(url&&process.env.RELAY_TOKEN)targets.push({id:'relay:'+snapshotDigest({url,token:process.env.RELAY_TOKEN}),send:async(body:string)=>{
+        const response=await relayFetch(`${url}/receipt/process?device=${outgoing.deviceId}`,{method:'POST',headers:{Authorization:`Bearer ${process.env.RELAY_TOKEN}`,'Content-Type':'application/json'},body,signal:AbortSignal.timeout(30_000)})
+        await response.body?.cancel()
+        if(!response.ok)throw new Error(`Process relay returned ${response.status}`)
+      }})
+      await deliverSnapshot(snapshotJournal(prisma),'snapshotDelivery/process',hash,outgoing,targets)
       publishedHash = hash
-    })().catch(error => {
+    })().catch(async error => {
       console.error('[series-process] publication will retry:', error)
-      publishTimer = setTimeout(() => { publishTimer = null; schedulePublish() }, 30_000)
+      publishTimer = setTimeout(() => { publishTimer = null; schedulePublish() }, await relayRetryDelay().catch(()=>300_000))
       publishTimer.unref()
     }).finally(() => {
       publishing = false
       if (snapshot && createHash('sha256').update(JSON.stringify(snapshot.series)).digest('hex') !== publishedHash) schedulePublish()
     })
-  }, 600)
+  }, processPublishDelay(publishStartedAt, Date.now()))
   publishTimer.unref()
 }
 

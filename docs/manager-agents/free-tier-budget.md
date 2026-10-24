@@ -1,19 +1,29 @@
 # Relay free-tier budget
 
+**24 October continuation update:** Read the [completed agent-reporting and Cloudflare usage scope](../../../MAPI/Sleeper-cell-main/docs/agent-reporting-continuation-update.md) before continuing overlapping work. Source implementation and local validation are complete; rollout, installed acceptance and measured savings remain pending. Reconcile older pending items with that update; reuse the delivered implementation rather than starting it again. Other phase gates remain unchanged.
+
 19 October 2026. Applies to `sleeper-cell-relay` and its single `main` SQLite Durable Object. Production Worker version `2b02e41b-d1ee-4d9c-b7a9-6c191168ebac`; prior compatible version `64a8e59e-99f8-457d-8c55-749236aef14d`.
 
 | Dimension | Cloudflare Free allowance per UTC day | Relay protection |
 |---|---:|---|
-| Worker requests | 100,000 | Reduce producer traffic; 20,000 admitted relay operations shared with DO events. This is **not** a cap on ingress invocations. |
-| Durable Object requests | 100,000 | 20,000 admitted HTTP/WebSocket-handler/alarm/close operations. Pings use hibernating auto-response. Rejected calls and handshake attempts still consume platform requests. |
-| SQL row writes | 100,000 | 60,000 local counter ceiling, with 10,000 reserved before each query; work normally pauses around 50,000 measured writes. |
-| SQL row reads | 5,000,000 | 3,000,000 local counter ceiling, with 10,000 reserved before each query. |
+| Worker requests | 100,000 | Reduce producer traffic; 100,000 admitted relay operations shared with DO events. This is **not** a cap on ingress invocations. |
+| Durable Object requests | 100,000 | 100,000 admitted HTTP/WebSocket-handler/alarm/close operations. Pings use hibernating auto-response. Rejected calls and handshake attempts still consume platform requests. |
+| SQL row writes | 100,000 | 100,000 local counter ceiling, with 10,000 reserved before each query; work pauses around 90,000 measured writes, before Cloudflare would fail operations. |
+| SQL row reads | 5,000,000 | 5,000,000 local counter ceiling, with 10,000 reserved before each query. |
 
 Sources: [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/), [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/), [SQL cursor billing metrics](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/#returned-cursor-behavior).
 
 ## Behavior
 
-- Counters live in one SQLite integer-primary-key row, survive process restarts and deployments, and reset at **00:00 UTC / 05:30 IST**. Existing report/receipt data is retained at rollover. SQL results are fully consumed before their `rowsRead`/`rowsWritten` metrics are accumulated; index work is included by the platform cursor. One checkpoint per admitted event includes conservative bookkeeping and explicit alarm-write accounting. Rolled-back report work still counts locally.
+**25 October 2026, deployed 00:44 IST (19:14 UTC 24 October) as relay `af54f66b-1f89-4b2f-9c49-64a772f4034b`** (previous `5ca19495-8e71-49d3-a0c8-2491b3293cb0`; this deployment also carried the then-undeployed Phase 6 relay source). Studio restart and the Android GitHub Actions release are pending. Local ceilings now equal the Cloudflare Free daily allowances above (previously 20,000 operations / 3,000,000 reads / 60,000 writes, which paused the relay at about 50,000 writes on 20 and 24 October). The 10,000-row reserve keeps the pause graceful. Same change:
+
+- The manager projection is stored one row per observation, incident and chapter revision (`manager_observation_rows`, `manager_incident_rows`, `manager_revision_rows`). A report reads and writes only the entries it names, and only changed entries are written. Local Wrangler measurement on a 15,000-observation store: updating an existing observation fell from 145 reads / 76 writes to 9 / 9; a 16-report batch from 2,272 reads to 114.
+- The one-time move from the serialized chunks copies 2,000 entries per fact report (about 4,000 row writes each; about 30,000 in total for 15,000 entries), with progress committed per slice. Uncopied entries are read from the chunks meanwhile. The chunks are never written again and are kept for rollback; a rolled-back relay sees the state as it was at the move.
+- The usage row is saved two seconds after the last unsaved operation (a pending timer prevents hibernation first), at once after 20 unsaved operations, and on every operation near a limit. A crash inside that window can lose at most those seconds of counts.
+- `GET /usage` adds `rows`: rows read/written per signal (`manager_fact`, `manager_health`, `http_ws`, `alarm`, `checkpoint`, …), each manager event in a batch counted separately.
+- Studio publishes its process snapshot at most every 30 seconds while it keeps changing (first change after a quiet period: 600 ms). Android sends each unprompted receipt kind at most every 30 seconds, with one queued worker per kind that builds the latest receipt when it runs; answers to requests are not paced.
+
+- Counters live in one SQLite integer-primary-key row, survive process restarts and deployments, and reset at **00:00 UTC / 05:30 IST**. Existing report/receipt data is retained at rollover. SQL results are fully consumed before their `rowsRead`/`rowsWritten` metrics are accumulated; index work is included by the platform cursor. Checkpoints include conservative bookkeeping and explicit alarm-write accounting. Rolled-back report work still counts locally.
 - An exhausted budget returns **HTTP 429 + Retry-After** until the next UTC day. Reporting outboxes retain their immutable events. No new report is acknowledged as accepted merely because the budget is exhausted. Rejected retries do not continually write the budget row. One alarm is scheduled at reset instead of continuing minute-by-minute writes while paused.
 - Relay commands also pause at exhaustion; the budget does not cancel ongoing phone work. Local phone controls remain available. This is deliberate reduced availability to preserve free-tier headroom.
 - Studio health-only reports are spaced five minutes apart; changed facts are immediate and retain original observation times. Reporter health becomes last-known after fifteen minutes. Studio persists the manager-delivery pause across restarts.

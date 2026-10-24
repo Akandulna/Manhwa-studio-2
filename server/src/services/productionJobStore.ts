@@ -1,3 +1,4 @@
+import {validDispositionPreparation,validDispositionCompletion} from './productionRecoveryDisposition.js'
 import {validHandoffReplacement} from './managedProductionHandoff.js'
 import {randomUUID} from 'node:crypto'
 import {productionDevices,type ProductionJob} from './productionAutomationModel.js'
@@ -74,13 +75,17 @@ export class ProductionJobStore {
    if(expected?(!old||old.id!==expected.id||revision(old)!==expected.revision):!!old)throw new ProductionOwnershipConflict('Production job was replaced or changed; this process cannot overwrite it')
    if(!Number.isSafeInteger(snapshot.revision)||snapshot.revision!==(expected?.revision??0)+1)throw new ProductionOwnershipConflict('Exact next production revision required')
    if(old?.id===snapshot.id&&(JSON.stringify(old.config)!==JSON.stringify(snapshot.config)||old.status!=='running'&&old.status!==snapshot.status&&!(old.config.managedCrop&&['failed','interrupted'].includes(old.status)&&snapshot.status==='cancelled')))throw new ProductionOwnershipConflict('A retained job cannot change configuration or reopen after stopping')
+   if(old&&JSON.stringify(old.portableFamilyReceipts)!==JSON.stringify(snapshot.portableFamilyReceipts))throw new ProductionOwnershipConflict('Imported family receipt history must remain immutable')
+   const disposition=!!old&&validDispositionCompletion(old,snapshot),preparing=!!old&&validDispositionPreparation(old,snapshot)
+   if(old&&JSON.stringify(old.pendingRecoveryDisposition)!==JSON.stringify(snapshot.pendingRecoveryDisposition)&&!disposition&&!preparing)throw new ProductionOwnershipConflict('Pending recovery disposition is immutable until its original receipt is applied')
+   if(old&&JSON.stringify(old.recoveryDispositionHistory)!==JSON.stringify(snapshot.recoveryDispositionHistory)&&!disposition)throw new ProductionOwnershipConflict('Recovery disposition history must remain immutable')
    const handoff=old?.status!=='cancelled'&&old?.pendingHandoff&&old.id!==snapshot.id&&validHandoffReplacement(old,snapshot)
    if(old?.id!==snapshot.id&&old?.config.managedCrop&&['failed','interrupted','cancelled'].includes(old.status)) {
     const approval=snapshot.resumedFrom
     if(!handoff&&(old.status==='cancelled'||!approval||approval.jobId!==old.id||approval.revision!==revision(old)||!(/^[a-f0-9]{64}$/).test(approval.scopeDigest)||!Number.isFinite(Date.parse(approval.checkedAt))||!Array.isArray(approval.preparedTaskIds)||approval.preparedTaskIds.length>1000||new Set(approval.preparedTaskIds).size!==approval.preparedTaskIds.length||approval.preparedTaskIds.some(id=>!/^task:sha256:[a-f0-9]{64}$/.test(id))||JSON.stringify(snapshot.config)!==JSON.stringify(old.config)||JSON.stringify(snapshot.command)!==JSON.stringify(old.command)))throw new ProductionOwnershipConflict('Explicit inspected resume must retain the exact saved configuration and claim receipts')
    }
    if(old&&JSON.stringify(old.adoptedFrom)!==JSON.stringify(snapshot.adoptedFrom))throw new ProductionOwnershipConflict('The original adoption receipt must remain immutable')
-   if(old?.pendingHandoff&&!handoff&&JSON.stringify(old.pendingHandoff)!==JSON.stringify(snapshot.pendingHandoff))throw new ProductionOwnershipConflict('Pending handoff cannot change before reconciliation')
+   if(old?.pendingHandoff&&!handoff&&!disposition&&JSON.stringify(old.pendingHandoff)!==JSON.stringify(snapshot.pendingHandoff))throw new ProductionOwnershipConflict('Pending handoff cannot change before reconciliation')
    if(old&&!handoff&&JSON.stringify(old.handoffHistory)!==JSON.stringify(snapshot.handoffHistory))throw new ProductionOwnershipConflict('Handoff history must remain immutable')
    if(old?.id===snapshot.id&&JSON.stringify(old.resumedFrom)!==JSON.stringify(snapshot.resumedFrom))throw new ProductionOwnershipConflict('The persisted resume decision is immutable')
    if(old?.id!==snapshot.id) {

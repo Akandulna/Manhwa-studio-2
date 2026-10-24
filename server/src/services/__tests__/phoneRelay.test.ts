@@ -65,6 +65,12 @@ Object.assign(process.env, {
   R2_ACCOUNT_ID: 'a', R2_ACCESS_KEY_ID: 'k', R2_SECRET_ACCESS_KEY: 's', R2_BUCKET: 'b',
   RELAY_URL: `http://localhost:${(relay.address() as AddressInfo).port}/`, RELAY_TOKEN: 't0ken'
 })
+const {configureRelayTraffic}=await import('../relayTraffic.js')
+const trafficSettings=new Map<string,string>()
+configureRelayTraffic({setting:{
+  findUnique:async({where}:any)=>trafficSettings.has(where.key)?{value:trafficSettings.get(where.key)}:null,
+  upsert:async({where,create,update}:any)=>{const value=trafficSettings.has(where.key)?update.value??trafficSettings.get(where.key):create.value;trafficSettings.set(where.key,value);return {key:where.key,value}}
+}} as never)
 const { startPhoneRelay, relayStatus, relayReceipts } = await import('../phoneRelay.js')
 const { getPhoneScripts, getPhoneCrops, getPhoneOverview, requestPhoneUpdate, sendAutomationCommand } = await import('../r2Service.js')
 

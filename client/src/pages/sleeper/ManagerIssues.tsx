@@ -1,3 +1,4 @@
+import RetainedRecoveryControls from '@/components/recovery/RetainedRecoveryControls'
 import { useState } from 'react'
 import WebsiteUiStatus from './WebsiteUiStatus'
 import { Link } from 'react-router-dom'
@@ -132,6 +133,7 @@ export default function ManagerIssues() {
         </div>
         <Button variant="outline" onClick={() => void reload()}>Refresh view</Button>
       </div>
+      <RetainedRecoveryControls />
       {(error || data?.error || actionError) && (
         <p role="alert" className="rounded border border-destructive p-3 text-sm">{error || data?.error || actionError}</p>
       )}

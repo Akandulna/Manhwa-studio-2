@@ -1,8 +1,22 @@
 # Phase 4 — Multi-device coordination and reconnect recovery
 
-Started 21 October 2026. **Read-only reconnect foundation implemented and deployed;
-native reconnect and gated single-page pilot transfer are implemented; scoped installed two-phone pilot checks passed, while full Phase 4 exit remains open.** This is not Phase 4 exit
-acceptance. Both installed phones have completed the scoped pilot described below.
+**Current status: complete for the managed two-phone crop-page pilot.** The
+[22 October sign-off](../../../MAPI/Sleeper-cell-main/docs/managed-phase4-acceptance.md)
+supersedes the open-exit statements in the historical milestones below. It records
+installed reconnect, handoff, saved-output recovery, unknown-outcome disposition,
+healthy-worker continuation and final preservation evidence.
+
+The subsequent Chapter 002 production pilot also completed reviewed cuts and a
+corrected script/audio/alignment/timeline-to-MP4 journey. See its
+[production record](../../../MAPI/Sleeper-cell-main/docs/managed-chapter-002-audio-status.md).
+That journey used existing narration/voiceover/Editor paths after reconciled
+unpairing; it does not expand managed task ownership beyond crop-page execution.
+Phase 5 is the next implementation phase. Eight installed phones, exhaustive fault
+interleavings and all-module managed ownership are not certified by this sign-off.
+
+## Historical implementation milestones
+
+The following sections preserve their original evidence and limitations.
 
 `POST /managed/reconnect` accepts a strictly bounded current-workspace inventory of
 up to eight local attempts from a device-authenticated worker. It separates current

@@ -67,3 +67,12 @@ export function buildProcessSeries(series: { id: string; rootFolder: string; tit
   return { seriesId: series.id, folder: series.rootFolder, title: series.title, completedParts, completedThrough,
     parts, stages: counts(chapters, parts.reduce((n, p) => n + p.expected, 0)) }
 }
+
+/** Progress changes settle for this long before a publication; while changes keep coming, one goes out at most this often. */
+export const PROCESS_PUBLISH_DEBOUNCE_MS = 600
+export const PROCESS_PUBLISH_INTERVAL_MS = 30_000
+/** The wait before the next relay/R2 publication: the debounce when quiet, else until the interval since the last one ends. */
+export function processPublishDelay(lastStartedAt: number, now: number): number {
+  if (!lastStartedAt || now < lastStartedAt) return PROCESS_PUBLISH_DEBOUNCE_MS
+  return Math.max(PROCESS_PUBLISH_DEBOUNCE_MS, lastStartedAt + PROCESS_PUBLISH_INTERVAL_MS - now)
+}

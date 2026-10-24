@@ -113,6 +113,19 @@ export class ManagedArtifactDestination {
   if('validation/'+await artifactHash(receipt)!==record.validationRef||!Buffer.from(receipt).equals(Buffer.from(this.receipt(snapshot))))throw new TaskConflict('Managed destination receipt mismatch')
   return snapshot
  }
+ /** Read-only recovery preflight; compatible partial files can be completed, conflicts are retained. */
+ async inspectProjection(snapshot:ManagedArtifactSnapshot):Promise<'missing'|'verified'|'conflict'> {
+  try {
+   const local=await this.readPublished(snapshot.task)
+   if(local)return local.record.id===snapshot.record.id&&local.record.sha256===snapshot.record.sha256&&local.attempt.id===snapshot.attempt.id?'verified':'conflict'
+   const dirs=[this.root,path.join(this.root,snapshot.task.id.slice(12)),path.join(this.root,snapshot.task.id.slice(12),snapshot.attempt.id),path.join(this.root,snapshot.task.id.slice(12),snapshot.attempt.id,snapshot.record.id)]
+   for(const dir of dirs){try{const stat=await fs.lstat(dir);if(!stat.isDirectory()||stat.isSymbolicLink())return 'conflict'}catch(error:any){if(error.code==='ENOENT')return 'missing';throw error}}
+   for(const [name,expected] of [['artifact.json',snapshot.bytes],['validation.json',this.receipt(snapshot)]] as const){
+    try{const bytes=await this.readFile(path.join(dirs[3],name),1_000_000);if(!Buffer.from(bytes).equals(Buffer.from(expected)))return 'conflict'}catch(error:any){if(error.code!=='ENOENT')throw error}
+   }
+   return 'missing'
+  }catch{return 'conflict'}
+ }
  async stage(snapshot:ManagedArtifactSnapshot):Promise<{reference:string;path:string;verify:()=>Promise<void>}> {
   const {record,task,attempt,bytes}=snapshot
   if(record.taskId!==task.id||record.attemptId!==attempt.id||record.generation!==attempt.generation||record.fingerprint!==task.fingerprint||record.ref!==artifactRef(task,attempt.id,record.id)||await artifactHash(bytes)!==record.sha256)throw new TaskConflict('Destination artifact fence or checksum mismatch')

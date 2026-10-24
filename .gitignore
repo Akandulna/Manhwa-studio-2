@@ -14,6 +14,7 @@ downloads/
 
 # Private immutable managed-pilot output
 /server/private/managed-crops/
+/server/private/progress-resets/
 
 # Environment files (keep .env.example)
 .env

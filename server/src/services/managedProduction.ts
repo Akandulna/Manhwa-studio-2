@@ -11,6 +11,7 @@ export interface ManagedProductionDependencies {
  inputs:()=>Promise<PilotInput[]>
  report:(message:string,taskId:string|null,claim?:ManagedProductionClaim)=>Promise<void>
  wait:(signal:AbortSignal,device?:string)=>Promise<void>
+ restoreVerified?:(input:PilotInput,signal:AbortSignal)=>Promise<void>
  now?:()=>number
 }
 /** A running, explicit foreground-phone workflow. The authority owns every page; job state is only UI intent. */
@@ -41,7 +42,7 @@ export async function runManagedProduction(device:string,profile:string,signal:A
   // Persist an immutable claim intent after binding and before dispatch. Stop resolves only that receipt.
   await deps.report('Planning managed page '+input.filename,null)
   signal.throwIfAborted()
-  if(!deps.claims?.some(c=>c.taskId===taskId)){const binding=await managedCropBinding(input.folder,input.filename);if(binding){const verified=await deps.authority.timeline(taskId);if(verified.task.state==='verified_complete'){await pilot.import(input,taskId);await deps.report('Reusing verified output for '+input.filename,null);continue}}}
+  if(!deps.claims?.some(c=>c.taskId===taskId)){const binding=await managedCropBinding(input.folder,input.filename);if(binding){const verified=await deps.authority.timeline(taskId);if(verified.task.state==='verified_complete'){if(deps.restoreVerified)await deps.restoreVerified(input,signal);else await pilot.import(input,taskId);await deps.report('Reusing verified output for '+input.filename,null);continue}}}
   const claim=deps.claims?.find(c=>c.taskId===taskId)??{taskId,claimEventId:randomUUID(),deviceId:device,profileId:profile}
   if(claim.deviceId!==device||claim.profileId!==profile)throw new TaskConflict('Saved production claim belongs to another phone/profile')
   let current=await pilot.start(input,device,profile,async()=>{await deps.report('Assigning managed page '+input.filename,taskId,claim);signal.throwIfAborted()},claim.claimEventId)
@@ -75,7 +76,7 @@ export async function runManagedProduction(device:string,profile:string,signal:A
   }
   assertOwner()
   // Rebuild the local projection after a lost publication reply; this does not regenerate or claim.
-  await pilot.import(input,taskId,false,owner??undefined)
+  if(deps.restoreVerified)await deps.restoreVerified(input,signal);else await pilot.import(input,taskId,false,owner??undefined)
  }
 }
 /** Legacy task-ID-only jobs require explicit page reconciliation; never adopt the current owner. */

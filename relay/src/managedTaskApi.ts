@@ -1,3 +1,26 @@
+import {RecoveryDispositionAuthority,recoveryDispositionApi} from './recoveryDisposition'
+import {AccountHandoffAuthority,accountHandoffApi} from './accountHandoff'
+import {CandidateAdoptionAuthority,candidateAdoptionApi} from './candidateAdoption'
+import {TargetContextAuthority,targetContextApi} from './targetContext'
+import {TargetPackageAuthority,targetPackageApi} from './targetPackage'
+import {TargetInputAuthority,targetInputApi} from './targetInput'
+import {FallbackPreflightAuthority,fallbackPreflightApi} from './fallbackPreflight'
+import {RecoveryDispatch} from './recoveryDispatch'
+import {recoveryDispatchApi} from './recoveryDispatchApi'
+import {ConversationRestoration} from './conversationRestoration'
+import {conversationRestorationApi} from './conversationRestorationApi'
+import {CorrectionRecovery} from './correctionRecovery'
+import {correctionRecoveryApi} from './correctionRecoveryApi'
+import {KnownUiRepair} from './knownUiRepair'
+import {knownUiRepairApi} from './knownUiRepairApi'
+import {UnsentNavigation} from './unsentNavigation'
+import {unsentNavigationApi} from './unsentNavigationApi'
+import {RecoveryStops,recoveryStopsApi} from './recoveryStops'
+import {ExecutorEvidenceAuthority,executorEvidenceApi} from './executorEvidence'
+import {AccountRecheckRecovery} from './accountRecheckRecovery'
+import {accountRecheckRecoveryApi} from './accountRecheckRecoveryApi'
+import {SavedUploadRecovery} from './savedUploadRecovery'
+import {savedUploadRecoveryApi} from './savedUploadRecoveryApi'
 import {SavedImportRecovery} from './savedImportRecovery'
 import {savedImportRecoveryApi} from './savedImportRecoveryApi'
 import {accountApi} from './accountApi'
@@ -11,9 +34,20 @@ import { parseManagedOperation, TaskConflict, MANAGED_CAPABILITIES, type TaskPri
 import {DEFAULT_CROP_CAPABILITY,SLICED_CROP_CAPABILITY} from '../../server/src/services/managedCropPilotPolicy'
 
 export interface ManagedTaskEnvironment {
+  MANAGED_ACCOUNT_HANDOFF?: string
+  MANAGED_CANDIDATE_ADOPTION?: string
+  MANAGED_AUTOMATIC_RECOVERY?: string
+  MANAGED_RECOVERY_DISPATCH?: string
   MANAGED_ARTIFACTS?: ManagedArtifactBucket
   RELAY_TOKEN?: string
   MANAGED_SAVED_IMPORT_RECOVERY?: string
+  MANAGED_SAVED_UPLOAD_RECOVERY?: string
+  MANAGED_ACCOUNT_RECHECK_RECOVERY?: string
+  MANAGED_EXECUTOR_EVIDENCE?: string
+  MANAGED_CONVERSATION_RESTORATION?: string
+  MANAGED_CORRECTION_RECOVERY?: string
+  MANAGED_KNOWN_UI_REPAIR?: string
+  MANAGED_UNSENT_NAVIGATION_RECOVERY?: string
   MANAGED_CROP_PAGE?: string
   MANAGED_WORKSPACE_ID?: string
   MANAGED_STUDIO_TOKEN?: string
@@ -47,17 +81,73 @@ export function managedPrincipal(request:Request,env:ManagedTaskEnvironment):Tas
  return null
 }
 export class ManagedTaskApi {
+ private disposition:RecoveryDispositionAuthority
+ private accountHandoff:AccountHandoffAuthority
+ private candidateAdoption:CandidateAdoptionAuthority
+ private targetContext:TargetContextAuthority
+ private targetPackage:TargetPackageAuthority
+ private targetInput:TargetInputAuthority
+ private fallbackPreflight:FallbackPreflightAuthority
+ private dispatch:RecoveryDispatch
+ private executorEvidence:ExecutorEvidenceAuthority
+ private recoveryStops:RecoveryStops
+ private conversationRestoration:ConversationRestoration
+ private correctionRecovery:CorrectionRecovery
+ private uiRepairRecovery:KnownUiRepair
+ private navigationRecovery:UnsentNavigation
  private authority:TaskAuthority
  private savedImportRecovery:SavedImportRecovery
+ private savedUploadRecovery:SavedUploadRecovery
+ private accountRecheckRecovery:AccountRecheckRecovery
  constructor(private sql:TaskSql,transaction:<T>(work:()=>T)=>T,private env:ManagedTaskEnvironment,private now=()=>new Date().toISOString()) {
-  this.authority=new TaskAuthority(sql,transaction,now)
+  this.authority=new TaskAuthority(sql,transaction,now,()=>crypto.randomUUID(),()=>this.env.MANAGED_ACCOUNT_HANDOFF==='1'&&this.env.MANAGED_CANDIDATE_ADOPTION==='1'&&this.env.MANAGED_AUTOMATIC_RECOVERY==='1')
+  this.fallbackPreflight=new FallbackPreflightAuthority(sql,transaction,this.authority,()=>Date.parse(now()))
+  this.targetInput=new TargetInputAuthority(sql,transaction,this.authority,this.fallbackPreflight,()=>Date.parse(now()))
+  this.targetPackage=new TargetPackageAuthority(sql,transaction,this.authority,this.targetInput,()=>Date.parse(now()))
+  this.targetContext=new TargetContextAuthority(sql,transaction,this.authority,this.targetPackage,()=>Date.parse(now()))
+  this.accountHandoff=new AccountHandoffAuthority(sql,transaction,this.authority,this.targetContext,()=>this.env.MANAGED_ACCOUNT_HANDOFF==='1'&&this.env.MANAGED_CANDIDATE_ADOPTION==='1'&&this.env.MANAGED_AUTOMATIC_RECOVERY==='1',()=>Date.parse(now()))
+  this.candidateAdoption=new CandidateAdoptionAuthority(sql,transaction,this.authority,this.targetContext,()=>this.env.MANAGED_CANDIDATE_ADOPTION==='1'&&this.env.MANAGED_AUTOMATIC_RECOVERY==='1',()=>Date.parse(now()))
+  this.conversationRestoration=new ConversationRestoration(sql,transaction,this.authority,()=>Date.parse(now()))
+  this.correctionRecovery=new CorrectionRecovery(sql,transaction,this.authority,()=>Date.parse(now()))
+  this.uiRepairRecovery=new KnownUiRepair(sql,transaction,this.authority,()=>Date.parse(now()))
+  this.navigationRecovery=new UnsentNavigation(sql,transaction,this.authority,()=>Date.parse(now()))
+  this.executorEvidence=new ExecutorEvidenceAuthority(sql,transaction,this.authority,()=>Date.parse(now()))
+  this.accountRecheckRecovery=new AccountRecheckRecovery(sql,transaction,this.authority,()=>Date.parse(now()),()=>this.env.MANAGED_ACCOUNT_RECHECK_RECOVERY==='1')
+  this.recoveryStops=new RecoveryStops(sql,transaction,this.authority,this.accountRecheckRecovery,()=>Date.parse(now()))
+  this.disposition=new RecoveryDispositionAuthority(sql,transaction,this.authority,this.recoveryStops,this.accountHandoff,this.candidateAdoption,()=>Date.parse(now()))
+  this.savedUploadRecovery=new SavedUploadRecovery(sql,transaction,this.authority,()=>Date.parse(now()))
   this.savedImportRecovery=new SavedImportRecovery(sql,transaction,this.authority,()=>Date.parse(now()))
+  this.dispatch=new RecoveryDispatch(sql,transaction,this.authority,()=>this.env.MANAGED_RECOVERY_DISPATCH==='1',kind=>({saved_upload:this.env.MANAGED_SAVED_UPLOAD_RECOVERY,navigate:this.env.MANAGED_UNSENT_NAVIGATION_RECOVERY,known_ui:this.env.MANAGED_KNOWN_UI_REPAIR,correct_output:this.env.MANAGED_CORRECTION_RECOVERY,restore_conversation:this.env.MANAGED_CONVERSATION_RESTORATION})[kind]==='1',(actor,kind,f)=>{
+   if(kind==='saved_upload'){const c=this.savedUploadRecovery.context(actor,f);return !c.task.canonical&&c.attempt.phase==='result_saved'}
+   return kind==='navigate'?this.navigationRecovery.status(actor,f).admissionReady:kind==='known_ui'?this.uiRepairRecovery.status(actor,f).admissionReady:kind==='correct_output'?this.correctionRecovery.status(actor,f).admissionReady:this.conversationRestoration.status(actor,f).admissionReady
+  },()=>Date.parse(now()))
  }
  async handle(request:Request):Promise<Response> {
   const actor=managedPrincipal(request,this.env)
   if(!actor)return Response.json({error:'Managed task authentication required'},{status:401})
   try {
    const url=new URL(request.url)
+   if(url.pathname==='/managed/recovery/disposition')return await recoveryDispositionApi(request,actor,this.disposition,this.env.MANAGED_WORKSPACE_ID!)
+   if(url.pathname==='/managed/recovery/account-handoff')return await accountHandoffApi(request,actor,this.accountHandoff,this.env.MANAGED_WORKSPACE_ID!)
+   if(url.pathname==='/managed/recovery/saved-upload/compatibility') {
+    if(request.method!=='GET'||url.search)return new Response('Not found',{status:404})
+    return Response.json({schema:'saved-transfer-compatibility/1',workspaceId:this.env.MANAGED_WORKSPACE_ID,artifactStorageConfigured:!!this.env.MANAGED_ARTIFACTS,
+     capabilities:['saved-transfer-authority/1','saved-transfer-terminal/1','saved-transfer-upload-fence/1']},{headers:{'Cache-Control':'no-store'}})
+   }
+   if(url.pathname==='/managed/recovery/candidate-adoption')return await candidateAdoptionApi(request,actor,this.candidateAdoption,this.env.MANAGED_WORKSPACE_ID!)
+   if(url.pathname==='/managed/recovery/target-context')return await targetContextApi(request,actor,this.targetContext,this.env.MANAGED_WORKSPACE_ID!)
+   if(url.pathname==='/managed/recovery/target-package')return await targetPackageApi(request,actor,this.targetPackage,this.env.MANAGED_WORKSPACE_ID!)
+   if(url.pathname==='/managed/recovery/target-input')return await targetInputApi(request,actor,this.targetInput,this.env.MANAGED_WORKSPACE_ID!)
+   if(url.pathname==='/managed/recovery/fallback-preflight')return await fallbackPreflightApi(request,actor,this.fallbackPreflight,this.env.MANAGED_WORKSPACE_ID!)
+   if(url.pathname==='/managed/recovery/dispatch')return await recoveryDispatchApi(request,actor,this.dispatch,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_RECOVERY_DISPATCH==='1')
+   if(url.pathname==='/managed/recovery/original-conversation')return await conversationRestorationApi(request,actor,this.conversationRestoration,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_CONVERSATION_RESTORATION==='1',(f,id)=>f.retained?this.dispatch.assertRetainedManualEffect(actor,f,id):this.dispatch.assertEffect(actor,'restore_conversation',f,id),{enabled:this.env.MANAGED_CORRECTION_RECOVERY==='1',effect:(f,id)=>this.dispatch.assertEffect(actor,'correct_output',f,id)})
+   if(url.pathname==='/managed/recovery/correction')return await correctionRecoveryApi(request,actor,this.correctionRecovery,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_CORRECTION_RECOVERY==='1',(f,id)=>this.dispatch.assertEffect(actor,'correct_output',f,id))
+   if(url.pathname==='/managed/recovery/known-ui-repair')return await knownUiRepairApi(request,actor,this.uiRepairRecovery,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_KNOWN_UI_REPAIR==='1',(f,id)=>this.dispatch.assertEffect(actor,'known_ui',f,id))
+   if(url.pathname==='/managed/recovery/unsent-navigation')return await unsentNavigationApi(request,actor,this.navigationRecovery,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_UNSENT_NAVIGATION_RECOVERY==='1',(f,id)=>this.dispatch.assertEffect(actor,'navigate',f,id))
+   if(url.pathname==='/managed/recovery/stop')return await recoveryStopsApi(request,actor,this.recoveryStops,this.env.MANAGED_WORKSPACE_ID!)
+   if(url.pathname==='/managed/recovery/executor-evidence')return await executorEvidenceApi(request,actor,this.executorEvidence,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_EXECUTOR_EVIDENCE==='1')
+   if(url.pathname==='/managed/recovery/account-recheck')return await accountRecheckRecoveryApi(request,actor,this.accountRecheckRecovery,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_ACCOUNT_RECHECK_RECOVERY==='1')
+   if(url.pathname==='/managed/recovery/saved-upload')return await savedUploadRecoveryApi(request,actor,this.savedUploadRecovery,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_ARTIFACTS,()=>this.env.MANAGED_SAVED_UPLOAD_RECOVERY==='1',(f,id)=>this.dispatch.assertEffect(actor,'saved_upload',f,id))
    if(url.pathname==='/managed/recovery/saved-import'){
     return await savedImportRecoveryApi(request,actor,this.savedImportRecovery,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_ARTIFACTS,this.env.MANAGED_SAVED_IMPORT_RECOVERY==='1')
    }
@@ -77,7 +167,7 @@ export class ManagedTaskApi {
    if(request.method==='GET'&&url.pathname==='/managed/readiness') {
     if(actor.role!=='studio')return Response.json({error:'Studio authority required'},{status:403})
     if(url.search)throw new TaskConflict('Unexpected readiness query')
-    return Response.json({schema:'managed-task/1',result:{workspaceId:this.env.MANAGED_WORKSPACE_ID,artifactStorageConfigured:!!this.env.MANAGED_ARTIFACTS,capabilities:['managed-accounts/1','managed-artifact-status/1','worker-reconnect/1','unsent-transfer/1','production-claim-stop/1','production-coordinator/1','production-reconciliation/1','obsolete-unsent-stop/1','production-handoff/1',DEFAULT_CROP_CAPABILITY,SLICED_CROP_CAPABILITY,'expired-saved-recovery/1','upload-only-reconciliation/1','cancelled-submission-discard/1','cancelled-unknown-abandonment/1']}})
+    return Response.json({schema:'managed-task/1',result:{workspaceId:this.env.MANAGED_WORKSPACE_ID,artifactStorageConfigured:!!this.env.MANAGED_ARTIFACTS,capabilities:['managed-accounts/1','managed-artifact-status/1','worker-reconnect/1','unsent-transfer/1','production-claim-stop/1','production-coordinator/1','production-reconciliation/1','obsolete-unsent-stop/1','production-handoff/1','production-candidate-handoff/1','recovery-family-disposition/1','portable-recovery-journal/1',DEFAULT_CROP_CAPABILITY,SLICED_CROP_CAPABILITY,'expired-saved-recovery/1','upload-only-reconciliation/1','cancelled-submission-discard/1','cancelled-unknown-abandonment/1']}})
    }
    if(request.method==='GET'&&url.pathname==='/managed/coordinator'){if(actor.role!=='studio')return Response.json({error:'Studio authority required'},{status:403});if(url.search)throw new TaskConflict('Unexpected coordinator query');return Response.json({schema:'managed-task/1',result:this.authority.coordinator(actor,this.env.MANAGED_WORKSPACE_ID!)})}
    if(request.method==='GET'&&url.pathname.startsWith('/managed/production-claims/')){
@@ -108,12 +198,17 @@ export class ManagedTaskApi {
     if(op.workspaceId!==this.env.MANAGED_WORKSPACE_ID)throw new TaskConflict('Cross-workspace artifact rejected')
     this.authority.assertWorkspace(op.taskId,op.workspaceId)
     const owner=this.authority.artifactOwner(actor,op.taskId,op.attemptId,op.generation,op.fingerprint)
+    if(this.savedUploadRecovery.enrolled(actor,{workspaceId:op.workspaceId,taskId:op.taskId,attemptId:op.attemptId,generation:op.generation,fingerprint:op.fingerprint}))throw new TaskConflict('This saved upload is enrolled in recovery; use its original action instead of ordinary upload')
+    if(this.correctionRecovery.discover(actor,{workspaceId:op.workspaceId,taskId:op.taskId,attemptId:op.attemptId,generation:op.generation,fingerprint:op.fingerprint})&&this.env.MANAGED_CORRECTION_RECOVERY!=='1')throw new TaskConflict('Correction upload is off; retain the original saved checkpoint')
     const document=new TextEncoder().encode(raw.document)
     validateManagedCrop(document,owner.task,owner.attempt)
     if(owner.attempt.submission!=='saved'||!owner.attempt.checkpointRef||op.ref!==artifactRef(owner.task,op.attemptId,op.artifactId)||await artifactHash(document)!==op.contentHash)throw new TaskConflict('Saved artifact identity or checksum mismatch')
     const record:ManagedArtifactRecord={id:op.artifactId,taskId:op.taskId,attemptId:op.attemptId,generation:op.generation,fingerprint:op.fingerprint,ref:op.ref,sha256:op.contentHash,validated:false,validationRef:null}
     this.authority.reserveArtifact(actor,op.taskId,op.attemptId,op.generation,op.fingerprint,op.artifactId,op.ref,op.contentHash,document.length)
-    await storeManagedArtifact(this.env.MANAGED_ARTIFACTS,record,document)
+    await storeManagedArtifact(this.env.MANAGED_ARTIFACTS,record,document,()=>{
+     this.authority.artifactOwner(actor,op.taskId,op.attemptId,op.generation,op.fingerprint)
+     this.savedUploadRecovery.claimOrdinaryUpload(actor,{workspaceId:op.workspaceId,taskId:op.taskId,attemptId:op.attemptId,generation:op.generation,fingerprint:op.fingerprint})
+    })
     // Ownership is checked again by the synchronous authority after R2 awaits. Late bytes stay historical.
     const result=this.authority.stage(actor,op.eventId,op.taskId,op.attemptId,op.generation,op.fingerprint,op.artifactId,op.ref,op.contentHash)
     return Response.json({schema:'managed-task/1',result})
@@ -214,6 +309,7 @@ export class ManagedTaskApi {
      const record=this.authority.artifact(actor,op.artifactId)
      if(record.taskId!==op.taskId||record.attemptId!==op.attemptId||record.generation!==op.generation||record.fingerprint!==op.fingerprint||record.sha256!==op.contentHash)throw new TaskConflict('Publication artifact fence mismatch')
      const owner=this.authority.artifactOwner(actor,op.taskId,op.attemptId,op.generation,op.fingerprint)
+     if(this.correctionRecovery.discover(actor,{workspaceId:op.workspaceId,taskId:op.taskId,attemptId:op.attemptId,generation:op.generation,fingerprint:op.fingerprint})&&this.env.MANAGED_CORRECTION_RECOVERY!=='1')throw new TaskConflict('Correction publication is off; retain the staged artifact')
      await readManagedArtifact(this.env.MANAGED_ARTIFACTS,record,owner.task,owner.attempt)
      result=this.authority.publish(actor,op.eventId,op.taskId,op.attemptId,op.generation,op.fingerprint,op.artifactId,op.contentHash,op.validationRef,op.action==='publish_recovered'||op.action==='publish_production'&&op.recovered,coordinator);break
     }

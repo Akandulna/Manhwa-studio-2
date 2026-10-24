@@ -1,8 +1,11 @@
 # Implementation Plan: Manager Agents and Reliable Automation
 
+**24 October continuation update:** Read the [completed agent-reporting and Cloudflare usage scope](../../MAPI/Sleeper-cell-main/docs/agent-reporting-continuation-update.md) before continuing overlapping work. Source implementation and local validation are complete; rollout, installed acceptance and measured savings remain pending. Reconcile older pending items with that update; reuse the delivered implementation rather than starting it again. Other phase gates remain unchanged.
+
 **Date:** 18 October 2026  
-**Status:** Phase 4 is complete for the managed default-ChatGPT crop-page workflow on two installed phones; see the [current sign-off](../../MAPI/Sleeper-cell-main/docs/managed-phase4-acceptance.md). The subsequent Sandmancer Chapter 002 production pilot completed reviewed cuts, corrected narration, fresh voiceover/alignment, a provider-generated timeline and a verified MP4. Phase 5 audits, confirmed account links, scoped quota evidence, atomic account reservations and policy-based initial selection are implemented and locally validated for the managed crop workflow; deployment and installed-device acceptance are pending. Earlier phase implementation paragraphs below retain their milestone dates and must be read with the latest acceptance record.
-**Specification:** [PRD v1.1](PRD-manager-agents-and-automation.md)  
+**Status:** Phase 4 is complete for the managed default-ChatGPT crop-page workflow on two installed phones; see the [current sign-off](../../MAPI/Sleeper-cell-main/docs/managed-phase4-acceptance.md). The subsequent Sandmancer Chapter 002 production pilot completed reviewed cuts, corrected narration, fresh voiceover/alignment, a provider-generated timeline and a verified MP4. Phase 5 audits, confirmed account links, scoped quota evidence, atomic account reservations and policy-based initial selection are implemented and locally validated for the managed crop workflow; scoped installed-device acceptance is complete; see the [Phase 5 sign-off](../../MAPI/Sleeper-cell-main/docs/managed-phase5-acceptance.md). Earlier phase implementation paragraphs below retain their milestone dates and must be read with the latest acceptance record.
+**Updated:** 24 October 2026 — Cloudflare/agent traffic source implementation and rollout gates added; earlier milestone evidence retains its date.
+**Specification:** [PRD v1.2](PRD-manager-agents-and-automation.md)\
 **Scope:** Manhwa Studio, Sleeper-Cell, and the Cloudflare relay
 
 ## 1. Delivery approach
@@ -90,7 +93,7 @@ Work packages:
 
 **Code areas to inspect:** `productionAutomationModel.ts`, `productionRunner.ts`, `productionAutomation.ts`, `seriesProcessModel.ts`, `phoneRelay.ts`, relay protocol, Android `LibraryAutomationService.kt`, `AutomationService.kt`, `AutoRun.kt`, and workflow checkpoint stores.
 
-**Planned deliverables:** protocol decision record, state-transition fixtures, module ownership map, migration design, and an acceptance-case matrix referring to PRD A01–A32. New protocol/test filenames must be marked as proposed until created.
+**Planned deliverables:** protocol decision record, state-transition fixtures, module ownership map, migration design, and an acceptance-case matrix referring to PRD A01–A40. New protocol/test filenames must be marked as proposed until created.
 
 **Exit gate:** each external action has a defined intent/acknowledgment/checkpoint boundary; every existing dispatch path is classified as integrated, blocked during managed execution, or unsupported. Ownership expiry and request uncertainty have distinct handling.
 
@@ -202,7 +205,7 @@ Work packages:
 
 ## 8. Phase 5 — Accounts Manager and execution routing
 
-**Source status (22 October 2026):** The requested audit/reservation/selection runtime is implemented across relay, Studio and phone for the enrolled default-ChatGPT crop workflow. Audits run under shared and local idle ownership, claims pin policies and account capacity atomically, and ineligible work waits explicitly. See the [runtime handoff](../../MAPI/Sleeper-cell-main/docs/managed-phase5-runtime.md) for tests, compatibility and remaining release gates. No Phase 5 installed-device acceptance or Phase 6 recovery enablement is claimed.
+**Source status (22 October 2026):** The requested audit/reservation/selection runtime is implemented across relay, Studio and phone for the enrolled default-ChatGPT crop workflow. Audits run under shared and local idle ownership, claims pin policies and account capacity atomically, and ineligible work waits explicitly. See the [runtime handoff](../../MAPI/Sleeper-cell-main/docs/managed-phase5-runtime.md) for tests, compatibility and remaining release gates. The [23 October scoped Phase 5 acceptance](../../MAPI/Sleeper-cell-main/docs/managed-phase5-acceptance.md) supersedes this earlier source milestone. The Phase 6 bridge is now applied and locally validated with live recovery disabled.
 
 **Outcome:** Automation can select an eligible website/profile, account health is checked every 24–48 hours, and shared quotas are respected across devices.
 
@@ -279,14 +282,14 @@ Work packages:
 
 1. Run migrations on copies of desktop and relay data, preserving legacy IDs, revision evidence, and known outputs. Verify repeat application and restart recovery.
 2. Import existing work conservatively: verified outputs become completion evidence; old receipts without required provenance remain last-known/unknown; old running commands remain interrupted or uncertain until reconciled.
-3. Exercise every PRD acceptance case A01–A32 with deterministic fixtures/local services before using real production accounts.
+3. Exercise every PRD acceptance case A01–A40 with deterministic fixtures/local services before using real production accounts.
 4. Measure status latency, cloud operation volume, payload size, device overhead, account audit deferrals, recovery results, and duplicate/stale-publication rejection.
 5. Release relay protocol support first with managed dispatch disabled. Then release the compatible Studio client and phone build. Enroll only devices advertising the required protocol capabilities.
 6. Pilot in steps: observation only → one managed device → two devices → each permitted recovery playbook → additional supported workflows/devices.
 7. Perform a supervised run including at least one disconnect/reconnect, one saved-result/acknowledgment interruption, one quota/sign-out simulation, and one UI-change fixture. Do not consume paid capacity solely to recreate failures already covered by fixtures.
 8. Write operator procedures for manager outage, uncertain request, login repair, UI-baseline review, pausing recovery, data backup, and compatible rollback.
 
-**Exit gate:** all A01–A32 pass; no simultaneous valid ownership or accepted stale publication is observed; uncertainty never causes a blind replay; UI-change notifications follow the required chain; resource budgets are documented from measurements; rollback rehearsal preserves work.
+**Exit gate:** all A01–A40 pass; no simultaneous valid ownership or accepted stale publication is observed; uncertainty never causes a blind replay; UI-change notifications follow the required chain; resource budgets are documented from measurements; rollback rehearsal preserves work.
 
 **Release artifacts:** compatibility matrix, migration notes, acceptance evidence, known limitations, operator runbook, and per-feature enablement settings.
 
@@ -344,6 +347,7 @@ Use deterministic clocks and message-loss/reordering controls in coordinator tes
 | UI-01–UI-07 | 2, 6, 8 |
 | ACC-01–ACC-08 | 1 observation, 5 implementation, 6 recovery integration |
 | ISS-01–ISS-06 | 1 foundation, 2 UI routing, 6 recovery history, 8 verification |
+| COST-01–COST-08; A33–A40 | Cross-phase reporting/transport source complete (24 October); installed acceptance and usage gate in 8 |
 | PRD nonfunctional targets | Baseline in 0; measure in 1–7; enforce release gate in 8 |
 | Optional AI assistance | 9 only; absence verified throughout core phases |
 
@@ -351,7 +355,7 @@ Before marking the core implementation complete:
 
 - [ ] All 12 shared roles and 9 per-device roles have mapped responsibilities and health reporting.
 - [ ] Existing execution entry points participate in ownership checks or are explicitly excluded.
-- [ ] A01–A32 pass across all enrolled workflows and supported website variants.
+- [ ] A01–A40 pass across all enrolled workflows and supported website variants.
 - [ ] Two-device interruption/resume has been demonstrated without conflicting accepted work.
 - [ ] Quota, upload, sign-out, and missing-button recoveries obey evidence, policy, and retry limits.
 - [ ] Account audits and UI monitoring do not steal active browser sessions.
@@ -366,3 +370,181 @@ Before marking the core implementation complete:
 Start with Phase 0, then deliver Phase 1 observation and the Issues inbox. The first visible milestone is a chapter view that accurately explains its latest verified state, missing handoff, responsible manager, and source freshness. Add the website UI reporting chain next while durable task ownership is developed separately.
 
 Automatic restart/failover is enabled only after the ownership, reconnect, and account-policy gates pass. Completing this planning document does not authorize or perform application implementation, deployment, or device changes.
+
+
+### 23 October Phase 6 Automation integration
+
+The saved-crop recovery playbook is now called by production through its existing relay episode/shared budget. Ordinary/manual Import cannot bypass that authority for missing canonical files. Durable exact-unit diagnosis controls, typed REC-02 policy decisions, source-time evidence, Automation → Issues incident correlation and explicit operator timeline/admission/stop controls are implemented. Pause/cancel remain possible without network access and when the bounded timeline is full. Both Studio recovery flags remain configured off; no deployment or additional live playbook admission occurred.
+
+Shared-source validation passed 365 tests in 11 suites, server/client/relay typechecks and desktop/mobile synthetic HTTP UI checks. Android managed connection retries are pinned off in source, with 447 offline unit tests passing; no APK was built or installed. Full Phase 6 remains open: executable saved-upload/account/session/UI/correction adapters, typed installed-executor evidence and their postcondition/budget/fallback integration and supervised runtime acceptance. See [the precise delivered and remaining scope](../../MAPI/Sleeper-cell-main/docs/phase6/automation-recovery-handoff.md). Earlier completed milestones retain their original scopes.
+
+
+### 23 October saved-upload recovery source integration
+
+The saved-upload playbook now has original-phone immutable metadata offers, explicit Studio enable/grant controls, authenticated one-use phone execution, cloud hash/schema readback and off-switch outcome reconciliation in source. Its ledger and the existing saved-import ledger share one transactional three-action budget, cooldown and unknown hold; ordinary upload cannot bypass enrollment. Cloud transfer, canonical publication and local import remain separate facts. Both recovery panels show the aggregate budget.
+
+Shared validation passed 387 tests in 12 suites, server/client/relay typechecks and both recovery desktop/mobile HTTP fixtures. Android passed 454 offline tests across 63 suites. Source watchers reloaded after exact baseline checks; all three Studio recovery flags remain configured off. No relay deployment, APK build/install, account/quota change or live phone action occurred. Installed/deployed saved-upload acceptance and automatic phone dispatch remain open. Next source work is idle account-recheck ownership and typed executor evidence, then session/UI/context/correction adapters and validators. See [the saved-upload handoff](../../MAPI/Sleeper-cell-main/docs/phase6/saved-upload-recovery-handoff.md).
+
+
+### 23 October Phase 6 account recheck source increment
+
+The bounded account-recheck adapter now reuses the existing idle audit owner. Studio explicitly confirms/enables/requests one check for a real pinned attempt and the original or confirmed same-account profile. Request scheduling and budget charging are atomic; import/upload/account share three actions. The original scheduler owns claims/navigation/cleanup, and the ledger records true source times without granting quota availability. Queued cancellation/off withdraws only its original request; newer owner edits and normal cadence remain intact, while running audits retain their original claim. Claim-time pins and owner identity are revalidated.
+
+Applied 18 reviewed source/test files with baseline/after-hash checks. Validation against shared source passed 412 tests across 14 suites, server/client/relay typechecks and account/upload/import desktop/mobile HTTP fixtures. Studio health is HTTP 200 on configured port 3002. All four recovery flags remain off. No relay deployment, provider generation, account/quota change, live phone operation, APK build/install, commit or push occurred. Android source was unchanged in this increment.
+
+Evidence, incremental patch/manifest and remaining gates are in the companion Sleeper-Cell docs/phase6/account-recheck-recovery-handoff.md and account-recheck-recovery-validation.json. Full Phase 6 remains open: typed installed executor evidence/UI incident wiring, audited session/UI/context/correction adapters, detached/offline stop controls and safe original-phone dispatch, then compatible releases and supervised REC-02 acceptance. Existing live selection/unknown/estimated-quota permissions remain disabled; no pin/reset case is manufactured for acceptance.
+
+
+### 23 October Phase 6 typed executor evidence source increment
+
+Typed managed-crop failure observations now have a separate immutable Android journal, explicit one-event delivery, original authenticated task/command/profile fencing at the relay, and manual Studio diagnosis. Specific capture sites report categories without raw error/provider text. Recent stable unresolved UI incidents link only for the exact profile/workflow; monitor/device-manager ownership and incident impacts remain intact. Source and receipt times remain distinct; stale/contradictory/unknown evidence grants no repair, resend, account switch, quota capacity or resource release.
+
+Applied 10 reviewed Studio/relay source/test files and verified seven Android source/test hashes. Shared validation passed 421 tests across 15 suites, 459 offline Android tests across 64 suites, all three typechecks, provider/composer scripts and four desktop/mobile HTTP fixtures. Local Studio health is HTTP 200 on configured port 3002. All four recovery flags and new MANAGED_EXECUTOR_EVIDENCE intake remain off. No relay deployment, APK build/install, provider generation, live phone/account/quota operation, commit or push was performed by this increment.
+
+Evidence, patches and remaining gates are preserved in companion Sleeper-Cell docs/phase6/executor-evidence-handoff.md, executor-evidence-manifest.json and executor-evidence-validation.json. Phase 6 remains open: compatible installed observation acceptance and broader typed sites; audited session/UI/context/correction adapters with actual postconditions; detached/offline stop controls; safe original-phone dispatch; final REC-02 runtime acceptance.
+
+
+### 23 October Phase 6 retained recovery controls source increment
+
+Production Issues now offers retained-unit recovery pause/disable/cancel independently of the current page and relay. The local diagnosis hold and original delivery intent commit atomically; cloud confirmation is explicit and separate. New local admissions are fenced around asynchronous source reads and before account/upload requests. Relay stop receipts are immutable and ordered; newer cancellation can supersede an unsent pause, and late acknowledgments cannot weaken newer local intent. All enrolled playbooks share the barrier; queued account requests withdraw through the original idle owner, while running audits, unknown writes, task claims, budgets and cooldowns remain retained. Preparation leaves each playbook disabled/paused and requires fresh evidence/admission; it resumes nothing.
+
+Applied 19 reviewed shared source/test files with preimage/after-hash checks. Shared validation passed 440 tests across 16 suites, server/client/relay typechecks and five desktop/mobile HTTP fixtures. Studio health is HTTP 200 on configured port 3002; all four recovery flags and observation intake remain off. Android source hashes match the preceding increment; no Android rerun, APK, relay deployment, provider generation, live control/account/quota mutation, phone navigation, commit or push was performed.
+
+Evidence, incremental patch/manifest and remaining gates are in companion Sleeper-Cell docs/phase6/retained-recovery-handoff.md and retained-recovery-validation.json. A saved local hold does not certify a remote executor has stopped; its original owner must report the actual outcome. Compatible installed/deployed acceptance remains pending. Full Phase 6 stays open: audited session/navigation, known UI repair, context restoration and correction adapters with real postconditions, safe original-phone dispatch, broader typed sites and final REC-02 runtime fault coverage.
+
+
+### 23 October Phase 6 original-session checkpoint source increment
+
+The session/navigation audit found no verified binding between a failed command and its browser context. Passive source checkpoints now bind typed failure evidence to the exact original in-process view, profile, planned input and verified local cache. One bounded read-only sample reports document/composer/attachment/response shape; uncertain, touched, submitted, signed-out, loading or changed contexts remain held. Login remains unknown without separate identity verification. Nothing navigates, reloads, taps, pastes, uploads or submits, and no adapter/context portability/repair admission is granted. Process restart cannot adopt a restored tab from a historical binding ID. Older receipt envelopes remain compatible; immutable source times and historical/authority contradictions remain visible.
+
+Applied six reviewed Studio/relay source/test files and verified seven Android/probe source/test baselines and after-hashes. Shared validation passed 446 tests across 16 suites, 465 offline Android tests across 65 suites, all three typechecks, passive-probe/provider/composer scripts and all five desktop/mobile HTTP fixtures. Local Studio health is HTTP 200 on port 3002. All four recovery flags and evidence intake remain off. No relay deployment, APK build/install, live phone/control/account/quota operation, provider generation, commit or push occurred.
+
+Evidence, patches, manifest and exact remaining gates are in companion Sleeper-Cell docs/phase6/session-checkpoint-handoff.md and session-checkpoint-validation.json. This is the evidence prerequisite, not an executable session/navigation repair. Next implement a fresh original-owner/budgeted grant, durable start/unknown reconciliation, current policy/profile/lease checks, a single permitted action and actual postcondition acknowledgment with retained-stop integration. Known UI repair, context restoration/correction, safe original-phone dispatch, compatible release/installed acceptance and final REC-02 coverage remain open; full Phase 6 is not accepted.
+
+### 23 October Phase 6 original empty-home reload source increment
+
+The budgeted original-view navigation adapter is applied to shared Studio/relay source and implemented in Android source. Explicit Studio confirmation grants at most one same-view reload after a fresh untouched incomplete empty-home observation. It shares the import/upload/account three-action transaction, retained stops and unknown holds, commits a durable phone physical-effect marker before its only reload, and verifies actual same-view readiness afterward. Normal enrolled execution cannot bypass a grant with a new page. Original observations, task resources, policy pins, identity links and quarantine are preserved; no live phone action or relay deployment occurred.
+
+Validation: 886 shared tests in 73 suites, 472 offline Android tests in 66 suites, all three TypeScript checks, six desktop/mobile UI fixtures and probe/provider/composer script checks passed. All six recovery/observation gates remain configured off; local Studio health is 200 after the authorized watcher reload. No APK build/install, provider generation, live quota/account/control mutation, commit or push occurred.
+
+See companion Sleeper-Cell docs/phase6/unsent-navigation-handoff.md, unsent-navigation-manifest.json and unsent-navigation-validation.json. Compatible installed navigation acceptance, known-UI/context/correction adapters, safe automatic dispatch, broader typed sites and final REC-02 runtime fault coverage remain pending. Source readiness does not establish full Phase 6 acceptance.
+
+### 23 October Phase 6 known email-promotion repair source increment
+
+The first known-UI repair is applied to shared Studio/relay source and implemented in Android source: one explicitly granted Not now dismissal of the exact original email promotion. It requires an untouched original empty-home binding and strict modal/control/form/hit-target checks, saves a durable physical-effect marker before one click, and verifies actual promotion absence and an accessible empty composer. UI repair joins the shared three-action transaction and retained stops across five playbooks, while also enforcing the two-UI-cycle limit. Unknown effects remain held; normal continuation validates both navigation and UI receipts without opening a replacement page. Recent exact monitor incidents retain their source identity without granting execution or clearing other managers' impacts.
+
+Validation passed 911 shared tests in 75 suites, 481 offline Android tests in 67 suites, all three TypeScript checks, seven desktop/mobile operator fixtures, synthetic browser DOM click/postcondition checks and four probe/provider/composer script groups. All seven recovery/observation gates remain configured off; local Studio health is 200. No relay deployment, APK build/install, live phone operation, provider generation, live account/quota/control change, pairing/pilot/quarantine change, commit or push occurred.
+
+Companion Sleeper-Cell docs/phase6/known-ui-repair-handoff.md, known-ui-repair-manifest.json and known-ui-repair-validation.json preserve the incremental patches, hashes and evidence. Broader UI adaptation, context restoration/fallback, validated correction, safe automatic dispatch, broader typed sites, compatible installed acceptance and final REC-02 runtime validation remain open. This source increment does not establish full Phase 6 acceptance.
+
+### 23 October Phase 6 retained context and correction preflight source increment
+
+The original local request package and completed malformed-reply provenance are retained in Android source, with private owner-supplied correction draft validation. Stable validator-valid candidate rows are locked; identified failed fields are the only permitted edits, and full existing validators must pass. Original task/account-policy/scope/guard/cache changes, ambiguous JSON and unscoped edits hold. No task/output checkpoint is advanced. Studio/relay source now accepts and displays an optional strict sanitized context summary with original source times, hashes and counts, while withholding every correction/context-portability/fallback permission.
+
+Validation passed 917 shared tests in 76 suites, 501 offline Android tests in 69 suites, all three TypeScript checks, seven desktop/mobile fixtures and four probe/provider/composer script groups. All seven existing recovery/observation gates remain configured off; local Studio health is 200. No executable correction operation is enrolled, no shared recovery budget is charged or reset, and no relay deployment, APK build/install, live phone action, provider generation, live account/quota/control change, original pairing/pilot/quarantine change, commit or push occurred.
+
+Companion Sleeper-Cell docs/phase6/correction-preflight-handoff.md, correction-preflight-manifest.json and correction-preflight-validation.json preserve patches, hashes, evidence and the precise remaining gates. Next are the separately budgeted correction grant and durable checkpoint/publication transition, then actual live conversation restoration/policy-permitted fallback, safe automatic dispatch and compatible installed/REC-02 acceptance. A validated private preview does not establish a completed repair, portable conversation or full Phase 6 acceptance.
+
+
+## 16. 24 October — Agent reporting and Cloudflare usage reduction
+
+**Status:** Source implementation and local validation complete across Studio, relay and Android. Compatible deployment, installed-device validation and measured production savings are pending. This increment does not sign off Phase 6, complete module coverage or unattended operation.
+
+The [usage implementation handoff](../../MAPI/Sleeper-cell-main/docs/cloudflare-usage-implementation.md) and [validation manifest](../../MAPI/Sleeper-cell-main/docs/cloudflare-usage-validation.json) record delivered behavior, tests and source hashes. They implement the [relay usage plan](../../MAPI/Sleeper-cell-main/docs/cloudflare-relay-usage-plan.md) and [agent status audit](../../MAPI/Sleeper-cell-main/docs/cloudflare-agent-status-audit.md); PRD COST-01–COST-08 and A33–A40 now define the corresponding product/release obligations.
+
+### Delivered source work
+
+- [x] Change-driven UI publication and verified native/legacy overlap suppression, retaining meaningful changes, terminal evidence and legacy fallback.
+- [x] Device health cohorts at five minutes active / fifteen minutes idle, original per-manager observations and 45-minute reporter staleness independent of fact freshness. Empty health avoids full projection reads/writes.
+- [x] Capability-negotiated envelopes (16 immutable events / 256 KB), exact partial acknowledgments, same-source ordering, single-event fallback and bounded eight-round drains. Android has one drain owner with a synchronized final recheck; immutable outboxes survive restart.
+- [x] Stable-open reconnect backoff, authentication cutoff and persisted relay/role-scoped budget pauses across legacy and managed transports. Open sockets honor budget messages; a trusted in-isolate daily-budget rejection avoids repeat DO calls where possible.
+- [x] Semantic library/process snapshots with original bytes/timestamps and durable per-destination acknowledgments, ambiguous R2 readback and unchanged receipt deduplication; explicit answers remain deliverable.
+- [x] Capability-gated audit deadlines and empty recovery backoff, invalidation hints and in-flight revision fencing. Original pending claims, task authority, idle ownership and admission checks are retained.
+- [x] Hibernating sockets and automatic ping/pong retained, 60-second presence alarms retained with five-minute durable timestamp checkpoints, route/signal counters integrated into existing budget writes.
+
+### Completed local validation
+
+Android passed `./gradlew testDebugUnitTest --offline`: **707 tests / 87 suites**, zero failures/errors/skips. Full Studio Vitest passed **1,379 tests / 88 files**. Server, client and relay typechecks passed, along with the relevant synthetic managed browser/script fixtures. Local Wrangler/SQLite exercised batching, duplicate/partial replay, ping, receipt deduplication, explicit answers and category counters. The isolated three-operation cutoff/restart fixture retained **37 row writes** through rejected retries and restart. These are local fixture outcomes, not production billing measurements; no APK was generated locally.
+
+### Rollout and acceptance still open
+
+1. [ ] Deploy the compatible relay with batch/deadline/hint capability advertisement; verify old clients retain the single-event protocol.
+2. [ ] Restart updated Studio and confirm scoped pauses, bounded reconnects, report delivery and destination acknowledgments persist across restart.
+3. [ ] Release compatible Android through GitHub Actions; validate both installed phones and Master, native/legacy fallback, account early recheck, recovery hints and sleep/wake reconnect behavior.
+4. [ ] Confirm queue drainage, source ordering, critical incident/UI notifications and unchanged original command/task admission under mixed clients and rejection. Demonstrate A33–A39 on the installed combination.
+5. [ ] Record a complete UTC-day baseline/comparison for Worker requests, DO calls/messages/alarms, SQL rows, duration and R2 operations, including workload and client-version context. Accept A40 only after measurements and functional checks; the ≥95% rejected-traffic reduction remains a target.
+6. [ ] Rehearse protocol-compatible rollback while preserving outboxes and reporting journal schema 3. Android schema 2→3 retains evidence/outbox tables and adds `reporter_activity`; older code requires a compatible rollback release.
+
+Full paginated projection replay remains in place. A resumable cursor is deferred unless post-rollout metrics show replay dominates reads. Durable budget checkpoint guarantees and task ownership renewals were not reduced. The Worker rejection shortcut is best effort per isolate and saves DO calls only; client suppression is necessary to reduce Worker ingress. No production deployment, application restart, installed-phone operation, commit or push is claimed by this source milestone.
+
+## 17. 24 October — Target source verification for fallback
+
+The selected paired target can explicitly verify its existing local shared page against the original task/specification and source hash, retain its observation before delivery and reconcile the original receipt. Studio's explicit fallback inspector displays source-only status and historical deadlines. The relay rechecks original release, policy/account/quota/capacity, shared stops and reservations. No task/attempt, browser action, package preparation, provider request or handoff is created.
+
+This supersedes only the missing target source-cache evidence prerequisite. Exact derived slices/attachment manifest, prompt and required portable context still need independent verification. A separately approved atomic account-aware handoff with its own recovery action and lineage, family hold disposition and installed/migration/rollback acceptance remain pending. The existing lineage core applies to legacy confirmed-unsent transfers; neither it nor a source-only receipt grants account-aware fallback. Recovery stays off.
+
+See the [target source handoff](../../MAPI/Sleeper-cell-main/docs/phase6/target-source-check-handoff.md) and [validation](../../MAPI/Sleeper-cell-main/docs/phase6/target-source-check-validation.json). All existing core parent/runtime gates remain pending; the newer reporting/Cloudflare rollout obligations above are unchanged. No deployment, CI trigger, local APK build/install, live operation, commit or push is included.
+
+## 18. 24 October — Offline target package and prompt verification
+
+The next source increment now prepares a separate private offline target candidate using the existing pixel-verified sliced encoder, applies attachment byte ceilings during encoding, rereads the retained source/manifest/prompt/attachments and records a distinct immutable package receipt. The relay independently reconstructs the exact versioned manifest/prompt; Studio compares filename/hash/dimensions with the real current source before displaying package-only verification. Shared native/server fixtures test byte-for-byte contract parity.
+
+This supersedes the derived-package/prompt verification gap in the preceding source-only note. It does not verify required portable context or the original browser request. Approved exact candidate adoption, atomic account-aware handoff with recovery charge/lineage, explicit family hold disposition and installed image/storage/process-loss/migration/rollback acceptance remain pending. Recovery stays off and all existing full-scope core/runtime gates remain open.
+
+See the [package handoff](../../MAPI/Sleeper-cell-main/docs/phase6/target-package-check-handoff.md) and [validation](../../MAPI/Sleeper-cell-main/docs/phase6/target-package-check-validation.json). No deployment, CI trigger, local APK build/install, live provider/phone operation, commit or push is included.
+
+## 19. 24 October — Reviewed standalone target context
+
+Studio now records an explicit exact-candidate requirements review for standalone page/package/prompt-only work, with withdrawal and supersession. The target separately rechecks retained files, samples the already-open empty home and independently observes the account before reporting a scope-limited context receipt. Proof/receipt retention, expiry, interruption, role/workspace fences and no-retry transport are validated. No browser view is adopted or modified.
+
+This supersedes the missing standalone context-check prerequisite above. It does not transfer earlier conversations, external rules, provider personalization or hidden state. Exact candidate adoption and approved atomic account-aware handoff with recovery charge/lineage, family hold disposition and installed/fault/migration/rollback acceptance remain pending. Recovery stays off; all existing full-scope core/runtime gates and reporting/cost rollout obligations remain open.
+
+See the [context handoff](../../MAPI/Sleeper-cell-main/docs/phase6/target-context-check-handoff.md) and [validation](../../MAPI/Sleeper-cell-main/docs/phase6/target-context-check-validation.json). No deployment, CI trigger, local APK build/install, live operation, commit or push is included.
+
+## 20. 24 October — Separately approved local candidate retention
+
+Studio now provides a distinct unchecked exact-candidate approval. The target consumes it once to retain a durable reference to the verified private package and original context, with durable intent, a consumed marker and a fixed short permit. Approval charges the ninth ledger within the original shared recovery budget. Its private continuation can finish that already charged action while public pending/exhausted facts remain visible; other pending actions still block it. Unused cancellation retains its charge, and historical receipt reconciliation never repeats the effect.
+
+This completes local candidate retention only. Separately approved atomic account-aware ownership handoff and its executable consumer, explicit family hold disposition, required inherited-conversation/external-rule portability and installed/fault/migration/rollback acceptance remain pending. Recovery flags remain off; all 58 existing core workboard entries, 41 original runtime gates and eight additional reporting/cost gates remain open.
+
+Validation passed 1,499 Studio tests in 92 files, all three typechecks and 752 offline Android tests in 94 suites, plus relevant scripts and desktop/mobile fixtures. Final focused lineage/retention checks passed 61 tests. See the [retention handoff](../../MAPI/Sleeper-cell-main/docs/phase6/candidate-adoption-handoff.md) and [validation/source hashes](../../MAPI/Sleeper-cell-main/docs/phase6/candidate-adoption-validation.json). No deployment, configuration change, CI trigger, local APK build/install, live operation, commit or push is included.
+
+## 21. 24 October — Atomic standalone account-aware candidate handoff
+
+Studio now provides a separate exact-candidate handoff confirmation after acknowledged local candidate retention. Its own action is charged within the original recovery family. The target explicitly supplies a fresh original-view/account proof; one SQLite transaction allocates the next generation, pins the confirmed independent account, reserves page/device/browser/profile/account resources, records successor lineage and retains the exact result. Lost responses reconcile the immutable original proof/result without another generation or allowance.
+
+The compatible native executor consumes the original retained package and acknowledged custody/handoff receipts on the same in-memory inspected view. It does not rebuild the package or open a replacement view. Ongoing execution checks retain account/quota/policy/review/resource and family-stop fences. Unused cancellation keeps its charge, and read-only original receipt reconciliation works without a live view. The tenth ledger and command extension require compatible readers; all recovery flags remain off.
+
+Full Studio validation passed 1,537 tests in 93 files, including 38 handoff tests; all three typechecks passed. Required offline Android validation passed 761 tests in 95 suites, including nine shared-contract/model/reconciliation cases. Seven script checks and extended desktop/mobile approval/cancellation/budget fixtures passed. See the [handoff scope and remaining gates](../../MAPI/Sleeper-cell-main/docs/phase6/account-handoff-handoff.md) and [validation/source hashes](../../MAPI/Sleeper-cell-main/docs/phase6/account-handoff-validation.json).
+
+This supersedes the standalone candidate-consumer/account-handoff implementation gap above. Production-coordinator claim/lease handoff remains blocked, as do unsupported inherited conversations/external rules. Family hold disposition, installed interruption/storage/account-change/migration/backup/rollback acceptance and all 58 existing core workboard/41 original runtime/eight additional reporting-cost gates remain pending. No configuration change, deployment, CI trigger, local APK build/install, live operation, commit or push occurred.
+
+## 22. 24 October — Production-coordinator candidate handoff
+
+Retained managed crop production jobs now use the separately approved candidate handoff under existing job and coordinator authority. Studio persists immutable original candidate/action/successor claim IDs before remote approval. The target retains fresh original-view/account proof in a pending prepared phase without moving ownership. Studio reacquires a current lease and atomically commits the exact successor account/resources/lineage, original claim receipt relationship and production registration, then applies the derived interrupted job using the shared CAS store. Scheduling remains paused.
+
+Lost approval/commit replies and local CAS failure retain original IDs and receipts. Cancelled/newer jobs cannot be overwritten, and the existing run stop path includes both source and pending successor claim IDs. Prepared proof stays charged and cannot refresh under the same action; expired or changed evidence remains held. The same tenth ledger and three-action original family budget apply. Target capability production-candidate-handoff/1 is required; all recovery flags stay off.
+
+Full Studio validation passed 1,563 tests in 94 files, including 25 production candidate cases and a new actual Prisma SQLite job-store takeover case. Required offline Android validation passed 766 tests in 95 suites, including five new production staging/receipt cases. All three typechecks, seven relevant scripts and both desktop/mobile production/fallback fixtures passed. See the [production handoff](../../MAPI/Sleeper-cell-main/docs/phase6/production-candidate-handoff-handoff.md) and [validation/source hashes](../../MAPI/Sleeper-cell-main/docs/phase6/production-candidate-handoff-validation.json).
+
+This supersedes the production-coordinator enrollment gap above for the reviewed standalone-context managed crop workflow. Explicit recovery-family hold disposition, required inherited-context portability and compatible installed two-phone interruption/account-change/source-view-loss/storage/fault/migration/backup/rollback acceptance remain pending. All 58 full-scope workboard entries, 41 original runtime gates and eight additional reporting/cost gates remain open. No deployment, configuration change, CI trigger, local APK build/install, live operation, commit or push occurred.
+
+## 23. 24 October — Explicit original-family disposition
+
+Studio now inspects all ten action ledgers and original successor lineage before an explicit family hold or provably unused candidate/handoff closure. A fresh private-state token, durable original decision ID and separate confirmation fence each action. Unknown/started/committed effects retain their original outcomes and reconcilers. Root stops, original reservations/ownership, charges and exhaustion remain intact; no allowance or generation is reset.
+
+Production unused pending intent clears only after the current coordinator atomically blocks its unused successor claim, closes any unused approval and retains the audit receipt. Shared job-store CAS preserves original claims/configuration/stopped state and append-only disposition history. Lost replies and failed local saves use the original decision; expired unreceived decisions receive a terminal no-effect audit fence while the original handoff remains pending. Native closure acknowledgment preserves original intent/proof and refuses resume. New audit storage is not another action ledger. Recovery flags remain off.
+
+Full Studio validation passed 1,585 tests in 95 files, including 20 disposition tests and two additional real Prisma SQLite job-store cases. Required offline Android validation passed 769 tests in 95 suites, including three native closure tests. All three typechecks, seven relevant scripts and disposition/production/fallback desktop/mobile fixtures passed. See [family disposition](../../MAPI/Sleeper-cell-main/docs/phase6/recovery-family-disposition-handoff.md) and [validation/source hashes](../../MAPI/Sleeper-cell-main/docs/phase6/recovery-family-disposition-validation.json).
+
+This completes the scoped family hold/unused-approval disposition gap above. Required inherited-context portability, additional effect-specific/module enrollment, portable export of the new disposition history, and installed two-phone/view-loss/provider interruption/account-change/storage/fault/migration/backup/rollback acceptance remain pending. All 58 full-scope workboard entries, 41 original runtime gates and eight additional reporting/cost gates stay open. No deployment, configuration change, CI trigger, local APK build/install, live operation, commit or push occurred.
+
+## 24. 24 October — Portable recovery journals without approval replay
+
+Version-2 production bundles now preserve complete authority family receipts, local disposition/handoff history and original pending identities. Read-only receipt lookup and stable family proofs verify exact sources, claims, lineage, history and successor barriers without resolving decisions or creating approvals. Recomputed checksums cannot omit known audit history. Existing journal-free version 1 remains readable; known histories require the new format.
+
+Adoption into an empty Studio store retains the source job ID needed by original pending production authority and preserves cancellation, claims/configuration, immutable family receipts and local CAS history. Unacknowledged imported decisions cannot fall through to apply; explicit expired reconciliation can only obtain the original no-effect fence. Imported handoff intent cannot create a missing original approval or legacy successor. Scheduling and provider work never start as part of import. Scope is bounded to 64 original claims, 128 complete family receipts and 512,000 bundle bytes; larger histories are held rather than pruned.
+
+Full Studio regression passed 1,605 tests in 96 files, including 20 portable-journal cases. The final 20-case focused run emitted a checksum-verified synthetic example. All three typechecks, required offline Android compatibility (769 tests in 95 suites, up to date), seven relevant script checks and existing disposition/production/fallback desktop/mobile fixtures passed. Real independent Prisma SQLite source/destination stores retain original source state and imported history. See [portable recovery journal handoff](../../MAPI/Sleeper-cell-main/docs/phase6/portable-recovery-journal-handoff.md), [validation/source hashes](../../MAPI/Sleeper-cell-main/docs/phase6/portable-recovery-journal-validation.json) and [synthetic version-2 example](../../MAPI/Sleeper-cell-main/docs/phase6/evidence/portable-recovery-journal-example.json).
+
+This supersedes the disposition-aware portable bundle gap above. Required inherited-conversation/external-rule portability, other module/playbook enrollment and installed two-phone/view-loss/provider interruption/account-change/storage/fault/migration/backup/rollback acceptance remain pending. All 58 full-scope workboard entries, 41 original runtime gates and eight additional reporting/cost gates remain open. Recovery flags stay off. No deployment, configuration change, CI trigger, local APK build/install, live operation, commit or push occurred.

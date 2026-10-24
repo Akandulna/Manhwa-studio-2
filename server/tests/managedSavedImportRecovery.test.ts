@@ -1,3 +1,4 @@
+import {SavedCropRecoveryBridge,resolveSavedCropScope,currentSavedCropInput,type SavedCropTarget} from '../src/services/savedCropRecoveryBridge.js'
 import {createRequire} from 'node:module'
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -13,7 +14,7 @@ import {SAVED_IMPORT_SCHEMA,type SavedImportFence,type SavedImportRecord} from '
 import {MANAGED_CAPABILITIES,TaskConflict} from '../src/services/managedTaskProtocol.js'
 const {DatabaseSync}=createRequire(import.meta.url)('node:sqlite')
 const folders:string[]=[],databases:any[]=[]
-afterEach(async()=>{vi.restoreAllMocks();for(const db of databases.splice(0))try{db.close()}catch{};for(const f of folders.splice(0))await fs.rm(f,{recursive:true,force:true})})
+afterEach(async()=>{vi.restoreAllMocks();vi.unstubAllEnvs();for(const db of databases.splice(0))try{db.close()}catch{};for(const f of folders.splice(0))await fs.rm(f,{recursive:true,force:true})})
 const studio={role:'studio'} as const,phone={role:'phone',deviceId:'phone'} as const
 const token='s'.repeat(40),phoneToken='p'.repeat(40)
 async function setup(){
@@ -45,11 +46,11 @@ async function setup(){
  const destination=new ManagedArtifactDestination(path.join(root,'restored')),destinationId=await savedImportDestinationId(destination)
  const requests:string[]=[]
  const request=(action:string,details:Record<string,unknown>={},f=fence,d=destinationId,bearer=token)=>api.handle(new Request('https://fixture/managed/recovery/saved-import',{method:'POST',headers:{Authorization:'Bearer '+bearer},body:JSON.stringify({schema:SAVED_IMPORT_SCHEMA,action,fence:f,destinationId:d,details})}))
- const transport:SavedImportRecoveryTransport={singleAttempt:true,artifacts:{async load(id){requests.push('load');const r=await api.handle(new Request('https://fixture/managed/artifacts/'+id,{headers:{Authorization:'Bearer '+token}}));if(r.status!==200)throw new TaskConflict('Artifact read rejected');const raw=await r.json();return {record:raw.record,task:raw.task,attempt:raw.attempt,bytes:new TextEncoder().encode(raw.document)}},async publish(){throw new Error('No publication permitted')}},async call(action,f,d,details){requests.push(action);const response=await request(action,details,f,d);const body=await response.json();if(response.status!==200)throw new TaskConflict(body.error);return body.result}}
+ const transport:SavedImportRecoveryTransport={singleAttempt:true,get globalEnabled(){return env.MANAGED_SAVED_IMPORT_RECOVERY==='1'},artifacts:{async load(id){requests.push('load');const r=await api.handle(new Request('https://fixture/managed/artifacts/'+id,{headers:{Authorization:'Bearer '+token}}));if(r.status!==200)throw new TaskConflict('Artifact read rejected');const raw=await r.json();return {record:raw.record,task:raw.task,attempt:raw.attempt,bytes:new TextEncoder().encode(raw.document)}},async publish(){throw new Error('No publication permitted')}},async call(action,f,d,details){requests.push(action);const response=await request(action,details,f,d);const body=await response.json();if(response.status!==200)throw new TaskConflict(body.error);return body.result}}
  const control=async(change:Partial<SavedImportRecord>={})=>{const old=await transport.call('inspect',fence,destinationId,{});return transport.call('control',fence,destinationId,{revision:old?.revision??0,enabled:true,paused:false,cancelled:false,...change})}
  const current=()=>resolveManagedCropInput(identity,spec,sourceFile)
  const snapshot=()=>({tasks:db.prepare('SELECT * FROM managed_tasks ORDER BY id').all(),attempts:db.prepare('SELECT * FROM managed_attempts ORDER BY id').all(),commands:db.prepare('SELECT * FROM managed_commands ORDER BY id').all(),artifacts:db.prepare('SELECT * FROM managed_artifacts ORDER BY id').all(),reservations:db.prepare('SELECT * FROM managed_reservations ORDER BY resource').all()})
- return {a,sql,tx,env,root,fence,destination,destinationId,transport,control,current,sourceFile,request,requests,receipt,snapshot,run:()=>new ManagedSavedImportRecovery(transport).run(fence,'recovery_one',destination,current,new AbortController().signal),record:()=>transport.call('inspect',fence,destinationId,{}),afterGet:(hook:(()=>void)|null)=>{afterGet=hook},advance:()=>now+=60_000,restart:()=>{db.close();db=new DatabaseSync(database);databases.push(db);api=make()}}
+ return {input:{identity,spec,sourceFile,folder:'fixture',filename:'page.png',destination:destination.rootPath},a,sql,tx,env,root,fence,destination,destinationId,transport,control,current,sourceFile,request,requests,receipt,snapshot,run:()=>new ManagedSavedImportRecovery(transport).run(fence,'recovery_one',destination,current,new AbortController().signal),record:()=>transport.call('inspect',fence,destinationId,{}),afterGet:(hook:(()=>void)|null)=>{afterGet=hook},now:()=>now,advance:()=>now+=60_000,restart:()=>{db.close();db=new DatabaseSync(database);databases.push(db);api=make()}}
 }
 describe('fenced saved crop local import recovery',()=>{
  it('rebuilds and verifies a real immutable local projection without changing cloud task/history or publishing',async()=>{
@@ -58,9 +59,21 @@ describe('fenced saved crop local import recovery',()=>{
   expect((await e.record())!.actions[0].phase).toBe('verified');expect(e.snapshot()).toEqual(before);expect(publish).not.toHaveBeenCalled()
   expect(e.requests.filter(x=>x==='reserve')).toHaveLength(1);expect(e.requests.filter(x=>x==='start')).toHaveLength(1)
  })
+ it('reports authoritative switch status to the HTTP transport and rejects malformed revision envelopes',async()=>{
+  const e=await setup(),fetch=vi.spyOn(globalThis,'fetch').mockImplementation(async(_url,init)=>{
+   const raw=JSON.parse(init!.body as string);return e.request(raw.action,raw.details,raw.fence,raw.destinationId)
+  })
+  const client=savedImportRecoveryTransport('https://fixture/','workspace',token)
+  expect(client.globalEnabled).toBe(false);await client.call('inspect',e.fence,e.destinationId,{});expect(client.globalEnabled).toBe(true)
+  delete e.env.MANAGED_SAVED_IMPORT_RECOVERY
+  expect(await client.call('inspect',e.fence,e.destinationId,{})).toBeNull();expect(client.globalEnabled).toBe(false)
+  e.env.MANAGED_SAVED_IMPORT_RECOVERY='1'
+  expect((await e.request('reserve',null as any)).status).toBe(409)
+  expect(fetch).toHaveBeenCalledTimes(2)
+ })
  it('is default off, requires a Studio principal and requires explicit per-unit enablement',async()=>{
   const e=await setup();delete e.env.MANAGED_SAVED_IMPORT_RECOVERY
-  expect((await e.request('inspect')).status).toBe(503);e.env.MANAGED_SAVED_IMPORT_RECOVERY='1'
+  expect((await e.request('inspect')).status).toBe(200);e.env.MANAGED_SAVED_IMPORT_RECOVERY='1'
   expect((await e.request('inspect',{},e.fence,e.destinationId,phoneToken)).status).toBe(403)
   await expect(e.run()).rejects.toThrow('disabled');expect((await e.request('inspect',{}, {...e.fence,workspaceId:'foreign'})).status).toBe(409)
  })
@@ -202,5 +215,173 @@ describe('fenced saved crop local import recovery',()=>{
   expect((await e.request('reserve',{actionId:'next'})).status).toBe(503)
   expect((await e.request('finish',{actionId:'first',outcome:'unknown',evidenceRef:'evidence/stopped'})).status).toBe(200)
   expect((await e.record())!.actions[0].phase).toBe('unknown')
+ })
+})
+
+describe('server recovery panel bridge with real relay SQL and filesystem',()=>{
+ async function fixture(){
+  const e=await setup()
+  const scope=await resolveSavedCropScope(e.input,{task:e.a.timeline(studio,e.fence.taskId).task,destination:e.destination.rootPath},{timeline:async id=>e.a.timeline(studio,id),artifacts:e.transport.artifacts},e.current)
+  const deps={transport:e.transport,enabled:()=>true,async resolve(pageId:string){if(pageId!=='approved_page')throw new Error('Unknown page');return scope}}
+  const bridge=new SavedCropRecoveryBridge(deps)
+  const perform=(action:string,revision=0,actionId?:string,target:SavedCropTarget=scope.target)=>bridge.perform('approved_page',{action,target,expectedRevision:revision,...(actionId?{actionId}:{})})
+  return {...e,bridge,perform,scope,deps}
+ }
+ it('honors a detached local hold arriving during an authority read before writing any restored bytes',async()=>{
+  const e=await fixture();const enabled=await e.perform('enable');let held=false
+  const bridge=new SavedCropRecoveryBridge({...e.deps,assertAdmission:async()=>{if(held)throw new Error('Detached local stop')}})
+  const current=e.scope.current;e.scope.current=async()=>{const source=await current();if(e.requests.includes('start'))held=true;return source}
+  await expect(bridge.perform('approved_page',{action:'run',target:e.scope.target,expectedRevision:enabled.episode!.revision,actionId:'guarded'})).rejects.toThrow('Detached local stop')
+  expect((await e.record())!.actions.at(-1)?.phase).toBe('safe_failure')
+  expect(await e.destination.inspectProjection(await e.transport.artifacts.load(e.fence.artifactId))).toBe('missing')
+ })
+ it('discovers one opaque target and restores once after explicit inspection and enablement',async()=>{
+  const e=await fixture(),before=e.snapshot()
+  expect(await e.bridge.targets('approved_page')).toEqual([e.scope.target]);expect(JSON.stringify(e.scope.target)).not.toContain(e.root)
+  expect(e.requests.filter(x=>['reserve','start','control'].includes(x))).toEqual([])
+  const inspected=await e.perform('inspect');expect(inspected).toMatchObject({canonical:true,sourceMatches:true,globalEnabled:true,localState:'missing',episode:null})
+  const enabled=await e.perform('enable');expect(enabled.episode!.enabled).toBe(true)
+  const done=await e.perform('run',enabled.episode!.revision,'bridge_action');expect(done.localState).toBe('verified');expect(done.episode!.actions[0].phase).toBe('verified')
+  await expect(e.perform('run',done.episode!.revision,'another_action')).rejects.toThrow('held')
+  expect(e.snapshot()).toEqual(before)
+ })
+ it('requires both local and relay switches and allows read-only inspection with no episode while off',async()=>{
+  const e=await fixture();delete e.env.MANAGED_SAVED_IMPORT_RECOVERY
+  const view=await e.perform('inspect');expect(view.globalEnabled).toBe(false);expect(view.episode).toBeNull()
+  await expect(e.perform('enable')).rejects.toThrow('disabled')
+  e.env.MANAGED_SAVED_IMPORT_RECOVERY='1';e.deps.enabled=()=>false
+  await expect(e.perform('enable')).rejects.toThrow('disabled');expect((await e.perform('inspect')).localState).toBe('missing')
+ })
+ it('rejects browser paths, forged scope, unapproved pages, extra fields and stale revisions',async()=>{
+  const e=await fixture()
+  await expect(e.bridge.targets('../foreign')).rejects.toThrow('Unknown page')
+  for(const target of [{...e.scope.target,destinationId:'a'.repeat(64)},{...e.scope.target,artifactId:'foreign'},{...e.scope.target,destination:'/tmp/arbitrary'}])await expect(e.perform('inspect',0,undefined,target)).rejects.toThrow('approved')
+  await expect(e.bridge.perform('approved_page',{action:'inspect',target:e.scope.target,expectedRevision:0,token:'secret'})).rejects.toThrow('Exact')
+  const enabled=await e.perform('enable')
+  await expect(e.perform('run',0,'stale')).rejects.toThrow('revision')
+  const revision=enabled.episode!.revision
+  await e.control({paused:true});expect((await e.request('reserve',{actionId:'atomic_stale',revision})).status).toBe(409)
+  expect((await e.record())!.actions).toHaveLength(0)
+ })
+ it('checks revisions atomically even if controls change after inspection but before reserve',async()=>{
+  const e=await fixture();const enabled=await e.perform('enable'),revision=enabled.episode!.revision
+  await e.control();expect((await e.request('reserve',{actionId:'stale_but_enabled',revision})).status).toBe(409)
+  expect((await e.record())!.actions).toHaveLength(0)
+ })
+ it('shows changed actual source and corrupt partial files without spending a recovery attempt',async()=>{
+  const e=await fixture(),artifact=path.join(e.destination.rootPath,e.fence.taskId.slice(12),e.fence.attemptId,e.fence.artifactId,'artifact.json')
+  await fs.mkdir(path.dirname(artifact),{recursive:true});await fs.writeFile(artifact,'keep corrupt evidence')
+  const inspected=await e.perform('inspect');expect(inspected.localState).toBe('conflict');await expect(e.perform('enable')).rejects.toThrow('held')
+  expect(await fs.readFile(artifact,'utf8')).toBe('keep corrupt evidence');expect(await e.record()).toBeNull()
+  await fs.writeFile(e.sourceFile,await sharp({create:{width:6,height:6,channels:3,background:'black'}}).png().toBuffer())
+  expect((await e.perform('inspect')).sourceMatches).toBe(false)
+ })
+ it('re-reads the actual source and private binding at each import boundary',async()=>{
+  const e=await fixture(),binding={task:e.a.timeline(studio,e.fence.taskId).task,destination:e.destination.rootPath}
+  const fresh=()=>Promise.resolve(e.input)
+  expect((await currentSavedCropInput(fresh,async()=>binding,e.scope.target)).source.width).toBe(12)
+  await expect(currentSavedCropInput(fresh,async()=>null,e.scope.target)).rejects.toThrow('changed')
+  await expect(currentSavedCropInput(fresh,async()=>({...binding,destination:path.join(e.root,'another')}),e.scope.target)).rejects.toThrow('changed')
+  await fs.writeFile(e.sourceFile,await sharp({create:{width:6,height:6,channels:3,background:'black'}}).png().toBuffer())
+  await expect(currentSavedCropInput(fresh,async()=>binding,e.scope.target)).rejects.toThrow('dependency')
+ })
+ it('rejects symlink destinations and accepts matching staged files without writing during inspection',async()=>{
+  const e=await fixture(),published=e.a.timeline(studio,e.fence.taskId).task,snapshot=await e.transport.artifacts.load(e.fence.artifactId)
+  await fs.mkdir(e.destination.rootPath);await fs.symlink(path.join(e.root,'original',published.id.slice(12)),path.join(e.destination.rootPath,published.id.slice(12)))
+  expect((await e.perform('inspect')).localState).toBe('conflict')
+  const clean=new ManagedArtifactDestination(path.join(e.root,'partial'));await clean.stage(snapshot)
+  const stage=vi.spyOn(clean,'stage');expect(await clean.inspectProjection(snapshot)).toBe('missing');expect(stage).not.toHaveBeenCalled()
+  expect(await clean.readPublished(published)).toBeNull()
+ })
+ it('retains a lost action across restart and reconciles completed local bytes with both switches off',async()=>{
+  const e=await fixture(),enabled=await e.perform('enable'),call=e.transport.call.bind(e.transport)
+  vi.spyOn(e.transport,'call').mockImplementation(async(action,f,d,details)=>{if(action==='finish')throw new Error('lost acknowledgment');return call(action,f,d,details)})
+  await expect(e.perform('run',enabled.episode!.revision,'retained_action')).rejects.toThrow('lost acknowledgment')
+  vi.restoreAllMocks();e.restart();delete e.env.MANAGED_SAVED_IMPORT_RECOVERY;e.deps.enabled=()=>false
+  const before=e.requests.filter(x=>x==='reserve').length
+  const result=await e.perform('reconcile',0,'retained_action');expect(result.localState).toBe('verified');expect(result.globalEnabled).toBe(false);expect(result.episode!.actions[0].phase).toBe('verified')
+  expect(e.requests.filter(x=>x==='reserve')).toHaveLength(before)
+ })
+ it('keeps unfinished actions held and refuses to reconcile a different lost action identity',async()=>{
+  const e=await fixture();await e.control();await e.request('reserve',{actionId:'original'});await e.request('start',{actionId:'original'});e.restart()
+  await expect(e.perform('reconcile',0,'other')).rejects.toThrow('unresolved')
+  const result=await e.perform('reconcile',0,'original');expect(result.episode!.actions[0].phase).toBe('executing');expect(result.localState).toBe('missing')
+  await expect(e.perform('run',result.episode!.revision,'replacement')).rejects.toThrow('held')
+ })
+})
+
+// Automation uses the same real relay authority, immutable bytes and filesystem validator as the panel.
+import {restoreManagedProductionProjection} from '../src/services/managedProductionRecovery.js'
+import {AutomationRecovery} from '../src/services/automationRecovery.js'
+import {bindManagedCrop} from '../src/services/managedCropProjection.js'
+import {PrismaClient} from '@prisma/client'
+import {productionJobDatabase} from '../src/services/productionJobDatabase.js'
+import {runManagedProduction} from '../src/services/managedProduction.js'
+async function productionFixture(){
+ const e=await setup();vi.stubEnv('DOWNLOAD_ROOT','/');e.input.folder=e.root
+ await bindManagedCrop(e.input.folder,e.input.filename,e.a.timeline(studio,e.fence.taskId).task,e.destination.rootPath)
+ const db=new PrismaClient({datasources:{db:{url:'file:'+path.join(e.root,'diagnoses.sqlite')}}})
+ await db.$executeRawUnsafe('CREATE TABLE Setting (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)')
+ const diagnoses=new AutomationRecovery(productionJobDatabase(()=>db),e.now)
+ const authority={ready:vi.fn(async()=>{}),operation:vi.fn(async()=>{throw new Error('No task mutation allowed')}),timeline:vi.fn(async(id:string)=>e.a.timeline(studio,id)),artifacts:e.transport.artifacts}
+ const report=vi.fn(async()=>{}),wait=vi.fn(async()=>{e.advance()}),deps={authority,transport:e.transport,diagnoses,enabled:()=>true,report,wait,now:e.now,refreshInput:async()=>e.input}
+ const signal=new AbortController()
+ const run=()=>restoreManagedProductionProjection(e.input,signal.signal,deps)
+ const unit={workspaceId:e.fence.workspaceId,taskId:e.fence.taskId,attemptId:e.fence.attemptId,generation:1,fingerprint:e.fence.fingerprint}
+ const enroll=async()=>{await e.control();await expect(run()).rejects.toThrow('explicitly enable');const d=(await diagnoses.inspect(unit))!;await diagnoses.control(unit,d.revision,{enabled:true,paused:false,cancelled:false})}
+ return {...e,db,diagnoses,authority,report,wait,deps,signal,run,unit,enroll}
+}
+describe('Automation Manager production recovery uses the existing shared authority',()=>{
+ it('requires explicit enrollment, restores through production, and does not republish or spend on verified reuse',async()=>{
+  const e=await productionFixture()
+  try{
+   await e.enroll();const before=e.snapshot()
+   await runManagedProduction('phone','profile',e.signal.signal,{...e.deps,inputs:async()=>[e.input],restoreVerified:()=>e.run()})
+   expect((await e.record())?.actions.map(a=>a.phase)).toEqual(['verified']);expect(e.snapshot()).toEqual(before)
+   expect(e.authority.operation).not.toHaveBeenCalled();expect((await e.diagnoses.inspect(e.unit))?.decision.state).toBe('verified')
+   const old=await e.diagnoses.inspect(e.unit);await e.run();expect(await e.diagnoses.inspect(e.unit)).toEqual(old)
+   expect(e.requests.filter(r=>r==='reserve')).toHaveLength(1)
+  }finally{await e.db.$disconnect()}
+ })
+ it('reconciles an original unknown write after restart while both recovery switches are off',async()=>{
+  const e=await productionFixture()
+  try{
+   await e.enroll();const original=e.transport.call.bind(e.transport);let fail=true
+   e.transport.call=async(action,f,d,details)=>{if(action==='finish'&&details.outcome==='verified'&&fail){fail=false;throw new Error('Lost finish transport')}return original(action,f,d,details)}
+   await expect(e.run()).rejects.toThrow('Lost finish');expect((await e.record())?.actions[0].phase).toBe('unknown')
+   e.env.MANAGED_SAVED_IMPORT_RECOVERY='0';e.deps.enabled=()=>false;e.restart();await e.run()
+   expect((await e.record())?.actions[0].phase).toBe('verified');expect(e.requests.filter(r=>r==='reserve')).toHaveLength(1)
+  }finally{await e.db.$disconnect()}
+ })
+ it('waits for the authority cooldown after a safe read failure and counts the next physical action',async()=>{
+  const e=await productionFixture()
+  try{
+   await e.enroll();const load=e.transport.artifacts.load.bind(e.transport.artifacts);let armed=false,failed=false
+   const call=e.transport.call.bind(e.transport)
+   e.transport.call=async(action,f,d,details)=>{const result=await call(action,f,d,details);if(action==='start'&&!failed)armed=true;return result}
+   e.transport.artifacts.load=async id=>{if(armed&&!failed){failed=true;throw new Error('Read interrupted before effect')}return load(id)}
+   await e.run();expect((await e.record())?.actions.map(a=>a.phase)).toEqual(['safe_failure','verified'])
+   expect(e.wait).toHaveBeenCalledTimes(1);expect(e.requests.filter(r=>r==='reserve')).toHaveLength(2)
+   expect((await e.diagnoses.inspect(e.unit))?.budget.used).toBe(2)
+  }finally{await e.db.$disconnect()}
+ })
+ it.each(['cancel','input'] as const)('rechecks %s changes after an asynchronous authority check, before local writes',async mode=>{
+  const e=await productionFixture()
+  try{
+   await e.enroll();const call=e.transport.call.bind(e.transport)
+   e.transport.call=async(action,f,d,details)=>{const result=await call(action,f,d,details);if(action==='check'){
+    if(mode==='cancel'){const old=(await e.diagnoses.inspect(e.unit))!;await e.diagnoses.control(e.unit,old.revision,{enabled:true,paused:false,cancelled:true})}
+    else e.deps.refreshInput=async()=>({...e.input,spec:{...e.input.spec,pageRevision:'changed'}})
+   }return result}
+   await expect(e.run()).rejects.toThrow();expect(await e.destination.inspectProjection(await e.transport.artifacts.load('artifact'))).toBe('missing')
+   expect(e.requests.filter(r=>r==='reserve')).toHaveLength(1)
+  }finally{await e.db.$disconnect()}
+ })
+ it('holds missing files with an unknown original action without issuing a second reserve',async()=>{
+  const e=await productionFixture()
+  try{
+   await e.enroll();await e.request('reserve',{actionId:'original'});await e.request('start',{actionId:'original'})
+   await expect(e.run()).rejects.toThrow('reconciliation');expect(e.requests.filter(r=>r==='reserve')).toHaveLength(0)
+  }finally{await e.db.$disconnect()}
  })
 })

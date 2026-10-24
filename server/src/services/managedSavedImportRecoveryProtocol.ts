@@ -12,7 +12,7 @@ export function parseSavedImportFence(v:unknown):SavedImportFence {
  return {...v} as SavedImportFence
 }
 // Resource/artifact/destination changes cannot create another budget for the same authoritative unit.
-export const savedImportKey=(f:SavedImportFence)=>canonicalJson([f.workspaceId,f.taskId,f.attemptId,f.generation,f.fingerprint])
+export const savedImportKey=(f:Pick<SavedImportFence,'workspaceId'|'taskId'|'attemptId'|'generation'|'fingerprint'>)=>canonicalJson([f.workspaceId,f.taskId,f.attemptId,f.generation,f.fingerprint])
 export function parseSavedImportRecord(v:unknown):SavedImportRecord{
  recoveryExact(v,['schema','fence','destinationId','revision','enabled','paused','cancelled','nextEligibleAt','actions'])
  parseSavedImportFence(v.fence)

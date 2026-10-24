@@ -20,6 +20,8 @@ vi.mock('ws', () => ({ default: class extends EventEmitter {
 } }))
 
 afterEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
   vi.useRealTimers()
   vi.unstubAllEnvs()
 })
@@ -27,12 +29,20 @@ afterEach(() => {
 async function setup() {
   vi.resetModules()
   vi.useFakeTimers()
+  vi.spyOn(Math,'random').mockReturnValue(1)
   state.sockets = []
   state.fail = false
   vi.stubEnv('RELAY_URL', 'https://relay.example')
   vi.stubEnv('RELAY_TOKEN', 'test')
+  const settings=new Map<string,string>()
+  const {configureRelayTraffic}=await import('../relayTraffic.js')
+  configureRelayTraffic({setting:{
+    findUnique:async({where}:any)=>settings.has(where.key)?{value:settings.get(where.key)}:null,
+    upsert:async({where,create,update}:any)=>{const value=settings.has(where.key)?update.value??settings.get(where.key):create.value;settings.set(where.key,value);return {key:where.key,value}}
+  }} as never)
   const relay = await import('../phoneRelay.js')
   relay.startPhoneRelay({ emit: vi.fn() } as never)
+  await vi.advanceTimersByTimeAsync(0)
   return relay
 }
 
@@ -59,4 +69,28 @@ describe('relay connection recovery', () => {
     await vi.advanceTimersByTimeAsync(5_000)
     expect(state.sockets).toHaveLength(2)
   })
+  it('persists an upgrade 429 before scheduling another handshake',async()=>{
+    await setup()
+    state.sockets[0].emit('unexpected-response',{destroy:vi.fn()},{statusCode:429,headers:{'retry-after':'600'},resume:vi.fn()})
+    await vi.advanceTimersByTimeAsync(599_999)
+    expect(state.sockets).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(10_001)
+    expect(state.sockets).toHaveLength(2)
+  })
+  it('blocks authentication failures until configuration changes',async()=>{
+    await setup()
+    state.sockets[0].emit('unexpected-response',{destroy:vi.fn()},{statusCode:401,headers:{},resume:vi.fn()})
+    await vi.advanceTimersByTimeAsync(3_600_000)
+    expect(state.sockets).toHaveLength(1)
+  })
+  it('blocks command fallbacks after a budget notification on an open socket',async()=>{
+    const relay=await setup()
+    state.sockets[0].emit('open')
+    state.sockets[0].emit('message',Buffer.from(JSON.stringify({type:'relay:budget',retryAfter:600})))
+    await vi.advanceTimersByTimeAsync(0)
+    const fetch=vi.fn();vi.stubGlobal('fetch',fetch)
+    await expect(relay.sendPhoneRequest()).rejects.toThrow('paused')
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
 })

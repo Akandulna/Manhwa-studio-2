@@ -14,7 +14,7 @@ export async function savedImportRecoveryApi(request:Request,actor:TaskPrincipal
  switch(raw.action){
  case 'inspect':recoveryExact(d,[]);result=recovery.inspect(actor,f,raw.destinationId);break
  case 'control':recoveryExact(d,['revision','enabled','paused','cancelled']);result=recovery.control(actor,f,raw.destinationId,d.revision,d.enabled,d.paused,d.cancelled);break
- case 'reserve':recoveryExact(d,['actionId']);result=recovery.reserve(actor,f,raw.destinationId,d.actionId);break
+ case 'reserve':recoveryExact(d,Object.hasOwn(d??{},'revision')?['actionId','revision']:['actionId']);result=recovery.reserve(actor,f,raw.destinationId,d.actionId,d.revision);break
  case 'start': {
   recoveryExact(d,['actionId'])
   if(!bucket)throw new TaskConflict('Artifact storage unavailable')
@@ -27,6 +27,5 @@ export async function savedImportRecoveryApi(request:Request,actor:TaskPrincipal
  case 'finish':recoveryExact(d,['actionId','outcome','evidenceRef']);result=recovery.finish(actor,f,raw.destinationId,d.actionId,d.outcome,d.evidenceRef);break
  default:throw new TaskConflict('Unsupported recovery operation')
  }
- if(!enabled&&raw.action==='inspect'&&result===null)return Response.json({error:'Saved import recovery is disabled'},{status:503})
- return Response.json({schema:SAVED_IMPORT_SCHEMA,result})
+ return Response.json({schema:SAVED_IMPORT_SCHEMA,globalEnabled:enabled,budget:recovery.budget(f),result})
 }

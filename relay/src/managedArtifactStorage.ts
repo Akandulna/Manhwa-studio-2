@@ -24,9 +24,9 @@ export async function readManagedArtifact(bucket:ManagedArtifactBucket,record:Ma
  return bytes
 }
 /** Conditional creation prevents an overlapping request or a retry from overwriting attempt bytes. */
-export async function storeManagedArtifact(bucket:ManagedArtifactBucket,record:ManagedArtifactRecord,bytes:Uint8Array):Promise<void> {
+export async function storeManagedArtifact(bucket:ManagedArtifactBucket,record:ManagedArtifactRecord,bytes:Uint8Array,beforePut?:()=>void):Promise<void> {
  const existing=await bucket.get(record.ref)
- if(!existing)await bucket.put(record.ref,bytes,{onlyIf:{etagDoesNotMatch:'*'},httpMetadata:{contentType:'application/json'}})
+ if(!existing){beforePut?.();await bucket.put(record.ref,bytes,{onlyIf:{etagDoesNotMatch:'*'},httpMetadata:{contentType:'application/json'}})}
  const readback=await bucket.get(record.ref)
  if(!readback||readback.size>MAX_MANAGED_ARTIFACT_BYTES||await artifactHash(new Uint8Array(await readback.arrayBuffer()))!==record.sha256)throw new TaskConflict('Immutable artifact bytes conflict or failed readback')
 }

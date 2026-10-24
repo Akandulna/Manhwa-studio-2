@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildProcessSeries, emptyStages, mergeStage, type ProcessChapter } from '../seriesProcessModel.js'
+import { buildProcessSeries, emptyStages, mergeStage, processPublishDelay, PROCESS_PUBLISH_INTERVAL_MS, type ProcessChapter } from '../seriesProcessModel.js'
 
 const series = { id: 's', title: 'Demo', rootFolder: 'Demo' }
 const chapter = (number: number, en = true, hi = true): ProcessChapter => ({
@@ -49,5 +49,25 @@ describe('20-chapter series process parts', () => {
   it('never adds duplicate voiceover counts from two devices', () => {
     expect(mergeStage({ state: 'partial', done: 5, total: 10 }, { state: 'partial', done: 5, total: 10 })).toMatchObject({ done: 5, total: 10, state: 'partial' })
     expect(mergeStage({ state: 'partial', done: 5, total: 10 }, { state: 'done', done: 10, total: 10 }).state).toBe('done')
+  })
+})
+
+describe('process publication pacing', () => {
+  it('publishes promptly when quiet and at most every 30 seconds while progress keeps changing', () => {
+    const now = 1_000_000
+    expect(processPublishDelay(0, now)).toBe(600)
+    expect(processPublishDelay(now - PROCESS_PUBLISH_INTERVAL_MS, now)).toBe(600)
+    expect(processPublishDelay(now - 5_000, now)).toBe(25_000)
+    expect(processPublishDelay(now - 29_900, now)).toBe(600)
+    // A clock set backwards never stalls publication.
+    expect(processPublishDelay(now + 60_000, now)).toBe(600)
+    // Forty changes, one every 3 seconds, become five publications (one prompt, then one per 30 s) instead of forty.
+    let last = 0, due = 0, sent = 0
+    for (let t = 0; t <= 117_000; t += 3_000) {
+      if (due && t >= due) { last = due; sent++; due = 0 }
+      if (!due) due = t + processPublishDelay(last, t)
+    }
+    if (due) sent++
+    expect(sent).toBe(5)
   })
 })

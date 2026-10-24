@@ -6,6 +6,8 @@ import {accountIdValid as id,profileKey,scopeKey,scopeMatches,taskScope,parseAcc
 export class AccountWaiting extends TaskConflict {constructor(public selection:AccountSelection){super('No eligible account/profile; waiting')}}
 /** Shares the task authority's SQLite transaction and reservation table. No timers or provider requests here. */
 export class AccountAuthority {
+ recoveryAuditHooks?:{beforeClaim?(device:string,profile:string):void;claimed(audit:{id:string;deviceId:string;profileId:string;startedAt:number}):void;finished(audit:{id:string;deviceId:string;profileId:string;startedAt:number;finishedAt:number;state:string},profile:ManagedAccountProfile):void}
+
  constructor(private sql:TaskSql,private transaction:<T>(work:()=>T)=>T,private clock=()=>Date.now(),private reviewedPageQuarantine:(resource:string,attemptId:string)=>boolean=()=>false) {
   for(const name of ['profiles','accounts','quotas','policies','audits','events','waiting','issues'])sql.exec(`CREATE TABLE IF NOT EXISTS managed_account_${name} (id TEXT PRIMARY KEY, body TEXT NOT NULL)`)
  }
@@ -94,10 +96,27 @@ export class AccountAuthority {
    if((p.audit.retryNotBefore??0)>now)throw new TaskConflict('Failed audit retry cooldown remains active')
    const prior=this.get<{requestedAt:number}>('policies',key)
    if(prior&&(!Number.isSafeInteger(prior.requestedAt)||now-prior.requestedAt<15*60_000))throw new TaskConflict('Owner audit rechecks are limited to once per 15 minutes')
+   const priorAudit=structuredClone(p.audit)
    p.audit.dueAt=Math.min(p.audit.dueAt,now);p.audit.nextCheckAt=now
    const reason=this.auditReason(p);p.audit.state=reason?'deferred':'due';p.audit.reason=reason
-   this.put('profiles',p.id,p);this.put('policies',key,{requestedAt:now});return p
+   this.put('profiles',p.id,p);this.put('policies',key,{requestedAt:now,requestEventId:eventId,priorAudit});return p
   })
+ }
+ /** An unrelated later owner request must never be credited to an older recovery action. */
+ auditRequestOwned(device:string,profile:string,requestEventId:string):boolean {
+  const request=this.get<{requestEventId:string;priorAudit:ManagedAccountProfile['audit']}>('policies','audit-recheck:'+profileKey(device,profile)),p=this.profile(device,profile)
+  return !!request&&request.requestEventId===requestEventId&&!!request.priorAudit&&p.audit.cadenceHours===request.priorAudit.cadenceHours&&p.audit.lastSuccessfulAt===request.priorAudit.lastSuccessfulAt&&p.audit.retryNotBefore===request.priorAudit.retryNotBefore
+ }
+ /** Withdraw only this scheduling intent; never rewind a newer owner edit or release an audit claim. */
+ withdrawAuditRequest(actor:TaskPrincipal,device:string,profile:string,requestEventId:string):boolean {
+  this.studio(actor)
+  const key='audit-recheck:'+profileKey(device,profile),request=this.get<{requestedAt:number;requestEventId:string;priorAudit:ManagedAccountProfile['audit']}>('policies',key),p=this.profile(device,profile)
+  if(!request||request.requestEventId!==requestEventId||!request.priorAudit||p.audit.claimId!==null)return false
+  const old=request.priorAudit
+  if(p.audit.lastSuccessfulAt!==old.lastSuccessfulAt||p.audit.cadenceHours!==old.cadenceHours||p.audit.retryNotBefore!==old.retryNotBefore||p.audit.dueAt!==Math.min(old.dueAt,request.requestedAt)||p.audit.nextCheckAt!==request.requestedAt)return false
+  p.audit=structuredClone(old);this.put('profiles',p.id,p)
+  // Keep the immutable event and rate-limit marker; withdrawing never resets the 15-minute allowance.
+  return true
  }
  private reserved(resource:string){return this.sql.exec('SELECT attempt_id FROM managed_reservations WHERE resource = ?',resource).toArray().length>0}
  private accountReservations(account:string){return this.sql.exec<{resource:string;attempt_id:string}>("SELECT resource,attempt_id FROM managed_reservations WHERE substr(resource,1,?) = ?",('account:'+account+':').length,'account:'+account+':').toArray()}
@@ -123,14 +142,15 @@ export class AccountAuthority {
  auditClaim(actor:TaskPrincipal,eventId:string,profile:string){
   if(actor.role!=='phone')throw new TaskConflict('Authenticated auditing phone required')
   return this.transaction(()=>{
-   const p=this.profile(actor.deviceId,profile),prior=this.get<any>('audits',eventId)
+   let p=this.profile(actor.deviceId,profile);const prior=this.get<any>('audits',eventId)
    if(prior){if(prior.deviceId!==actor.deviceId||prior.profileId!==profile)throw new TaskConflict('Foreign audit receipt');return prior}
+   this.recoveryAuditHooks?.beforeClaim?.(actor.deviceId,profile);p=this.profile(actor.deviceId,profile)
    const reason=!this.policy()?.auditsEnabled?'audits_disabled':p.audit.claimId?'audit_in_progress':p.audit.dueAt>this.clock()?'not_due':Math.max(p.audit.nextCheckAt,p.audit.retryNotBefore??0)>this.clock()?'retry_delay':this.auditReason(p)
-   if(reason){if(!['not_due','audits_disabled','audit_in_progress'].includes(reason)){p.audit.state='deferred';p.audit.reason=reason;this.put('profiles',p.id,p)}return {state:'deferred',reason,dueAt:p.audit.dueAt}}
+   if(reason){if(!['not_due','audits_disabled','audit_in_progress'].includes(reason)){p.audit.state='deferred';p.audit.reason=reason;this.put('profiles',p.id,p)}return {state:'deferred',reason,dueAt:p.audit.dueAt,nextCheckAt:p.audit.nextCheckAt,retryNotBefore:p.audit.retryNotBefore}}
    if(!id(eventId))throw new TaskConflict('Exact audit ID required')
    const audit={id:eventId,deviceId:actor.deviceId,profileId:profile,state:'running',startedAt:this.clock(),finishedAt:null}
    for(const resource of ['device:'+actor.deviceId,'browser:'+actor.deviceId,'profile:'+actor.deviceId+':'+profile])this.sql.exec('INSERT INTO managed_reservations (resource,attempt_id) VALUES (?,?)',resource,'audit:'+eventId)
-   p.audit.claimId=eventId;p.audit.state='running';p.audit.reason=null;this.put('profiles',p.id,p);this.put('audits',eventId,audit);return audit
+   p.audit.claimId=eventId;p.audit.state='running';p.audit.reason=null;this.put('profiles',p.id,p);this.put('audits',eventId,audit);this.recoveryAuditHooks?.claimed(audit);return audit
   })
  }
  auditDefer(actor:TaskPrincipal,eventId:string,profile:string,reason:'busy'|'interrupted'){
@@ -155,6 +175,7 @@ export class AccountAuthority {
    this.put('profiles',p.id,p);audit.state=success?'success':'failed';audit.finishedAt=this.clock();this.put('audits',auditId,audit)
    // No expiry-based release: only the authenticated original worker acknowledges stopping its WebView.
    this.sql.exec('DELETE FROM managed_reservations WHERE attempt_id = ?','audit:'+auditId)
+   this.recoveryAuditHooks?.finished(audit,p)
    return {audit,profile:p}
   })
  }
@@ -197,6 +218,19 @@ export class AccountAuthority {
   attempt.accountId=account.id
   this.sql.exec('DELETE FROM managed_account_waiting WHERE id = ?',task.id)
   return {policy:this.policy()!,selectedAt:this.clock(),accountId:account.id,observationAt:p.observation!.checkedAt,quotaEvidence:this.rows<AccountQuota>('quotas').filter(q=>q.accountId===account.id&&(scopeMatches(q.scope,taskScope(task.spec))||scopeMatches(q.scope,{...taskScope(task.spec),feature:'uploads'}))),configuration:structuredClone(task.spec),reason:'Fresh signed-in identity, approved configuration, scoped quota policy and atomic shared capacity'}
+ }
+ /** Strict independent fallback prerequisites remain current on each successor execution admission. */
+ assertRetainedHandoff(task:CropTask,attempt:CropAttempt) {
+  const now=this.clock(),policy=this.policy(),pin=attempt.accountSelection,p=this.profile(attempt.deviceId,attempt.profileId),site=p.observation?.sites.chatgpt,link=p.links.chatgpt,account=attempt.accountId?this.get<ManagedAccount>('accounts',attempt.accountId):null
+  if(!pin||!policy?.enabled||!policy.contextPortable||canonicalJson(policy)!==canonicalJson(pin.policy)||canonicalJson(task.spec)!==canonicalJson(pin.configuration)||!p.observation||p.observation.checkedAt>now||now-p.observation.checkedAt>=120000||site?.login!=='signed_in'||!account||account.id!==pin.accountId||account.provider!=='openai'||!site.candidate||site.candidate!==link?.candidate||link.accountId!==account.id||account.candidate!==link.candidate)throw new TaskConflict('Independent fallback account or configuration changed')
+  const peer=this.peer(attempt.deviceId),enrollment=this.managed<{profileId:string}>('enrollment',attempt.deviceId)
+  if(enrollment?.profileId!==attempt.profileId||!peer||!peer.capabilities.includes('retained-candidate-handoff/1')||!peer.profileIds.includes(attempt.profileId)||Date.parse(peer.receivedAt)>now||now-Date.parse(peer.receivedAt)>=900000)throw new TaskConflict('Compatible handoff target is no longer current')
+  for(const resource of ['page:'+task.workspaceId+':'+task.pageId,'device:'+attempt.deviceId,'browser:'+attempt.deviceId,'profile:'+attempt.deviceId+':'+attempt.profileId])if(this.sql.exec<{attempt_id:string}>('SELECT attempt_id FROM managed_reservations WHERE resource = ?',resource).toArray()[0]?.attempt_id!==attempt.id)throw new TaskConflict('Exact successor resources required')
+  const slots=this.accountReservations(account.id)
+  if(slots.length>account.maxConcurrent||!slots.some(s=>s.attempt_id===attempt.id))throw new TaskConflict('Exact independent account capacity required')
+  const scope=taskScope(task.spec),quotas=this.rows<AccountQuota>('quotas').filter(q=>q.accountId===account.id&&(scopeMatches(q.scope,scope)||scopeMatches(q.scope,{...scope,feature:'uploads'})))
+  if(![scope,{...scope,feature:'uploads'}].every(s=>quotas.some(q=>scopeMatches(q.scope,s))))throw new TaskConflict('Both generation and upload quota evidence required')
+  if(quotas.some(q=>q.state!=='available'||!['observed','owner_supplied'].includes(q.evidence)||q.observedAt>now||now-q.observedAt>=policy.criticalMaxAgeHours*3600000||q.recheckAt!==null&&q.recheckAt<=now))throw new TaskConflict('Current independent quota evidence required')
  }
  clearWaiting(taskId:string){this.sql.exec('DELETE FROM managed_account_waiting WHERE id = ?',taskId)}
  waiting(taskId:string,selection:AccountSelection){

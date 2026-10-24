@@ -1,3 +1,6 @@
+import { deliverSnapshot, snapshotDigest } from './snapshotDelivery.js'
+import { r2Snapshot, snapshotJournal } from './snapshotDestinations.js'
+import { relayFetch, relayRetryDelay } from './relayTraffic.js'
 /** Shared listings and automatic prepared-chapter imports. R2 is durable; relay is the change notification. */
 import { randomUUID } from 'crypto'
 import path from 'path'
@@ -72,10 +75,10 @@ export function scheduleLibraryPublish(): void {
   if (publishing || publishTimer) return
   publishTimer = setTimeout(() => {
     publishTimer = null
-    void publishLibrary().catch(error => {
+    void publishLibrary().catch(async error => {
       console.error('[library-sync] publish will retry:', error)
       publishDirty = true
-      publishTimer = setTimeout(() => { publishTimer = null; scheduleLibraryPublish() }, 30_000)
+      publishTimer = setTimeout(() => { publishTimer = null; scheduleLibraryPublish() }, await relayRetryDelay().catch(()=>300_000))
     })
   }, 300)
   publishTimer.unref()
@@ -95,7 +98,7 @@ export async function publishLibrary(): Promise<void> {
       const deleted = new Set(controls.filter(c => c.deleted).map(c => c.folder))
       const rows = (await prisma.series.findMany({ where: { id: { in: owners.map(o => o.key.slice(OWNER.length)) } }, include: { chapters: { orderBy: { number: 'asc' }, include: { phoneSend: true } } } })).filter(s => !deleted.has(path.basename(s.rootFolder)))
       // A ZIP uploaded just before a failed index write must still become downloadable on every phone.
-      for (const row of rows) if (row.chapters.some(c => c.phoneSend?.sentAt)) await updatePhoneIndexes(row.id)
+
       const manifest: LibraryManifest = {
         schema: 'manhwa-library/1', deviceId, device: 'Manhwa Studio', updatedAt: new Date().toISOString(),
         controls, series: rows.map(s => ({ id: s.id, folder: path.basename(s.rootFolder), title: s.title, sourceSite: s.sourceSite,
@@ -106,20 +109,20 @@ export async function publishLibrary(): Promise<void> {
           }) }))
       }
       if (!manifest.series.length && !controls.length) return
-      const body = JSON.stringify(manifest)
-      const client = createClient(config)
-      try {
-        // The phones may use a different prefix from the desktop's production files.
-        const folder = await phoneZipFolder(client, config)
-        const prefix = folder.slice(0, -'manhwa/'.length)
-        await client.send(new PutObjectCommand({ Bucket: config.bucket, Key: `${prefix}library/${deviceId}.json`, Body: body, ContentType: 'application/json' }))
-      } finally { client.destroy() }
       const url = process.env.RELAY_URL?.trim().replace(/\/+$/, '')
       const token = process.env.RELAY_TOKEN?.trim()
-      if (url && token) {
-        const response = await fetch(`${url}/receipt/library?device=${deviceId}`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body, signal: AbortSignal.timeout(30_000) })
-        if (!response.ok) throw new Error(`Library relay returned ${response.status}`)
-      }
+      const client=createClient(config)
+      let prefix:string
+      try {prefix=(await phoneZipFolder(client,config)).slice(0,-'manhwa/'.length)}finally{client.destroy()}
+      const targets=[r2Snapshot('r2:'+snapshotDigest(config),()=>createClient(config),config.bucket,`${prefix}library/${deviceId}.json`,async()=>{
+        for(const row of rows)if(row.chapters.some(c=>c.phoneSend?.sentAt))await updatePhoneIndexes(row.id)
+      })]
+      if(url&&token)targets.push({id:'relay:'+snapshotDigest({url,token}),send:async body=>{
+        const response=await relayFetch(`${url}/receipt/library?device=${deviceId}`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body,signal:AbortSignal.timeout(30_000)})
+        await response.body?.cancel()
+        if(!response.ok)throw new Error(`Library relay returned ${response.status}`)
+      }})
+      await deliverSnapshot(snapshotJournal(prisma),'snapshotDelivery/library',snapshotDigest({series:manifest.series,controls}),manifest,targets)
       if (deleted.size) scheduleLibraryCleanup()
     } while (publishDirty)
   })()

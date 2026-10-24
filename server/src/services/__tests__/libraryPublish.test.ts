@@ -5,8 +5,8 @@ vi.mock('../../index.js', () => ({ prisma: {
   setting: {
     findUnique: async ({ where }: any) => state.settings.has(where.key) ? { key: where.key, value: state.settings.get(where.key) } : null,
     findMany: async ({ where }: any) => [...state.settings].filter(([key, value]) => key.startsWith(where.key.startsWith) && (where.value === undefined || value === where.value)).map(([key, value]) => ({ key, value })),
-    upsert: async ({ where, create }: any) => {
-      if (!state.settings.has(where.key)) state.settings.set(where.key, create.value)
+    upsert: async ({ where, create, update }: any) => {
+      state.settings.set(where.key,state.settings.has(where.key)?update.value??state.settings.get(where.key):create.value)
       return { key: where.key, value: state.settings.get(where.key) }
     },
   },

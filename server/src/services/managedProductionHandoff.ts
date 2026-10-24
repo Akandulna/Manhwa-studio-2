@@ -2,7 +2,7 @@ import type {ProductionJob,ProductionConfig} from './productionAutomationModel.j
 import {productionDevices} from './productionAutomationModel.js'
 import {TaskConflict} from './managedTaskProtocol.js'
 export interface ProductionHandoffIntent {
- eventId:string;newClaimEventId:string;claimEventId:string;taskId:string;attemptId:string;generation:number;fingerprint:string;stopCommandId:string;deviceId:string;profileId:string;createdAt:string
+ accountCandidateId?:string;eventId:string;newClaimEventId:string;claimEventId:string;taskId:string;attemptId:string;generation:number;fingerprint:string;stopCommandId:string;deviceId:string;profileId:string;createdAt:string
 }
 export interface ProductionHandoffReceipt extends ProductionHandoffIntent {appliedAt:string;newAttemptId:string;newGeneration:number}
 export function handoffConfig(config:ProductionConfig,intent:ProductionHandoffIntent):ProductionConfig {

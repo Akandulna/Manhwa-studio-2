@@ -88,6 +88,9 @@ export class ProductionRunner {
       if(config.managedCrop&&previous?.config.managedCrop&&previous.config.device===config.device&&previous.config.profileId===config.profileId)job.command=previous.command?structuredClone(previous.command):undefined
       if(resume) {
         job.adoptedFrom=previous?.adoptedFrom?structuredClone(previous.adoptedFrom):undefined
+        job.portableFamilyReceipts=previous?.portableFamilyReceipts?structuredClone(previous.portableFamilyReceipts):undefined
+        job.recoveryDispositionHistory=previous?.recoveryDispositionHistory?structuredClone(previous.recoveryDispositionHistory):undefined
+        if(previous?.pendingRecoveryDisposition)throw new ProductionOwnershipConflict('Reconcile the pending recovery disposition before resume')
         job.handoffHistory=previous?.handoffHistory?structuredClone(previous.handoffHistory):undefined
         if(previous?.pendingHandoff)throw new ProductionOwnershipConflict('Finish the pending handoff before resume')
         const current=this.jobs.get(seriesId)

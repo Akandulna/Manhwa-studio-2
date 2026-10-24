@@ -1,3 +1,4 @@
+import { createLegacyR2S3Client } from './r2S3Client.js'
 import { parseAccountInventory, type PhoneAccountInventory } from './accountInventory.js'
 import { withSeriesActivity, recordPhoneActivity } from './seriesActivity.js'
 /**
@@ -70,14 +71,7 @@ export function getR2Config(): R2Config | null {
 }
 
 export function createClient(config: R2Config): S3Client {
-  const client = new S3Client({
-    region: 'auto',
-    endpoint: `https://${config.accountId}.r2.cloudflarestorage.com`,
-    credentials: {
-      accessKeyId: config.accessKeyId,
-      secretAccessKey: config.secretAccessKey
-    }
-  })
+  const client = createLegacyR2S3Client(config)
   attachUsageCounter(client)
   return client
 }

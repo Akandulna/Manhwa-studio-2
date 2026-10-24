@@ -1,3 +1,4 @@
+import { configureRelayTraffic } from './services/relayTraffic.js'
 import {initManagedMaintenanceRoutes} from './routes/managedMaintenance.js';
 import express from 'express';
 import cors from 'cors';
@@ -153,6 +154,7 @@ backfillAlignmentDocumentsQuietly();
 publishEditorPackagesAtStartup();
 
 // Live phone status through the relay Worker, when Settings → Cloudflare has it set up.
+configureRelayTraffic(prisma);
 startManagerReporting(prisma, io);
 startLibrarySync(io);
 startSeriesProcess(io);

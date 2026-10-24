@@ -12,10 +12,12 @@ import { validateManualChapters } from '../services/discovery.js';
 import { Server } from 'socket.io';
 import { reconcileQuietly } from '../services/diskReconcile.js';
 import path from 'path';
+import fs from 'node:fs/promises';
+import { newSeriesFolder } from '../services/newSeriesFolder.js';
 import { libraryDeviceId, scheduleLibraryCleanup } from '../services/librarySync.js';
 import { libraryControl, libraryControls, saveLibraryControls, hiddenLibraryFolders } from '../services/libraryControls.js';
 import { notifySeriesProcessChanged } from '../services/seriesProcess.js';
-import { productionAutomation, getProductionStatus, reconcileManagedProduction, resumeManagedProduction, exportManagedProduction, adoptManagedProduction, pauseManagedProduction, handoffManagedProduction } from '../services/productionAutomation.js';
+import { productionAutomation, getProductionStatus, reconcileManagedProduction, resumeManagedProduction, exportManagedProduction, adoptManagedProduction, pauseManagedProduction, handoffManagedProduction, accountHandoffManagedProduction, disposeManagedProductionRecovery } from '../services/productionAutomation.js';
 import { parseProductionConfig } from '../services/productionAutomationModel.js';
 
 const router = Router();
@@ -45,6 +47,8 @@ router.post('/:id/automation/adopt-run', async (req, res) => {
   catch (error) { res.status(409).json({error:error instanceof Error?error.message:String(error)}); }
 });
 router.post('/:id/automation/pause-handoff',async(req,res)=>{try{res.json(await pauseManagedProduction(req.params.id,req.body))}catch(error){res.status(409).json({error:error instanceof Error?error.message:String(error)})}});
+router.post('/:id/automation/recovery-disposition',async(req,res)=>{try{res.json(await disposeManagedProductionRecovery(req.params.id,req.body))}catch(error){res.status(409).json({error:error instanceof Error?error.message:String(error)})}});
+router.post('/:id/automation/account-handoff',async(req,res)=>{try{res.json(await accountHandoffManagedProduction(req.params.id,req.body))}catch(error){res.status(409).json({error:error instanceof Error?error.message:String(error)})}});
 router.post('/:id/automation/handoff',async(req,res)=>{try{res.json(await handoffManagedProduction(req.params.id,req.body))}catch(error){res.status(409).json({error:error instanceof Error?error.message:String(error)})}});
 router.post('/:id/automation/stop', async (req, res) => {
   try { res.json(await productionAutomation.cancel(req.params.id)); }
@@ -282,8 +286,20 @@ router.post('/', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'At least one chapter is required' });
     }
     
-    const sanitizedTitle = sanitizeTitle(title);
-    const rootFolder = sanitizedTitle;
+    const rootFolder = await newSeriesFolder(title,
+      async folder => !!(await libraryControl(folder)).deleted,
+      async folder => {
+        const control = await libraryControl(folder);
+        if (control.deleted || control.archived || control.parts) return true;
+        if (await prisma.series.findFirst({ where: { rootFolder: folder } })) return true;
+        try {
+          await fs.stat(path.resolve(process.env.DOWNLOAD_ROOT || './downloads', folder));
+          return true;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+          throw error;
+        }
+      });
     
     // Create series
     const series = await prisma.series.create({

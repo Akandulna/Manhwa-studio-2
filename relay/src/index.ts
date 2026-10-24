@@ -1,3 +1,5 @@
+import { boundedBody } from './managedArtifactStorage'
+import { receiptContent, PRESENCE_CHECKPOINT_MS } from './receiptState'
 /**
  * Sleeper-Cell relay: carries the phones' status receipts to Manhwa Studio,
  * and Manhwa Studio's "Refresh from phone" requests to the phones, without
@@ -22,7 +24,7 @@
  *                         and every stored receipt, then each new one. A phone is sent the requests meant for it.
  *
  * Messages on the sockets (JSON):
- *   relay → desktop  { type: 'hello', phones, devices, seen, request } · { type: 'receipt', kind, device, at, body }
+ *   relay → desktop  { type: 'hello', features:FEATURES, phones, devices, seen, request } · { type: 'receipt', kind, device, at, body }
  *                    { type: 'presence', phones, devices, seen } · { type: 'requested', id, phones }
  *                    { type: 'forgotten', device }
  *   desktop → relay  { type: 'request', id, requestedAt, action?, device?, series?, tabs?, chapters?, ai?, flow?, language?, profile?, chatGpt? }
@@ -112,13 +114,29 @@ function tokenMatches(given: string | null, expected: string): boolean {
   return a.byteLength === b.byteLength && crypto.subtle.timingSafeEqual(a, b)
 }
 
+const FEATURES = ['manager-batch/1','native-manager-coverage/1','account-audit-deadline/1','recovery-dispatch-hints/1']
+const pauses = new WeakMap<Env,{until:number}>()
+async function forwardRelay(request:Request,env:Env):Promise<Response> {
+  const cached=pauses.get(env)
+  const path=new URL(request.url).pathname
+  if(path!=='/usage'&&cached&&Date.now()<cached.until) {
+    const reader=request.body?.getReader();if(reader)while(!(await reader.read()).done){}
+    return Response.json({error:'Relay daily safety budget reached',reason:'daily_budget'},{status:429,headers:{'Retry-After':String(Math.max(1,Math.ceil((cached.until-Date.now())/1000))),'X-Relay-Rejection':'daily_budget'}})
+  }
+  const response=await env.RELAY.get(env.RELAY.idFromName('main')).fetch(request)
+  if(response.status===429&&response.headers.get('X-Relay-Rejection')==='daily_budget') {
+    const seconds=Number(response.headers.get('Retry-After'))
+    if(Number.isSafeInteger(seconds)&&seconds>0&&seconds<=172800)pauses.set(env,{until:Date.now()+seconds*1000})
+  }
+  return response
+}
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const managedPath = new URL(request.url).pathname.startsWith('/managed/')
     if (managedPath) {
       if (!managedEnabled(env)) return Response.json({ error: 'Managed execution is disabled' }, { status: 503 })
       if (!managedPrincipal(request,env)) return Response.json({ error: 'Managed task authentication required' }, { status: 401 })
-      return env.RELAY.get(env.RELAY.idFromName('main')).fetch(request)
+      return forwardRelay(request,env)
     }
     if (!env.RELAY_TOKEN) return new Response('RELAY_TOKEN is not set on the Worker', { status: 500 })
     const url = new URL(request.url)
@@ -126,7 +144,7 @@ export default {
     if (!tokenMatches(header ?? url.searchParams.get('token'), env.RELAY_TOKEN)) {
       return new Response('Unauthorized', { status: 401 })
     }
-    return env.RELAY.get(env.RELAY.idFromName('main')).fetch(request)
+    return forwardRelay(request,env)
   }
 } satisfies ExportedHandler<Env>
 
@@ -278,7 +296,9 @@ export class Relay extends DurableObject<Env> {
       if (reader) while (!(await reader.read()).done) { /* drain without retaining payload bytes */ }
       return this.budget.response()
     }
-    try { this.initialize(); return await this.handleFetch(request) }
+    const route=new URL(request.url).pathname
+    this.budget.signal(route.startsWith('/manager/')?'http_manager':route.startsWith('/receipt/')?'http_receipt':route==='/ws'?'http_ws':route.startsWith('/managed/')?'http_managed':'http_other')
+    try { this.initialize(); const response=await this.handleFetch(request); if(response.status!==101)response.headers.set('X-Relay-Features',FEATURES.join(',')); return response }
     catch (error) { if (error instanceof RelayBudgetExceeded) return this.budget.response(); throw error }
     finally { this.budget.flush() }
   }
@@ -288,23 +308,42 @@ export class Relay extends DurableObject<Env> {
       if (!managedEnabled(this.env)) return Response.json({ error: 'Managed execution is disabled' }, { status: 503 })
       if (!managedPrincipal(request,this.env)) return Response.json({ error: 'Managed task authentication required' }, { status: 401 })
       this.tasks ??= new ManagedTaskApi(this.sql,work => this.ctx.storage.transactionSync(work),this.env)
-      return this.tasks.handle(request)
+      const notifying=request.method==='POST'&&['/managed/accounts/operation','/managed/recovery/dispatch','/managed/recovery/account-recheck'].includes(url.pathname)
+      let action:any=null
+      if(notifying) {
+        let bytes:Uint8Array
+        try { bytes=await boundedBody(request.body,32_000) }catch { return new Response('Managed request exceeds bound',{status:413}) }
+        try {action=JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes))}catch{}
+        request=new Request(request,{body:bytes})
+      }
+      const response=await this.tasks.handle(request)
+      if(response.ok&&action) {
+        const account=(url.pathname==='/managed/accounts/operation'&&['audit_recheck','cadence','policy','confirm'].includes(action.action))||(url.pathname==='/managed/recovery/account-recheck'&&action.action==='request')
+        const dispatch=url.pathname==='/managed/recovery/dispatch'&&['queue','cancel'].includes(action.action)
+        if(account||dispatch)for(const ws of this.sockets('phone'))ws.send(JSON.stringify({type:account?'managed:accounts_changed':'managed:recovery_available'}))
+      }
+      return response
     }
-    if (request.method === 'POST' && url.pathname === '/manager/report') {
+    if (request.method === 'POST' && (url.pathname === '/manager/report' || url.pathname === '/manager/batch')) {
       const text = await request.text()
-      if (text.length > 256_000) return new Response('Manager report too large', { status: 413 })
+      if (encoder.encode(text).byteLength > 256_000) return new Response('Manager report too large', { status: 413 })
       try {
-        const result = this.managers.accept(JSON.parse(text), url.searchParams.get('device') ?? '')
-        if (!result.duplicate) {
-          const incidents = this.managers.state().incidents
-          const affected = new Set(result.report.facts.flatMap(f => f.condition ? [JSON.stringify([f.condition.cause,f.condition.resource])] : []))
-          if (result.report.acknowledgment) affected.add(result.report.acknowledgment.incidentId)
-          for (const ws of this.sockets('desktop')) {
-            ws.send(JSON.stringify({ type: 'manager:report', body: result.report }))
-            for (const id of affected) if (incidents[id]) ws.send(JSON.stringify({ type: 'manager:incident', body: incidents[id] }))
+        const raw=JSON.parse(text)
+        const device=url.searchParams.get('device')??''
+        if(url.pathname==='/manager/report')return Response.json(this.acceptManager(raw,device))
+        if(!raw||raw.schema!=='manager-batch/1'||Object.keys(raw).some(k=>!['schema','reports'].includes(k))||!Array.isArray(raw.reports)||raw.reports.length<1||raw.reports.length>16) return new Response('Invalid manager batch',{status:400})
+        const results:unknown[]=[]
+        const blockedSources=new Set<string>()
+        for(const report of raw.reports) {
+          if(blockedSources.has(report?.source?.id)){results.push({eventId:report?.eventId??null,error:'Earlier source event was not accepted'});continue}
+          try { results.push({eventId:report?.eventId,...this.acceptManager(report,device)}) }
+          catch(error) {
+            if(error instanceof RelayBudgetExceeded)throw error
+            if(typeof report?.source?.id==='string')blockedSources.add(report.source.id)
+            results.push({eventId:typeof report?.eventId==='string'?report.eventId:null,error:'Manager event rejected'})
           }
         }
-        return Response.json(result)
+        return Response.json({schema:'manager-batch/1',results})
       } catch (error) {
         if (error instanceof RelayBudgetExceeded) throw error
         return new Response(error instanceof Error ? error.message : 'Invalid manager report', { status: 400 })
@@ -354,6 +393,21 @@ export class Relay extends DurableObject<Env> {
     return new Response('Not found', { status: 404 })
   }
 
+  private acceptManager(raw:unknown,device:string) {
+    const result=this.managers.accept(raw,device)
+    this.budget.signal(result.duplicate?'manager_duplicate':result.report.acknowledgment?'manager_ack':!result.report.facts.length?'manager_health':result.report.facts.some(f=>f.websiteUi)?'manager_ui':'manager_fact')
+    if(!result.duplicate) {
+      const affected=new Set(result.report.facts.flatMap(f=>f.condition?[JSON.stringify([f.condition.cause,f.condition.resource])]:[]))
+      if(result.report.acknowledgment)affected.add(result.report.acknowledgment.incidentId)
+      const incidents=affected.size?this.managers.incidents(affected):{}
+      for(const ws of this.sockets('desktop')) {
+        ws.send(JSON.stringify({type:'manager:report',body:result.report}))
+        for(const id of affected)if(incidents[id])ws.send(JSON.stringify({type:'manager:incident',body:incidents[id]}))
+      }
+    }
+    return result
+  }
+
   private async accept(request: Request, url: URL): Promise<Response> {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return new Response('Expected a WebSocket upgrade', { status: 426 })
@@ -366,16 +420,17 @@ export class Relay extends DurableObject<Env> {
     // Bound registered-device tables and prepare replay before accepting a socket, so quota errors
     // cannot leave an upgraded client with a partial replay or an orphaned connection.
     const registered = this.seen()
-    if (role === 'phone' && device && !registered.some(p => p.id === device) && registered.length >= 8) return new Response('Pilot supports at most eight registered phones', { status: 429, headers: { 'Retry-After': '86400' } })
-    if (this.sockets(role).length >= (role === 'phone' ? 8 : 4)) return new Response('Relay connection safety limit reached', { status: 429, headers: { 'Retry-After': '300' } })
+    if (role === 'phone' && device && !registered.some(p => p.id === device) && registered.length >= 8) return new Response('Pilot supports at most eight registered phones', { status: 429, headers: { 'Retry-After': '86400', 'X-Relay-Rejection':'device_limit' } })
+    if (this.sockets(role).length >= (role === 'phone' ? 8 : 4)) return new Response('Relay connection safety limit reached', { status: 429, headers: { 'Retry-After': '300', 'X-Relay-Rejection':'connection_limit' } })
     const replay = role === 'desktop' ? this.managers.replay() : []
-    const incidents = role === 'desktop' ? Object.values(this.managers.state().incidents) : []
+    const incidents = role === 'desktop' ? this.managers.allIncidents() : []
     const { 0: client, 1: server } = new WebSocketPair()
     // The role stays the first tag (see roleOf).
     this.ctx.acceptWebSocket(server, device ? [role, DEVICE_TAG + device] : [role])
+    server.send(JSON.stringify({type:'relay:features',features:FEATURES}))
     if (role === 'desktop') {
       const devices = this.devices()
-      server.send(JSON.stringify({ type: 'hello', phones: devices.length, devices, seen: this.seen(), request: this.lastRequest('') }))
+      server.send(JSON.stringify({ type: 'hello', features:FEATURES, phones: devices.length, devices, seen: this.seen(), request: this.lastRequest('') }))
       for (const row of this.sql.exec<{ device: string; kind: string; body: string; at: number }>('SELECT device, kind, body, at FROM phone_receipts LIMIT 5000')) {
         server.send(receiptMessage(row.kind, row.device, row.body, row.at))
       }
@@ -404,7 +459,7 @@ export class Relay extends DurableObject<Env> {
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    try { this.budget.begin() } catch { ws.send(JSON.stringify({ type: 'relay:budget', retryAfter: this.budget.retryAfter() })); return }
+    try { this.budget.begin('ws_message') } catch { ws.send(JSON.stringify({ type: 'relay:budget', retryAfter: this.budget.retryAfter() })); return }
     try { this.initialize(); await this.handleSocketMessage(ws,message) }
     catch (error) { if (error instanceof RelayBudgetExceeded) ws.send(JSON.stringify({ type: 'relay:budget', retryAfter: this.budget.retryAfter() })); else throw error }
     finally { this.budget.flush() }
@@ -437,7 +492,7 @@ export class Relay extends DurableObject<Env> {
   }
 
   private closeWithBudget(ws: WebSocket, code?: number, reason?: string): void {
-    try { this.budget.begin() } catch { try { ws.close() } catch {} return }
+    try { this.budget.begin('ws_close') } catch { try { ws.close() } catch {} return }
     try { this.initialize(); this.closed(ws,code,reason) } catch (error) { if (!(error instanceof RelayBudgetExceeded)) throw error }
     finally { this.budget.flush() }
   }
@@ -459,11 +514,12 @@ export class Relay extends DurableObject<Env> {
    * others were last heard, and settles phones left marked connected by a socket that is gone (as after a deploy).
    */
   async alarm(): Promise<void> {
-    try { this.budget.begin() } catch {
+    try { this.budget.begin('alarm') } catch {
       // One wake at UTC reset, rather than continuing to write every minute while paused.
       await this.ctx.storage.setAlarm(Date.now() + Number(this.budget.retryAfter()) * 1000)
       return
     }
+    this.budget.signal('alarm')
     try { this.initialize(); await this.handleAlarm() }
     catch (error) { if (!(error instanceof RelayBudgetExceeded)) throw error }
     finally { this.budget.flush() }
@@ -480,7 +536,7 @@ export class Relay extends DurableObject<Env> {
         continue
       }
       if (now - heard <= SILENT_MS) {
-        if (attachment.device) this.sql.exec('UPDATE phone_seen SET at = ? WHERE device = ? AND left IS NULL', heard, attachment.device)
+        if (attachment.device) this.sql.exec('UPDATE phone_seen SET at = ? WHERE device = ? AND left IS NULL AND at <= ?', heard, attachment.device, heard-PRESENCE_CHECKPOINT_MS)
         continue
       }
       if (attachment.device) this.left(attachment.device, 'lost', heard, ws)
@@ -512,7 +568,15 @@ export class Relay extends DurableObject<Env> {
   private seen(): SeenPhone[] {
     return this.sql.exec<{ device: string; name: string; at: number; left: string | null }>('SELECT device, name, at, left FROM phone_seen LIMIT 5000')
       .toArray()
-      .map(row => ({ id: row.device, name: row.name, at: row.at, left: (row.left as Left | null) ?? null }))
+      .map(row => {
+        let at=row.at
+        if(row.left===null)for(const socket of this.ctx.getWebSockets(DEVICE_TAG+row.device)) {
+          if(!open(socket))continue
+          const attachment=socket.deserializeAttachment() as PhoneAttachment|null
+          at=Math.max(at,this.ctx.getWebSocketAutoResponseTimestamp(socket)?.getTime()??0,attachment?.at??0)
+        }
+        return {id:row.device,name:row.name,at,left:(row.left as Left|null)??null}
+      })
   }
 
   private postReceipt(kind: string, device: string, text: string, replacesLegacy: boolean): Response {
@@ -528,7 +592,7 @@ export class Relay extends DurableObject<Env> {
       return new Response('Receipt must be a JSON object', { status: 400 })
     }
     const known = new Set(this.sql.exec<{device:string}>('SELECT device FROM phone_receipts LIMIT 65').toArray().map(r => r.device))
-    if (!known.has(device) && known.size >= 8) return new Response('Pilot supports receipts from at most eight phones', { status: 429, headers: { 'Retry-After': '86400' } })
+    if (!known.has(device) && known.size >= 8) return new Response('Pilot supports receipts from at most eight phones', { status: 429, headers: { 'Retry-After': '86400', 'X-Relay-Rejection':'device_limit' } })
     if (device && replacesLegacy) this.forget('')
     const at = Date.now()
     if (PASS_ONLY.has(kind)) {
@@ -537,6 +601,8 @@ export class Relay extends DurableObject<Env> {
       for (const ws of desktops) ws.send(message)
       return Response.json({ ok: true, at, device, desktops: desktops.length })
     }
+    const prior=this.sql.exec<{body:string;at:number}>('SELECT body,at FROM phone_receipts WHERE device = ? AND kind = ?',device,kind).toArray()[0]
+    if(prior && !('answers' in (parsed as Record<string,unknown>)) && receiptContent(JSON.parse(prior.body))===receiptContent(parsed))return Response.json({ok:true,at:prior.at,device,desktops:this.sockets('desktop').length,unchanged:true})
     this.sql.exec(
       'INSERT INTO phone_receipts (device, kind, body, at) VALUES (?, ?, ?, ?) ' +
         'ON CONFLICT(device, kind) DO UPDATE SET body = excluded.body, at = excluded.at',

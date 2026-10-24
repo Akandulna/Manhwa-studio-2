@@ -1,9 +1,11 @@
 # PRD: Manager Agents and Reliable Automation
 
+**24 October continuation update:** Read the [completed agent-reporting and Cloudflare usage scope](../../MAPI/Sleeper-cell-main/docs/agent-reporting-continuation-update.md) before continuing overlapping work. Source implementation and local validation are complete; rollout, installed acceptance and measured savings remain pending. Reconcile older pending items with that update; reuse the delivered implementation rather than starting it again. Other phase gates remain unchanged.
+
 **Product:** Manhwa Studio + Sleeper-Cell + Cloudflare relay  
-**Version:** 1.1 — proposed requirements  
-**Date:** 18 October 2026  
-**Status:** Ready for product review; implementation has not started  
+**Version:** 1.2 — requirements with implementation status\
+**Date:** 24 October 2026 (original: 18 October 2026)\
+**Status:** Implementation is in progress. Scoped Phase 4/5 acceptance and later source milestones are tracked in the implementation plan. Cloudflare/agent traffic reductions are implemented and locally validated as of 24 October; compatible deployment, installed-device acceptance and production usage measurement remain pending. This does not establish full Phase 6 or overall product acceptance.\
 **Implementation plan:** [Phased delivery plan](IMPLEMENTATION-PLAN-manager-agents-and-automation.md)  
 **Primary user:** The studio owner operating a Mac and multiple Android production devices
 
@@ -329,7 +331,7 @@ The following are proposed release targets, to be measured under a documented te
 
 - **Assignment correctness:** zero simultaneous valid owners for one task in concurrency and failure tests; zero accepted stale-attempt publications.
 - **Recovery correctness:** no blind replay of uncertain external generation; verified completed checkpoints survive tested restarts and acknowledgment loss.
-- **Status timeliness:** target p95 of five seconds from an accepted connected-source event to Studio display under healthy test-network conditions. Offline time is excluded and freshness remains explicit.
+- **Status timeliness:** target p95 of five seconds from an accepted connected-source event to Studio display under healthy test-network conditions. This is event-to-display latency, not a requirement for five-second health polling. Health cohorts use the separate cadence below; offline time is excluded and freshness remains explicit.
 - **Failure visibility:** every detected automation failure creates or updates an incident and records its recovery outcome.
 - **UI-change visibility:** every new confirmed monitored UI change is traceable through the device Image Clipper Manager to an Issues Manager notification; repeated delivery does not create repeated owner alerts.
 - **Audit coverage:** every eligible profile receives a completed audit within its configured 24/48-hour interval. Busy/offline deferrals are visible and separately measured.
@@ -338,6 +340,26 @@ The following are proposed release targets, to be measured under a documented te
 - **Privacy:** redact secrets from shared status, screenshots, and logs; define retention and deletion controls before enabling evidence capture.
 
 Track automatic recovery rate by failure class, median blocked time, repeated-request incidents, unnecessary regeneration, stale-status incidents, account-audit coverage, and owner interventions per production run. Establish pilot baselines before committing improvement percentages.
+
+### Cloudflare and agent reporting requirements
+
+The 24 October source implementation satisfies the following local behavior contracts. Production resource targets remain release measurements; see the [implementation evidence](../../MAPI/Sleeper-cell-main/docs/cloudflare-usage-implementation.md).
+
+**COST-01 — Change-driven reports.** Publish meaningful facts, terminal states, incidents, acknowledgments and UI compatibility changes. Sampling-only timestamps must not create new UI events. Coalesce only eligible unsaved ordinary progress before assigning immutable event IDs. Suppress legacy process/crop facts only after accepted native coverage matches device, scope, stage, state, input revision and counts; otherwise retain fallback.
+
+**COST-02 — Honest, batched health.** Cohort actual manager observations per device every five minutes for recently active work and fifteen minutes while idle. Retain each manager's actual source timestamp and sequence; never refresh unobserved managers. Reporter staleness is 45 minutes, separately from fact freshness and task progress. A health-only report must not load or rewrite the full facts/incidents projection. Condition-bearing reports and owner acknowledgments retain their authority path.
+
+**COST-03 — Durable bounded delivery.** Negotiate `manager-batch/1`; envelopes contain at most 16 original events and 256 KB. Preserve identity, ordering, timestamps and exact per-event acknowledgments. A rejection blocks later same-source events in that envelope while independent sources may succeed. Retain single-report fallback. One Android drain owner and a final producer-synchronized recheck prevent lost wakeups; each Studio/Android drain invocation is bounded to eight rounds. Persisted pending events are not discarded to meet a traffic target.
+
+**COST-04 — Backoff and shared pauses.** Desktop failed socket opens follow jittered 2/5/15/30/60-second delays; reset only after that socket is open and stable for 60 seconds. Authentication failures wait for corrected configuration. All relay transports honor persisted budget pauses, including messages on already-open sockets; retain the longest valid deadline and a conservative fallback for unknown 429s. Scope daily-budget pauses by relay URL and explicit connection/device limits by socket role. The authenticated outer-Worker rejection cache may avoid DO calls, but cannot replace the durable limiter or eliminate Worker ingress.
+
+**COST-05 — Independent snapshot delivery.** Timestamp-only library/process updates must not republish unchanged semantic content. Persist original snapshot bytes and separate R2/relay destination acknowledgments across retries and restart. Read back ambiguous R2 writes before retransmitting; a failed relay delivery must not repeat an acknowledged R2 upload. Canonical unchanged receipts avoid writes/broadcasts; explicit command answers remain deliverable. Managed artifact publication checks remain authoritative.
+
+**COST-06 — Deadline-driven checks.** With negotiated capability, reuse returned account due/retry deadlines; pending original audit claims bypass the cache. Owner edits/rechecks and recovery availability invalidate deadlines, with protection against stale in-flight replies. Empty recovery polls back off through 2/5/15 minutes with a bounded fallback. A hint grants no execution authority; leases, preflight, idle ownership and task admission checks remain mandatory.
+
+**COST-07 — Low-cost presence and measurement.** Preserve hibernating sockets and automatic ping/pong. Keep the 60-second liveness alarm; checkpoint unchanged live-presence timestamps no more often than every five minutes while retaining live attachment-based freshness and immediate connection transitions. Aggregate route/signal counters in existing budget checkpoints without a new telemetry request or per-event write. Measure Worker requests, DO calls/messages/alarms, SQL rows, duration and R2 operations separately.
+
+**COST-08 — Compatible measured rollout.** Deploy relay capabilities, restart updated Studio, then release Android through GitHub Actions and validate both phones/Master. Preserve reporting journal schema 3 on rollback with a compatible release. Observe a complete UTC day, queue drainage, critical alerts, owner rechecks and sleep/wake behavior before declaring savings. The original ≥95% rejected-traffic reduction is a target, not an achieved result. Full paginated replay remains supported; add a resumable cursor only if measured replay cost warrants it. Do not reduce durable budget checkpoint guarantees or ownership renewals as part of status optimization.
 
 ## 16. Acceptance scenarios
 
@@ -375,6 +397,14 @@ Track automatic recovery rate by failure class, median blocked time, repeated-re
 | A30 | A UI change appears on only one device/profile variant | Impact and baseline remain scoped to that variant; other devices are not automatically marked incompatible. |
 | A31 | A UI-change report is queued offline and replayed twice | Both manager handoffs persist and complete on reconnect; the owner receives one notification for the change. |
 | A32 | A required control changes during active automation or an idle audit becomes due | Monitoring does not hijack the session or repeat a submission; affected work follows existing recovery rules, and acknowledgment alone does not erase the old baseline or unblock work. |
+| A33 | Managers are idle, then work becomes active | Health uses 15/5-minute cohorts with original per-manager times; facts and progress remain separate; empty health bypasses the full projection. |
+| A34 | Repeated UI samples and overlapping native/legacy reports arrive | Sampling-only changes create no new cloud event; meaningful changes still publish; legacy suppression requires matching accepted native evidence and retains fallback otherwise. |
+| A35 | A batch is duplicated, partially rejected or interrupted by restart | Immutable IDs/sequences survive; exact per-event acknowledgments remove only accepted events; later same-source events stop; independent sources and legacy fallback work within count/byte/drain bounds. |
+| A36 | Socket upgrades fail or the relay rejects traffic | Stable-open backoff, authentication cutoff and persisted scoped pauses suppress retries across HTTP/socket paths and restart; cold Worker isolates still consult the durable limiter. |
+| A37 | R2 succeeds but relay fails; unchanged snapshots/receipts recur | Destination acknowledgments survive restart, successful uploads are not repeated, ambiguous writes are read back, timestamp-only snapshots are suppressed and explicit command answers still arrive. |
+| A38 | Account/recovery poll is empty, then an owner requests recheck | Deadlines/backoff avoid repeated empty calls; hints invalidate promptly, stale replies cannot restore an obsolete deadline, and pending claims plus original authorization remain intact. |
+| A39 | An idle socket pings and the relay reaches its daily cap | Runtime ping does not add application operations/writes; presence remains accurate, checkpoints are bounded, and rejected retries/restart do not churn budget writes. |
+| A40 | Compatible relay, Studio and both phones/Master are released | A full UTC-day comparison records each resource separately; queues, critical alerts, command admission, rechecks, sleep/wake and compatible rollback pass before savings are accepted. |
 
 ## 17. Delivery phases and release gates
 
@@ -395,6 +425,10 @@ Introduce task identity, atomic assignment, command acknowledgment, reservations
 Enable scheduled account/UI audits, provider/profile policy, quota waits, eligible fallback, transfer recovery, known UI recovery, and automatic resume after verified repair. Connect reported website compatibility changes to bounded recovery without giving the UI Monitor dispatch authority.
 
 **Gate:** account/recovery scenarios and A32 pass; retry budgets and owner pause behavior hold; independent work continues during isolated failures. Run an observed multi-device pilot before unattended use.
+
+### Cross-phase resource release gate
+
+COST-01–COST-08 and A33–A40 apply across all delivery phases. Source/local validation is recorded separately from installed acceptance and a complete UTC-day usage comparison. This gate supplements the ownership/recovery gates; it does not complete them.
 
 ### Phase 4 — Optional diagnostic assistance
 

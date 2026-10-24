@@ -1,3 +1,8 @@
+import {recoveryDispositionTransport} from './recoveryDispositionBridge.js'
+import {accountHandoffTransport} from './accountHandoffBridge.js'
+import {candidateAdoptionTransport} from './candidateAdoptionBridge.js'
+import path from 'node:path'
+import {validateManagedCrop} from './managedCropArtifact.js'
 import type {AccountSelection} from './managedAccountsProtocol.js'
 import {recordManagedCropRevision,verifyManagedCropRevision} from './managedCropRevision.js'
 import {createHash,randomUUID} from 'node:crypto'
@@ -11,6 +16,9 @@ const hash=(value:unknown)=>createHash('sha256').update(canonicalJson(value)).di
 export interface PilotInput {identity:CropIdentity;spec:CropSpec;sourceFile:string;folder:string;filename:string;destination:string}
 export interface PilotTimeline {waiting?:AccountSelection;task:CropTask;attempt:CropAttempt|null;commands:unknown[];artifactReady?:boolean;uploadOnlyReport?:any;cancelledSubmissionReport?:any}
 export interface PilotAuthority {
+ recoveryDisposition?(operation:Record<string,unknown>):Promise<any>
+ accountHandoff?(operation:Record<string,unknown>):Promise<any>
+ candidateAdoptionStatus?(unit:Record<string,unknown>,target:{deviceId:string;profileId:string}):Promise<any>
  accounts?(action?:Record<string,unknown>):Promise<any>
  selectAccount?(taskId:string,targets?:{deviceId:string;profileId:string}[]):Promise<AccountSelection>
  claimReceipt?(taskId:string,claimEventId:string):Promise<ProductionClaimReceipt>
@@ -35,7 +43,7 @@ export function pilotAuthority(url:string,workspaceId:string,token:string,legacy
   if(raw.schema!==schema)throw new TaskConflict('Incompatible managed response')
   return raw
  }
- return {artifacts,accounts:async body=>(await call(body?'/managed/accounts/operation':'/managed/accounts',body?{schema:'managed-accounts/1',workspaceId,eventId:randomUUID(),...body}:undefined,'managed-accounts/1')).result,selectAccount:async(taskId,targets)=>(await call('/managed/accounts/select',{schema:'managed-accounts/1',workspaceId,taskId,targets:targets??null},'managed-accounts/1')).result,claimReceipt:async(taskId,claimEventId)=>{if(!/^task:sha256:[a-f0-9]{64}$/.test(taskId)||!(/^[A-Za-z0-9_-]{1,128}$/).test(claimEventId))throw new TaskConflict('Exact original claim receipt required');return (await call('/managed/production-claims/'+encodeURIComponent(taskId)+'/'+encodeURIComponent(claimEventId))).result},coordinator:async()=>(await call('/managed/coordinator')).result,ready:async(requiredCapabilities=[])=>{const {result}=await call('/managed/readiness');if(result?.workspaceId!==workspaceId||result.artifactStorageConfigured!==true||!result.capabilities?.includes(DEFAULT_CROP_CAPABILITY)||!requiredCapabilities.every(cap=>result.capabilities?.includes(cap)))throw new TaskConflict('Configure compatible relay artifact storage before dispatching a provider request')},operation:async body=>(await call('/managed/operation',{schema:'managed-task/1',workspaceId,eventId:randomUUID(),...body})).result,
+ return {artifacts,recoveryDisposition:recoveryDispositionTransport(url,workspaceId,token,legacyToken,pause),accountHandoff:accountHandoffTransport(url,workspaceId,token,legacyToken,pause),candidateAdoptionStatus:async(unit,target)=>candidateAdoptionTransport(url,workspaceId,token,legacyToken,pause)({action:'status',unit,target}),accounts:async body=>(await call(body?'/managed/accounts/operation':'/managed/accounts',body?{schema:'managed-accounts/1',workspaceId,eventId:randomUUID(),...body}:undefined,'managed-accounts/1')).result,selectAccount:async(taskId,targets)=>(await call('/managed/accounts/select',{schema:'managed-accounts/1',workspaceId,taskId,targets:targets??null},'managed-accounts/1')).result,claimReceipt:async(taskId,claimEventId)=>{if(!/^task:sha256:[a-f0-9]{64}$/.test(taskId)||!(/^[A-Za-z0-9_-]{1,128}$/).test(claimEventId))throw new TaskConflict('Exact original claim receipt required');return (await call('/managed/production-claims/'+encodeURIComponent(taskId)+'/'+encodeURIComponent(claimEventId))).result},coordinator:async()=>(await call('/managed/coordinator')).result,ready:async(requiredCapabilities=[])=>{const {result}=await call('/managed/readiness');if(result?.workspaceId!==workspaceId||result.artifactStorageConfigured!==true||!result.capabilities?.includes(DEFAULT_CROP_CAPABILITY)||!requiredCapabilities.every(cap=>result.capabilities?.includes(cap)))throw new TaskConflict('Configure compatible relay artifact storage before dispatching a provider request')},operation:async body=>(await call('/managed/operation',{schema:'managed-task/1',workspaceId,eventId:randomUUID(),...body})).result,
   timeline:async taskId=>{if(!/^task:sha256:[a-f0-9]{64}$/.test(taskId))throw new TaskConflict('Invalid task ID');return call('/managed/tasks/'+encodeURIComponent(taskId))}}
 }
 /** Connects real page binding, dispatch and immutable import. Cloud authority remains the sole task owner. */
@@ -129,6 +137,14 @@ export class ManagedCropPilot {
   if(!attempt?.checkpointRef||attempt.submission!=='saved'||!['result_saved','published'].includes(attempt.phase)||!(recovered?['uncertain','verified_complete']:['running','verified_complete']).includes(current.task.state))throw new TaskConflict('A saved result with current ownership is required')
   if(owner&&(attempt.id!==owner.id||attempt.generation!==owner.generation))throw new TaskConflict('Production ownership changed before import')
   const artifactId='crop_'+hash([taskId,attempt.id,attempt.checkpointRef])
+  // Canonical reconstruction belongs exclusively to the recovery authority, including manual imports.
+  if(current.task.state==='verified_complete'){
+   const destination=new ManagedArtifactDestination(input.destination),local=await destination.readPublished(current.task)
+   if(!local||local.attempt.id!==attempt.id||local.record.id!==artifactId||local.record.ref!==current.task.canonical)throw new TaskConflict('Use saved crop recovery to restore this missing canonical local projection')
+   const source=await resolveManagedCropInput(input.identity,input.spec,input.sourceFile)
+   validateManagedCrop(local.bytes,current.task,attempt,source.source)
+   return {task:current.task,path:path.join(input.destination,taskId.slice(12),attempt.id,artifactId,'artifact.json')}
+  }
   const transport=recovered?{load:this.authority.artifacts.load,publish:(op:ManagedOperation)=>{if(op.action!=='publish')throw new TaskConflict('Expected trusted publication receipt');return this.authority.artifacts.publish({...op,action:'publish_recovered',eventId:'recover_'+op.eventId})}}:this.authority.artifacts
   return importManagedArtifact(transport,new ManagedArtifactDestination(input.destination),artifactId,()=>resolveManagedCropInput(input.identity,input.spec,input.sourceFile))
  }

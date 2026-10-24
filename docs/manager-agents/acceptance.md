@@ -1,5 +1,7 @@
 # Acceptance and phase evidence
 
+**24 October continuation update:** Read the [completed agent-reporting and Cloudflare usage scope](../../../MAPI/Sleeper-cell-main/docs/agent-reporting-continuation-update.md) before continuing overlapping work. Source implementation and local validation are complete; rollout, installed acceptance and measured savings remain pending. Reconcile older pending items with that update; reuse the delivered implementation rather than starting it again. Other phase gates remain unchanged.
+
 All PRD A01–A32 cases are mapped below. “Specification” checks exercise the Phase 0 oracle/schema, not production implementation. No end-to-end acceptance scenario is claimed passed yet. Each later phase must attach deterministic execution evidence before marking its gate complete.
 
 | PRD | Implementation phases | Required fixture / test target | Phase 0 evidence and remaining work |

@@ -42,7 +42,7 @@ export default function SavedCropRecoveryPanel({session,targets}: SavedCropRecov
           <p>{state.current ? 'Observed' : 'Last known'} {date(inspection.observedAt)}</p>
           <p>Source: {inspection.sourceMatches ? 'matches current input' : 'changed or unverified'} · Cloud result: {inspection.canonical ? 'verified' : 'unverified'}</p>
           <p>Local copy: {({ missing: 'missing', verified: 'verified', conflict: 'conflicting files — review required', unknown: 'unknown' })[inspection.localState]}</p>
-          {episode && <p>{episode.cancelled ? 'Cancelled; history retained.' : episode.paused ? 'Paused.' : episode.enabled ? 'Enabled for this scope.' : 'Disabled for this scope.'} Attempts used: {episode.actions.length}/3.</p>}
+          {episode && <p>{episode.cancelled ? 'Cancelled; history retained.' : episode.paused ? 'Paused.' : episode.enabled ? 'Enabled for this scope.' : 'Disabled for this scope.'} Attempts used: {inspection?.budget?.used??episode.actions.length}/3.</p>}
           {last && <p>{phaseLabel[last.phase]}</p>}
           {episode && episode.nextEligibleAt > Date.now() && <p>Next eligible time: {date(episode.nextEligibleAt)}. Inspect again before restoring.</p>}
         </>}

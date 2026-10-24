@@ -1,3 +1,32 @@
+import {recoveryDispositionTransport} from '../services/recoveryDispositionBridge.js'
+import {parseDispositionIntent,parseDispositionReceipt,parseDispositionSnapshot} from '../services/recoveryDispositionProtocol.js'
+import {AccountHandoffStudioBridge,accountHandoffTransport} from '../services/accountHandoffBridge.js'
+import {CandidateAdoptionStudioBridge,candidateAdoptionTransport,candidateAdoptionStatusTransport} from '../services/candidateAdoptionBridge.js'
+import {TargetContextStudioBridge,targetContextTransport,targetContextStatusTransport} from '../services/targetContextBridge.js'
+import {targetPackageStatusTransport} from '../services/targetPackageBridge.js'
+import {targetInputStatusTransport} from '../services/targetInputBridge.js'
+import {FallbackPreflightBridge,fallbackPreflightTransport} from '../services/fallbackPreflightBridge.js'
+import {RetainedBindingApprovalBridge,retainedBindingApprovalTransport} from '../services/retainedBindingApprovalBridge.js'
+import {RecoveryDispatchBridge,recoveryDispatchTransport} from '../services/recoveryDispatchBridge.js'
+import {ConversationRestorationBridge,conversationRestorationTransport} from '../services/conversationRestorationBridge.js'
+import {CorrectionRecoveryBridge,correctionRecoveryTransport} from '../services/correctionRecoveryBridge.js'
+import {KnownUiRepairBridge,knownUiRepairTransport} from '../services/knownUiRepairBridge.js'
+import {UnsentNavigationBridge,unsentNavigationTransport} from '../services/unsentNavigationBridge.js'
+import {recoveryStopTransport} from '../services/recoveryStopTransport.js'
+import {recoveryUnitKey} from '../services/automationRecoveryPolicy.js'
+import {recoveryExact} from '../services/managedSavedImportRecoveryProtocol.js'
+import {executorEvidenceTransport,inspectExecutorEvidence} from '../services/executorEvidenceBridge.js'
+import {AccountRecheckRecoveryBridge} from '../services/accountRecheckRecoveryBridge.js'
+import {accountRecheckTransport} from '../services/accountRecheckRecoveryTransport.js'
+import {SavedUploadRecoveryBridge} from '../services/savedUploadRecoveryBridge.js'
+import {savedUploadRecoveryTransport} from '../services/managedSavedUploadRecovery.js'
+import {resolveManagedCropInput} from '../services/managedArtifactImport.js'
+import {cropTaskIdentity,TaskConflict} from '../services/managedTaskProtocol.js'
+import {automationRecoveryForDatabase} from '../services/automationRecoveryDatabase.js'
+import {AutomationRecoveryBridge} from '../services/automationRecoveryBridge.js'
+import {SavedCropRecoveryBridge,resolveSavedCropScope,currentSavedCropInput,type SavedCropTarget} from '../services/savedCropRecoveryBridge.js'
+import {savedImportRecoveryTransport} from '../services/managedSavedImportRecovery.js'
+import {managedCropBinding} from '../services/managedCropProjection.js'
 import {applyManagedBoundaryFeedback} from '../services/managedCropReview.js'
 import {readManagedBoundaryFeedback,saveManagedBoundaryFeedback} from '../services/managedCropReview.js'
 import {managedProductionCoordinator} from '../services/managedProductionCoordinator.js'
@@ -31,7 +60,213 @@ export function initManagedPilotRoutes(db:PrismaClient):Router {
  router.post('/accounts',async(req,res)=>{try{const a=authority();await a.ready(['managed-accounts/1']);const body=req.body;if(!body||typeof body!=='object'||Array.isArray(body)||JSON.stringify(body).length>30000||!['policy','confirm','quota','cadence','observe','audit_recheck'].includes(body.action)||['schema','workspaceId'].some(k=>k in body))throw new Error('Supported bounded account action required');res.json(await a.accounts!(body))}catch(error){res.status(409).json({error:error instanceof Error?error.message:'Account update unavailable'})}})
  router.post('/accounts/select',async(req,res)=>{try{const {taskId:id,targets,...extra}=req.body??{};if(Object.keys(extra).length||!taskId(id))throw new Error('Exact task required');const a=authority();await a.ready(['managed-accounts/1']);res.json(await a.selectAccount!(id,targets))}catch(error){res.status(409).json({error:error instanceof Error?error.message:'Selection unavailable'})}})
 
+ router.post('/recovery-disposition',async(req,res)=>{try{
+  if(!configured()||Object.keys(req.query).length)throw new TaskConflict('Configured original recovery workspace required')
+  const b=req.body
+  if(b?.action==='inspect'){recoveryExact(b,['action','unit']);recoveryUnitKey(b.unit);if(b.unit.workspaceId!==process.env.MANAGED_WORKSPACE_ID)throw new TaskConflict('Original workspace required')}
+  else {recoveryExact(b,['action','intent']);parseDispositionIntent(b.intent);if(!['apply','resolve'].includes(b.action)||b.intent.production!==null||b.intent.unit.workspaceId!==process.env.MANAGED_WORKSPACE_ID)throw new TaskConflict('Use the original production coordinator for a production disposition')}
+  const call=recoveryDispositionTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db)),result=await call(b)
+  if(b.action==='inspect')parseDispositionSnapshot(result,b.unit);else if(result!==null)parseDispositionReceipt(result)
+  res.set('Cache-Control','no-store').json(result)
+ }catch{res.status(409).json({error:'Recovery disposition is held or unconfirmed. Reconcile the original decision; charges and evidence remain retained.'})}})
+ router.get('/recovery-retained',async(req,res)=>{try{
+  if(Object.keys(req.query).length)throw new TaskConflict('No retained-recovery filters accepted')
+  res.set('Cache-Control','no-store').json({items:await automationRecoveryForDatabase(db).retained(process.env.MANAGED_WORKSPACE_ID)})
+ }catch{res.status(409).json({error:'Retained recovery records require inspection; no history was replaced.'})}})
+ router.post('/recovery-retained',async(req,res)=>{try{
+  if(Object.keys(req.query).length||JSON.stringify(req.body??null).length>8000)throw new TaskConflict('Bounded retained recovery action required')
+  recoveryExact(req.body,['action','unit','expectedRevision']);const {action,unit,expectedRevision}=req.body
+  recoveryUnitKey(unit)
+  if(process.env.MANAGED_WORKSPACE_ID&&unit.workspaceId!==process.env.MANAGED_WORKSPACE_ID||!['pause','disable','cancel','reinspect','sync'].includes(action)||!Number.isSafeInteger(expectedRevision)||expectedRevision<1)throw new TaskConflict('Exact retained unit/action/revision required')
+  const controller=automationRecoveryForDatabase(db),old=await controller.inspect(unit)
+  if(!old||old.revision!==expectedRevision)throw new TaskConflict('Refresh retained recovery controls')
+  if(action==='sync'){
+   const row=(await controller.retained(unit.workspaceId)).find(r=>recoveryUnitKey(r.diagnosis.unit)===recoveryUnitKey(unit))
+   if(!row?.stop)throw new TaskConflict('Original saved stop required')
+   if(!row.stop.receipt){const receipt=await recoveryStopTransport(process.env.RELAY_URL??'',unit.workspaceId,process.env.MANAGED_STUDIO_TOKEN??'',process.env.RELAY_TOKEN,relayPauseForDatabase(db))(row.stop.intent);await controller.acknowledgeStop(receipt)}
+  }else await controller.stop(unit,expectedRevision,action)
+  res.set('Cache-Control','no-store').json({items:await controller.retained(process.env.MANAGED_WORKSPACE_ID)})
+ }catch{res.status(409).json({error:'Relay confirmation or control is unconfirmed. Refresh retained records; a saved local hold remains in force.'})}})
  const input=(pageId:string)=>managedPilotInput(db,pageId)
+ function recoveryBridge(){
+  authority() // Enforce the existing separate managed configuration without exposing it to the browser.
+  const transport=savedImportRecoveryTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db))
+  return new SavedCropRecoveryBridge({transport,assertAdmission:unit=>automationRecoveryForDatabase(db).assertAdmission(unit),enabled:()=>process.env.MANAGED_SAVED_IMPORT_RECOVERY==='1',async resolve(pageId){
+   if(!identifier(pageId))throw new Error('Exact source page required')
+   const source=await input(pageId),binding=await managedCropBinding(source.folder,source.filename)
+   let target:SavedCropTarget
+   const scope=await resolveSavedCropScope(source,binding,authority(),()=>currentSavedCropInput(()=>input(pageId),async()=>{const latest=await input(pageId);return managedCropBinding(latest.folder,latest.filename)},target))
+   target=scope.target
+   return scope
+  }})
+ }
+ router.post('/pages/:pageId/recovery-dispatch',async(req,res)=>{try{
+  if(!configured()||!identifier(req.params.pageId)||Object.keys(req.query).length)throw new TaskConflict('Exact configured page required')
+  const bridge=new RecoveryDispatchBridge({call:recoveryDispatchTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db)),diagnoses:automationRecoveryForDatabase(db),enabled:()=>process.env.MANAGED_RECOVERY_DISPATCH==='1'&&process.env.MANAGED_AUTOMATIC_RECOVERY==='1',resolve:async()=>{
+   const source=await input(req.params.pageId),binding=await managedCropBinding(source.folder,source.filename),expected=await cropTaskIdentity(source.identity,source.spec)
+   if(!binding||binding.task.id!==expected.taskId||binding.destination!==source.destination)throw new TaskConflict('Current original source binding required')
+   await resolveManagedCropInput(source.identity,source.spec,source.sourceFile);const {task,attempt}=await authority().timeline(expected.taskId)
+   if(!attempt||task.fingerprint!==expected.fingerprint)throw new TaskConflict('Current original attempt required')
+   return {unit:{workspaceId:task.workspaceId,taskId:task.id,attemptId:attempt.id,generation:task.generation,fingerprint:task.fingerprint},pageLabel:source.filename}
+  }})
+  res.set('Cache-Control','no-store').json(await bridge.perform(req.body))
+ }catch{res.status(409).json({error:'Original phone delivery is held. Inspect its exact grant and retained delivery receipt.'})}})
+ router.post('/pages/:pageId/account-handoff',async(req,res)=>{try{
+  if(!configured()||!identifier(req.params.pageId)||Object.keys(req.query).length)throw new TaskConflict('Exact configured page required')
+  const bridge=new AccountHandoffStudioBridge({call:accountHandoffTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db)),enabled:()=>process.env.MANAGED_ACCOUNT_HANDOFF==='1'&&process.env.MANAGED_CANDIDATE_ADOPTION==='1'&&process.env.MANAGED_AUTOMATIC_RECOVERY==='1',resolve:async()=>{
+   const source=await input(req.params.pageId),binding=await managedCropBinding(source.folder,source.filename),expected=await cropTaskIdentity(source.identity,source.spec)
+   if(!binding||binding.task.id!==expected.taskId||binding.destination!==source.destination)throw new TaskConflict('Current original source binding required')
+   const verified=await resolveManagedCropInput(source.identity,source.spec,source.sourceFile),{task,attempt}=await authority().timeline(expected.taskId)
+   if(!attempt||task.fingerprint!==expected.fingerprint)throw new TaskConflict('Current original attempt required')
+   return {unit:{workspaceId:task.workspaceId,taskId:task.id,attemptId:attempt.id,generation:attempt.generation,fingerprint:task.fingerprint},source:verified.source}
+  }})
+  res.set('Cache-Control','no-store').json(await bridge.perform(req.body))
+ }catch{res.status(409).json({error:'Account handoff is held or unconfirmed. Inspect the original handoff and current owner before further action.'})}})
+ router.post('/pages/:pageId/candidate-adoption',async(req,res)=>{try{
+  if(!configured()||!identifier(req.params.pageId)||Object.keys(req.query).length)throw new TaskConflict('Exact configured page required')
+  const bridge=new CandidateAdoptionStudioBridge({call:candidateAdoptionTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db)),contexts:targetContextStatusTransport(targetContextTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db))),enabled:()=>process.env.MANAGED_CANDIDATE_ADOPTION==='1'&&process.env.MANAGED_AUTOMATIC_RECOVERY==='1',resolve:async()=>{
+   const source=await input(req.params.pageId),binding=await managedCropBinding(source.folder,source.filename),expected=await cropTaskIdentity(source.identity,source.spec)
+   if(!binding||binding.task.id!==expected.taskId||binding.destination!==source.destination)throw new TaskConflict('Current original source binding required')
+   const verified=await resolveManagedCropInput(source.identity,source.spec,source.sourceFile),{task,attempt}=await authority().timeline(expected.taskId)
+   if(!attempt||task.fingerprint!==expected.fingerprint)throw new TaskConflict('Current original attempt required')
+   return {unit:{workspaceId:task.workspaceId,taskId:task.id,attemptId:attempt.id,generation:attempt.generation,fingerprint:task.fingerprint},source:verified.source}
+  }})
+  res.set('Cache-Control','no-store').json(await bridge.perform(req.body))
+ }catch{res.status(409).json({error:'Candidate retention approval is unconfirmed. Inspect its original action and budget; no ownership transfer or provider work was authorized.'})}})
+ router.post('/pages/:pageId/target-context',async(req,res)=>{try{
+  if(!configured()||!identifier(req.params.pageId)||Object.keys(req.query).length)throw new TaskConflict('Exact configured page required')
+  const bridge=new TargetContextStudioBridge({call:targetContextTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db)),packages:targetPackageStatusTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db)),resolve:async()=>{
+   const source=await input(req.params.pageId),binding=await managedCropBinding(source.folder,source.filename),expected=await cropTaskIdentity(source.identity,source.spec)
+   if(!binding||binding.task.id!==expected.taskId||binding.destination!==source.destination)throw new TaskConflict('Current original source binding required')
+   const verified=await resolveManagedCropInput(source.identity,source.spec,source.sourceFile),{task,attempt}=await authority().timeline(expected.taskId)
+   if(!attempt||task.fingerprint!==expected.fingerprint)throw new TaskConflict('Current original attempt required')
+   return {unit:{workspaceId:task.workspaceId,taskId:task.id,attemptId:attempt.id,generation:attempt.generation,fingerprint:task.fingerprint},source:verified.source}
+  }})
+  res.set('Cache-Control','no-store').json(await bridge.perform(req.body))
+ }catch{res.status(409).json({error:'Context review is unconfirmed. Inspect its original receipt; no view adoption or handoff was authorized.'})}})
+ router.post('/pages/:pageId/fallback-preflight',async(req,res)=>{try{
+  if(!configured()||!identifier(req.params.pageId)||Object.keys(req.query).length)throw new TaskConflict('Exact configured page required')
+  const bridge=new FallbackPreflightBridge({adoptionChecks:candidateAdoptionStatusTransport(candidateAdoptionTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db))),contextChecks:targetContextStatusTransport(targetContextTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db))),packageChecks:targetPackageStatusTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db)),sourceChecks:targetInputStatusTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db)),call:fallbackPreflightTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db)),resolve:async()=>{
+   const source=await input(req.params.pageId),binding=await managedCropBinding(source.folder,source.filename),expected=await cropTaskIdentity(source.identity,source.spec)
+   if(!binding||binding.task.id!==expected.taskId||binding.destination!==source.destination)throw new TaskConflict('Current original source binding required')
+   const verified=await resolveManagedCropInput(source.identity,source.spec,source.sourceFile);const {task,attempt}=await authority().timeline(expected.taskId)
+   if(!attempt||task.fingerprint!==expected.fingerprint)throw new TaskConflict('Current original attempt required')
+   return {unit:{workspaceId:task.workspaceId,taskId:task.id,attemptId:attempt.id,generation:task.generation,fingerprint:task.fingerprint},pageLabel:source.filename,source:verified.source}
+  }})
+  res.set('Cache-Control','no-store').json(await bridge.inspect(req.body))
+ }catch{res.status(409).json({error:'Fallback inspection unavailable. Preserve the original task and outcomes; no handoff or execution was authorized.'})}})
+ router.post('/pages/:pageId/retained-binding',async(req,res)=>{try{
+  if(!configured()||!identifier(req.params.pageId)||Object.keys(req.query).length)throw new TaskConflict('Exact configured page required')
+  const bridge=new RetainedBindingApprovalBridge({call:retainedBindingApprovalTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db)),diagnoses:automationRecoveryForDatabase(db),enabled:()=>process.env.MANAGED_CONVERSATION_RESTORATION==='1'&&process.env.MANAGED_AUTOMATIC_RECOVERY==='1',resolve:async()=>{
+   const source=await input(req.params.pageId),binding=await managedCropBinding(source.folder,source.filename),expected=await cropTaskIdentity(source.identity,source.spec)
+   if(!binding||binding.task.id!==expected.taskId||binding.destination!==source.destination)throw new TaskConflict('Current original source binding required')
+   await resolveManagedCropInput(source.identity,source.spec,source.sourceFile);const {task,attempt}=await authority().timeline(expected.taskId)
+   if(!attempt||task.fingerprint!==expected.fingerprint)throw new TaskConflict('Current original attempt required')
+   return {unit:{workspaceId:task.workspaceId,taskId:task.id,attemptId:attempt.id,generation:task.generation,fingerprint:task.fingerprint},pageLabel:source.filename}
+  }})
+  res.set('Cache-Control','no-store').json(await bridge.perform(req.body))
+ }catch{res.status(409).json({error:'Retained binding approval is unconfirmed. Inspect the exact original offer and receipt; no repeated association is authorized.'})}})
+ router.post('/pages/:pageId/conversation-restoration',async(req,res)=>{try{
+  if(!configured()||!identifier(req.params.pageId)||Object.keys(req.query).length)throw new TaskConflict('Exact configured page required')
+  const bridge=new ConversationRestorationBridge({call:conversationRestorationTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db)),diagnoses:automationRecoveryForDatabase(db),enabled:()=>process.env.MANAGED_CONVERSATION_RESTORATION==='1'&&process.env.MANAGED_AUTOMATIC_RECOVERY==='1',resolve:async()=>{
+   const source=await input(req.params.pageId),binding=await managedCropBinding(source.folder,source.filename),expected=await cropTaskIdentity(source.identity,source.spec)
+   if(!binding||binding.task.id!==expected.taskId||binding.destination!==source.destination)throw new TaskConflict('Current original source binding required')
+   await resolveManagedCropInput(source.identity,source.spec,source.sourceFile);const {task,attempt}=await authority().timeline(expected.taskId)
+   if(!attempt||task.fingerprint!==expected.fingerprint)throw new TaskConflict('Current original attempt required')
+   return {unit:{workspaceId:task.workspaceId,taskId:task.id,attemptId:attempt.id,generation:task.generation,fingerprint:task.fingerprint},pageLabel:source.filename}
+  }})
+  res.set('Cache-Control','no-store').json(await bridge.perform(req.body))
+ }catch{res.status(409).json({error:'Original conversation restoration is held. Preserve the original live view, private anchor and exact receipt.'})}})
+ router.post('/pages/:pageId/correction-recovery',async(req,res)=>{try{
+  if(!configured()||!identifier(req.params.pageId)||Object.keys(req.query).length)throw new TaskConflict('Exact configured page required')
+  const bridge=new CorrectionRecoveryBridge({call:correctionRecoveryTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db)),diagnoses:automationRecoveryForDatabase(db),enabled:()=>process.env.MANAGED_CORRECTION_RECOVERY==='1'&&process.env.MANAGED_AUTOMATIC_RECOVERY==='1',resolve:async()=>{
+   const source=await input(req.params.pageId),binding=await managedCropBinding(source.folder,source.filename),expected=await cropTaskIdentity(source.identity,source.spec)
+   if(!binding||binding.task.id!==expected.taskId||binding.destination!==source.destination)throw new TaskConflict('Current original source binding required')
+   await resolveManagedCropInput(source.identity,source.spec,source.sourceFile);const {task,attempt}=await authority().timeline(expected.taskId)
+   if(!attempt||task.fingerprint!==expected.fingerprint)throw new TaskConflict('Current original attempt required')
+   return {unit:{workspaceId:task.workspaceId,taskId:task.id,attemptId:attempt.id,generation:task.generation,fingerprint:task.fingerprint},pageLabel:source.filename}
+  }})
+  res.set('Cache-Control','no-store').json(await bridge.perform(req.body))
+ }catch{res.status(409).json({error:'Correction is held. Preserve the original draft, grant and checkpoint; inspect its exact receipt before continuing.'})}})
+ router.post('/pages/:pageId/ui-repair',async(req,res)=>{try{
+  if(!configured()||!identifier(req.params.pageId)||Object.keys(req.query).length)throw new TaskConflict('Exact configured page required')
+  const bridge=new KnownUiRepairBridge({call:knownUiRepairTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db)),diagnoses:automationRecoveryForDatabase(db),enabled:()=>process.env.MANAGED_KNOWN_UI_REPAIR==='1',resolve:async()=>{
+   const source=await input(req.params.pageId),binding=await managedCropBinding(source.folder,source.filename),expected=await cropTaskIdentity(source.identity,source.spec)
+   if(!binding||binding.task.id!==expected.taskId||binding.destination!==source.destination)throw new TaskConflict('Current original source binding required')
+   await resolveManagedCropInput(source.identity,source.spec,source.sourceFile);const {task,attempt}=await authority().timeline(expected.taskId)
+   if(!attempt||task.fingerprint!==expected.fingerprint)throw new TaskConflict('Current original attempt required')
+   return {unit:{workspaceId:task.workspaceId,taskId:task.id,attemptId:attempt.id,generation:task.generation,fingerprint:task.fingerprint},pageLabel:source.filename}
+  }})
+  res.set('Cache-Control','no-store').json(await bridge.perform(req.body))
+ }catch{res.status(409).json({error:'Original known UI repair is held. Inspect the same original page and exact promotion; no generic dismissal or provider work is authorized.'})}})
+ router.post('/pages/:pageId/navigation-recovery',async(req,res)=>{try{
+  if(!configured()||!identifier(req.params.pageId)||Object.keys(req.query).length)throw new TaskConflict('Exact configured page required')
+  const bridge=new UnsentNavigationBridge({call:unsentNavigationTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db)),diagnoses:automationRecoveryForDatabase(db),enabled:()=>process.env.MANAGED_UNSENT_NAVIGATION_RECOVERY==='1',resolve:async()=>{
+   const source=await input(req.params.pageId),binding=await managedCropBinding(source.folder,source.filename),expected=await cropTaskIdentity(source.identity,source.spec)
+   if(!binding||binding.task.id!==expected.taskId||binding.destination!==source.destination)throw new TaskConflict('Current original source binding required')
+   await resolveManagedCropInput(source.identity,source.spec,source.sourceFile);const {task,attempt}=await authority().timeline(expected.taskId)
+   if(!attempt||task.fingerprint!==expected.fingerprint)throw new TaskConflict('Current original attempt required')
+   return {unit:{workspaceId:task.workspaceId,taskId:task.id,attemptId:attempt.id,generation:task.generation,fingerprint:task.fingerprint},pageLabel:source.filename}
+  }})
+  res.set('Cache-Control','no-store').json(await bridge.perform(req.body))
+ }catch{res.status(409).json({error:'Original navigation is held. Inspect the same phone/view/grant; no replacement page or provider request was authorized.'})}})
+ router.post('/pages/:pageId/executor-evidence',async(req,res)=>{try{
+  if(!configured()||!identifier(req.params.pageId)||Object.keys(req.query).length||!req.body||Object.keys(req.body).length)throw new TaskConflict('Exact current page inspection required')
+  const source=await input(req.params.pageId),binding=await managedCropBinding(source.folder,source.filename),expected=await cropTaskIdentity(source.identity,source.spec)
+  if(!binding||binding.task.id!==expected.taskId||binding.destination!==source.destination)throw new TaskConflict('Current original source binding required')
+  await resolveManagedCropInput(source.identity,source.spec,source.sourceFile)
+  const {task,attempt}=await authority().timeline(expected.taskId)
+  if(!attempt||task.fingerprint!==expected.fingerprint)throw new TaskConflict('Current original attempt required')
+  const unit={workspaceId:task.workspaceId,taskId:task.id,attemptId:attempt.id,generation:task.generation,fingerprint:task.fingerprint}
+  const inventory=await executorEvidenceTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db))(unit)
+  const current=await input(req.params.pageId);await resolveManagedCropInput(current.identity,current.spec,current.sourceFile)
+  const currentBinding=await managedCropBinding(current.folder,current.filename),latest=await authority().timeline(expected.taskId)
+  if((await cropTaskIdentity(current.identity,current.spec)).fingerprint!==unit.fingerprint||currentBinding?.task.id!==unit.taskId||currentBinding?.destination!==current.destination||latest.attempt?.id!==unit.attemptId||latest.task.generation!==unit.generation)throw new TaskConflict('Page/attempt changed while inspecting executor evidence')
+  res.set('Cache-Control','no-store').json(await inspectExecutorEvidence(unit,inventory,automationRecoveryForDatabase(db)))
+ }catch{res.status(409).json({error:'Executor diagnosis is held. Retained observations and original work remain unchanged.'})}})
+ router.post('/pages/:pageId/account-recovery',async(req,res)=>{try{
+  if(!configured()||!identifier(req.params.pageId)||Object.keys(req.query).length)throw new TaskConflict('Exact configured page required')
+  const transport=accountRecheckTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db))
+  const bridge=new AccountRecheckRecoveryBridge({transport,diagnoses:automationRecoveryForDatabase(db),enabled:()=>process.env.MANAGED_ACCOUNT_RECHECK_RECOVERY==='1',resolve:async()=>{
+   const source=await input(req.params.pageId),binding=await managedCropBinding(source.folder,source.filename),expected=await cropTaskIdentity(source.identity,source.spec)
+   if(!binding||binding.task.id!==expected.taskId||binding.destination!==source.destination)throw new TaskConflict('Current original source binding required')
+   await resolveManagedCropInput(source.identity,source.spec,source.sourceFile)
+   const {task,attempt}=await authority().timeline(expected.taskId)
+   if(!attempt||task.fingerprint!==expected.fingerprint)throw new TaskConflict('Original attempt required; queued selection remains under Accounts')
+   return {unit:{workspaceId:task.workspaceId,taskId:task.id,attemptId:attempt.id,generation:task.generation,fingerprint:task.fingerprint},outcome:attempt.submission,canonical:!!task.canonical,pageLabel:source.filename}
+  }})
+  res.set('Cache-Control','no-store').json(await bridge.perform(req.body))
+ }catch{res.status(409).json({error:'Account recheck recovery is held. Inspect the original task/account/audit receipt; no readiness or capacity was inferred.'})}})
+ router.post('/pages/:pageId/upload-recovery',async(req,res)=>{try{
+  if(!configured()||!identifier(req.params.pageId)||Object.keys(req.query).length)throw new TaskConflict('Exact configured page required')
+  const transport=savedUploadRecoveryTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db))
+  const bridge=new SavedUploadRecoveryBridge({transport,diagnoses:automationRecoveryForDatabase(db),enabled:()=>process.env.MANAGED_SAVED_UPLOAD_RECOVERY==='1',resolve:async()=>{
+   const source=await input(req.params.pageId),binding=await managedCropBinding(source.folder,source.filename),expected=await cropTaskIdentity(source.identity,source.spec)
+   if(!binding||binding.task.id!==expected.taskId||binding.destination!==source.destination)throw new TaskConflict('Current original source binding required')
+   await resolveManagedCropInput(source.identity,source.spec,source.sourceFile)
+   const {task,attempt}=await authority().timeline(expected.taskId)
+   if(!attempt||attempt.submission!=='saved'||!attempt.checkpointRef||task.fingerprint!==expected.fingerprint)throw new TaskConflict('Original saved checkpoint acknowledgment required')
+   return {unit:{workspaceId:task.workspaceId,taskId:task.id,attemptId:attempt.id,generation:task.generation,fingerprint:task.fingerprint},pageLabel:source.filename}
+  }})
+  res.set('Cache-Control','no-store').json(await bridge.perform(req.body))
+ }catch{res.status(409).json({error:'Saved-upload recovery is held. Inspect the original phone checkpoint and current page; no replacement upload was granted.'})}})
+ router.get('/pages/:pageId/recovery',async(req,res)=>{try{
+  if(Object.keys(req.query).length)throw new Error('Unexpected recovery query')
+  res.set('Cache-Control','no-store').json({targets:await recoveryBridge().targets(req.params.pageId)})
+ }catch{res.status(409).json({error:'Saved crop recovery unavailable. Refresh the published page and its current binding.'})}})
+ router.post('/pages/:pageId/recovery',async(req,res)=>{try{
+  if(Object.keys(req.query).length||JSON.stringify(req.body??null).length>8000)throw new Error('Bounded recovery action required')
+  res.set('Cache-Control','no-store').json(await recoveryBridge().perform(req.params.pageId,req.body))
+ }catch{res.status(409).json({error:'Recovery outcome is unconfirmed. Inspect the original action before continuing.'})}})
+
+
+ // Explicit inspection only. No browser-supplied failure, evidence or budget.
+ router.post('/pages/:pageId/automation-recovery',async(req,res)=>{try{
+  if(!configured()||!identifier(req.params.pageId)||Object.keys(req.query).length)throw new Error('Exact managed page required')
+  const bridge=new AutomationRecoveryBridge({controller:automationRecoveryForDatabase(db),workspaceId:process.env.MANAGED_WORKSPACE_ID!,enabled:()=>process.env.MANAGED_AUTOMATIC_RECOVERY==='1',inspect:target=>recoveryBridge().perform(req.params.pageId,{action:'inspect',target,expectedRevision:0})})
+  res.set('Cache-Control','no-store').json(await bridge.perform(req.body))
+ }catch{res.status(409).json({error:'Automation recovery is held. Refresh the current page recovery inspection.'})}})
+
  async function reviewPage(pageId:string) {
   if(!identifier(pageId))throw new Error('Choose an exact source page')
   const source=await input(pageId)

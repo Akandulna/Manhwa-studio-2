@@ -1,3 +1,6 @@
+import {readFileSync} from 'node:fs'
+const dispositionFixture=JSON.parse(readFileSync(new URL('./fixtures/recovery-disposition-job.json',import.meta.url),'utf8'))
+import {prepareDispositionJob,disposedProductionJob} from '../src/services/productionRecoveryDisposition.js'
 import {handoffJob,type ProductionHandoffIntent} from '../src/services/managedProductionHandoff.js'
 import {afterEach,describe,expect,it,vi} from 'vitest'
 import {PrismaClient} from '@prisma/client'
@@ -105,6 +108,31 @@ describe('production scheduler against real Prisma SQLite transactions',()=>{
   expect(retained.command!.managedClaims![0]).toMatchObject({claimEventId:'target-claim',deviceId:'second-phone'})
   expect(retained.handoffHistory).toHaveLength(1);expect(retained.pendingHandoff).toBeUndefined()
   await expect(b.save(next,{id:pending.id,revision:pending.revision})).rejects.toThrow('replaced or changed')
+ })
+ it('preserves candidate handoff identities across scheduler takeover and derived claim replacement',async()=>{
+  const e=await setup(),a=e.store();await a.activate();await a.save(e.job(),null);e.advance();const b=e.store(e.client());await b.activate();const old=(await b.load())[0]
+  const intent:ProductionHandoffIntent={accountCandidateId:'retained-candidate',eventId:'candidate-action',newClaimEventId:'independent-claim',claimEventId:'original-claim',taskId:'task',attemptId:'original-attempt',generation:1,fingerprint:'a'.repeat(64),stopCommandId:'stop',deviceId:'second-phone',profileId:'profile',createdAt:'2026-10-24T00:00:00Z'}
+  const pending={...old,revision:(old.revision??0)+1,pendingHandoff:intent};await b.save(pending,{id:old.id,revision:old.revision??0});e.advance();const c=e.store(e.client());await c.activate();const retained=(await c.load())[0]
+  expect(retained.pendingHandoff).toEqual(intent)
+  await expect(c.save({...retained,revision:(retained.revision??0)+1,pendingHandoff:{...intent,accountCandidateId:'other'}},{id:retained.id,revision:retained.revision??0})).rejects.toThrow('Pending handoff')
+  const next=handoffJob(retained,intent,{attemptId:'independent-attempt',generation:2},Date.parse('2026-10-24T00:00:01Z'));await c.save(next,{id:retained.id,revision:retained.revision??0})
+  const applied=(await c.load())[0];expect(applied.handoffHistory![0].accountCandidateId).toBe('retained-candidate');expect(applied.command!.managedClaims![0].claimEventId).toBe('independent-claim')
+ })
+ it('requires the original disposition receipt before clearing a pending handoff and preserves history across takeover',async()=>{
+  const e=await setup(),a=e.store();await a.activate()
+  const original:ProductionJob=structuredClone(dispositionFixture.original),receipt=structuredClone(dispositionFixture.receipt)
+  await a.save(original,null);const prepared=prepareDispositionJob(original,receipt.intent);await a.save(prepared,{id:original.id,revision:1})
+  await expect(a.save({...prepared,revision:3,pendingHandoff:undefined,pendingRecoveryDisposition:undefined},{id:prepared.id,revision:2})).rejects.toThrow()
+  e.advance();const b=e.store(e.client());await b.activate();const retained=(await b.load())[0];expect(retained.pendingRecoveryDisposition).toEqual(receipt.intent)
+  const next=disposedProductionJob(retained,receipt);await b.save(next,{id:retained.id,revision:retained.revision??0});const saved=(await b.load())[0]
+  expect(saved.pendingHandoff).toBeUndefined();expect(saved.command).toEqual(original.command);expect(saved.status).toBe('interrupted');expect(saved.recoveryDispositionHistory).toHaveLength(1)
+  await expect(b.save({...saved,revision:4,recoveryDispositionHistory:[]},{id:saved.id,revision:3})).rejects.toThrow('immutable')
+ })
+ it('applies an expired-unreceived decision receipt without clearing the original pending handoff',async()=>{
+  const e=await setup(),a=e.store();await a.activate();const original:ProductionJob=structuredClone(dispositionFixture.original),applied=structuredClone(dispositionFixture.receipt)
+  const receipt={...applied,state:'not_applied_expired' as const,receivedAt:applied.intent.inspectedAt+15000,closed:null,successorClaimBlocked:null,stop:null,afterBudget:applied.beforeBudget}
+  await a.save(original,null);const pending=prepareDispositionJob(original,receipt.intent);await a.save(pending,{id:original.id,revision:1});const next=disposedProductionJob(pending,receipt);await a.save(next,{id:pending.id,revision:2});const saved=(await a.load())[0]
+  expect(saved.pendingHandoff).toEqual(original.pendingHandoff);expect(saved.pendingRecoveryDisposition).toBeUndefined();expect(saved.recoveryDispositionHistory![0].receipt.state).toBe('not_applied_expired')
  })
  it('retains cancellation across a lost handoff reply and rejects the delayed local apply',async()=>{
   const e=await setup(),a=e.store();await a.activate();await a.save(e.job(),null);e.advance()

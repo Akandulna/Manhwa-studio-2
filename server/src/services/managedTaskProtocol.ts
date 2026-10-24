@@ -36,7 +36,7 @@ export async function cropTaskIdentity(identity:CropIdentity,spec:CropSpec):Prom
 }
 
 export const MANAGED_CAPABILITIES = ['managed-task/1','attempt-fencing/1','command-journal/1','artifact-publication/1'] as const
-export const MANAGED_KNOWN_CAPABILITIES = [...MANAGED_CAPABILITIES,'managed-transport/1','chatgpt-default-crop/1','chatgpt-sliced-crop/1','worker-reconnect/1','account-audit/1','account-selection/1'] as const
+export const MANAGED_KNOWN_CAPABILITIES = [...MANAGED_CAPABILITIES,'managed-transport/1','chatgpt-default-crop/1','chatgpt-sliced-crop/1','worker-reconnect/1','account-audit/1','account-selection/1','unsent-navigation-recovery/1','known-ui-repair/1','correction-preflight/1'] as const
 interface Envelope {schema:'managed-task/1';workspaceId:string;eventId:string}
 export interface ProductionClaimReceipt {taskId:string;claimEventId:string;status:'missing'|'blocked_before_claim'|'recorded';fingerprint?:string;attemptId?:string;generation?:number;deviceId?:string;profileId?:string;accountId?:string|null}
 export interface CoordinatorFence {coordinatorId:string;coordinatorGeneration:number}
