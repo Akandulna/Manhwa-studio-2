@@ -1,3 +1,4 @@
+import {retainedInventory} from './retainedInventory'
 import {recoveryUnitKey,type RecoveryUnit} from '../../server/src/services/automationRecoveryPolicy'
 import type {TaskSql,TaskAuthority} from './taskAuthority'
 import {TaskConflict,canonicalJson,type TaskPrincipal} from '../../server/src/services/managedTaskProtocol'
@@ -22,7 +23,7 @@ export class SavedUploadRecovery {
  /** A phone may offer metadata, never enable admission or allocate its own attempt. */
  offer(actor:TaskPrincipal,f:SavedUploadFence){if(actor.role!=='phone')throw new TaskConflict('Original phone offer required');return this.transaction(()=>{
   const c=this.eligible(actor,f);if(c.record)return c.record
-  if(this.sql.exec('SELECT id FROM managed_upload_recovery_episodes LIMIT 129').toArray().length>=128)throw new TaskConflict('Recovery inventory bound reached')
+  if(retainedInventory(this.sql,'managed_upload_recovery_episodes',128)>=128)throw new TaskConflict('Recovery inventory bound reached')
   const r:SavedUploadRecord={schema:SAVED_UPLOAD_SCHEMA,fence:structuredClone(f),revision:1,enabled:false,paused:false,cancelled:false,nextEligibleAt:0,actions:[]};this.put(r);return r
  })}
  control(actor:TaskPrincipal,f:SavedUploadFence,revision:number,enabled:boolean,paused:boolean,cancelled:boolean){if(actor.role!=='studio')throw new TaskConflict('Automation Manager admission required');return this.transaction(()=>{

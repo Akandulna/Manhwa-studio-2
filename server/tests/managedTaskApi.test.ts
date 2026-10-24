@@ -5,17 +5,17 @@ import {MANAGED_CAPABILITIES,parseManagedOperation} from '../src/services/manage
 import type {TaskSql} from '../../relay/src/taskAuthority.js'
 const {DatabaseSync}=createRequire(import.meta.url)('node:sqlite')
 const studio='s'.repeat(40),phone='p'.repeat(40),other='o'.repeat(40),legacy='r'.repeat(40)
-const env:ManagedTaskEnvironment={MANAGED_CROP_PAGE:'1',MANAGED_WORKSPACE_ID:'workspace',MANAGED_STUDIO_TOKEN:studio,MANAGED_DEVICE_TOKENS:JSON.stringify({'phone-1':phone,'phone-2':other}),RELAY_TOKEN:legacy}
+const env:ManagedTaskEnvironment={MANAGED_AUTOMATIC_RECOVERY:'1',MANAGED_CROP_PAGE:'1',MANAGED_WORKSPACE_ID:'workspace',MANAGED_STUDIO_TOKEN:studio,MANAGED_DEVICE_TOKENS:JSON.stringify({'phone-1':phone,'phone-2':other}),RELAY_TOKEN:legacy}
 const spec={version:'crop-page/1',provider:'chatgpt',product:'web',model:'chosen-model',settings:{mode:'Chat',effort:null},pageRevision:'r1',promptVersion:'p1',validatorVersion:'v1',dependencies:[{id:'page',revision:'r1',sha256:'a'.repeat(64)}]}
 const identity={workspaceId:'workspace',seriesId:'series',chapterId:'chapter',pageId:'page'}
 const opened:InstanceType<typeof DatabaseSync>[]=[]
 afterEach(()=>{for(const db of opened.splice(0))db.close()})
-function setup(){
+function setup(settings:ManagedTaskEnvironment=env){
  const db=new DatabaseSync(':memory:');opened.push(db)
  const sql:TaskSql={exec(q,...args){const rows=db.prepare(q).all(...args);return {toArray:()=>rows}}}
  const tx=<T>(work:()=>T)=>{db.exec('BEGIN IMMEDIATE');try{const r=work();db.exec('COMMIT');return r}catch(e){db.exec('ROLLBACK');throw e}}
  let now=Date.parse('2026-10-19T00:00:00Z')
- const api=()=>new ManagedTaskApi(sql,tx,env,()=>new Date(now).toISOString())
+ const api=()=>new ManagedTaskApi(sql,tx,settings,()=>new Date(now).toISOString())
  const first=api()
  async function send(action:Record<string,unknown>,token=studio,instance=first){return instance.handle(new Request('https://relay.invalid/managed/operation',{method:'POST',headers:{Authorization:'Bearer '+token},body:JSON.stringify({schema:'managed-task/1',workspaceId:'workspace',eventId:crypto.randomUUID(),...action})}))}
  async function handshake(token=phone,eventId='hello'){return send({action:'hello',eventId,profileIds:['profile'],capabilities:[...MANAGED_CAPABILITIES],apkVersion:'1.0.999'},token)}
@@ -196,5 +196,25 @@ describe('native reconnect capability and transfer authorization',()=>{
   expect(parseManagedOperation(op)).toEqual(op)
   for(const change of [{generation:1.5},{generation:Infinity},{confirm:true},{stopCommandId:''},{deviceId:'bad device'}])expect(()=>parseManagedOperation({...op,...change})).toThrow()
   expect((await s.send(op,phone)).status).toBe(403)
+ })
+})
+
+describe('global recovery kill switch',()=>{
+ it.each([
+  ['known-ui-repair','reserve'],['unsent-navigation','reserve'],['correction','start'],['original-conversation','reserve-binding'],
+  ['account-recheck','request'],['saved-upload','offer'],['saved-import','reserve'],['dispatch','queue'],
+  ['candidate-adoption','approve'],['account-handoff','approve'],['target-context','review'],['target-input','begin'],['target-package','begin'],['fallback-preflight','inspect-new-context'],
+ ])('blocks new %s/%s work even if its individual switch is on',async(path,action)=>{
+  const settings={...env,MANAGED_AUTOMATIC_RECOVERY:'0',MANAGED_KNOWN_UI_REPAIR:'1',MANAGED_UNSENT_NAVIGATION_RECOVERY:'1',MANAGED_CORRECTION_RECOVERY:'1',MANAGED_CONVERSATION_RESTORATION:'1',MANAGED_ACCOUNT_RECHECK_RECOVERY:'1',MANAGED_SAVED_UPLOAD_RECOVERY:'1',MANAGED_SAVED_IMPORT_RECOVERY:'1',MANAGED_RECOVERY_DISPATCH:'1',MANAGED_CANDIDATE_ADOPTION:'1',MANAGED_ACCOUNT_HANDOFF:'1'}
+  const s=setup(settings),before=s.db.prepare('SELECT total_changes() AS n').get().n
+  const response=await s.first.handle(new Request('https://relay.invalid/managed/recovery/'+path,{method:'POST',headers:{Authorization:'Bearer '+studio},body:JSON.stringify({action,details:{enabled:true,paused:false,cancelled:false}})}))
+  expect(response.status).toBe(503);expect(s.db.prepare('SELECT total_changes() AS n').get().n).toBe(before)
+ })
+ it('accepts an exact stop intent while the kill switch is off',async()=>{
+  const s=setup({...env,MANAGED_AUTOMATIC_RECOVERY:'0'});await s.handshake();await s.send({action:'enroll',deviceId:'phone-1',profileId:'profile'})
+  const task=(await(await s.send({action:'plan',identity,spec})).json()).result,claimed=(await(await s.send({action:'claim',taskId:task.id,deviceId:'phone-1',profileId:'profile',accountId:null})).json()).result
+  const unit={workspaceId:'workspace',taskId:task.id,attemptId:claimed.attempt.id,generation:1,fingerprint:task.fingerprint}
+  const response=await s.first.handle(new Request('https://relay.invalid/managed/recovery/stop',{method:'POST',headers:{Authorization:'Bearer '+studio},body:JSON.stringify({schema:'recovery-stop/1',unit,eventId:'global_off_stop',sequence:1,mode:'cancel'})}))
+  expect(response.status).toBe(200);expect((await response.json()).receipt.mode).toBe('cancel')
  })
 })

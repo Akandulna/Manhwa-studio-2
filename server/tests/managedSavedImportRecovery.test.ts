@@ -40,7 +40,7 @@ async function setup(){
  a.publish(studio,event(),task.id,attempt.id,1,task.fingerprint,'artifact',hash,receipt.reference)
  let afterGet:(()=>void)|null=null
  const bucket={async get(key:string){afterGet?.();return key===ref?{size:bytes.length,arrayBuffer:async()=>new Uint8Array(bytes).buffer}:null},async put(){throw new Error('No cloud upload permitted')}}
- const env:ManagedTaskEnvironment={MANAGED_CROP_PAGE:'1',MANAGED_SAVED_IMPORT_RECOVERY:'1',MANAGED_WORKSPACE_ID:'workspace',MANAGED_STUDIO_TOKEN:token,MANAGED_DEVICE_TOKENS:JSON.stringify({phone:phoneToken}),MANAGED_ARTIFACTS:bucket}
+ const env:ManagedTaskEnvironment={MANAGED_AUTOMATIC_RECOVERY:'1',MANAGED_CROP_PAGE:'1',MANAGED_SAVED_IMPORT_RECOVERY:'1',MANAGED_WORKSPACE_ID:'workspace',MANAGED_STUDIO_TOKEN:token,MANAGED_DEVICE_TOKENS:JSON.stringify({phone:phoneToken}),MANAGED_ARTIFACTS:bucket}
  const make=()=>new ManagedTaskApi(sql,tx,env,()=>new Date(now).toISOString());let api=make()
  const fence:SavedImportFence={workspaceId:'workspace',taskId:task.id,attemptId:attempt.id,generation:1,fingerprint:task.fingerprint,artifactId:'artifact',sha256:hash}
  const destination=new ManagedArtifactDestination(path.join(root,'restored')),destinationId=await savedImportDestinationId(destination)

@@ -184,3 +184,64 @@ describe('ProductionRunner durable ownership',()=>{
   expect(events.at(-1)?.id).toBe(started.id);expect((await b.load())[0]).toEqual(replacement)
  })
 })
+
+describe('scheduler recovery regressions',()=>{
+ it('reacquires its own expired lease without restarting and retains original claim IDs',async()=>{
+  const e=await setup(),a=e.store();await a.activate();await a.save(e.job(),null)
+  const lost=vi.fn(),recovered=vi.fn(async()=>{});a.setOwnershipHandlers(lost,recovered)
+  e.advance();await a.activate()
+  expect(lost).toHaveBeenCalledOnce();expect(recovered).toHaveBeenCalledWith([expect.objectContaining({status:'interrupted',command:e.job().command})])
+  const saved=(await a.load())[0];await a.save({...saved,status:'cancelled',revision:3},{id:saved.id,revision:2})
+ })
+ it('recovers after a transient heartbeat database failure on the next heartbeat',async()=>{
+  const e=await setup(),base=productionJobDatabase(()=>e.db);let fail=false
+  const a=new ProductionJobStore({transaction:work=>fail?Promise.reject(new Error('SQLITE_BUSY')):base.transaction(work)},Date.now,45000,0);stores.push(a)
+  await a.activate();await a.save(e.job(),null);fail=true
+  await expect(a.heartbeat()).rejects.toThrow('SQLITE_BUSY');fail=false
+  await a.heartbeat();expect((await a.load())[0]).toMatchObject({status:'interrupted',command:e.job().command})
+  await a.heartbeat()
+ })
+ it('releases on shutdown immediately without releasing a different live owner',async()=>{
+  const e=await setup(),a=e.store(),b=e.store(e.client());await a.activate();await a.release();await b.activate()
+  await a.release();await b.heartbeat();await expect(a.activate()).rejects.toThrow('shutting down')
+ })
+ it('retries initialization after a corrupt job is repaired',async()=>{
+  const e=await setup(),a=e.store(),row={key:PRODUCTION_JOB_PREFIX+'broken',value:'broken'};await e.db.setting.create({data:row})
+  const runner=new ProductionRunner({activate:()=>a.activate(),load:()=>a.load(),save:(j,v)=>a.save(j,v),series:async()=>{throw Error('Unused')},validate:async()=>{},perform:async()=>{},stop:async()=>{},emit:()=>{}})
+  await expect(runner.init()).rejects.toThrow();await e.db.setting.delete({where:{key:row.key}})
+  await expect(runner.init()).resolves.toBeUndefined()
+ })
+ it('aborts active work on loss and stops its original receipts after ownership is recovered',async()=>{
+  const e=await setup(),a=e.store(),stop=vi.fn(async()=>{});let signal:AbortSignal|undefined
+  const runner=new ProductionRunner({activate:()=>a.activate(),load:()=>a.load(),save:(j,v)=>a.save(j,v),series:async()=>series(),validate:async()=>{},perform:async(_step,_job,s,report)=>{signal=s;await report('Claim retained',{kind:'clipper',sentAt:'now',managedClaims:e.job().command!.managedClaims});await new Promise<void>(resolve=>s.addEventListener('abort',()=>resolve(),{once:true}))},stop,emit:()=>{}})
+  a.setOwnershipHandlers(()=>runner.ownershipLost(),jobs=>runner.reconcileInterrupted(jobs))
+  await runner.start('series',config);await vi.waitFor(()=>expect(signal).toBeDefined())
+  e.advance();await expect(a.heartbeat()).rejects.toBeInstanceOf(ProductionOwnershipConflict)
+  expect(signal!.aborted).toBe(true);await a.activate()
+  expect(stop).toHaveBeenCalledWith(expect.objectContaining({status:'interrupted',command:expect.objectContaining({managedClaims:e.job().command!.managedClaims})}))
+  expect((await a.load())[0].status).toBe('interrupted')
+ })
+})
+
+it('allows Stop for an interrupted legacy job after scheduler recovery',async()=>{
+ const e=await setup(),a=e.store(),legacy=e.job();delete legacy.config.managedCrop
+ await a.activate();await a.save(legacy,null);e.advance();await a.activate()
+ const stop=vi.fn(async()=>{}),runner=new ProductionRunner({activate:()=>a.activate(),load:()=>a.load(),save:(j,v)=>a.save(j,v),series:async()=>series(),validate:async()=>{},perform:async()=>{},stop,emit:()=>{}})
+ expect((await runner.cancel('series')).status).toBe('cancelled');expect(stop).toHaveBeenCalledOnce()
+})
+it('persists interrupted state and stops the original phone before shutdown release',async()=>{
+ const e=await setup(),a=e.store(),stop=vi.fn(async()=>{});let started=false
+ const runner=new ProductionRunner({activate:()=>a.activate(),load:()=>a.load(),save:(j,v)=>a.save(j,v),series:async()=>series(),validate:async()=>{},perform:async(_step,_job,signal)=>{started=true;await new Promise<void>(resolve=>signal.addEventListener('abort',()=>resolve(),{once:true}))},stop,emit:()=>{}})
+ await runner.start('series',config);await vi.waitFor(()=>expect(started).toBe(true));await runner.shutdown();await a.release()
+ expect(stop).toHaveBeenCalledOnce();expect((await a.load())[0].status).toBe('interrupted')
+ const b=e.store(e.client());await b.activate()
+})
+
+it('refuses new starts and validation already in flight once shutdown begins',async()=>{
+ const e=await setup(),a=e.store(),perform=vi.fn(async()=>{});let unblock!:()=>void,validating=false
+ const runner=new ProductionRunner({activate:()=>a.activate(),load:()=>a.load(),save:(j,v)=>a.save(j,v),series:async()=>series(),validate:async()=>{validating=true;await new Promise<void>(resolve=>{unblock=resolve})},perform,stop:async()=>{},emit:()=>{}})
+ const starting=runner.start('series',config),rejected=expect(starting).rejects.toThrow('shutting down')
+ await vi.waitFor(()=>expect(validating).toBe(true));await runner.shutdown();unblock();await rejected
+ await expect(runner.start('series',config)).rejects.toThrow('shutting down')
+ expect(perform).not.toHaveBeenCalled();expect(await a.load()).toHaveLength(0)
+})

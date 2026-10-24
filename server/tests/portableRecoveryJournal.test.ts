@@ -33,7 +33,7 @@ async function setup(){
  const sql:TaskSql={exec(q,...args){const rows=db.prepare(q).all(...args);return {toArray:()=>rows}}}
  let txSeq=0;const transaction=<T>(work:()=>T)=>{const key='portable_'+(++txSeq);db.exec('SAVEPOINT '+key);try{const result=work();db.exec('RELEASE '+key);return result}catch(error){db.exec('ROLLBACK TO '+key);db.exec('RELEASE '+key);throw error}}
  const objects=new Map<string,Uint8Array>()
- const env:ManagedTaskEnvironment={MANAGED_CROP_PAGE:'1',MANAGED_WORKSPACE_ID:'workspace',MANAGED_STUDIO_TOKEN:studio,MANAGED_DEVICE_TOKENS:JSON.stringify({phone,foreign}),MANAGED_ARTIFACTS:{async get(key){const value=objects.get(key);return value?{size:value.length,arrayBuffer:async()=>new Uint8Array(value).buffer}:null},async put(key,value){if(objects.has(key))return null;objects.set(key,new Uint8Array(value));return {key}}}}
+ const env:ManagedTaskEnvironment={MANAGED_AUTOMATIC_RECOVERY:'1',MANAGED_CROP_PAGE:'1',MANAGED_WORKSPACE_ID:'workspace',MANAGED_STUDIO_TOKEN:studio,MANAGED_DEVICE_TOKENS:JSON.stringify({phone,foreign}),MANAGED_ARTIFACTS:{async get(key){const value=objects.get(key);return value?{size:value.length,arrayBuffer:async()=>new Uint8Array(value).buffer}:null},async put(key,value){if(objects.has(key))return null;objects.set(key,new Uint8Array(value));return {key}}}}
  let now=Date.parse('2026-10-19T00:00:00Z')
  const api=()=>new ManagedTaskApi(sql,transaction,env,()=>new Date(now).toISOString())
  async function request(route:string,body?:unknown,token=studio){return api().handle(new Request('https://relay.invalid'+route,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+token},...(body?{body:JSON.stringify(body)}:{})}))}
@@ -168,6 +168,6 @@ describe('portable journal completeness and compatibility',()=>{
 })
 
 describe('portable origin and runtime capability fences',()=>{
- it('advertises read-only journal capability while new recovery flags remain off',async()=>{const e=await retained(),readiness=await(await e.request('/managed/readiness')).json();expect(readiness.result.capabilities).toContain('portable-recovery-journal/1');expect(e.env.MANAGED_AUTOMATIC_RECOVERY).toBeUndefined()})
+ it('advertises read-only journal capability while new recovery flags remain off',async()=>{const e=await retained();delete e.env.MANAGED_AUTOMATIC_RECOVERY;const readiness=await(await e.request('/managed/readiness')).json();expect(readiness.result.capabilities).toContain('portable-recovery-journal/1');expect(e.env.MANAGED_AUTOMATIC_RECOVERY).toBeUndefined()})
  it('cannot substitute the source adoption receipt on an idempotent retry',async()=>{const e=await retained(),bundle=await exportManagedRun(e.job,e.authority,[e.input],e.clock()),dest=destination(e),adopted=await adoptManagedRun('destination',bundle,dest.deps);dest.set({...adopted,adoptedFrom:{...adopted.adoptedFrom!,sourceRevision:999}});await expect(adoptManagedRun('destination',bundle,dest.deps)).rejects.toThrow('adoption receipt')})
 })

@@ -20,7 +20,7 @@ afterEach(()=>vi.unstubAllGlobals())
 it('requires explicit admission, holds a lost grant and reports actual readiness only as owner review',async()=>{
  const e=fixture();await e.act('inspect');await expect(e.act('reserve')).rejects.toThrow('admission');expect(e.calls).not.toContain('reserve')
  expect((await e.act('enable')).diagnosis?.decision.operation).toBe('navigate');e.lose();await expect(e.act('reserve')).rejects.toThrow('Lost')
- expect((await e.act('inspect')).budget.pending).toBe(true);await expect(e.act('reserve')).rejects.toThrow('pending');expect(e.view.budget.used).toBe(1)
+ expect((await e.act('inspect')).budget.pending).toBe(true);await expect(e.act('reserve')).rejects.toThrow('Original action needs reconciliation');expect(e.view.budget.used).toBe(1)
  Object.assign(e.view.record!.actions[0],{phase:'verified',effect:'reloaded',before:e.view.record!.offer,after:{...e.view.record!.offer,ready:true,context:'empty_unsent'},finishedAt:now,evidenceRef:'navigation/one_grant'});e.view.budget.pending=false
  expect((await e.act('inspect')).diagnosis?.decision.state).toBe('owner_action')
 })

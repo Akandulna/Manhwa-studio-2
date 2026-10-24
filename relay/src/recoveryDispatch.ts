@@ -1,3 +1,4 @@
+import {retainedInventory} from './retainedInventory'
 import {parseRestorationFence} from '../../server/src/services/conversationRestorationProtocol'
 import {DISPATCH_SCHEMA,DISPATCH_KINDS,parseDispatchTicket,dispatchFence,type DispatchKind,type DispatchTicket} from '../../server/src/services/recoveryDispatchProtocol'
 import {parseSavedUploadRecord} from '../../server/src/services/managedSavedUploadRecoveryProtocol'
@@ -45,7 +46,7 @@ export class RecoveryDispatch {
   return this.tx(()=>{const old=this.get(id);if(old){if(old.grantRevision!==grantRevision||old.fenceSha256!==fenceSha256)throw new TaskConflict('Conflicting immutable dispatch intent');return old}
    const g=this.grant(actor,u,kind)
    if(g.last.id!==actionId||g.record.revision!==grantRevision||hash!==fenceSha256||canonicalJson(g.record.fence)!==canonicalJson(initial.record.fence))throw new TaskConflict('Inspect the exact original grant before dispatch')
-   if(this.sql.exec('SELECT id FROM managed_recovery_dispatch LIMIT 513').toArray().length>=512)throw new TaskConflict('Dispatch receipt inventory full')
+   if(retainedInventory(this.sql,'managed_recovery_dispatch',512)>=512)throw new TaskConflict('Dispatch receipt inventory full')
    const at=this.now(),t:DispatchTicket={schema:DISPATCH_SCHEMA,id,unit:structuredClone(u),kind,actionId,commandId:g.attempt.activeCommandId,deviceId:g.attempt.deviceId,profileId:g.attempt.profileId,fence:structuredClone(g.record.fence),fenceSha256,grantRevision,revision:1,queuedAt:at,expiresAt:Math.min(at+120000,Date.parse(g.attempt.leaseExpiresAt)-30000),phase:'queued',claimId:null,finishedAt:null};this.put(t);return t
   })
  }

@@ -1,3 +1,4 @@
+import type {RecoveryUnit} from './automationRecoveryPolicy.js'
 import {randomUUID} from 'node:crypto'
 import type {PilotAuthority,PilotInput} from './managedCropPilot.js'
 import type {ManagedProductionCoordinator} from './managedProductionCoordinator.js'
@@ -12,6 +13,7 @@ export interface ProductionCandidateHandoffDependencies {
  load:()=>Promise<ProductionJob[]>;save:(job:ProductionJob,expected:{id:string;revision:number})=>Promise<void>
  authority:PilotAuthority;coordinator:ManagedProductionCoordinator;inputs:(job:ProductionJob)=>Promise<PilotInput[]>
  verify:(input:PilotInput)=>Promise<PackageSource>;validateTarget:(job:ProductionJob,intent:ProductionHandoffIntent,existing:boolean)=>Promise<void>
+ assertAdmission?:(unit:RecoveryUnit)=>Promise<void>
  enabled:()=>boolean;now?:()=>number;id?:()=>string
 }
 /** Persist original intent before reserving a recovery action. Native stages proof; only a current coordinator commits ownership. */
@@ -54,6 +56,7 @@ export async function productionCandidateHandoff(seriesId:string,value:unknown,d
   }
   if(request.action==='approve'){
    if(!deps.enabled())throw new TaskConflict('Production candidate handoff approval is off')
+   if(!existing)await deps.assertAdmission?.(unit)
    const custody=parseAdoptionStatus(await authority.candidateAdoptionStatus(unit,target),unit,target,(deps.now??Date.now)()),candidate=custody.actions.find((a:any)=>a.id===pending.accountCandidateId)
    if(candidate?.phase!=='verified'||canonicalJson(candidate.context.source)!==canonicalJson(source))throw new TaskConflict('Acknowledged exact source candidate required')
    if(!existing){

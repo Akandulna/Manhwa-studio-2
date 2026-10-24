@@ -1,3 +1,4 @@
+import {retainedInventory} from './retainedInventory'
 import type {TaskSql,TaskAuthority} from './taskAuthority'
 import {canonicalJson,TaskConflict,type TaskPrincipal} from '../../server/src/services/managedTaskProtocol'
 import {recoveryUnitKey,type RecoveryUnit} from '../../server/src/services/automationRecoveryPolicy'
@@ -15,7 +16,7 @@ export class AccountRecheckRecovery {
  private get(f:AccountRecheckFence){const raw=this.row<unknown>('managed_account_recovery_episodes',accountRecheckKey(f));return raw?parseAccountRecheckRecord(raw):null}
  private put(r:AccountRecheckRecord){parseAccountRecheckRecord(r);this.sql.exec('INSERT INTO managed_account_recovery_episodes (id,target,body) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body',accountRecheckKey(r.fence),profileKey(r.fence.deviceId,r.fence.profileId),JSON.stringify(r))}
  private pending(device:string,profile:string){
-  const rows=this.sql.exec<{body:string}>('SELECT body FROM managed_account_recovery_episodes WHERE target = ? LIMIT 129',profileKey(device,profile)).toArray()
+  const rows=this.sql.exec<{body:string}>("SELECT body FROM managed_account_recovery_episodes WHERE target = ? AND EXISTS (SELECT 1 FROM json_each(body,'$.actions') a WHERE json_extract(a.value,'$.phase') = 'executing') LIMIT 129",profileKey(device,profile)).toArray()
   if(rows.length>128)throw new TaskConflict('Account recheck inventory exceeded; preserve receipts')
   return rows.map(row=>{const r=parseAccountRecheckRecord(JSON.parse(row.body));if(r.fence.deviceId!==device||r.fence.profileId!==profile)throw new TaskConflict('Retained audit target mismatch');return r}).filter(r=>r.actions.at(-1)?.phase==='executing')
  }
@@ -65,7 +66,7 @@ export class AccountRecheckRecovery {
    const old=this.context(f).record
    if(!Number.isSafeInteger(revision)||revision!==(old?.revision??0)||![enabled,paused,cancelled].every(x=>typeof x==='boolean'))throw new TaskConflict('Current account recovery controls required')
    if(enabled&&!paused&&!cancelled)this.context(f,true)
-   if(!old&&this.sql.exec('SELECT id FROM managed_account_recovery_episodes LIMIT 129').toArray().length>=128)throw new TaskConflict('Account recovery inventory reached')
+   if(!old&&retainedInventory(this.sql,'managed_account_recovery_episodes',128)>=128)throw new TaskConflict('Account recovery inventory reached')
    const r:AccountRecheckRecord=old??{schema:ACCOUNT_RECHECK_SCHEMA,fence:structuredClone(f),revision:0,enabled:false,paused:false,cancelled:false,nextEligibleAt:0,actions:[]}
    if((!enabled||paused||cancelled)&&r.actions.at(-1)?.phase==='executing'&&r.actions.at(-1)?.auditId===null)this.withdraw(r)
    r.revision++;r.enabled=enabled;r.paused=paused;r.cancelled=r.cancelled||cancelled;this.put(r);return r

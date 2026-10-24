@@ -30,7 +30,7 @@ async function setup(){
  const sql:TaskSql={exec(q,...args){const rows=db.prepare(q).all(...args);return {toArray:()=>rows}}}
  const transaction=<T>(work:()=>T)=>{db.exec('BEGIN IMMEDIATE');try{const r=work();db.exec('COMMIT');return r}catch(e){db.exec('ROLLBACK');throw e}}
  const objects=new Map<string,Uint8Array>()
- const env:ManagedTaskEnvironment={MANAGED_CROP_PAGE:'1',MANAGED_WORKSPACE_ID:'workspace',MANAGED_STUDIO_TOKEN:studio,MANAGED_DEVICE_TOKENS:JSON.stringify({phone,foreign}),MANAGED_ARTIFACTS:{async get(key){const value=objects.get(key);return value?{size:value.length,arrayBuffer:async()=>new Uint8Array(value).buffer}:null},async put(key,value){if(objects.has(key))return null;objects.set(key,new Uint8Array(value));return {key}}}}
+ const env:ManagedTaskEnvironment={MANAGED_AUTOMATIC_RECOVERY:'1',MANAGED_CROP_PAGE:'1',MANAGED_WORKSPACE_ID:'workspace',MANAGED_STUDIO_TOKEN:studio,MANAGED_DEVICE_TOKENS:JSON.stringify({phone,foreign}),MANAGED_ARTIFACTS:{async get(key){const value=objects.get(key);return value?{size:value.length,arrayBuffer:async()=>new Uint8Array(value).buffer}:null},async put(key,value){if(objects.has(key))return null;objects.set(key,new Uint8Array(value));return {key}}}}
  let now=Date.parse('2026-10-19T00:00:00Z')
  const api=()=>new ManagedTaskApi(sql,transaction,env,()=>new Date(now).toISOString())
  async function request(route:string,body?:unknown,token=studio){return api().handle(new Request('https://relay.invalid'+route,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+token},...(body?{body:JSON.stringify(body)}:{})}))}

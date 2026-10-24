@@ -314,13 +314,13 @@ async function perform(step: ProductionStep, job: ProductionJob, signal: AbortSi
       claims:[...claims.values()],
       expectedTaskIds:job.resumedFrom?.preparedTaskIds,
       inputs:()=>managedProductionInputs(job),
-      restoreVerified:(input,signal)=>restoreManagedProductionProjection(input,signal,{
+      restoreVerified:process.env.MANAGED_AUTOMATIC_RECOVERY==='1'&&process.env.MANAGED_SAVED_IMPORT_RECOVERY==='1'?(input,signal)=>restoreManagedProductionProjection(input,signal,{
         authority,diagnoses:automationRecoveryForDatabase(prisma),
         transport:savedImportRecoveryTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(prisma)),
         refreshInput:async()=>{const page=await prisma.page.findFirst({where:{localPath:path.join(input.folder,input.filename),chapter:{seriesId:job.seriesId}}});if(!page)throw new TaskConflict('Original production page is unavailable');return managedPilotInput(prisma,page.id)},
         enabled:()=>process.env.MANAGED_AUTOMATIC_RECOVERY==='1'&&process.env.MANAGED_SAVED_IMPORT_RECOVERY==='1',
         wait:(ms,signal)=>delay(ms,undefined,{signal}),report:message=>report(message)
-      }),
+      }):undefined,
       report:async(message,taskId,claim)=>{if(taskId)taskIds.add(taskId);if(claim)claims.set(claim.taskId,claim);await report(message,{kind:'clipper',devices:productionDevices(job.config).map(d=>d.device),sentAt:job.command?.sentAt??new Date().toISOString(),managedTaskIds:[...taskIds],managedClaims:[...claims.values()]})},
       wait:signal=>delay(10_000,undefined,{signal})
     }))
@@ -391,6 +391,12 @@ export const productionAutomation = new ProductionRunner({
   stop: stopCommandPhones,
   emit: job => { io?.emit('production:updated', job); recordManagerAutomation(job) }
 })
+
+productionJobs.setOwnershipHandlers(()=>productionAutomation.ownershipLost(),jobs=>productionAutomation.reconcileInterrupted(jobs))
+
+export async function stopProductionAutomation(){
+  try{await productionAutomation.shutdown()}finally{await productionJobs.release()}
+}
 
 /** A phone's finished JSON still needs fetching before the desktop can offer its review. */
 export async function getProductionStatus(seriesId: string) {
@@ -501,6 +507,7 @@ export async function accountHandoffManagedProduction(seriesId:string,request:un
  const result=await productionCandidateHandoff(seriesId,request,{
   load:()=>productionJobs.load(),save:(job,expected)=>productionJobs.save(job,expected),authority:managedPilotAuthority(prisma),coordinator:managedProductionCoordinator,
   inputs:managedProductionInputs,verify:async input=>(await resolveManagedCropInput(input.identity,input.spec,input.sourceFile)).source,
+  assertAdmission:unit=>automationRecoveryForDatabase(prisma).assertAdmission(unit,'handoff'),
   enabled:()=>process.env.MANAGED_AUTOMATIC_RECOVERY==='1'&&process.env.MANAGED_CANDIDATE_ADOPTION==='1'&&process.env.MANAGED_ACCOUNT_HANDOFF==='1',
   validateTarget:async(job,intent,existing)=>{
    const overview=await getPhoneOverview(null)

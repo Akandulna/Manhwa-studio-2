@@ -1,3 +1,4 @@
+import {retainedInventory} from './retainedInventory'
 import type {TaskSql,TaskAuthority} from './taskAuthority'
 import type {RecoveryStops} from './recoveryStops'
 import type {AccountHandoffAuthority} from './accountHandoff'
@@ -38,7 +39,7 @@ export class RecoveryDispositionAuthority {
  private async token(encoded:string,checkedAt:number){return artifactHash(new TextEncoder().encode(canonicalJson([checkedAt,encoded])))}
  async inspect(actor:TaskPrincipal,unit:RecoveryUnit){this.studio(actor);const checkedAt=this.now(),c=this.tx(()=>this.capture(unit)),inspectionToken=await this.token(c.encoded,checkedAt);return {schema:RECOVERY_DISPOSITION_SCHEMA,unit,root:c.root,checkedAt,inspectionToken,units:c.units,actions:c.actions,budget:c.budget,history:c.history,...dispositionPermissions}}
  private save(receipt:DispositionReceipt){
-  const count=this.sql.exec('SELECT id FROM managed_recovery_disposition_events LIMIT 4097').toArray().length,local=this.sql.exec('SELECT id FROM managed_recovery_disposition_events WHERE root_id = ? LIMIT 17',recoveryUnitKey(receipt.root)).toArray().length
+  const count=retainedInventory(this.sql,'managed_recovery_disposition_events',4096),local=this.sql.exec('SELECT id FROM managed_recovery_disposition_events WHERE root_id = ? LIMIT 17',recoveryUnitKey(receipt.root)).toArray().length
   if(count>=4096||local>=16||receipt.intent.mode!=='retain_hold'&&(count>=3968||local>=15))throw new TaskConflict('Disposition inventory preserves its final hold capacity')
   parseDispositionReceipt(receipt);this.sql.exec('INSERT INTO managed_recovery_disposition_events (id,root_id,body) VALUES (?,?,?)',receipt.intent.eventId,recoveryUnitKey(receipt.root),JSON.stringify(receipt));return receipt
  }

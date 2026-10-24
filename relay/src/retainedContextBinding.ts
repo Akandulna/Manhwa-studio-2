@@ -1,3 +1,4 @@
+import {retainedInventory} from './retainedInventory'
 import type {TaskSql} from './taskAuthority'
 import {TaskConflict,canonicalJson,type TaskPrincipal} from '../../server/src/services/managedTaskProtocol'
 import {recoveryUnitKey} from '../../server/src/services/automationRecoveryPolicy'
@@ -16,7 +17,7 @@ export class RetainedContextBinding {
   if(!recoveryId(candidateId))throw new TaskConflict('Exact live candidate identity required')
   const old=this.get(f);if(old){if(!sameRetainedBindingOffer(old,f,inspection,target,candidateId))throw new TaskConflict('Original binding offer cannot be replaced or reset');return old}
   this.validate(actor,f,inspection,target);assertRecoveryControls(this.sql,f.unit)
-  if(this.sql.exec('SELECT id FROM managed_retained_binding_episodes LIMIT 129').toArray().length>=128)throw new TaskConflict('Retained binding inventory full')
+  if(retainedInventory(this.sql,'managed_retained_binding_episodes',128)>=128)throw new TaskConflict('Retained binding inventory full')
   const r:RetainedBindingRecord={schema:RETAINED_BINDING_SCHEMA,fence:structuredClone(f),inspection:structuredClone(inspection),target:structuredClone(target),candidateId,offeredAt:this.now(),revision:1,enabled:false,paused:false,cancelled:false,nextEligibleAt:0,actions:[]};this.put(r);return r
  })}
  perform(actor:TaskPrincipal,f:ConversationFence,action:string,raw:unknown){return this.tx(()=>{

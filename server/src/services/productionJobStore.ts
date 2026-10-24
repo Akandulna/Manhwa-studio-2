@@ -11,6 +11,7 @@ export interface ProductionSettings {
  list(prefix:string):Promise<{key:string;value:string}[]>
  insert(key:string,value:string):Promise<void>
  replace(key:string,previous:string,value:string):Promise<boolean>
+ remove?(key:string,previous:string):Promise<boolean>
 }
 export interface ProductionStoreDatabase {
  transaction<T>(work:(settings:ProductionSettings)=>Promise<T>):Promise<T>
@@ -26,42 +27,54 @@ function decode(raw:string,key?:string):ProductionJob {
 export class ProductionJobStore {
  private readonly owner=randomUUID()
  private owned=false
- private lost=false
+ private closed=false
+ private onLost:()=>void=()=>{}
+ private onRecovered:(jobs:ProductionJob[])=>Promise<void>=async()=>{}
  private timer:ReturnType<typeof setInterval>|undefined
  private activating:Promise<void>|undefined
  constructor(private db:ProductionStoreDatabase,private now=Date.now,private leaseMs=45_000,private heartbeatMs=10_000) {}
+ setOwnershipHandlers(lost:()=>void,recovered:(jobs:ProductionJob[])=>Promise<void>){this.onLost=lost;this.onRecovered=recovered}
  async load():Promise<ProductionJob[]> {return this.db.transaction(async tx=>(await tx.list(PRODUCTION_JOB_PREFIX)).map(row=>decode(row.value,row.key)))}
  private async requireLease(tx:ProductionSettings) {
   const raw=await tx.get(LEASE_KEY),lease=raw?JSON.parse(raw):null
-  if(this.lost||!this.owned||lease?.owner!==this.owner||!Number.isFinite(lease?.expiresAt)||lease.expiresAt<=this.now())throw new ProductionOwnershipConflict('Scheduler ownership changed or expired. Restart Studio and reconcile saved work')
+  if(this.closed||!this.owned||lease?.owner!==this.owner||!Number.isFinite(lease?.expiresAt)||lease.expiresAt<=this.now()){this.lose();throw new ProductionOwnershipConflict('Scheduler ownership changed or expired. Reconcile saved work before resuming')}
   return {raw:raw!,lease}
  }
  async activate():Promise<void> {
-  if(this.lost)throw new ProductionOwnershipConflict('Scheduler ownership was lost. Restart Studio before resuming')
+  if(this.closed)throw new ProductionOwnershipConflict('Scheduler is shutting down')
   if(this.activating)return this.activating
   const work=this.db.transaction(async tx=>{
-   if(this.owned){await this.requireLease(tx);return}
+   const interrupted:ProductionJob[]=[]
+   if(this.owned){
+    const raw=await tx.get(LEASE_KEY),lease=raw?JSON.parse(raw):null
+    if(lease?.owner===this.owner&&Number.isFinite(lease.expiresAt)&&lease.expiresAt>this.now())return interrupted
+    this.lose()
+   }
    const raw=await tx.get(LEASE_KEY),old=raw?JSON.parse(raw):null
-   if(old&&(!Number.isFinite(old.expiresAt)||old.expiresAt>this.now()))throw new ProductionOwnershipConflict('Another Studio process owns the scheduler. Wait for its lease to expire before resuming')
+   if(old&&(!Number.isFinite(old.expiresAt)||old.owner!==this.owner&&old.expiresAt>this.now()))throw new ProductionOwnershipConflict('Another Studio process owns the scheduler. Wait for its lease to expire before resuming')
    const next=JSON.stringify({owner:this.owner,expiresAt:this.now()+this.leaseMs})
    if(raw){if(!(await tx.replace(LEASE_KEY,raw,next)))throw new ProductionOwnershipConflict('Scheduler lease changed during acquisition')}else await tx.insert(LEASE_KEY,next)
    // Only the new scheduler owner may interrupt old jobs. Preserve all original claim receipts.
    for(const row of await tx.list(PRODUCTION_JOB_PREFIX)) {
     const job=decode(row.value,row.key)
     if(job.status!=='running')continue
-    job.status='interrupted';job.message='Scheduler restarted. Reconcile the phone, then resume the saved claim receipts.'
+    job.status='interrupted';job.message='Scheduler ownership recovered. Reconcile the phone, then explicitly resume saved work.'
     job.updatedAt=new Date(this.now()).toISOString();job.revision=revision(job)+1
     if(!(await tx.replace(row.key,row.value,JSON.stringify(job))))throw new ProductionOwnershipConflict('Production job changed during scheduler recovery')
+    interrupted.push(job)
    }
-  }).then(()=>{
+   return interrupted
+  }).then(async interrupted=>{
    this.owned=true
-   if(!this.timer&&this.heartbeatMs>0){this.timer=setInterval(()=>{void this.heartbeat().catch(()=>{/* Lost ownership fences all later writes. */})},this.heartbeatMs);this.timer.unref()}
+   if(!this.closed&&!this.timer&&this.heartbeatMs>0){this.timer=setInterval(()=>{void this.heartbeat().catch(()=>{/* Retry acquisition on the next heartbeat; writes stay fenced. */})},this.heartbeatMs);this.timer.unref()}
+   if(interrupted.length)await this.onRecovered(interrupted)
   }).catch(error=>{if(this.owned)this.lose();throw error})
   this.activating=work
   try {await work}finally{if(this.activating===work)this.activating=undefined}
  }
- private lose(){this.lost=true;this.owned=false;if(this.timer)clearInterval(this.timer);this.timer=undefined}
+ private lose(){const wasOwned=this.owned;this.owned=false;if(wasOwned)this.onLost()}
  async heartbeat():Promise<void> {
+  if(!this.owned)return this.activate()
   try {await this.db.transaction(async tx=>{
    const {raw,lease}=await this.requireLease(tx)
    if(!(await tx.replace(LEASE_KEY,raw,JSON.stringify({...lease,expiresAt:this.now()+this.leaseMs}))))throw new ProductionOwnershipConflict('Scheduler lease changed during renewal')
@@ -74,7 +87,7 @@ export class ProductionJobStore {
    const key=PRODUCTION_JOB_PREFIX+snapshot.seriesId,raw=await tx.get(key),old=raw?decode(raw,key):null
    if(expected?(!old||old.id!==expected.id||revision(old)!==expected.revision):!!old)throw new ProductionOwnershipConflict('Production job was replaced or changed; this process cannot overwrite it')
    if(!Number.isSafeInteger(snapshot.revision)||snapshot.revision!==(expected?.revision??0)+1)throw new ProductionOwnershipConflict('Exact next production revision required')
-   if(old?.id===snapshot.id&&(JSON.stringify(old.config)!==JSON.stringify(snapshot.config)||old.status!=='running'&&old.status!==snapshot.status&&!(old.config.managedCrop&&['failed','interrupted'].includes(old.status)&&snapshot.status==='cancelled')))throw new ProductionOwnershipConflict('A retained job cannot change configuration or reopen after stopping')
+   if(old?.id===snapshot.id&&(JSON.stringify(old.config)!==JSON.stringify(snapshot.config)||old.status!=='running'&&old.status!==snapshot.status&&!((old.status==='interrupted'||old.config.managedCrop&&old.status==='failed')&&snapshot.status==='cancelled')))throw new ProductionOwnershipConflict('A retained job cannot change configuration or reopen after stopping')
    if(old&&JSON.stringify(old.portableFamilyReceipts)!==JSON.stringify(snapshot.portableFamilyReceipts))throw new ProductionOwnershipConflict('Imported family receipt history must remain immutable')
    const disposition=!!old&&validDispositionCompletion(old,snapshot),preparing=!!old&&validDispositionPreparation(old,snapshot)
    if(old&&JSON.stringify(old.pendingRecoveryDisposition)!==JSON.stringify(snapshot.pendingRecoveryDisposition)&&!disposition&&!preparing)throw new ProductionOwnershipConflict('Pending recovery disposition is immutable until its original receipt is applied')
@@ -98,5 +111,13 @@ export class ProductionJobStore {
    if(raw){if(!(await tx.replace(key,raw,JSON.stringify(snapshot))))throw new ProductionOwnershipConflict('Production job changed during save')}else await tx.insert(key,JSON.stringify(snapshot))
   })
  }
- close(){if(this.timer)clearInterval(this.timer);this.timer=undefined;this.lost=true;this.owned=false}
+ async release():Promise<void> {
+  this.close()
+  await this.activating?.catch(()=>{})
+  await this.db.transaction(async tx=>{
+   const raw=await tx.get(LEASE_KEY),lease=raw?JSON.parse(raw):null
+   if(lease?.owner===this.owner&&!await tx.replace(LEASE_KEY,raw!,JSON.stringify({...lease,expiresAt:0})))throw new ProductionOwnershipConflict('Scheduler lease changed during shutdown')
+  })
+ }
+ close(){this.closed=true;if(this.timer)clearInterval(this.timer);this.timer=undefined;this.lose()}
 }

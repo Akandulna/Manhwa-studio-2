@@ -33,9 +33,9 @@ export async function restoreManagedProductionProjection(input:PilotInput,signal
   const episode=await deps.transport.call('inspect',f,destinationId,{}),last=episode?.actions.at(-1)
   const localState=await destination.inspectProjection(snapshot)
   if(localState==='verified'&&(!last||['verified','safe_failure'].includes(last.phase))){const old=await deps.diagnoses.inspect(unit);if(!old||old.decision.state==='verified')return}
-  const evidence:RecoveryEvidence={reference:'projection/'+randomUUID(),observedAt:now(),failure:'local_import',outcome:'verified',inputCurrent:true,reviewRequired:false,canonical:true,localState,savedCheckpoint:true,login:'unknown',quota:'unknown',quotaScope:null,recheckAt:null,pageExpected:false,profileExpected:false,loading:false,precedingActionReconciled:true,knownRepair:false,uiChangeId:null,adapterScope:'saved-crop-import',contextVerified:true,contextPortable:false,policyAllowsAlternative:false,correctionAllowed:false,acceptedUnitsPreserved:true,safeReleaseVerified:false,deviceReachable:false}
+  const evidence:RecoveryEvidence={reference:'projection/inspection',observedAt:now(),failure:'local_import',outcome:'verified',inputCurrent:true,reviewRequired:false,canonical:true,localState,savedCheckpoint:true,login:'unknown',quota:'unknown',quotaScope:null,recheckAt:null,pageExpected:false,profileExpected:false,loading:false,precedingActionReconciled:true,knownRepair:false,uiChangeId:null,adapterScope:'saved-crop-import',contextVerified:true,contextPortable:false,policyAllowsAlternative:false,correctionAllowed:false,acceptedUnitsPreserved:true,safeReleaseVerified:false,deviceReachable:false}
   const budget=deps.transport.budget??{used:episode?.actions.length??0,uiUsed:0,nextEligibleAt:episode?.nextEligibleAt??0,pending:!!last&&['reserved','executing','unknown'].includes(last.phase),exhausted:(episode?.actions.length??0)>=3}
-  const diagnosis=await deps.diagnoses.observe(unit,evidence,budget)
+  const diagnosis=await deps.diagnoses.observeInspection(unit,evidence,budget)
   if(last&&['executing','unknown'].includes(last.phase)&&localState==='verified'){
    const reconciled=await adapter.reconcile(f,destination,current,signal);if(reconciled.state!=='verified')throw new TaskConflict('Original recovery remains unresolved');continue
   }
@@ -52,7 +52,7 @@ export async function restoreManagedProductionProjection(input:PilotInput,signal
    await deps.report('Safe local import failure; shared authority cooldown applies');continue
   }finally{executing=false}
   if(await destination.inspectProjection(snapshot)!=='verified')throw new TaskConflict('Recovery postcondition failed; retain original action')
-  await deps.diagnoses.observe(unit,{...evidence,reference:'projection/'+randomUUID(),observedAt:now(),localState:'verified'},deps.transport.budget??{...budget,used:budget.used+1,pending:false,exhausted:budget.used+1>=3})
+  await deps.diagnoses.observeInspection(unit,{...evidence,reference:'projection/inspection',observedAt:now(),localState:'verified'},deps.transport.budget??{...budget,used:budget.used+1,pending:false,exhausted:budget.used+1>=3})
   return
  }
  throw new TaskConflict('Recovery inspection bound reached; original episode and budget retained')

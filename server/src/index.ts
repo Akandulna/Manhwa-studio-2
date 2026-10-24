@@ -30,7 +30,7 @@ import { publishEditorPackagesAtStartup } from './services/editorAutoPublish.js'
 import { publishLibrary, startLibrarySync } from './services/librarySync.js';
 import { getSeriesProcess, notifySeriesProcessChanged, startSeriesProcess } from './services/seriesProcess.js';
 import { startSeriesActivity, seriesActivityMiddleware, flushSeriesActivity } from './services/seriesActivity.js';
-import { productionAutomation, startProductionAutomation } from './services/productionAutomation.js';
+import { productionAutomation, startProductionAutomation, stopProductionAutomation } from './services/productionAutomation.js';
 import { startManagerReporting, managerOverview, acknowledgeManagerIncident, recordManagerStorage, managerRelayUsage } from './services/managerReporting.js';
 
 dotenv.config();
@@ -166,10 +166,16 @@ const managerStorageTimer = setInterval(() => { void recordManagerStorage().catc
 managerStorageTimer.unref();
 
 // Graceful shutdown
-process.on('SIGINT', async () => {
+let shuttingDown=false;
+const shutdown=async () => {
+  if(shuttingDown)return;
+  shuttingDown=true;
   console.log('Shutting down...');
+  await stopProductionAutomation().catch(error=>console.error('[production] shutdown:',error));
   await downloadManager.shutdown();
   await flushSeriesActivity();
   await prisma.$disconnect();
   process.exit(0);
-});
+};
+process.on('SIGINT',shutdown);
+process.on('SIGTERM',shutdown);

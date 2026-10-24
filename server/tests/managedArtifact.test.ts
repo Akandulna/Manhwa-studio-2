@@ -47,7 +47,7 @@ async function setup(filename='page.png',pageId='page') {
  const db=new DatabaseSync(':memory:');opened.push(db)
  const sql:TaskSql={exec(q,...args){const rows=db.prepare(q).all(...args);return {toArray:()=>rows}}}
  const tx=<T>(work:()=>T)=>{db.exec('BEGIN IMMEDIATE');try{const r=work();db.exec('COMMIT');return r}catch(e){db.exec('ROLLBACK');throw e}}
- const bucket=new Bucket(),env:ManagedTaskEnvironment={MANAGED_CROP_PAGE:'1',MANAGED_WORKSPACE_ID:'workspace',MANAGED_STUDIO_TOKEN:studio,MANAGED_DEVICE_TOKENS:JSON.stringify({'phone':phone,'foreign':foreign}),MANAGED_ARTIFACTS:bucket}
+ const bucket=new Bucket(),env:ManagedTaskEnvironment={MANAGED_AUTOMATIC_RECOVERY:'1',MANAGED_CROP_PAGE:'1',MANAGED_WORKSPACE_ID:'workspace',MANAGED_STUDIO_TOKEN:studio,MANAGED_DEVICE_TOKENS:JSON.stringify({'phone':phone,'foreign':foreign}),MANAGED_ARTIFACTS:bucket}
  let now=Date.parse('2026-10-19T00:00:00Z')
  const make=()=>new ManagedTaskApi(sql,tx,env,()=>new Date(now).toISOString()),api=make()
  async function send(op:Record<string,unknown>,token=studio) {return api.handle(new Request('https://relay.invalid/managed/operation',{method:'POST',headers:{Authorization:'Bearer '+token},body:JSON.stringify({schema:'managed-task/1',workspaceId:'workspace',eventId:crypto.randomUUID(),...op})}))}

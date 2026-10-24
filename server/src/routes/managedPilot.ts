@@ -1,3 +1,4 @@
+import {recoveryAllowedWhileDisabled} from '../services/recoveryAdmission.js'
 import {recoveryDispositionTransport} from '../services/recoveryDispositionBridge.js'
 import {parseDispositionIntent,parseDispositionReceipt,parseDispositionSnapshot} from '../services/recoveryDispositionProtocol.js'
 import {AccountHandoffStudioBridge,accountHandoffTransport} from '../services/accountHandoffBridge.js'
@@ -60,6 +61,14 @@ export function initManagedPilotRoutes(db:PrismaClient):Router {
  router.post('/accounts',async(req,res)=>{try{const a=authority();await a.ready(['managed-accounts/1']);const body=req.body;if(!body||typeof body!=='object'||Array.isArray(body)||JSON.stringify(body).length>30000||!['policy','confirm','quota','cadence','observe','audit_recheck'].includes(body.action)||['schema','workspaceId'].some(k=>k in body))throw new Error('Supported bounded account action required');res.json(await a.accounts!(body))}catch(error){res.status(409).json({error:error instanceof Error?error.message:'Account update unavailable'})}})
  router.post('/accounts/select',async(req,res)=>{try{const {taskId:id,targets,...extra}=req.body??{};if(Object.keys(extra).length||!taskId(id))throw new Error('Exact task required');const a=authority();await a.ready(['managed-accounts/1']);res.json(await a.selectAccount!(id,targets))}catch(error){res.status(409).json({error:error instanceof Error?error.message:'Selection unavailable'})}})
 
+ router.use((req,res,next)=>{
+  const endpoint=req.path.split('/').at(-1)??''
+  const recovery=new Set(['recovery-disposition','recovery-retained','recovery-dispatch','account-handoff','candidate-adoption','target-context','fallback-preflight','retained-binding','conversation-restoration','correction-recovery','ui-repair','navigation-recovery','account-recovery','upload-recovery','recovery','automation-recovery'])
+  if(req.method==='POST'&&recovery.has(endpoint)&&process.env.MANAGED_AUTOMATIC_RECOVERY!=='1'&&!recoveryAllowedWhileDisabled(req.body)){
+   res.status(503).json({error:'Automatic recovery is off. Inspection, stop and retained receipt reconciliation remain available.'});return
+  }
+  next()
+ })
  router.post('/recovery-disposition',async(req,res)=>{try{
   if(!configured()||Object.keys(req.query).length)throw new TaskConflict('Configured original recovery workspace required')
   const b=req.body
@@ -91,7 +100,7 @@ export function initManagedPilotRoutes(db:PrismaClient):Router {
  function recoveryBridge(){
   authority() // Enforce the existing separate managed configuration without exposing it to the browser.
   const transport=savedImportRecoveryTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db))
-  return new SavedCropRecoveryBridge({transport,assertAdmission:unit=>automationRecoveryForDatabase(db).assertAdmission(unit),enabled:()=>process.env.MANAGED_SAVED_IMPORT_RECOVERY==='1',async resolve(pageId){
+  return new SavedCropRecoveryBridge({transport,assertAdmission:(unit,operation)=>automationRecoveryForDatabase(db).assertAdmission(unit,operation),enabled:()=>process.env.MANAGED_AUTOMATIC_RECOVERY==='1'&&process.env.MANAGED_SAVED_IMPORT_RECOVERY==='1',async resolve(pageId){
    if(!identifier(pageId))throw new Error('Exact source page required')
    const source=await input(pageId),binding=await managedCropBinding(source.folder,source.filename)
    let target:SavedCropTarget
@@ -112,6 +121,7 @@ export function initManagedPilotRoutes(db:PrismaClient):Router {
   res.set('Cache-Control','no-store').json(await bridge.perform(req.body))
  }catch{res.status(409).json({error:'Original phone delivery is held. Inspect its exact grant and retained delivery receipt.'})}})
  router.post('/pages/:pageId/account-handoff',async(req,res)=>{try{
+  if(req.body?.action==='approve')await automationRecoveryForDatabase(db).assertAdmission(req.body.unit,'handoff')
   if(!configured()||!identifier(req.params.pageId)||Object.keys(req.query).length)throw new TaskConflict('Exact configured page required')
   const bridge=new AccountHandoffStudioBridge({call:accountHandoffTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db)),enabled:()=>process.env.MANAGED_ACCOUNT_HANDOFF==='1'&&process.env.MANAGED_CANDIDATE_ADOPTION==='1'&&process.env.MANAGED_AUTOMATIC_RECOVERY==='1',resolve:async()=>{
    const source=await input(req.params.pageId),binding=await managedCropBinding(source.folder,source.filename),expected=await cropTaskIdentity(source.identity,source.spec)
@@ -123,6 +133,7 @@ export function initManagedPilotRoutes(db:PrismaClient):Router {
   res.set('Cache-Control','no-store').json(await bridge.perform(req.body))
  }catch{res.status(409).json({error:'Account handoff is held or unconfirmed. Inspect the original handoff and current owner before further action.'})}})
  router.post('/pages/:pageId/candidate-adoption',async(req,res)=>{try{
+  if(req.body?.action==='approve')await automationRecoveryForDatabase(db).assertAdmission(req.body.unit,'handoff')
   if(!configured()||!identifier(req.params.pageId)||Object.keys(req.query).length)throw new TaskConflict('Exact configured page required')
   const bridge=new CandidateAdoptionStudioBridge({call:candidateAdoptionTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db)),contexts:targetContextStatusTransport(targetContextTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db))),enabled:()=>process.env.MANAGED_CANDIDATE_ADOPTION==='1'&&process.env.MANAGED_AUTOMATIC_RECOVERY==='1',resolve:async()=>{
    const source=await input(req.params.pageId),binding=await managedCropBinding(source.folder,source.filename),expected=await cropTaskIdentity(source.identity,source.spec)
@@ -190,7 +201,7 @@ export function initManagedPilotRoutes(db:PrismaClient):Router {
  }catch{res.status(409).json({error:'Correction is held. Preserve the original draft, grant and checkpoint; inspect its exact receipt before continuing.'})}})
  router.post('/pages/:pageId/ui-repair',async(req,res)=>{try{
   if(!configured()||!identifier(req.params.pageId)||Object.keys(req.query).length)throw new TaskConflict('Exact configured page required')
-  const bridge=new KnownUiRepairBridge({call:knownUiRepairTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db)),diagnoses:automationRecoveryForDatabase(db),enabled:()=>process.env.MANAGED_KNOWN_UI_REPAIR==='1',resolve:async()=>{
+  const bridge=new KnownUiRepairBridge({call:knownUiRepairTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db)),diagnoses:automationRecoveryForDatabase(db),enabled:()=>process.env.MANAGED_AUTOMATIC_RECOVERY==='1'&&process.env.MANAGED_KNOWN_UI_REPAIR==='1',resolve:async()=>{
    const source=await input(req.params.pageId),binding=await managedCropBinding(source.folder,source.filename),expected=await cropTaskIdentity(source.identity,source.spec)
    if(!binding||binding.task.id!==expected.taskId||binding.destination!==source.destination)throw new TaskConflict('Current original source binding required')
    await resolveManagedCropInput(source.identity,source.spec,source.sourceFile);const {task,attempt}=await authority().timeline(expected.taskId)
@@ -201,7 +212,7 @@ export function initManagedPilotRoutes(db:PrismaClient):Router {
  }catch{res.status(409).json({error:'Original known UI repair is held. Inspect the same original page and exact promotion; no generic dismissal or provider work is authorized.'})}})
  router.post('/pages/:pageId/navigation-recovery',async(req,res)=>{try{
   if(!configured()||!identifier(req.params.pageId)||Object.keys(req.query).length)throw new TaskConflict('Exact configured page required')
-  const bridge=new UnsentNavigationBridge({call:unsentNavigationTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db)),diagnoses:automationRecoveryForDatabase(db),enabled:()=>process.env.MANAGED_UNSENT_NAVIGATION_RECOVERY==='1',resolve:async()=>{
+  const bridge=new UnsentNavigationBridge({call:unsentNavigationTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db)),diagnoses:automationRecoveryForDatabase(db),enabled:()=>process.env.MANAGED_AUTOMATIC_RECOVERY==='1'&&process.env.MANAGED_UNSENT_NAVIGATION_RECOVERY==='1',resolve:async()=>{
    const source=await input(req.params.pageId),binding=await managedCropBinding(source.folder,source.filename),expected=await cropTaskIdentity(source.identity,source.spec)
    if(!binding||binding.task.id!==expected.taskId||binding.destination!==source.destination)throw new TaskConflict('Current original source binding required')
    await resolveManagedCropInput(source.identity,source.spec,source.sourceFile);const {task,attempt}=await authority().timeline(expected.taskId)
@@ -227,7 +238,7 @@ export function initManagedPilotRoutes(db:PrismaClient):Router {
  router.post('/pages/:pageId/account-recovery',async(req,res)=>{try{
   if(!configured()||!identifier(req.params.pageId)||Object.keys(req.query).length)throw new TaskConflict('Exact configured page required')
   const transport=accountRecheckTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db))
-  const bridge=new AccountRecheckRecoveryBridge({transport,diagnoses:automationRecoveryForDatabase(db),enabled:()=>process.env.MANAGED_ACCOUNT_RECHECK_RECOVERY==='1',resolve:async()=>{
+  const bridge=new AccountRecheckRecoveryBridge({transport,diagnoses:automationRecoveryForDatabase(db),enabled:()=>process.env.MANAGED_AUTOMATIC_RECOVERY==='1'&&process.env.MANAGED_ACCOUNT_RECHECK_RECOVERY==='1',resolve:async()=>{
    const source=await input(req.params.pageId),binding=await managedCropBinding(source.folder,source.filename),expected=await cropTaskIdentity(source.identity,source.spec)
    if(!binding||binding.task.id!==expected.taskId||binding.destination!==source.destination)throw new TaskConflict('Current original source binding required')
    await resolveManagedCropInput(source.identity,source.spec,source.sourceFile)
@@ -240,7 +251,7 @@ export function initManagedPilotRoutes(db:PrismaClient):Router {
  router.post('/pages/:pageId/upload-recovery',async(req,res)=>{try{
   if(!configured()||!identifier(req.params.pageId)||Object.keys(req.query).length)throw new TaskConflict('Exact configured page required')
   const transport=savedUploadRecoveryTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db))
-  const bridge=new SavedUploadRecoveryBridge({transport,diagnoses:automationRecoveryForDatabase(db),enabled:()=>process.env.MANAGED_SAVED_UPLOAD_RECOVERY==='1',resolve:async()=>{
+  const bridge=new SavedUploadRecoveryBridge({transport,diagnoses:automationRecoveryForDatabase(db),enabled:()=>process.env.MANAGED_AUTOMATIC_RECOVERY==='1'&&process.env.MANAGED_SAVED_UPLOAD_RECOVERY==='1',resolve:async()=>{
    const source=await input(req.params.pageId),binding=await managedCropBinding(source.folder,source.filename),expected=await cropTaskIdentity(source.identity,source.spec)
    if(!binding||binding.task.id!==expected.taskId||binding.destination!==source.destination)throw new TaskConflict('Current original source binding required')
    await resolveManagedCropInput(source.identity,source.spec,source.sourceFile)

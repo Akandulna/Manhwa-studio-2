@@ -1,3 +1,4 @@
+import {retainedInventory} from './retainedInventory'
 import type {TaskSql,TaskAuthority} from './taskAuthority'
 import type {TargetInputAuthority} from './targetInput'
 import {TaskConflict,canonicalJson,type TaskPrincipal} from '../../server/src/services/managedTaskProtocol'
@@ -23,7 +24,7 @@ export class TargetPackageAuthority {
   return this.tx(()=>{
    const current=this.context(actor,sourceCheckId),s=current.challenge,old=this.read(id)
    if(old){if(old.challenge.sourceCheckId!==sourceCheckId)throw new TaskConflict('Immutable package request conflict');this.same(old.challenge,current);return old.challenge}
-   if(this.sql.exec('SELECT id FROM managed_target_package_checks LIMIT 129').toArray().length>=128)throw new TaskConflict('Package evidence inventory full; preserve history')
+   if(retainedInventory(this.sql,'managed_target_package_checks',128)>=128)throw new TaskConflict('Package evidence inventory full; preserve history')
    const now=this.now(),challenge={schema:TARGET_PACKAGE_SCHEMA,id,sourceCheckId,unit:s.unit,target:s.target,accountId:s.accountId,policyRevision:s.policyRevision,stopCommandId:s.stopCommandId,sourceObservedAt:current.receipt.observedAt,issuedAt:now,validUntil:Math.min(now+15000,current.validUntil),...permissions}
    this.sql.exec('INSERT INTO managed_target_package_checks (id,target_key,body) VALUES (?,?,?)',id,this.key(s.unit,s.target),JSON.stringify({challenge,proof:null,receipt:null}));return challenge
   })

@@ -1,3 +1,4 @@
+import {retainedInventory} from './retainedInventory'
 import {parseHandoffRecord} from '../../server/src/services/accountHandoffProtocol'
 import {parseAdoptionRecord} from '../../server/src/services/candidateAdoptionProtocol'
 import {parseRetainedBindingRecord} from '../../server/src/services/retainedContextBindingProtocol'
@@ -38,7 +39,7 @@ export class RecoveryStops {
     this.authority.artifactOwner(actor,unit.taskId,unit.attemptId,unit.generation,unit.fingerprint)
    }
    if(intent.sequence===128&&intent.mode!=='cancel')throw new TaskConflict('Final stop slot is reserved for cancellation')
-   if(!old&&this.sql.exec('SELECT id FROM managed_recovery_stops LIMIT 129').toArray().length>=128||this.sql.exec('SELECT id FROM managed_recovery_stop_events LIMIT 4097').toArray().length>=4096)throw new TaskConflict('Stop receipt inventory full; preserve original records')
+   if(!old&&retainedInventory(this.sql,'managed_recovery_stops',128)>=128||retainedInventory(this.sql,'managed_recovery_stop_events',4096)>=4096)throw new TaskConflict('Stop receipt inventory full; preserve original records')
    // Freeze all enrolled playbooks even when preparing reinspection: removing the shared gate cannot resume them.
    for(const table of ['managed_recovery_episodes','managed_upload_recovery_episodes','managed_account_recovery_episodes','managed_navigation_recovery_episodes','managed_ui_recovery_episodes','managed_correction_recovery_episodes','managed_conversation_recovery_episodes','managed_retained_binding_episodes','managed_candidate_adoption_episodes','managed_account_handoff_episodes']){
     const r=this.sql.exec<{body:string}>('SELECT body FROM '+table+' WHERE id = ?',key).toArray()[0];if(!r)continue

@@ -140,14 +140,14 @@ describe('explicit Automation Manager bridge controls',()=>{
   const cancelled=await e.act('cancel',paused.diagnosis.revision);expect(cancelled.diagnosis.cancelled).toBe(true)
   const disabled=await e.act('disable',cancelled.diagnosis.revision);expect(disabled.diagnosis.cancelled).toBe(true);expect(e.inspections()).toBe(1)
  })
- it('persists pause/cancel even when the bounded timeline is full',async()=>{
+ it('archives a long timeline while retaining enable, pause and sticky cancellation',async()=>{
   const e=bridgeFixture();let d=await e.controller.observe(unit,evidence({canonical:true}),budget)
   d=await e.controller.control(unit,d.revision,controls)
   for(let i=0;i<98;i++)d=await e.controller.observe(unit,evidence({canonical:true,reference:'evidence/'+(i+2)}),budget)
-  expect(d.history).toHaveLength(100)
-  const paused=await e.controller.control(unit,d.revision,{...controls,paused:true});expect(paused.paused).toBe(true);expect(paused.history).toEqual(d.history)
-  await expect(e.controller.control(unit,paused.revision,controls)).rejects.toThrow('history is full')
-  const cancelled=await e.controller.control(unit,paused.revision,{...controls,cancelled:true});expect(cancelled.cancelled).toBe(true)
+  expect(d.history.length).toBeLessThanOrEqual(64)
+  const paused=await e.controller.control(unit,d.revision,{...controls,paused:true});expect(paused.paused).toBe(true);expect(paused.history.at(-1)?.state).toBe('controls')
+  d=await e.controller.control(unit,paused.revision,controls);expect(d.enabled).toBe(true)
+  const cancelled=await e.controller.control(unit,d.revision,{...controls,cancelled:true});expect(cancelled.cancelled).toBe(true)
  })
  it('joins an existing device UI incident without clearing the device manager impact',async()=>{
   const e=bridgeFixture(),d=await e.controller.observe(unit,evidence({failure:'missing_control',uiChangeId:'abcdef123456'}),budget)
@@ -167,3 +167,47 @@ it('records verified original cloud transfer without inferring canonical/local p
  expect(run({failure:'cloud_transfer',outcome:'saved',savedCheckpoint:true,transferVerified:true},{...budget,used:3,exhausted:true})).toMatchObject({state:'verified',operation:'inspect'})
  expect(run({failure:'cloud_transfer',outcome:'saved',savedCheckpoint:true,transferVerified:true},{...budget,pending:true})).toMatchObject({state:'held',operation:'inspect'})
 })
+
+async function retainedFixture(work:(db:PrismaClient,a:AutomationRecovery,advance:()=>void)=>Promise<void>){
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'recovery-retention-')),db=new PrismaClient({datasources:{db:{url:'file:'+path.join(root,'fixture.db')}}});let clock=now
+ try{await db.$executeRawUnsafe('CREATE TABLE Setting (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)');await work(db,new AutomationRecovery(productionJobDatabase(()=>db),()=>clock),()=>clock++)}finally{await db.$disconnect();await fs.rm(root,{recursive:true,force:true})}
+}
+describe('inspection idempotency and archival regressions',()=>{
+ it('refreshes identical inspection evidence hundreds of times without consuming revisions or history',async()=>retainedFixture(async(_db,a,advance)=>{
+  let d=await a.observeInspection(unit,evidence(),budget)
+  for(let i=1;i<=250;i++){advance();d=await a.observeInspection(unit,evidence({reference:'random/'+i,observedAt:now+i}),budget)}
+  expect(d.revision).toBe(1);expect(d.history).toHaveLength(1);expect(d.evidence.observedAt).toBe(now+250)
+ }))
+ it('archives inactive pages beyond 128 while preserving cancelled controls and spent budget',async()=>retainedFixture(async(db,a)=>{
+  let first=await a.observeInspection(unit,evidence(),{...budget,used:1});first=await a.control(unit,first.revision,{enabled:false,paused:false,cancelled:true})
+  for(let i=2;i<=140;i++)await a.observeInspection({...unit,taskId:'task:sha256:'+i.toString(16).padStart(64,'0')},evidence(),budget)
+  expect(await a.list()).toHaveLength(128)
+  expect(await db.setting.count({where:{key:{startsWith:'automationRecoveryArchive/1/'}}})).toBe(12)
+  expect(await a.inspect(unit)).toMatchObject({cancelled:true,budget:{used:1}})
+  await expect(a.observeInspection(unit,evidence(),budget)).rejects.toThrow('cannot reset')
+  const restored=await a.observeInspection(unit,evidence(),{...budget,used:1});expect(restored.cancelled).toBe(true);expect(restored.budget.used).toBe(1)
+ }))
+ it('archives prior history chunks rather than permanently filling the unit',async()=>retainedFixture(async(db,a)=>{
+  let d=await a.observe(unit,evidence(),budget)
+  for(let i=1;i<=150;i++)d=await a.observe(unit,evidence({reference:'source/'+i}),budget)
+  expect(d.history.length).toBeLessThanOrEqual(64)
+  const chunks=await db.setting.findMany({where:{key:{startsWith:'automationRecoveryHistory/1/'}}})
+  expect(chunks.flatMap(r=>JSON.parse(r.value)).length+d.history.length).toBe(151)
+ }))
+ it('does not evict pending work to admit another page',async()=>retainedFixture(async(_db,a)=>{
+  for(let i=1;i<=128;i++)await a.observeInspection({...unit,taskId:'task:sha256:'+i.toString(16).padStart(64,'0')},evidence(),{...budget,pending:true})
+  await expect(a.observeInspection({...unit,taskId:'task:sha256:'+'f'.repeat(64)},evidence(),budget)).rejects.toThrow('Active recovery inventory')
+ }))
+})
+
+it('requires a fresh enrolled policy decision for every requested recovery operation',async()=>retainedFixture(async(db,a)=>{
+ await expect(a.assertAdmission(unit,'correct_output')).rejects.toThrow('Fresh Automation Manager diagnosis')
+ let d=await a.observe(unit,evidence({failure:'malformed_output'}),budget)
+ d=await a.control(unit,d.revision,controls)
+ await expect(a.assertAdmission(unit,'correct_output')).rejects.toThrow('No verified runtime adapter')
+ d=await a.observe(unit,evidence({reference:'canonical/1',canonical:true}),budget)
+ await expect(a.assertAdmission(unit,'restore_local')).resolves.toBeUndefined()
+ await expect(a.assertAdmission(unit,'navigate')).rejects.toThrow('Recovery policy holds')
+ const stale=new AutomationRecovery(productionJobDatabase(()=>db),()=>now+120001)
+ await expect(stale.assertAdmission(unit,'restore_local')).rejects.toThrow('Fresh')
+}))

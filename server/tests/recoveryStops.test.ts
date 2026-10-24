@@ -38,7 +38,7 @@ async function setup(){
  now+=1000;a.accounts.quota(studio,event(),null,{accountId:'shared',scope,state:'blocked',evidence:'owner_supplied',observedAt:now,recheckAt:now+1000})
  const recovery=new AccountRecheckRecovery(sql,tx,a,()=>now),unit={workspaceId:'workspace',taskId:task.id,attemptId:claim.attempt.id,generation:claim.attempt.generation,fingerprint:task.fingerprint}
  const fences=recovery.discover(studio,unit).targets,fence=fences.find(f=>f.deviceId==='two')!
- const env:ManagedTaskEnvironment={MANAGED_CROP_PAGE:'1',MANAGED_ACCOUNT_RECHECK_RECOVERY:'1',MANAGED_WORKSPACE_ID:'workspace',MANAGED_STUDIO_TOKEN:'s'.repeat(40),MANAGED_DEVICE_TOKENS:JSON.stringify({one:'o'.repeat(40),two:'t'.repeat(40)})}
+ const env:ManagedTaskEnvironment={MANAGED_AUTOMATIC_RECOVERY:'1',MANAGED_CROP_PAGE:'1',MANAGED_ACCOUNT_RECHECK_RECOVERY:'1',MANAGED_WORKSPACE_ID:'workspace',MANAGED_STUDIO_TOKEN:'s'.repeat(40),MANAGED_DEVICE_TOKENS:JSON.stringify({one:'o'.repeat(40),two:'t'.repeat(40)})}
  const api=(action:string,details:Record<string,unknown>={},f:unknown=fence,token='s'.repeat(40))=>new ManagedTaskApi(sql,tx,env,()=>new Date(now).toISOString()).handle(new Request('https://fixture/managed/recovery/account-recheck',{method:'POST',headers:{Authorization:'Bearer '+token},body:JSON.stringify({schema:ACCOUNT_RECHECK_SCHEMA,action,fence:f,details})}))
  const record=()=>recovery.inspect(studio,fence),enable=()=>recovery.control(studio,fence,record()?.revision??0,true,false,false),request=(id='original_request')=>recovery.request(studio,fence,record()!.revision,id)
  const finish=async(auditId:string,signedIn=true,email='same@example.com')=>{now++;return a.accounts.auditFinish(phone('two'),event(),auditId,await accountObservation(raw(signedIn,email),now))}
@@ -122,7 +122,7 @@ describe('durable detached local stop admission',()=>{
  it('keeps stopping possible at the full diagnosis history bound',async()=>{
   const e=await setup(),l=localFixture();let d=await l.controller.observe(e.unit,evidence(l.now()),budget)
   for(let i=1;i<100;i++)d=await l.controller.observe(e.unit,{...evidence(l.now()),reference:'evidence/'+i},budget)
-  const saved=await l.controller.stop(e.unit,d.revision,'cancel');expect(saved.diagnosis.history).toEqual(d.history);expect(saved.diagnosis.cancelled).toBe(true)
+  const saved=await l.controller.stop(e.unit,d.revision,'cancel');expect(saved.diagnosis.history.length).toBeLessThanOrEqual(64);expect(saved.diagnosis.history.at(-1)?.state).toBe('controls');expect(saved.diagnosis.cancelled).toBe(true)
  })
 })
 describe('single-attempt stop delivery',()=>{

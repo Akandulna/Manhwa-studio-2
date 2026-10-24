@@ -1,3 +1,4 @@
+import {retainedInventory} from './retainedInventory'
 import type {TaskSql} from './taskAuthority'
 import {TaskConflict,canonicalJson,type CropTask,type CropAttempt} from '../../server/src/services/managedTaskProtocol'
 import {recoveryUnitKey,type RecoveryUnit} from '../../server/src/services/automationRecoveryPolicy'
@@ -63,7 +64,7 @@ export function recordReleasedRecoveryLineage(sql:TaskSql,parent:RecoveryUnit,su
  for(const table of [...RECOVERY_LEDGER_TABLES,'managed_recovery_stops'])if(sql.exec('SELECT id FROM '+table+' WHERE id = ?',key).toArray().length)throw new TaskConflict('Successor already has independent recovery history')
  if(sql.exec('SELECT id FROM managed_recovery_dispatch WHERE unit_id = ? LIMIT 1',key).toArray().length)throw new TaskConflict('Successor already has delivery history')
  if(sql.exec('SELECT id FROM managed_recovery_lineage WHERE event_id = ?',transferEventId).toArray().length)throw new TaskConflict('Lineage event identity cannot be reused')
- if(sql.exec('SELECT id FROM managed_recovery_lineage LIMIT 129').toArray().length>=128)throw new TaskConflict('Recovery lineage inventory full; preserve history')
+ if(retainedInventory(sql,'managed_recovery_lineage',128)>=128)throw new TaskConflict('Recovery lineage inventory full; preserve history')
  sql.exec('INSERT INTO managed_recovery_lineage (id,parent_id,event_id,body) VALUES (?,?,?,?)',row.id,row.parent_id,row.event_id,row.body)
  family(sql,successor);return value
 }

@@ -1,3 +1,4 @@
+import {retainedInventory} from './retainedInventory'
 import {EXECUTOR_EVIDENCE_SCHEMA,parseExecutorEvidence,type ExecutorEvidence} from '../../server/src/services/managedExecutorEvidenceProtocol'
 import {recoveryUnitKey,type RecoveryUnit} from '../../server/src/services/automationRecoveryPolicy'
 import {TaskConflict,canonicalJson,type TaskPrincipal} from '../../server/src/services/managedTaskProtocol'
@@ -28,7 +29,7 @@ export class ExecutorEvidenceAuthority {
    if(c.attemptId!==e.unit.attemptId||c.taskId!==e.unit.taskId||c.generation!==e.unit.generation||c.fingerprint!==e.unit.fingerprint||c.action!=='start')throw new TaskConflict('Original start command fence required')
    const old=this.sql.exec<{body:string;received_at:number}>('SELECT body,received_at FROM managed_executor_evidence WHERE id = ?',e.id).toArray()[0]
    if(old){if(canonicalJson(JSON.parse(old.body))!==canonicalJson(e))throw new TaskConflict('Conflicting immutable executor observation');return {id:e.id,receivedAt:old.received_at}}
-   if(this.sql.exec('SELECT id FROM managed_executor_evidence LIMIT 4097').toArray().length>=4096||this.sql.exec('SELECT id FROM managed_executor_evidence WHERE unit = ? LIMIT 33',recoveryUnitKey(e.unit)).toArray().length>=32)throw new TaskConflict('Executor evidence inventory full; retain original history')
+   if(retainedInventory(this.sql,'managed_executor_evidence',4096)>=4096||this.sql.exec('SELECT id FROM managed_executor_evidence WHERE unit = ? LIMIT 33',recoveryUnitKey(e.unit)).toArray().length>=32)throw new TaskConflict('Executor evidence inventory full; retain original history')
    const receivedAt=this.now();this.sql.exec('INSERT INTO managed_executor_evidence (id,unit,body,received_at) VALUES (?,?,?,?)',e.id,recoveryUnitKey(e.unit),JSON.stringify(e),receivedAt);return {id:e.id,receivedAt}
   })
  }

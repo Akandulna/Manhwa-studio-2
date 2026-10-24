@@ -33,10 +33,10 @@ export class ConversationRestorationBridge {
   if(b.action!=='inspect'){
    const r=view.record;if(!r||canonicalJson(r.fence)!==canonicalJson(b.fence)||r.revision!==b.expectedRevision)throw new TaskConflict('Inspect the exact original private conversation anchor before approving')
    if(['enable','reserve'].includes(b.action)){
-    if(!this.deps.enabled()||!view.globalEnabled)throw new TaskConflict('Correction recovery is off')
-    await this.deps.diagnoses.assertAdmission(source.unit)
+    if(!this.deps.enabled()||!view.globalEnabled)throw new TaskConflict('Conversation restoration is off')
+    await this.deps.diagnoses.assertAdmission(source.unit,b.action==='reserve'?'navigate':undefined)
     const current=await this.deps.resolve();if(recoveryUnitKey(current.unit)!==recoveryUnitKey(source.unit))throw new TaskConflict('Original input or owner changed')
-    await this.deps.diagnoses.assertAdmission(source.unit)
+    await this.deps.diagnoses.assertAdmission(source.unit,b.action==='reserve'?'navigate':undefined)
    }
    view=b.action==='reserve'?await this.deps.call('reserve',r.fence,{revision:r.revision,actionId:b.actionId}):await this.deps.call('control',r.fence,{revision:r.revision,enabled:b.action==='enable'?true:b.action==='cancel'?false:r.enabled,paused:b.action==='pause'?true:b.action==='enable'?false:r.paused,cancelled:b.action==='cancel'})
   }

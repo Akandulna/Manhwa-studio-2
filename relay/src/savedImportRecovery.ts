@@ -1,3 +1,4 @@
+import {retainedInventory} from './retainedInventory'
 import {initRecoveryBudget,sharedRecoveryBudget,assertRecoveryReservation,assertRecoveryControls} from './recoveryBudget'
 import type {TaskSql,TaskAuthority} from './taskAuthority'
 import {TaskConflict,canonicalJson,type TaskPrincipal} from '../../server/src/services/managedTaskProtocol'
@@ -29,7 +30,7 @@ export class SavedImportRecovery {
  control(actor:TaskPrincipal,f:SavedImportFence,destinationId:string,revision:number,enabled:boolean,paused:boolean,cancelled:boolean){return this.transaction(()=>{
   const old=this.current(actor,f,destinationId)
   if(!Number.isSafeInteger(revision)||revision!==(old?.revision??0)||![enabled,paused,cancelled].every(v=>typeof v==='boolean'))throw new TaskConflict('Current recovery controls required')
-  if(!old&&this.sql.exec('SELECT id FROM managed_recovery_episodes LIMIT 129').toArray().length>=128)throw new TaskConflict('Recovery inventory bound reached')
+  if(!old&&retainedInventory(this.sql,'managed_recovery_episodes',128)>=128)throw new TaskConflict('Recovery inventory bound reached')
   const r:SavedImportRecord=old??{schema:SAVED_IMPORT_SCHEMA,fence:structuredClone(f),destinationId,revision:0,enabled:false,paused:false,cancelled:false,nextEligibleAt:0,actions:[]}
   r.revision++;r.enabled=enabled;r.paused=paused;r.cancelled=r.cancelled||cancelled;this.put(r);return r
  })}

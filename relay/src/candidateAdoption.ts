@@ -1,3 +1,4 @@
+import {retainedInventory} from './retainedInventory'
 import type {TaskSql,TaskAuthority} from './taskAuthority'
 import type {TargetContextAuthority} from './targetContext'
 import {TaskConflict,canonicalJson,type TaskPrincipal} from '../../server/src/services/managedTaskProtocol'
@@ -40,7 +41,7 @@ export class CandidateAdoptionAuthority {
    const current=this.contexts.adoptionContext({role:'phone',deviceId:target.deviceId},raw.contextId),context=parseContextReceipt(current.receipt,unit,target,this.now())
    if(r?.actions.some(a=>a.context.id===context.id&&a.phase==='verified'))throw new TaskConflict('This exact context candidate is already retained')
    assertRecoveryReservation(this.sql,unit,raw.actionId,this.now())
-   if(!r&&this.sql.exec('SELECT id FROM managed_candidate_adoption_episodes LIMIT 129').toArray().length>=128)throw new TaskConflict('Candidate retention inventory full; preserve history')
+   if(!r&&retainedInventory(this.sql,'managed_candidate_adoption_episodes',128)>=128)throw new TaskConflict('Candidate retention inventory full; preserve history')
    const now=this.now(),action:AdoptionAction={id:raw.actionId,context,at:now,expiresAt:now+120000,phase:'reserved',startEventId:null,startedAt:null,before:null,permit:null,unknownAt:null,finishedAt:null,receipt:null}
    r=r??{schema:CANDIDATE_ADOPTION_SCHEMA,fence:{unit},revision:0,enabled:true,paused:false,cancelled:false,nextEligibleAt:0,actions:[]}
    r.actions.push(action);r.revision++;this.put(r);return {action,globalEnabled:this.enabled(),...adoptionPermissions}

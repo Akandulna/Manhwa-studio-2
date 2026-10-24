@@ -50,7 +50,7 @@ export class RetainedBindingApprovalBridge {
    await sameSource()
    if(['enable','reserve'].includes(b.action)){
     if(!this.deps.enabled()||!view.globalEnabled||!view.admissionReady&&!(b.action==='enable'&&r.paused&&!r.cancelled&&!r.actions.length))throw new TaskConflict('Retained binding admission is off or not ready')
-    await this.deps.diagnoses.assertAdmission(source.unit);await sameSource();await this.deps.diagnoses.assertAdmission(source.unit)
+    await this.deps.diagnoses.assertAdmission(source.unit,b.action==='reserve'?'navigate':undefined);await sameSource();await this.deps.diagnoses.assertAdmission(source.unit,b.action==='reserve'?'navigate':undefined)
    }
    const changed=await this.deps.call(b.action==='reserve'?'reserve-binding':'control-binding',r.fence,b.action==='reserve'?{revision:r.revision,actionId:b.actionId}:{revision:r.revision,enabled:b.action==='enable'?true:['disable','cancel'].includes(b.action)?false:r.enabled,paused:b.action==='pause'?true:b.action==='enable'?false:r.paused,cancelled:b.action==='cancel'||r.cancelled})
    const updated=changed.binding

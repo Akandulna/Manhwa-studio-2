@@ -1,4 +1,4 @@
-import type {RecoveryUnit,RecoveryBudget} from './automationRecoveryPolicy.js'
+import type {RecoveryUnit,RecoveryBudget,RecoveryOperation} from './automationRecoveryPolicy.js'
 import {canonicalJson,cropTaskIdentity,TaskConflict} from './managedTaskProtocol.js'
 import {artifactRef} from './managedCropArtifact.js'
 import {ManagedArtifactDestination,resolveManagedCropInput,type ManagedCropInput} from './managedArtifactImport.js'
@@ -14,7 +14,7 @@ export interface SavedCropInspection {budget?:RecoveryBudget;target:SavedCropTar
 export interface RecoveryBridgeDependencies {
  resolve(pageId:string):Promise<SavedCropScope>
  transport:SavedImportRecoveryTransport
- assertAdmission?(unit:RecoveryUnit):Promise<void>
+ assertAdmission?(unit:RecoveryUnit,operation?:RecoveryOperation):Promise<void>
  enabled():boolean
  now?:()=>number
 }
@@ -57,11 +57,11 @@ export class SavedCropRecoveryBridge {
   if(raw.expectedRevision!==(e?.revision??0))throw new TaskConflict('Inspect the current recovery revision')
   if(action==='enable'||action==='run'){
    const unit={workspaceId:fence.workspaceId,taskId:fence.taskId,attemptId:fence.attemptId,generation:fence.generation,fingerprint:fence.fingerprint}
-   await this.deps.assertAdmission?.(unit)
+   await this.deps.assertAdmission?.(unit,action==='run'?'restore_local':undefined)
    if(view.budget?.pending||view.budget?.exhausted||(view.budget?.nextEligibleAt??0)>(this.deps.now??Date.now)()||!view.sourceMatches||view.localState!=='missing'||e?.cancelled||last&&last.phase!=='safe_failure'||(e?.actions.length??0)>=3||(e?.nextEligibleAt??0)>(this.deps.now??Date.now)())throw new TaskConflict('Recovery is held; inspect the original evidence')
    if(action==='run'){
     if(!e?.enabled||e.paused)throw new TaskConflict('Enable this inspected recovery first')
-    await this.recovery.run(fence,raw.actionId as string,destination,async()=>{await this.deps.assertAdmission?.(unit);const source=await current();await this.deps.assertAdmission?.(unit);return source},new AbortController().signal,raw.expectedRevision as number)
+    await this.recovery.run(fence,raw.actionId as string,destination,async()=>{await this.deps.assertAdmission?.(unit,action==='run'?'restore_local':undefined);const source=await current();await this.deps.assertAdmission?.(unit,action==='run'?'restore_local':undefined);return source},new AbortController().signal,raw.expectedRevision as number)
    }else await this.deps.transport.call('control',fence,target.destinationId,{revision:raw.expectedRevision,enabled:true,paused:false,cancelled:false})
   }else{
    if(!e||e.cancelled||last?.phase==='verified')throw new TaskConflict('No active recovery controls')

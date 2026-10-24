@@ -1,3 +1,4 @@
+import {retainedInventory} from './retainedInventory'
 import type {TaskSql,TaskAuthority} from './taskAuthority'
 import type {TargetContextAuthority} from './targetContext'
 import {TaskConflict,canonicalJson,type TaskPrincipal,type CoordinatorFence} from '../../server/src/services/managedTaskProtocol'
@@ -27,7 +28,7 @@ export class AccountHandoffAuthority {
    if(!candidate||candidate.phase!=='verified')throw new TaskConflict('Acknowledge the exact retained candidate first')
    this.compatible(candidate.context.target.deviceId,!!production);this.contexts.adoptionContext({role:'phone',deviceId:candidate.context.target.deviceId},candidate.context.id)
    assertRecoveryReservation(this.sql,unit,raw.actionId,this.now())
-   if(!old&&this.sql.exec('SELECT id FROM managed_account_handoff_episodes LIMIT 129').toArray().length>=128)throw new TaskConflict('Handoff history inventory full')
+   if(!old&&retainedInventory(this.sql,'managed_account_handoff_episodes',128)>=128)throw new TaskConflict('Handoff history inventory full')
    const at=this.now(),a={id:raw.actionId,candidate,at,expiresAt:at+120000,phase:'reserved' as const,...(production?{production}:{}),proof:null,result:null,finishedAt:null},r=old??{schema:ACCOUNT_HANDOFF_SCHEMA,fence:{unit},revision:0,enabled:true,paused:false,cancelled:false,nextEligibleAt:0,actions:[]}
    r.actions.push(a);r.revision++;this.put(r);return a
   })

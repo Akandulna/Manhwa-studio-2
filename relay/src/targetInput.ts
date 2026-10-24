@@ -1,3 +1,4 @@
+import {retainedInventory} from './retainedInventory'
 import type {TaskSql,TaskAuthority} from './taskAuthority'
 import {TaskConflict,canonicalJson,type TaskPrincipal} from '../../server/src/services/managedTaskProtocol'
 import {recoveryExact,recoveryId} from '../../server/src/services/managedSavedImportRecoveryProtocol'
@@ -33,7 +34,7 @@ export class TargetInputAuthority {
    if(old){if(this.key(old.challenge.unit,old.challenge.target)!==this.key(unit,target))throw new TaskConflict('Immutable target source request conflict');this.unchanged(old.challenge,this.context(unit,target));return old.challenge}
    const c=this.context(unit,target),now=this.now(),dependency=task.spec.dependencies[0]
    if(dependency.id!==task.pageId||dependency.revision!==task.spec.pageRevision)throw new TaskConflict('Exact page dependency required')
-   if(this.sql.exec('SELECT id FROM managed_target_input_checks LIMIT 129').toArray().length>=128)throw new TaskConflict('Target source evidence inventory full; preserve history')
+   if(retainedInventory(this.sql,'managed_target_input_checks',128)>=128)throw new TaskConflict('Target source evidence inventory full; preserve history')
    const challenge:TargetInputChallenge={schema:TARGET_INPUT_SCHEMA,id,unit,target,accountId:c.target.accountId!,policyRevision:c.snapshot.policyRevision!,stopCommandId:c.snapshot.source.stopCommandId!,scope:{workspaceId:workspace,seriesId:task.seriesId,chapterId:task.chapterId,pageId:task.pageId},spec:structuredClone(task.spec),sourceSha256:dependency.sha256,issuedAt:now,validUntil:Math.min(now+TARGET_INPUT_MAX_AGE,c.snapshot.validUntil),executionAllowed:false,handoffAllowed:false,resendAllowed:false,portableInputVerified:false}
    this.sql.exec('INSERT INTO managed_target_input_checks (id,target_key,body) VALUES (?,?,?)',id,this.key(unit,target),JSON.stringify({challenge,proof:null,receipt:null}))
    return challenge

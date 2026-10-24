@@ -1,3 +1,4 @@
+import {recoveryAllowedWhileDisabled} from '../../server/src/services/recoveryAdmission'
 import {RecoveryDispositionAuthority,recoveryDispositionApi} from './recoveryDisposition'
 import {AccountHandoffAuthority,accountHandoffApi} from './accountHandoff'
 import {CandidateAdoptionAuthority,candidateAdoptionApi} from './candidateAdoption'
@@ -112,12 +113,12 @@ export class ManagedTaskApi {
   this.uiRepairRecovery=new KnownUiRepair(sql,transaction,this.authority,()=>Date.parse(now()))
   this.navigationRecovery=new UnsentNavigation(sql,transaction,this.authority,()=>Date.parse(now()))
   this.executorEvidence=new ExecutorEvidenceAuthority(sql,transaction,this.authority,()=>Date.parse(now()))
-  this.accountRecheckRecovery=new AccountRecheckRecovery(sql,transaction,this.authority,()=>Date.parse(now()),()=>this.env.MANAGED_ACCOUNT_RECHECK_RECOVERY==='1')
+  this.accountRecheckRecovery=new AccountRecheckRecovery(sql,transaction,this.authority,()=>Date.parse(now()),()=>this.env.MANAGED_AUTOMATIC_RECOVERY==='1'&&this.env.MANAGED_ACCOUNT_RECHECK_RECOVERY==='1')
   this.recoveryStops=new RecoveryStops(sql,transaction,this.authority,this.accountRecheckRecovery,()=>Date.parse(now()))
   this.disposition=new RecoveryDispositionAuthority(sql,transaction,this.authority,this.recoveryStops,this.accountHandoff,this.candidateAdoption,()=>Date.parse(now()))
   this.savedUploadRecovery=new SavedUploadRecovery(sql,transaction,this.authority,()=>Date.parse(now()))
   this.savedImportRecovery=new SavedImportRecovery(sql,transaction,this.authority,()=>Date.parse(now()))
-  this.dispatch=new RecoveryDispatch(sql,transaction,this.authority,()=>this.env.MANAGED_RECOVERY_DISPATCH==='1',kind=>({saved_upload:this.env.MANAGED_SAVED_UPLOAD_RECOVERY,navigate:this.env.MANAGED_UNSENT_NAVIGATION_RECOVERY,known_ui:this.env.MANAGED_KNOWN_UI_REPAIR,correct_output:this.env.MANAGED_CORRECTION_RECOVERY,restore_conversation:this.env.MANAGED_CONVERSATION_RESTORATION})[kind]==='1',(actor,kind,f)=>{
+  this.dispatch=new RecoveryDispatch(sql,transaction,this.authority,()=>this.env.MANAGED_AUTOMATIC_RECOVERY==='1'&&this.env.MANAGED_RECOVERY_DISPATCH==='1',kind=>({saved_upload:this.env.MANAGED_SAVED_UPLOAD_RECOVERY,navigate:this.env.MANAGED_UNSENT_NAVIGATION_RECOVERY,known_ui:this.env.MANAGED_KNOWN_UI_REPAIR,correct_output:this.env.MANAGED_CORRECTION_RECOVERY,restore_conversation:this.env.MANAGED_CONVERSATION_RESTORATION})[kind]==='1',(actor,kind,f)=>{
    if(kind==='saved_upload'){const c=this.savedUploadRecovery.context(actor,f);return !c.task.canonical&&c.attempt.phase==='result_saved'}
    return kind==='navigate'?this.navigationRecovery.status(actor,f).admissionReady:kind==='known_ui'?this.uiRepairRecovery.status(actor,f).admissionReady:kind==='correct_output'?this.correctionRecovery.status(actor,f).admissionReady:this.conversationRestoration.status(actor,f).admissionReady
   },()=>Date.parse(now()))
@@ -127,6 +128,11 @@ export class ManagedTaskApi {
   if(!actor)return Response.json({error:'Managed task authentication required'},{status:401})
   try {
    const url=new URL(request.url)
+   if(url.pathname.startsWith('/managed/recovery/')&&request.method==='POST'&&this.env.MANAGED_AUTOMATIC_RECOVERY!=='1'){
+    let body:unknown
+    try{body=JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(await boundedBody(request.clone().body,2_100_000)))}catch{throw new TaskConflict('Bounded recovery request required')}
+    if(!recoveryAllowedWhileDisabled(body))return Response.json({error:'Automatic recovery is off; new repair actions are disabled'},{status:503})
+   }
    if(url.pathname==='/managed/recovery/disposition')return await recoveryDispositionApi(request,actor,this.disposition,this.env.MANAGED_WORKSPACE_ID!)
    if(url.pathname==='/managed/recovery/account-handoff')return await accountHandoffApi(request,actor,this.accountHandoff,this.env.MANAGED_WORKSPACE_ID!)
    if(url.pathname==='/managed/recovery/saved-upload/compatibility') {
@@ -139,17 +145,17 @@ export class ManagedTaskApi {
    if(url.pathname==='/managed/recovery/target-package')return await targetPackageApi(request,actor,this.targetPackage,this.env.MANAGED_WORKSPACE_ID!)
    if(url.pathname==='/managed/recovery/target-input')return await targetInputApi(request,actor,this.targetInput,this.env.MANAGED_WORKSPACE_ID!)
    if(url.pathname==='/managed/recovery/fallback-preflight')return await fallbackPreflightApi(request,actor,this.fallbackPreflight,this.env.MANAGED_WORKSPACE_ID!)
-   if(url.pathname==='/managed/recovery/dispatch')return await recoveryDispatchApi(request,actor,this.dispatch,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_RECOVERY_DISPATCH==='1')
-   if(url.pathname==='/managed/recovery/original-conversation')return await conversationRestorationApi(request,actor,this.conversationRestoration,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_CONVERSATION_RESTORATION==='1',(f,id)=>f.retained?this.dispatch.assertRetainedManualEffect(actor,f,id):this.dispatch.assertEffect(actor,'restore_conversation',f,id),{enabled:this.env.MANAGED_CORRECTION_RECOVERY==='1',effect:(f,id)=>this.dispatch.assertEffect(actor,'correct_output',f,id)})
-   if(url.pathname==='/managed/recovery/correction')return await correctionRecoveryApi(request,actor,this.correctionRecovery,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_CORRECTION_RECOVERY==='1',(f,id)=>this.dispatch.assertEffect(actor,'correct_output',f,id))
-   if(url.pathname==='/managed/recovery/known-ui-repair')return await knownUiRepairApi(request,actor,this.uiRepairRecovery,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_KNOWN_UI_REPAIR==='1',(f,id)=>this.dispatch.assertEffect(actor,'known_ui',f,id))
-   if(url.pathname==='/managed/recovery/unsent-navigation')return await unsentNavigationApi(request,actor,this.navigationRecovery,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_UNSENT_NAVIGATION_RECOVERY==='1',(f,id)=>this.dispatch.assertEffect(actor,'navigate',f,id))
+   if(url.pathname==='/managed/recovery/dispatch')return await recoveryDispatchApi(request,actor,this.dispatch,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_AUTOMATIC_RECOVERY==='1'&&this.env.MANAGED_RECOVERY_DISPATCH==='1')
+   if(url.pathname==='/managed/recovery/original-conversation')return await conversationRestorationApi(request,actor,this.conversationRestoration,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_AUTOMATIC_RECOVERY==='1'&&this.env.MANAGED_CONVERSATION_RESTORATION==='1',(f,id)=>f.retained?this.dispatch.assertRetainedManualEffect(actor,f,id):this.dispatch.assertEffect(actor,'restore_conversation',f,id),{enabled:this.env.MANAGED_AUTOMATIC_RECOVERY==='1'&&this.env.MANAGED_CORRECTION_RECOVERY==='1',effect:(f,id)=>this.dispatch.assertEffect(actor,'correct_output',f,id)})
+   if(url.pathname==='/managed/recovery/correction')return await correctionRecoveryApi(request,actor,this.correctionRecovery,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_AUTOMATIC_RECOVERY==='1'&&this.env.MANAGED_CORRECTION_RECOVERY==='1',(f,id)=>this.dispatch.assertEffect(actor,'correct_output',f,id))
+   if(url.pathname==='/managed/recovery/known-ui-repair')return await knownUiRepairApi(request,actor,this.uiRepairRecovery,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_AUTOMATIC_RECOVERY==='1'&&this.env.MANAGED_KNOWN_UI_REPAIR==='1',(f,id)=>this.dispatch.assertEffect(actor,'known_ui',f,id))
+   if(url.pathname==='/managed/recovery/unsent-navigation')return await unsentNavigationApi(request,actor,this.navigationRecovery,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_AUTOMATIC_RECOVERY==='1'&&this.env.MANAGED_UNSENT_NAVIGATION_RECOVERY==='1',(f,id)=>this.dispatch.assertEffect(actor,'navigate',f,id))
    if(url.pathname==='/managed/recovery/stop')return await recoveryStopsApi(request,actor,this.recoveryStops,this.env.MANAGED_WORKSPACE_ID!)
    if(url.pathname==='/managed/recovery/executor-evidence')return await executorEvidenceApi(request,actor,this.executorEvidence,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_EXECUTOR_EVIDENCE==='1')
-   if(url.pathname==='/managed/recovery/account-recheck')return await accountRecheckRecoveryApi(request,actor,this.accountRecheckRecovery,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_ACCOUNT_RECHECK_RECOVERY==='1')
-   if(url.pathname==='/managed/recovery/saved-upload')return await savedUploadRecoveryApi(request,actor,this.savedUploadRecovery,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_ARTIFACTS,()=>this.env.MANAGED_SAVED_UPLOAD_RECOVERY==='1',(f,id)=>this.dispatch.assertEffect(actor,'saved_upload',f,id))
+   if(url.pathname==='/managed/recovery/account-recheck')return await accountRecheckRecoveryApi(request,actor,this.accountRecheckRecovery,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_AUTOMATIC_RECOVERY==='1'&&this.env.MANAGED_ACCOUNT_RECHECK_RECOVERY==='1')
+   if(url.pathname==='/managed/recovery/saved-upload')return await savedUploadRecoveryApi(request,actor,this.savedUploadRecovery,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_ARTIFACTS,()=>this.env.MANAGED_AUTOMATIC_RECOVERY==='1'&&this.env.MANAGED_SAVED_UPLOAD_RECOVERY==='1',(f,id)=>this.dispatch.assertEffect(actor,'saved_upload',f,id))
    if(url.pathname==='/managed/recovery/saved-import'){
-    return await savedImportRecoveryApi(request,actor,this.savedImportRecovery,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_ARTIFACTS,this.env.MANAGED_SAVED_IMPORT_RECOVERY==='1')
+    return await savedImportRecoveryApi(request,actor,this.savedImportRecovery,this.env.MANAGED_WORKSPACE_ID!,this.env.MANAGED_ARTIFACTS,this.env.MANAGED_AUTOMATIC_RECOVERY==='1'&&this.env.MANAGED_SAVED_IMPORT_RECOVERY==='1')
    }
    if(url.pathname.startsWith('/managed/accounts')) {
     if(request.method==='POST'&&url.pathname==='/managed/accounts/select') {

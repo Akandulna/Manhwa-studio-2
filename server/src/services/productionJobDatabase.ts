@@ -6,6 +6,7 @@ export function productionJobDatabase(prisma:()=>PrismaClient):ProductionStoreDa
   get:async key=>(await tx.setting.findUnique({where:{key}}))?.value??null,
   list:prefix=>tx.setting.findMany({where:{key:{startsWith:prefix}},select:{key:true,value:true}}),
   insert:async(key,value)=>{await tx.setting.create({data:{key,value}})},
+  remove:async(key,previous)=>(await tx.setting.deleteMany({where:{key,value:previous}})).count===1,
   replace:async(key,previous,value)=>(await tx.setting.updateMany({where:{key,value:previous},data:{value}})).count===1
  })).catch(error=>{
   if(['P2002','P2034','P1008','P2028'].includes(error?.code))throw new ProductionOwnershipConflict('Production storage changed or is busy. Reconcile current scheduler ownership before retrying')

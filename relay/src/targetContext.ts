@@ -1,3 +1,4 @@
+import {retainedInventory} from './retainedInventory'
 import type {TaskSql,TaskAuthority} from './taskAuthority'
 import type {TargetPackageAuthority} from './targetPackage'
 import {TaskConflict,canonicalJson,type TaskPrincipal} from '../../server/src/services/managedTaskProtocol'
@@ -28,7 +29,7 @@ export class TargetContextAuthority {
    if(recoveryUnitKey(p.unit)!==recoveryUnitKey(unit)||canonicalJson(p.target)!==canonicalJson(target))throw new TaskConflict('Exact selected candidate required')
    const old=this.read('reviews',id)
    if(old){this.matches(old,c);return old}
-   if(this.sql.exec('SELECT id FROM managed_target_context_reviews LIMIT 129').toArray().length>=128)throw new TaskConflict('Context review inventory full; preserve history')
+   if(retainedInventory(this.sql,'managed_target_context_reviews',128)>=128)throw new TaskConflict('Context review inventory full; preserve history')
    const review={schema:TARGET_CONTEXT_SCHEMA,id,packageId,unit,target,accountId:p.accountId,policyRevision:p.policyRevision,source:p.source,manifestSha256:p.manifestSha256,promptSha256:p.promptSha256,contextScope:STANDALONE_CONTEXT,reviewedAt:this.now(),withdrawnAt:null,...contextPermissions}
    this.sql.exec('INSERT INTO managed_target_context_reviews (id,target_key,body) VALUES (?,?,?)',id,this.key(unit,target),JSON.stringify(review));return review
   })
@@ -45,7 +46,7 @@ export class TargetContextAuthority {
    if(!review||review.packageId!==packageId||review.withdrawnAt!==null)throw new TaskConflict('Review this exact standalone candidate in Studio first');this.matches(review,c)
    const peer=this.sql.exec<{body:string}>('SELECT body FROM managed_peers WHERE id = ?',actor.deviceId).toArray()[0];if(!peer||!JSON.parse(peer.body).capabilities.includes(TARGET_CONTEXT_CAPABILITY))throw new TaskConflict('Target context inspection capability required')
    const old=this.read('checks',id);if(old){if(old.challenge.reviewId!==review.id||old.challenge.packageId!==packageId)throw new TaskConflict('Immutable context request conflict');return old.challenge}
-   if(this.sql.exec('SELECT id FROM managed_target_context_checks LIMIT 129').toArray().length>=128)throw new TaskConflict('Context inspection inventory full; preserve history')
+   if(retainedInventory(this.sql,'managed_target_context_checks',128)>=128)throw new TaskConflict('Context inspection inventory full; preserve history')
    const now=this.now(),challenge={schema:TARGET_CONTEXT_SCHEMA,id,reviewId:review.id,packageId,unit:p.unit,target:p.target,accountId:p.accountId,policyRevision:p.policyRevision,source:p.source,manifestSha256:p.manifestSha256,promptSha256:p.promptSha256,contextScope:STANDALONE_CONTEXT,issuedAt:now,validUntil:Math.min(now+15000,c.validUntil),...contextPermissions}
    this.sql.exec('INSERT INTO managed_target_context_checks (id,target_key,body) VALUES (?,?,?)',id,this.key(p.unit,p.target),JSON.stringify({challenge,proof:null,receipt:null}));return challenge
   })

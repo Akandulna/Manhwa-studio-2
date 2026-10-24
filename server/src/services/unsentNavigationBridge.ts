@@ -1,4 +1,3 @@
-import {randomUUID} from 'node:crypto'
 import {managedArtifactTransport} from './managedArtifactImport.js'
 import {NAVIGATION_SCHEMA,parseNavigationRecord,type NavigationRecord,type NavigationFence} from './unsentNavigationProtocol.js'
 import {parseRecoveryBudget,recoveryUnitKey,type RecoveryUnit,type RecoveryBudget} from './automationRecoveryPolicy.js'
@@ -35,12 +34,12 @@ export class UnsentNavigationBridge {
    const r=view.record;if(!r||canonicalJson(r.fence)!==canonicalJson(b.fence)||r.revision!==b.expectedRevision)throw new TaskConflict('Inspect the original phone navigation offer')
    if(['enable','reserve'].includes(b.action)){
     if(!this.deps.enabled()||!view.globalEnabled)throw new TaskConflict('Original navigation recovery is off')
-    await this.deps.diagnoses.assertAdmission(source.unit)
+    await this.deps.diagnoses.assertAdmission(source.unit,b.action==='reserve'?'navigate':undefined)
     const current=await this.deps.resolve();if(recoveryUnitKey(current.unit)!==recoveryUnitKey(source.unit))throw new TaskConflict('Input/owner changed before navigation grant')
    }
    if(b.action==='reserve'){
     const d=await this.deps.diagnoses.inspect(source.unit);if(!d?.enabled||d.paused||d.cancelled)throw new TaskConflict('Explicit Automation admission required')
-    await this.deps.diagnoses.assertAdmission(source.unit)
+    await this.deps.diagnoses.assertAdmission(source.unit,b.action==='reserve'?'navigate':undefined)
     view=await this.deps.call('reserve',r.fence,{revision:r.revision,actionId:b.actionId})
    }else view=await this.deps.call('control',r.fence,{revision:r.revision,enabled:b.action==='enable'?true:r.enabled,paused:b.action==='pause'?true:b.action==='enable'?false:r.paused,cancelled:b.action==='cancel'})
   }
@@ -48,7 +47,7 @@ export class UnsentNavigationBridge {
   const r=view.record,now=(this.deps.now??Date.now)();let diagnosis=null
   if(r){
    const last=r.actions.at(-1),known=view.admissionReady
-   diagnosis=await this.deps.diagnoses.observe(source.unit,{reference:'unsent-navigation/'+randomUUID(),observedAt:now,failure:'executor_stopped',outcome:'unsent',inputCurrent:true,reviewRequired:last?.phase==='verified'||!known&&!view.budget.pending,canonical:false,localState:'unknown',savedCheckpoint:false,login:known?'signed_in':'unknown',quota:known?'available':'unknown',quotaScope:null,recheckAt:null,pageExpected:known,profileExpected:known,loading:false,precedingActionReconciled:known,knownRepair:false,uiChangeId:null,adapterScope:'original-unsent-navigation',contextVerified:known,contextPortable:false,policyAllowsAlternative:false,correctionAllowed:false,acceptedUnitsPreserved:true,safeReleaseVerified:false,deviceReachable:false},view.budget)
+   diagnosis=await this.deps.diagnoses.observeInspection(source.unit,{reference:'unsent-navigation/inspection',observedAt:now,failure:'executor_stopped',outcome:'unsent',inputCurrent:true,reviewRequired:last?.phase==='verified'||!known&&!view.budget.pending,canonical:false,localState:'unknown',savedCheckpoint:false,login:known?'signed_in':'unknown',quota:known?'available':'unknown',quotaScope:null,recheckAt:null,pageExpected:known,profileExpected:known,loading:false,precedingActionReconciled:known,knownRepair:false,uiChangeId:null,adapterScope:'original-unsent-navigation',contextVerified:known,contextPortable:false,policyAllowsAlternative:false,correctionAllowed:false,acceptedUnitsPreserved:true,safeReleaseVerified:false,deviceReachable:false},view.budget)
    if(['enable','pause','cancel'].includes(b.action))diagnosis=await this.deps.diagnoses.control(source.unit,diagnosis.revision,{enabled:b.action==='enable'?true:diagnosis.enabled,paused:b.action==='pause'?true:b.action==='enable'?false:diagnosis.paused,cancelled:b.action==='cancel'})
   }
   return {...view,diagnosis,pageLabel:source.pageLabel,observedAt:now,globalEnabled:this.deps.enabled()&&view.globalEnabled}

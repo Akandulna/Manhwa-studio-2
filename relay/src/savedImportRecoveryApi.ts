@@ -10,7 +10,8 @@ export async function savedImportRecoveryApi(request:Request,actor:TaskPrincipal
  const f=parseSavedImportFence(raw.fence)
  if(raw.schema!==SAVED_IMPORT_SCHEMA||f.workspaceId!==workspace)throw new TaskConflict('Exact recovery schema/workspace required')
  const d=raw.details;let result:unknown
- if(!enabled&&!['inspect','finish'].includes(raw.action))return Response.json({error:'Saved import recovery is disabled'},{status:503})
+ const stopping=raw.action==='control'&&d&&(d.enabled===false||d.paused===true||d.cancelled===true)
+ if(!enabled&&!['inspect','finish'].includes(raw.action)&&!stopping)return Response.json({error:'Saved import recovery is disabled'},{status:503})
  switch(raw.action){
  case 'inspect':recoveryExact(d,[]);result=recovery.inspect(actor,f,raw.destinationId);break
  case 'control':recoveryExact(d,['revision','enabled','paused','cancelled']);result=recovery.control(actor,f,raw.destinationId,d.revision,d.enabled,d.paused,d.cancelled);break

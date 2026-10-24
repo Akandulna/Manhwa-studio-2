@@ -13,7 +13,7 @@ async function setup(submission='unknown',expired=true,promptVersion=LEGACY_CROP
  const db=new DatabaseSync(':memory:');opened.push(db)
  const sql:TaskSql={exec(q,...args){const rows=db.prepare(q).all(...args);return {toArray:()=>rows}}}
  const tx=<T>(work:()=>T)=>{db.exec('BEGIN IMMEDIATE');try{const value=work();db.exec('COMMIT');return value}catch(e){db.exec('ROLLBACK');throw e}}
- const env:ManagedTaskEnvironment={MANAGED_CROP_PAGE:'1',MANAGED_WORKSPACE_ID:'workspace',MANAGED_STUDIO_TOKEN:studio,MANAGED_DEVICE_TOKENS:JSON.stringify({phone,foreign})}
+ const env:ManagedTaskEnvironment={MANAGED_AUTOMATIC_RECOVERY:'1',MANAGED_CROP_PAGE:'1',MANAGED_WORKSPACE_ID:'workspace',MANAGED_STUDIO_TOKEN:studio,MANAGED_DEVICE_TOKENS:JSON.stringify({phone,foreign})}
  let now=Date.parse('2026-10-20T00:00:00Z')
  const api=()=>new ManagedTaskApi(sql,tx,env,()=>new Date(now).toISOString())
  async function send(body:Record<string,unknown>,token=studio){return api().handle(new Request('https://relay.invalid/managed/operation',{method:'POST',headers:{Authorization:'Bearer '+token},body:JSON.stringify({schema:'managed-task/1',workspaceId:'workspace',eventId:crypto.randomUUID(),...body})}))}

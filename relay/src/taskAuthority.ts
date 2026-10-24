@@ -1,3 +1,4 @@
+import {initTaskArchive} from './retainedInventory'
 import {parseProductionCandidateHandoff,type ProductionCandidateHandoff,parseHandoffRecord} from '../../server/src/services/accountHandoffProtocol'
 import {recordReleasedRecoveryLineage} from './recoveryLineage'
 import {recoveryUnitKey} from '../../server/src/services/automationRecoveryPolicy'
@@ -20,6 +21,7 @@ const CAPS=['managed-task/1','attempt-fencing/1','command-journal/1','artifact-p
 export class TaskAuthority {
   readonly accounts:AccountAuthority
   constructor(private sql:TaskSql,private transaction:<T>(work:()=>T)=>T,private now=()=>new Date().toISOString(),private uuid=()=>crypto.randomUUID(),private handoffEnabled=()=>false) {
+    initTaskArchive(sql)
     initRecoveryBudget(sql)
     for(const table of ['tasks','attempts','commands','artifacts','enrollment','peers','uploads','recoveries','upload_only_reports','cancelled_submission_reports','cancelled_unknown_reports','claim_stops','coordinators','production_attempts']) sql.exec(`CREATE TABLE IF NOT EXISTS managed_${table} (id TEXT PRIMARY KEY, body TEXT NOT NULL)`)
     sql.exec('CREATE TABLE IF NOT EXISTS managed_artifact_budget (id INTEGER PRIMARY KEY CHECK(id=1), bytes INTEGER NOT NULL, slots INTEGER NOT NULL)')
@@ -34,6 +36,43 @@ export class TaskAuthority {
   }
   private get<T>(table:string,key:string):T|null {const row=this.sql.exec<{body:string}>(`SELECT body FROM managed_${table} WHERE id = ?`,key).toArray()[0];return row?JSON.parse(row.body):null}
   private put(table:string,key:string,value:unknown):void{this.sql.exec(`INSERT INTO managed_${table} (id,body) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body`,key,JSON.stringify(value))}
+  /** Called inside the authority transaction. Never retire unresolved or reserved work. */
+  private archiveCompleted(){
+    const rows=this.sql.exec<{id:string;body:string}>(`
+      SELECT t.id,t.body FROM managed_tasks t
+      LEFT JOIN managed_attempts a ON a.id=json_extract(t.body,'$.attemptId')
+      WHERE t.id NOT IN (SELECT id FROM managed_task_archive)
+      AND (
+        (json_extract(t.body,'$.state')='verified_complete'
+          AND json_extract(t.body,'$.canonical') IS NOT NULL
+          AND json_extract(a.body,'$.phase')='published')
+        OR (json_extract(t.body,'$.state') IN ('cancelled','superseded')
+          AND (json_extract(t.body,'$.attemptId') IS NULL
+            OR (json_extract(a.body,'$.phase')='stop_confirmed'
+              AND json_extract(a.body,'$.submission')='unsent'
+              AND json_extract(a.body,'$.checkpointRef') IS NULL)))
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM managed_reservations r
+        JOIN managed_attempts prior ON prior.id=r.attempt_id
+        WHERE json_extract(prior.body,'$.taskId')=t.id
+      ) LIMIT 64
+    `).toArray()
+    for(const row of rows){
+      const task=JSON.parse(row.body) as CropTask,attempt=task.attemptId?this.get<CropAttempt>('attempts',task.attemptId):null
+      const complete=task.state==='verified_complete'&&!!task.canonical&&attempt?.phase==='published'
+      const stopped=task.state!=='verified_complete'&&(!task.attemptId||attempt?.phase==='stop_confirmed'&&attempt.submission==='unsent'&&!attempt.checkpointRef)
+      if(!complete&&!stopped||this.sql.exec("SELECT r.resource FROM managed_reservations r JOIN managed_attempts a ON a.id=r.attempt_id WHERE json_extract(a.body,'$.taskId')=? LIMIT 1",task.id).toArray().length)continue
+      this.sql.exec('INSERT INTO managed_task_archive (id,archived_at) VALUES (?,?)',task.id,this.now())
+      const upload=this.get<{bytes:number}>('uploads',task.id)
+      if(upload&&!this.sql.exec('SELECT id FROM managed_released_uploads WHERE id=?',task.id).toArray().length){
+        const budget=this.sql.exec<{bytes:number;slots:number}>('SELECT bytes,slots FROM managed_artifact_budget WHERE id=1').toArray()[0]
+        if(!budget||budget.bytes<upload.bytes||budget.slots<1)throw new TaskConflict('Retain inconsistent upload budget for reconciliation')
+        this.sql.exec('UPDATE managed_artifact_budget SET bytes=bytes-?,slots=slots-1 WHERE id=1',upload.bytes)
+        this.sql.exec('INSERT INTO managed_released_uploads (id,bytes) VALUES (?,?)',task.id,upload.bytes)
+      }
+    }
+  }
   private studio(actor:TaskPrincipal):void{if(actor.role!=='studio') throw new TaskConflict('Studio authority required')}
   private once<T>(actor:TaskPrincipal,eventId:string,payload:unknown,work:()=>T,guard?:()=>void):T {
     if(!id(eventId)) throw new TaskConflict('Immutable event ID required')
@@ -114,7 +153,8 @@ export class TaskAuthority {
     return this.once(actor,eventId,{action:'plan',identity,spec},()=>{
       const old=this.get<CropTask>('tasks',computed.taskId);if(old)return old
       // One page cannot run two input revisions concurrently. Old output remains historical.
-      const active=this.sql.exec<{body:string}>('SELECT body FROM managed_tasks LIMIT 1001').toArray()
+      this.archiveCompleted()
+      const active=this.sql.exec<{body:string}>('SELECT body FROM managed_tasks WHERE id NOT IN (SELECT id FROM managed_task_archive) LIMIT 1001').toArray()
       if(active.length>=1000)throw new TaskConflict('Pilot task bound reached')
       if(active.some(r=>{
         const t=JSON.parse(r.body) as CropTask
@@ -433,6 +473,7 @@ export class TaskAuthority {
       if(['accepted','started','result_saved','stop_confirmed'].includes(phase))command.phase=phase
       this.put('commands',commandId,command)
       this.put('attempts',attempt.id,attempt);this.put('tasks',task.id,task)
+      if(phase==='stop_confirmed')this.archiveCompleted()
       return {task,attempt,permitted:true}
     })
   }
@@ -547,6 +588,7 @@ export class TaskAuthority {
       const slot={taskId,attemptId,generation,fingerprint,artifactId,ref,sha256,bytes}
       const old=this.get<unknown>('uploads',taskId)
       if(old){if(canonicalJson(old)!==canonicalJson(slot))throw new TaskConflict('Task already has a different immutable upload');return}
+      this.archiveCompleted()
       const budget=this.sql.exec<{bytes:number;slots:number}>('SELECT bytes,slots FROM managed_artifact_budget WHERE id=1').toArray()[0]??{bytes:0,slots:0}
       if(budget.slots>=256||budget.bytes+bytes>64_000_000)throw new TaskConflict('Managed artifact pilot storage budget reached')
       this.put('uploads',taskId,slot)
@@ -578,6 +620,7 @@ export class TaskAuthority {
       artifact.validated=true;artifact.validationRef=validationRef;task.canonical=artifact.ref;task.state='verified_complete';attempt.phase='published'
       this.put('artifacts',artifactId,artifact);this.put('tasks',taskId,task);this.put('attempts',attemptId,attempt)
       this.sql.exec('DELETE FROM managed_reservations WHERE attempt_id = ?',attemptId)
+      this.archiveCompleted()
       return {task,artifact}
     },()=>coordinator?this.requireCoordinator(this.task(taskId).workspaceId,coordinator):this.requirePilotControl(taskId))
   }

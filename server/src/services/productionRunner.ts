@@ -21,6 +21,7 @@ export class ProductionRunner {
   private active = new Map<string, AbortController>()
   private starting = new Set<string>()
   private ready: Promise<void> | null = null
+  private closing=false
   private versions=new Map<string,ProductionVersion>()
   private pending=new Map<string,Promise<void>>()
   constructor(private deps: ProductionRunnerDependencies) {}
@@ -33,7 +34,44 @@ export class ProductionRunner {
       this.jobs.set(saved.seriesId,saved);this.versions.set(saved.seriesId,version)
     }
   }
-  init():Promise<void> {return this.ready??=this.refresh(true)}
+  init():Promise<void> {
+    if(this.ready)return this.ready
+    const work=this.refresh(true).catch(error=>{if(this.ready===work)this.ready=null;throw error})
+    this.ready=work
+    return work
+  }
+
+  ownershipLost():void {
+    for(const controller of this.active.values())controller.abort(new ProductionOwnershipConflict('Scheduler ownership interrupted'))
+  }
+
+  async reconcileInterrupted(jobs:ProductionJob[]):Promise<void> {
+    for(const job of jobs){
+      const known=this.jobs.get(job.seriesId)
+      if(known&&known.id!==job.id)continue
+      this.active.get(job.seriesId)?.abort(new ProductionOwnershipConflict('Scheduler ownership interrupted'))
+      this.jobs.set(job.seriesId,job);this.versions.set(job.seriesId,{id:job.id,revision:job.revision??0})
+      this.deps.emit(job)
+      try{await this.deps.stop(job)}catch(error){console.error('[production] interrupted phone stop requires reconciliation:',error)}
+    }
+  }
+
+  async shutdown():Promise<void> {
+    this.closing=true
+    this.ownershipLost()
+    await Promise.allSettled([...this.pending.values()])
+    for(const saved of await this.deps.load()){
+      if(saved.status!=='running'||this.jobs.get(saved.seriesId)?.id!==saved.id)continue
+      try{
+        await this.deps.activate();await this.refresh()
+        const current=this.jobs.get(saved.seriesId)
+        if(current?.id!==saved.id||current.status!=='running')continue
+        const interrupted={...current,status:'interrupted' as const,message:'Studio shut down. Reconcile the phone before explicitly resuming.',updatedAt:new Date().toISOString()}
+        this.deps.emit(await this.persist(interrupted))
+        await this.deps.stop(interrupted)
+      }catch(error){console.error('[production] shutdown requires phone reconciliation:',error)}
+    }
+  }
 
   /** Serialize report/cancel writes and capture immutable state before awaiting storage. */
   private async persist(job:ProductionJob,signal?:AbortSignal,replacing=false,required?:ProductionVersion):Promise<ProductionJob> {
@@ -62,6 +100,7 @@ export class ProductionRunner {
   async list(): Promise<ProductionJob[]> { await this.init(); await this.refresh(true); return [...this.jobs.values()] }
 
   async start(seriesId: string, config: ProductionConfig, resume?:ProductionResumeApproval): Promise<ProductionJob> {
+    if(this.closing)throw new Error('Production automation is shutting down')
     await this.init()
     await this.deps.activate()
     await this.refresh()
@@ -81,6 +120,7 @@ export class ProductionRunner {
       const step = nextProductionStep(series,config)
       if (step === 'complete') throw new Error('All parts in this series are complete')
       await this.deps.validate(seriesId, config)
+      if(this.closing)throw new Error('Production automation is shutting down')
       const now = new Date().toISOString()
       const job: ProductionJob = { id: randomUUID(), seriesId, config, step, status: 'running', message: 'Starting from saved production progress…', createdAt: now, updatedAt: now }
       // Resume only the persisted original claim intents; a new receipt must never adopt retained work.
@@ -98,6 +138,7 @@ export class ProductionRunner {
         job.resumedFrom=structuredClone(resume)
       }
       await this.persist(job,undefined,true,resume?{id:resume.jobId,revision:resume.revision}:undefined)
+      if(this.closing)throw new Error('Production automation is shutting down')
       const controller = new AbortController()
       this.active.set(seriesId, controller)
       this.deps.emit(job)
@@ -140,7 +181,7 @@ export class ProductionRunner {
         job.command = undefined
       }
     } catch (error) {
-      if(error instanceof ProductionOwnershipConflict){controller.abort();await this.refresh();return}
+      if(error instanceof ProductionOwnershipConflict){controller.abort();try{await this.deps.activate()}catch{/* Another live scheduler owns recovery. */}await this.refresh();return}
       if (!signal.aborted) {
         job.status = 'failed'
         await report(error instanceof Error ? error.message : String(error))
@@ -170,14 +211,14 @@ export class ProductionRunner {
   async cancel(seriesId: string): Promise<ProductionJob> {
     await this.init()
     const initial=this.jobs.get(seriesId)
-    if(!initial||!(initial.status==='running'||initial.config.managedCrop&&['failed','interrupted'].includes(initial.status)))throw new Error('There is no running automation for this series')
+    if(!initial||!(['running','interrupted'].includes(initial.status)||initial.config.managedCrop&&initial.status==='failed'))throw new Error('There is no running automation for this series')
     this.active.get(seriesId)?.abort()
     // An in-flight report may have just saved a claim. Wait before collecting Stop's exact receipts.
     await this.pending.get(seriesId)?.catch(()=>{})
     await this.deps.activate()
     await this.refresh()
     const current=this.jobs.get(seriesId)
-    if(current?.id!==initial.id||!(current.status==='running'||current.config.managedCrop&&['failed','interrupted'].includes(current.status)))throw new ProductionOwnershipConflict('The saved production job changed before Stop; reconcile its current owner')
+    if(current?.id!==initial.id||!(['running','interrupted'].includes(current.status)||current.config.managedCrop&&current.status==='failed'))throw new ProductionOwnershipConflict('The saved production job changed before Stop; reconcile its current owner')
     const job=structuredClone(current)
     job.status='cancelled'
     job.message='Automation stopped. Any local operation already in progress will finish; no next step will start.'
