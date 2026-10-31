@@ -316,6 +316,13 @@ export interface NarrationSeries {
   alignedCount: number
 }
 
+export interface NarrationAlignmentProgress {
+  sectionId: string
+  sectionNumber: number
+  percent: number
+  phase: 'loading' | 'audio' | 'matching' | 'saving'
+}
+
 export interface NarrationChapter {
   id: string
   number: number
@@ -328,6 +335,7 @@ export interface NarrationChapter {
   aligned: number
   /** Sections queued or aligning right now. */
   aligning: boolean
+  alignmentProgress?: NarrationAlignmentProgress | null
   /** script-timeline.md (script-timeline.hi.md) is in the chapter folder. */
   documentWritten: boolean
   /** When its voiceover was last fetched from the phone. */
@@ -577,7 +585,7 @@ export const videoApi2 = {
   getStoredTimeline: (chapterId: string, lang: NarrationLanguage) =>
     fetchApi<StoredTimeline2 | null>(`/video2/chapters/${chapterId}/timeline?lang=${lang}`),
 
-  saveStoredTimeline: (chapterId: string, lang: NarrationLanguage, body: Omit<StoredTimeline2, 'chapterId' | 'language'>) =>
+  saveStoredTimeline: (chapterId: string, lang: NarrationLanguage, body: Omit<StoredTimeline2, 'chapterId' | 'language'> & { reset?: boolean }) =>
     fetchApi<StoredTimeline2>(`/video2/chapters/${chapterId}/timeline?lang=${lang}`, {
       method: 'PUT',
       body: JSON.stringify(body)
@@ -642,6 +650,9 @@ export const videoApi2 = {
       method: 'POST',
       body: JSON.stringify({ chapters })
     }),
+
+  getActiveExportJob: (seriesId: string, lang: NarrationLanguage) =>
+    fetchApi<Export2Job | null>(`/video2/series/${seriesId}/active-export?lang=${lang}`),
 
   getExportJob: (jobId: string) => fetchApi<Export2Job>(`/video2/exports/${jobId}`),
 
@@ -741,7 +752,10 @@ export interface TimelinePlan {
 // There is no stitched canvas here, so nothing in this section carries canvas
 // offsets, and an image's status never depends on another image's crops.
 
+export interface PageRedoRequest { revision: string; status: 'pending' | 'imported'; deliveryError?: string; deliveredAt?: string }
+
 export interface Clipper3Image {
+  redo?: PageRedoRequest | null
   filename: string
   /** Immutable managed pages use their revision-bound review/cut controls. */
   managed?: {pageId:string|null;taskId:string}|null
@@ -918,6 +932,8 @@ export interface Clipper3PhoneCropsFetch {
   failed: { folder: string; reason: string }[]
   /** Cropped markers written to R2 for chapters cut before they existed. */
   cropped: { published: string[]; failed: { folder: string; reason: string }[] }
+  /** Reviewed markers put in R2 or taken out, so the Master phone sees the desktop's reviews. */
+  reviewedMarkers?: { published: string[]; removed: string[]; failed: { folder: string; reason: string }[] }
 }
 
 /** What "Publish cropped chapters" wrote to R2 (Clipper3Library). */
@@ -1006,6 +1022,9 @@ export interface Clipper3Chapter {
 }
 
 export const clipper3Api = {
+  rejectPage: (chapterId: string, filename: string) => fetchApi<PageRedoRequest>(
+    `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/reject`, { method: 'POST' }),
+
   getSeries: () => fetchApi<Clipper3Series[]>('/clipper3/series'),
 
   getChapters: () => fetchApi<Clipper3Chapter[]>('/clipper3/chapters'),
@@ -1893,6 +1912,7 @@ export interface PhoneOverviewRun extends Omit<PhoneScriptRun, 'series' | 'tabs'
 
 /** Sleeper-Cell's automation settings (Tools → Settings → Automation), and the run it will start by itself. */
 export interface PhoneAutomation {
+  youtube?: import('../../../server/src/services/youtubePhoneStatus').YouTubePhoneActivity
   /** personal: shows over the lock screen, PIN kept. dedicated: dismisses the lock screen, locks after. */
   wakeMode: 'personal' | 'dedicated'
   resumeAfterLimit: boolean

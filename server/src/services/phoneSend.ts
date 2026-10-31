@@ -854,6 +854,7 @@ export async function startPhoneSend(requests: PhoneSendRequest[], io: Server, a
               for (const prefix of prefixes) {
                 oldCropKeys.add(`${prefix}crops/${state.index.series}/${chapter.folder}.zip`)
                 oldCropKeys.add(`${prefix}crops/${state.index.series}/${chapter.folder}.cropped.json`)
+                oldCropKeys.add(`${prefix}crops/${state.index.series}/${chapter.folder}.reviewed.json`)
               }
               for (const object of storage.objects) {
                 if ([...prefixes].some(prefix => object.key.startsWith(`${prefix}shared/crops/${state!.index.series}/${chapter.folder}/`))) oldCropKeys.add(object.key)

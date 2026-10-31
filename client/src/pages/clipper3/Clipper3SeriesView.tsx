@@ -88,23 +88,9 @@ function AttachedStatusBadge({ summary }: { summary: Clipper3ChapterSummary | un
 function ReviewStatusBadge({ summary }: { summary: Clipper3ChapterSummary | undefined }) {
   if (!summary) return null
   const review = summary.review
-  // Cut already: done, and counts as reviewed (the Master phone shows it as
-  // Cropped and won't review it).
-  if (review?.reviewed && review.cropped) {
-    return (
-      <Badge
-        variant="success"
-        className="flex items-center gap-1"
-        title={[
-          'Cropped — counts as reviewed',
-          review.croppedAt ? new Date(review.croppedAt).toLocaleString() : null
-        ].filter(Boolean).join(' · ')}
-      >
-        <Scissors className="h-3 w-3" />
-        Cropped
-      </Badge>
-    )
-  }
+  // A previous cut implies review. ChoppedStatusBadge owns the current crop
+  // status, including when those outputs are now out of date.
+  if (review?.reviewed && review.cropped) return null
   if (review?.reviewed) {
     const onPhone = review.by === 'phone'
     return (
@@ -139,7 +125,7 @@ function ReviewStatusBadge({ summary }: { summary: Clipper3ChapterSummary | unde
  * downloaded from the phone's uploads, and any it couldn't place.
  */
 function R2FetchSummary({ result }: { result: Clipper3PhoneCropsFetch }) {
-  const { found, fetched, upToDate, unmatched, failed, cropped } = result
+  const { found, fetched, upToDate, unmatched, failed, cropped, reviewedMarkers } = result
   const pages = fetched.reduce((sum, c) => sum + c.pages, 0)
   return (
     <div className="rounded-md border p-3 text-sm space-y-1.5">
@@ -175,6 +161,17 @@ function R2FetchSummary({ result }: { result: Clipper3PhoneCropsFetch }) {
       {cropped?.failed.map(f => (
         <p key={`cropped-${f.folder}`} className="text-xs text-destructive">
           {f.folder}: could not mark as cropped in R2 — {f.reason}
+        </p>
+      ))}
+      {reviewedMarkers && reviewedMarkers.published.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          Told the phones {reviewedMarkers.published.length} chapter{reviewedMarkers.published.length === 1 ? ' is' : 's are'} reviewed
+          here: {reviewedMarkers.published.join(', ')}.
+        </p>
+      )}
+      {reviewedMarkers?.failed.map(f => (
+        <p key={`reviewed-${f.folder}`} className="text-xs text-destructive">
+          {f.folder}: could not mark as reviewed in R2 — {f.reason}
         </p>
       ))}
       {failed.map(f => (
@@ -489,16 +486,16 @@ export default function Clipper3SeriesView() {
 
     // Only failures get the dialog: a clean run is fully described by its
     // counts, and a modal over "nothing went wrong" is just another click.
-    if (failed > 0) setSyncReport(results.filter(r => r.failed > 0))
+    setSyncReport(failed > 0 ? results.filter(r => r.failed > 0) : null)
 
     toast({
       title: imported > 0
         ? `Attached ${imported} page${imported === 1 ? '' : 's'}`
         : replaced > 0
-          ? `Applied the phone review to ${replaced} page${replaced === 1 ? '' : 's'}`
+          ? `Updated ${replaced} page${replaced === 1 ? '' : 's'}`
           : 'Nothing new to attach',
       description: [
-        imported > 0 && replaced > 0 ? `${replaced} replaced by the phone review` : null,
+        imported > 0 && replaced > 0 ? `${replaced} page updates` : null,
         skipped > 0 ? `${skipped} already attached` : null,
         failed > 0 ? `${failed} could not be attached` : null,
         imported === 0 && replaced === 0 && skipped === 0 && failed === 0
@@ -1059,7 +1056,7 @@ export default function Clipper3SeriesView() {
                 ? `Attach ${syncPreview.ready} page${syncPreview.ready === 1 ? '' : 's'}?`
                 : syncPreview && syncPreview.replaced > 0
                   ? `Apply the phone review to ${syncPreview.replaced} page${syncPreview.replaced === 1 ? '' : 's'}?`
-                  : 'Nothing to attach'}
+                  : 'Sync JSON'}
             </DialogTitle>
             <DialogDescription>
               {syncPreview && (syncPreview.ready > 0 || syncPreview.replaced > 0) ? (
@@ -1068,14 +1065,14 @@ export default function Clipper3SeriesView() {
                   {syncPreview.chapters === 1 ? '' : 's'}.
                   {syncPreview.ready > 0 && <> {syncPreview.ready} page{syncPreview.ready === 1 ? '' : 's'} will be marked done.</>}
                   {syncPreview.replaced > 0 && (
-                    <> {syncPreview.replaced} attached page{syncPreview.replaced === 1 ? '' : 's'} will be replaced by the Master phone&apos;s review.</>
+                    <> {syncPreview.replaced} page{syncPreview.replaced === 1 ? '' : 's'} will receive page updates; approved crops stay unchanged.</>
                   )}
                   {syncPreview.skipped > 0 && <> {syncPreview.skipped} already attached.</>}
                   {syncPreview.failed > 0 && <> {syncPreview.failed} cannot be attached.</>}
                 </>
               ) : (
                 <>
-                  No new crop JSON was found in this series&apos; Processed folders.
+                  No new JSON is ready to attach. Requested page redos will appear after Sleeper Cell finishes and uploads them.
                   {syncPreview && syncPreview.skipped > 0 && (
                     <> {syncPreview.skipped} page{syncPreview.skipped === 1 ? ' is' : 's are'} already attached.</>
                   )}
@@ -1142,7 +1139,7 @@ export default function Clipper3SeriesView() {
               Cancel
             </Button>
             <Button onClick={confirmSync} disabled={!syncPreview || (syncPreview.ready === 0 && syncPreview.replaced === 0)}>
-              Proceed
+              Sync JSON
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -35,6 +35,7 @@ import {
   openFolder,
   phoneScriptsIn,
   NarrationChapter,
+  NarrationAlignmentProgress,
   NarrationPhoneFetch,
   NarrationPhonePreview,
   NarrationSeriesDetail
@@ -53,6 +54,7 @@ import { PhoneRefreshButton } from '@/components/PhoneRefreshButton'
 import { PhoneFetchDialog, type PhoneFetchSelection } from '@/components/narration/PhoneFetchDialog'
 import { ReplaceScriptDialog } from '@/components/narration/ReplaceScriptDialog'
 import { ResetAlignmentDialog } from '@/components/narration/ResetAlignmentDialog'
+import { AlignmentProgressStatus } from '@/components/narration/AlignmentProgressStatus'
 import { cn } from '@/lib/utils'
 
 const chapters = (n: number) => `${n} chapter${n === 1 ? '' : 's'}`
@@ -63,6 +65,7 @@ interface AlignmentEvent {
   language?: NarrationLanguage
   stage?: 'aligning' | 'done' | 'failed'
   error?: string
+  progress?: NarrationAlignmentProgress
 }
 
 /** What a finished fetch did, in a few lines. */
@@ -77,20 +80,24 @@ function FetchSummary({ run }: { run: NarrationPhoneFetch }) {
   }
   const voiceovers = run.voiceovers
   const fetched = voiceovers?.fetched ?? []
+  const failed = voiceovers?.failed.length ?? 0
   const otherScript = fetched.filter(c => c.scriptMatches === false)
   const resplit = fetched.filter(c => c.resplit)
   return (
     <div className="space-y-1 text-sm">
       <p className="flex items-center gap-2">
-        <CheckCircle className="h-4 w-4 text-emerald-600" />
+        {failed > 0
+          ? <AlertTriangle className="h-4 w-4 text-amber-600" />
+          : <CheckCircle className="h-4 w-4 text-emerald-600" />}
         {[
           run.scripts ? `${run.scripts.imported} script${run.scripts.imported === 1 ? '' : 's'} saved` : null,
           run.scripts?.aboutUpdated ? 'about text updated' : null,
           voiceovers
             ? fetched.length > 0
               ? `voiceover attached to ${chapters(fetched.length)} (chapter ${fetched.map(c => c.chapterNumber).join(', ')}) — aligning now`
-              : 'no new voiceover'
-            : null
+              : failed > 0 ? 'no voiceover imported' : 'no new voiceover'
+            : null,
+          failed > 0 ? `voiceover import failed for ${chapters(failed)} — see errors below and retry Fetch from phone` : null
         ].filter(Boolean).join(', ')}
       </p>
       {resplit.length > 0 && (
@@ -225,18 +232,29 @@ export default function NarrationChapters() {
     }
     const onAlignmentEvent = (event: AlignmentEvent) => {
       if (!mine(event) || !chapterIds.current.has(event.chapterId)) return
+      if (event.stage === 'aligning' && event.progress) {
+        setSeries(previous => previous ? {
+          ...previous,
+          chapters: previous.chapters.map(chapter => chapter.id === event.chapterId
+            ? { ...chapter, aligning: true, alignmentProgress: event.progress }
+            : chapter)
+        } : previous)
+        return
+      }
       scheduleReload()
     }
 
     socket.on('narration:fetch', onFetchEvent)
     socket.on('alignment:progress', onAlignmentEvent)
     socket.on('alignment:chapter-complete', onAlignmentEvent)
+    socket.on('connect', loadSeries)
     const onReplacement = (event: AlignmentEvent) => { if (chapterIds.current.has(event.chapterId) && mine(event)) scheduleReload() }
     socket.on('narration:script-replaced', onReplacement)
     return () => {
       socket.off('narration:fetch', onFetchEvent)
       socket.off('alignment:progress', onAlignmentEvent)
       socket.off('alignment:chapter-complete', onAlignmentEvent)
+      socket.off('connect', loadSeries)
       socket.off('narration:script-replaced', onReplacement)
     }
   }, [socket, id, language, loadSeries, scheduleReload])
@@ -493,10 +511,7 @@ export default function NarrationChapters() {
                   />
 
                   {aligning ? (
-                    <span className="flex w-28 items-center gap-1 text-xs text-primary">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      Aligning {chapter.aligned}/{chapter.sections}
-                    </span>
+                    <AlignmentProgressStatus progress={chapter.alignmentProgress} sections={chapter.sections} />
                   ) : (
                     <Count
                       icon={Waves}

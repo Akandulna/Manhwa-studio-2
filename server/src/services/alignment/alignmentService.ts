@@ -120,7 +120,9 @@ export const checkAlignmentAvailable = cachedProbe(probeAlignmentAvailable, { is
  * `language` picks WhisperX's wav2vec2 alignment model: its default English
  * model, or its Hindi one for a Hindi section (downloaded on first use).
  */
-function runAligner(audioPath: string, text: string, language: NarrationLanguage): Promise<{
+function runAligner(audioPath: string, text: string, language: NarrationLanguage, durationMs?: number | null,
+  onProgress?: (percent: number, phase: AlignmentProgress['phase']) => void
+): Promise<{
   words: AlignedWord[]
   durationSec: number
 }> {
@@ -132,22 +134,48 @@ function runAligner(audioPath: string, text: string, language: NarrationLanguage
 
     let stdout = ''
     let stderr = ''
+    let progressBuffer = ''
     let settled = false
 
+    let failure: Error | undefined
+    let killTimer: ReturnType<typeof setTimeout> | undefined
+
     const fail = (err: Error) => {
-      if (settled) return
-      settled = true
+      if (settled || failure) return
+      failure = err
       clearTimeout(timer)
+      // Keep the queue occupied until close confirms the sidecar has exited.
+      // A process that ignores SIGTERM must still stop before the next job.
       proc.kill()
-      reject(err)
+      killTimer = setTimeout(() => { proc.kill('SIGKILL') }, 5_000)
     }
 
+    // Long recordings need proportionally more CPU time, especially with the
+    // Hindi model. Keep the existing minimum for startup and model loading.
+    const timeoutMs = typeof durationMs === 'number' && Number.isFinite(durationMs) && durationMs > 0
+      ? Math.max(ALIGN_TIMEOUT_MS, durationMs * 4 + 2 * 60 * 1000)
+      : ALIGN_TIMEOUT_MS
     const timer = setTimeout(() => {
       fail(new Error('Alignment timed out'))
-    }, ALIGN_TIMEOUT_MS)
+    }, timeoutMs)
 
     proc.stdout.on('data', (d) => { stdout += d.toString() })
-    proc.stderr.on('data', (d) => { stderr += d.toString() })
+    proc.stderr.on('data', (d) => {
+      const chunk = d.toString()
+      stderr = (stderr + chunk).slice(-64 * 1024)
+      progressBuffer += chunk
+      const lines = progressBuffer.split('\n')
+      progressBuffer = lines.pop()!.slice(-8192)
+      for (const line of lines) {
+        if (!line.startsWith('ALIGNMENT_PROGRESS ')) continue
+        try {
+          const progress = JSON.parse(line.slice('ALIGNMENT_PROGRESS '.length))
+          if (typeof progress.percent !== 'number' || !Number.isFinite(progress.percent)) continue
+          if (!['loading', 'audio', 'matching', 'saving'].includes(progress.phase)) continue
+          onProgress?.(Math.max(0, Math.min(99, Math.floor(progress.percent))), progress.phase)
+        } catch { /* Non-protocol library diagnostics are kept for errors. */ }
+      }
+    })
 
     proc.on('error', (err) => {
       fail(new Error(`Could not start the aligner: ${err.message}`))
@@ -157,6 +185,12 @@ function runAligner(audioPath: string, text: string, language: NarrationLanguage
       if (settled) return
       settled = true
       clearTimeout(timer)
+
+      clearTimeout(killTimer)
+      if (failure) {
+        reject(failure)
+        return
+      }
 
       if (code !== 0) {
         reject(new Error(stderr.trim() || `Aligner exited with code ${code}`))
@@ -174,6 +208,7 @@ function runAligner(audioPath: string, text: string, language: NarrationLanguage
       }
     })
 
+    proc.stdin.on('error', (err) => { fail(new Error(`Could not send script to the aligner: ${err.message}`)) })
     proc.stdin.write(JSON.stringify({
       audio_path: audioPath,
       text,
@@ -186,6 +221,19 @@ function runAligner(audioPath: string, text: string, language: NarrationLanguage
 /** Sections queued or aligning, per `chapterId:language`, so a page opened mid-run shows it. */
 const pending = new Map<string, number>()
 
+export interface AlignmentProgress {
+  sectionId: string
+  sectionNumber: number
+  percent: number
+  phase: 'loading' | 'audio' | 'matching' | 'saving'
+}
+const activeProgress = new Map<string, AlignmentProgress>()
+
+/** Snapshot for pages opened or refreshed while a section is running. */
+export function alignmentProgress(chapterId: string, language: NarrationLanguage): AlignmentProgress | null {
+  return activeProgress.get(`${chapterId}:${language}`) ?? null
+}
+
 /** How many of this chapter's sections are queued or aligning right now. */
 export function pendingAlignments(chapterId: string, language: NarrationLanguage): number {
   return pending.get(`${chapterId}:${language}`) ?? 0
@@ -195,7 +243,21 @@ export function pendingAlignments(chapterId: string, language: NarrationLanguage
  * Align one section's audio against its script text and save the resulting
  * timeline to the section. Queued: only one alignment runs at a time.
  */
-export async function alignSection(
+// Register synchronously so simultaneous manual/automatic requests share one job.
+const sectionJobs = new Map<string, Promise<AlignmentResult>>()
+
+export function alignSection(
+  sectionId: string,
+  io?: Server
+): Promise<AlignmentResult> {
+  const existing = sectionJobs.get(sectionId)
+  if (existing) return existing
+  const job = trackSection(sectionId, io).finally(() => { sectionJobs.delete(sectionId) })
+  sectionJobs.set(sectionId, job)
+  return job
+}
+
+async function trackSection(
   sectionId: string,
   io?: Server
 ): Promise<AlignmentResult> {
@@ -235,22 +297,29 @@ function alignQueued(sectionId: string, io?: Server): Promise<AlignmentResult> {
 
     const audioPath = section.audioFile.filePath
 
-    io?.emit('alignment:progress', {
-      chapterId: section.chapterId,
-      language: section.language,
-      sectionId,
-      index: section.index,
-      stage: 'aligning'
-    })
+    const progressKey = `${section.chapterId}:${parseLanguage(section.language)}`
+    const reportProgress = (percent: number, phase: AlignmentProgress['phase']) => {
+      const previous = activeProgress.get(progressKey)
+      percent = Math.max(previous?.percent ?? 0, percent)
+      if (previous?.percent === percent && previous.phase === phase) return
+      const progress = { sectionId, sectionNumber: section.index + 1, percent, phase }
+      activeProgress.set(progressKey, progress)
+      io?.emit('alignment:progress', {
+        chapterId: section.chapterId, language: section.language,
+        sectionId, index: section.index, stage: 'aligning', progress
+      })
+    }
+    reportProgress(0, 'loading')
 
     try {
-      const { words, durationSec } = await runAligner(audioPath, section.text, parseLanguage(section.language))
+      const { words, durationSec } = await runAligner(audioPath, section.text, parseLanguage(section.language), section.audioFile.durationMs, reportProgress)
 
       if (words.length === 0) {
         throw new Error('The aligner produced no word timings for this audio')
       }
 
       const timelineScript = buildTimelineScript(section.text, words)
+      reportProgress(99, 'saving')
 
       await prisma.audioSection.update({
         where: { id: sectionId },
@@ -266,6 +335,7 @@ function alignQueued(sectionId: string, io?: Server): Promise<AlignmentResult> {
         sectionId,
         index: section.index,
         stage: 'done',
+        percent: 100,
         beatCount,
         documentWritten
       })
@@ -285,6 +355,8 @@ function alignQueued(sectionId: string, io?: Server): Promise<AlignmentResult> {
       })
 
       throw error
+    } finally {
+      activeProgress.delete(progressKey)
     }
   }) as Promise<AlignmentResult>
 }

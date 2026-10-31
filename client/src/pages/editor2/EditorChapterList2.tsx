@@ -473,7 +473,7 @@ export default function EditorChapterList2() {
       setCropScan(null)
       toast({
         title: `Reset ${count} chapter${count === 1 ? '' : 's'}`,
-        description: 'Send to phone, generate a new timeline there, then Fetch from phone and Process again. Source assets and existing videos are kept.'
+        description: 'The reset syncs to your phones automatically. Run Editor 2.0 there to make a new timeline, then Fetch from phone and Process again. Source assets and existing videos are kept.'
       })
     } catch (error) {
       toast({ title: 'Reset could not finish', description: `${count} chapters reset. ${error instanceof Error ? error.message : 'Please retry.'}`, variant: 'destructive' })
@@ -867,6 +867,7 @@ export default function EditorChapterList2() {
 
   useEffect(() => {
     if (!seriesId) return
+    let cancelled = false
     setLoading(true)
     // The scan dialog and any finished job describe the other tab's videos.
     setCropScan(null)
@@ -874,12 +875,15 @@ export default function EditorChapterList2() {
     Promise.all([
       seriesApi.getById(seriesId),
       videoApi2.getEditableChapters(seriesId, language),
-      videoApi2.getExportedChapters(seriesId, language).catch(() => [] as Exported2Chapter[])
+      videoApi2.getExportedChapters(seriesId, language).catch(() => [] as Exported2Chapter[]),
+      videoApi2.getActiveExportJob(seriesId, language).catch(() => null)
     ])
-      .then(async ([s, chs, exportedRows]) => {
+      .then(async ([s, chs, exportedRows, activeJob]) => {
         // Pull in what was pasted or processed in another browser (or the
         // desktop app) before reading the local cache below.
         await syncSeriesTimelines(seriesId, language, chs.map(ch => ch.id))
+        if (cancelled) return
+        setExportJob(activeJob)
         setSeriesTitle(s.title)
         setChapters(chs)
         setExported(Object.fromEntries(exportedRows.map(r => [r.chapterId, r])))
@@ -893,8 +897,42 @@ export default function EditorChapterList2() {
         setPasted(restored)
       })
       .catch(err => console.error(err))
-      .finally(() => setLoading(false))
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
   }, [seriesId, language])
+
+  // Discover exports started in another view/window, and reconnect on focus.
+  // The server owns the render; leaving this page only stops its UI polling.
+  useEffect(() => {
+    if (!seriesId || exportJob?.status === 'running') return
+    let cancelled = false
+    let pending = false
+    const refresh = async () => {
+      if (document.hidden || pending) return
+      pending = true
+      try {
+        const job = await videoApi2.getActiveExportJob(seriesId, language)
+        if (!cancelled && job) setExportJob(prev => prev?.status === 'running' ? prev : job)
+      } catch {
+        // Retry discovery after a temporary connection failure.
+      } finally {
+        pending = false
+      }
+    }
+    const onFocus = () => {
+      void refresh()
+      void refreshExported(seriesId)
+    }
+    const id = setInterval(() => { void refresh() }, 3000)
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onFocus)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onFocus)
+    }
+  }, [seriesId, language, exportJob?.id, exportJob?.status])
 
   // Recheck compressed videos when returning from saving or cleaning up files.
   useEffect(() => {

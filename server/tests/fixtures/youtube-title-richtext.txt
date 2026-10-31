@@ -1,0 +1,28 @@
+{\
+&#x20; "schemaVersion": 1,\
+&#x20; "requestId": "433d250d-44b0-4e9e-bc4f-d59fdc406985",\
+&#x20; "seriesId": "6a6da4cf-4913-4002-be37-fc89c0164c13",\
+&#x20; "language": "en",\
+&#x20; "status": "ok",\
+&#x20; "research": {\
+&#x20;   "resolvedTitle": "Bad Business (배드 비즈니스)",\
+&#x20;   "summary": "Bad Business is an ongoing South Korean action and fantasy manhwa written by Won-Sik Lee and illustrated by Seuksu. Jay, a legendary hitman in the American underworld, accepts a contract from Union, North America's largest assassination corporation, to destroy the company founded by his friend Johnny. Although Jay demands that Johnny's life be spared, Union betrays them and both men are killed. Through a mysterious power, Jay is resurrected in the body of an ordinary young man in Korea, while Johnny returns in the body of a young woman. The former partners reunite and decide to establish their own powerful company to take revenge on Union. The work is an original manhwa adaptation, not a novel. Its official Korean serialization is associated with KakaoPage and Kakao Webtoon. The research was corroborated using the translated KakaoPage synopsis reproduced by MangaBaka and the independent NextChapter series listing.",\
+&#x20;   "sources": [\
+&#x20;     {\
+&#x20;       "title": "Bad Business (배드 비즈니스) – MangaBaka (KakaoPage-translated synopsis)",\
+&#x20;       "url": "https\://mangabaka.org/manhwa/571685/Bad-Business"\
+&#x20;     },\
+&#x20;     {\
+&#x20;       "title": "Bad Business (Manhwa) – NextChapter",\
+&#x20;       "url": "https\://nextchapter.moe/series/bad-business-94785"\
+&#x20;     }\
+&#x20;   ]\
+&#x20; },\
+&#x20; "titles": [\
+&#x20;   "Union Hired a Legendary Hitman to Destroy His Friend’s Company—Then Betrayed Them Both",\
+&#x20;   "Two Assassins Were Killed by Their Own Employer—Now They’re Building a Rival Company",\
+&#x20;   "Jay Reawakens in an Ordinary Korean Man’s Body—With a Deadly Score to Settle",\
+&#x20;   "His Friend Is Reborn as a Woman—Now Two Dead Assassins Are Back in Business",\
+&#x20;   "Forced to Target His Friend, a Legendary Hitman Gets One Last Shot at Union"\
+&#x20; ]\
+}

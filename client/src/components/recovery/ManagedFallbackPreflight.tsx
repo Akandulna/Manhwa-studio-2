@@ -1,3 +1,4 @@
+import ManagedInheritedContext from './ManagedInheritedContext'
 import ManagedCandidateAdoptionControls,{type CandidateAdoptionView} from './ManagedCandidateAdoptionControls'
 import {useState,useEffect,useRef} from 'react'
 import {Button} from '@/components/ui/button'
@@ -47,6 +48,7 @@ export default function ManagedFallbackPreflight({pageId,targets}:{pageId:string
     <p>This records required inputs for this exact candidate. It does not verify earlier conversations, account-wide personalization or provider settings.</p>
     <Button variant="outline" disabled={busy||!confirmed} onClick={()=>void reviewContext('review',c.target,c.receipt!.id)}>Review standalone context requirements</Button>
    </div>)}
+   {view.unit&&view.targetPackageChecks?.filter(c=>c.receipt).map(c=><ManagedInheritedContext key={'inherited/'+pageId+'/'+c.target.deviceId+'/'+c.target.profileId+'/'+c.receipt!.id+'/'+view.unit!.attemptId} pageId={pageId} unit={view.unit} target={c.target} packageId={c.receipt!.id} onChanged={()=>{setConfirmed(false);setView(current=>current?{...current,targetContextChecks:current.targetContextChecks?.map(r=>({...r,state:'blocked',receipt:null})),candidateAdoptionChecks:[]}:current)}}/>)}
    {view.unit&&view.candidateAdoptionChecks?.map(a=>{const context=view.targetContextChecks?.find(c=>c.target.deviceId===a.target.deviceId&&c.target.profileId===a.target.profileId);return <ManagedCandidateAdoptionControls key={'adoption/'+a.target.deviceId+'/'+a.target.profileId+'/'+a.revision+'/'+(context?.receipt?.id??'')} pageId={pageId} unit={view.unit!} status={a} contextId={context?.receipt?.id??null} contextDeadline={context?.receipt?.validUntil??null} contextVerified={context?.state==='verified_declared_context'} onBusy={value=>{if(pageRef.current===pageId)setBusy(value)}} onError={message=>{setView(null);setError(message)}} onResult={status=>setView(current=>current&&current.inspectedPageId===pageId?{...current,candidateAdoptionChecks:[status],budget:{...current.budget,used:status.budget.used}}:current)}/>})}
    {view.targets.map(t=><div key={t.deviceId+'/'+t.profileId} className="space-y-2"><p className="break-all">Target: {t.deviceId} / {t.profileId}. Account: {t.accountId??'unconfirmed'}.</p>
     {t.accountObservedAt&&<p>Target account observed {new Date(t.accountObservedAt).toISOString()}.</p>}

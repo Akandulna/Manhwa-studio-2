@@ -1,5 +1,5 @@
 import { boundedBody } from './managedArtifactStorage'
-import { receiptContent, PRESENCE_CHECKPOINT_MS } from './receiptState'
+import { receiptContent, PRESENCE_CHECKPOINT_MS, staleReceipt } from './receiptState'
 /**
  * Sleeper-Cell relay: carries the phones' status receipts to Manhwa Studio,
  * and Manhwa Studio's "Refresh from phone" requests to the phones, without
@@ -114,7 +114,7 @@ function tokenMatches(given: string | null, expected: string): boolean {
   return a.byteLength === b.byteLength && crypto.subtle.timingSafeEqual(a, b)
 }
 
-const FEATURES = ['manager-batch/1','native-manager-coverage/1','account-audit-deadline/1','recovery-dispatch-hints/1']
+const FEATURES = ['receipt-source-revision/1','youtube-automation/1','manager-batch/1','native-manager-coverage/1','account-audit-deadline/1','recovery-dispatch-hints/1']
 const pauses = new WeakMap<Env,{until:number}>()
 async function forwardRelay(request:Request,env:Env):Promise<Response> {
   const cached=pauses.get(env)
@@ -183,7 +183,7 @@ const SILENT_MS = 150_000
 
 /** What a request may ask of the phone besides its receipts. */
 const ACTIONS = new Set([
-  'sync', 'clipper_start', 'clipper_stop', 'narration_start', 'editor_start', 'voiceover_start', 'run_stop', 'run_finish',
+  'sync', 'clipper_start', 'clipper_stop', 'narration_start', 'editor_start', 'voiceover_start', 'youtube_start', 'run_stop', 'run_finish',
   'screen_on', 'screen_off', 'screenshot', 'profile_select', 'chatgpt_options'
 ])
 
@@ -208,7 +208,7 @@ function chatGptSettings(value: unknown): ChatGptSettings | null {
 }
 
 /** The actions that start a run on `series`. */
-const START_ACTIONS = new Set(['clipper_start', 'narration_start', 'editor_start', 'voiceover_start'])
+const START_ACTIONS = new Set(['clipper_start', 'narration_start', 'editor_start', 'voiceover_start', 'youtube_start'])
 /** The runs that take `tabs`. */
 const TAB_ACTIONS = new Set(['clipper_start', 'editor_start', 'voiceover_start'])
 /** The runs that take `chapters`: a phone's share of a series split between phones (or a running one's new scope). */
@@ -602,6 +602,12 @@ export class Relay extends DurableObject<Env> {
       return Response.json({ ok: true, at, device, desktops: desktops.length })
     }
     const prior=this.sql.exec<{body:string;at:number}>('SELECT body,at FROM phone_receipts WHERE device = ? AND kind = ?',device,kind).toArray()[0]
+    if(prior && staleReceipt(JSON.parse(prior.body),parsed)) {
+      // Preserve an explicit response correlation without replacing newer stored evidence.
+      const answers=(parsed as Record<string,unknown>).answers
+      if(answers!==undefined)for(const ws of this.sockets('desktop'))ws.send(receiptMessage(kind,device,JSON.stringify({...JSON.parse(prior.body),answers}),at))
+      return Response.json({ok:true,at:prior.at,device,stale:true})
+    }
     if(prior && !('answers' in (parsed as Record<string,unknown>)) && receiptContent(JSON.parse(prior.body))===receiptContent(parsed))return Response.json({ok:true,at:prior.at,device,desktops:this.sockets('desktop').length,unchanged:true})
     this.sql.exec(
       'INSERT INTO phone_receipts (device, kind, body, at) VALUES (?, ?, ?, ?) ' +

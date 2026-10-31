@@ -7,3 +7,9 @@ export function receiptContent(value:unknown):string {
   return JSON.stringify(canonical(content))
 }
 export const PRESENCE_CHECKPOINT_MS=300_000
+
+/** Optional source revision. Legacy clients keep their prior behavior. */
+export function staleReceipt(prior:unknown,incoming:unknown):boolean {
+ const p=(prior as any)?.wifiRevision,n=(incoming as any)?.wifiRevision
+ return Number.isSafeInteger(p)&&p>0&&Number.isSafeInteger(n)&&n>0&&n<p
+}

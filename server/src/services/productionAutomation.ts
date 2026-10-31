@@ -35,6 +35,7 @@ import { sendProfileCommand } from './phoneProfiles.js'
 import { getPhoneScreens } from './phoneScreen.js'
 import { previewPhoneScripts, importPhoneScripts } from './phoneScriptImport.js'
 import { fetchPhoneVoiceover } from './phoneVoiceoverImport.js'
+import { requireSeriesRestartReady } from './seriesRestartGuard.js'
 import { alignSectionInBackground, pendingAlignments } from './alignment/alignmentService.js'
 import { getChapterManifest } from './chapterManifest.js'
 import { fetchPhoneCrops } from './phoneCropImport.js'
@@ -360,6 +361,7 @@ export const productionAutomation = new ProductionRunner({
   save:(job,expected)=>productionJobs.save(job,expected),
   series,
   validate: async (id, config) => {
+    await requireSeriesRestartReady((await series(id)).folder)
     if(config.managedCrop) {
       if(config.parallelDevices?.length||config.clipper.ai!=='chatgpt'||config.clipper.tabs!==1||Object.values(config.clipper.chatGpt).some(value=>value!==null))throw new Error('Managed crop production requires explicit managed phones and default ChatGPT settings')
       const data=await overview(),previous=(await productionAutomation.get(id)).job

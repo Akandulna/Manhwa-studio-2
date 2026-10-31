@@ -1,3 +1,4 @@
+import {InheritedContextAuthority,inheritedContextApi} from './inheritedContext'
 import {recoveryAllowedWhileDisabled} from '../../server/src/services/recoveryAdmission'
 import {RecoveryDispositionAuthority,recoveryDispositionApi} from './recoveryDisposition'
 import {AccountHandoffAuthority,accountHandoffApi} from './accountHandoff'
@@ -85,6 +86,7 @@ export class ManagedTaskApi {
  private disposition:RecoveryDispositionAuthority
  private accountHandoff:AccountHandoffAuthority
  private candidateAdoption:CandidateAdoptionAuthority
+ private inheritedContext:InheritedContextAuthority
  private targetContext:TargetContextAuthority
  private targetPackage:TargetPackageAuthority
  private targetInput:TargetInputAuthority
@@ -105,6 +107,7 @@ export class ManagedTaskApi {
   this.fallbackPreflight=new FallbackPreflightAuthority(sql,transaction,this.authority,()=>Date.parse(now()))
   this.targetInput=new TargetInputAuthority(sql,transaction,this.authority,this.fallbackPreflight,()=>Date.parse(now()))
   this.targetPackage=new TargetPackageAuthority(sql,transaction,this.authority,this.targetInput,()=>Date.parse(now()))
+  this.inheritedContext=new InheritedContextAuthority(sql,transaction,this.authority,this.targetPackage,()=>Date.parse(now()))
   this.targetContext=new TargetContextAuthority(sql,transaction,this.authority,this.targetPackage,()=>Date.parse(now()))
   this.accountHandoff=new AccountHandoffAuthority(sql,transaction,this.authority,this.targetContext,()=>this.env.MANAGED_ACCOUNT_HANDOFF==='1'&&this.env.MANAGED_CANDIDATE_ADOPTION==='1'&&this.env.MANAGED_AUTOMATIC_RECOVERY==='1',()=>Date.parse(now()))
   this.candidateAdoption=new CandidateAdoptionAuthority(sql,transaction,this.authority,this.targetContext,()=>this.env.MANAGED_CANDIDATE_ADOPTION==='1'&&this.env.MANAGED_AUTOMATIC_RECOVERY==='1',()=>Date.parse(now()))
@@ -141,6 +144,7 @@ export class ManagedTaskApi {
      capabilities:['saved-transfer-authority/1','saved-transfer-terminal/1','saved-transfer-upload-fence/1']},{headers:{'Cache-Control':'no-store'}})
    }
    if(url.pathname==='/managed/recovery/candidate-adoption')return await candidateAdoptionApi(request,actor,this.candidateAdoption,this.env.MANAGED_WORKSPACE_ID!)
+   if(url.pathname==='/managed/recovery/inherited-context')return await inheritedContextApi(request,actor,this.inheritedContext,this.env.MANAGED_WORKSPACE_ID!)
    if(url.pathname==='/managed/recovery/target-context')return await targetContextApi(request,actor,this.targetContext,this.env.MANAGED_WORKSPACE_ID!)
    if(url.pathname==='/managed/recovery/target-package')return await targetPackageApi(request,actor,this.targetPackage,this.env.MANAGED_WORKSPACE_ID!)
    if(url.pathname==='/managed/recovery/target-input')return await targetInputApi(request,actor,this.targetInput,this.env.MANAGED_WORKSPACE_ID!)

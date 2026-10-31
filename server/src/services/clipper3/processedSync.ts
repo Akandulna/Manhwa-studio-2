@@ -42,6 +42,11 @@ import {withUnmanagedCropChapter} from '../managedCropProjection.js'
  * once — see `syncChapterProcessed`.
  */
 
+import { readEffectiveReview } from './chapterReview.js'
+import { sha256, storyLinksCurrent } from './studioCropAuthorityModel.js'
+import { queueEditorPublish } from '../editorAutoPublish.js'
+import { stripCropStory } from '../seriesRestartModel.js'
+import { readPageRedo, matchesRedo, finishPageRedo } from './pageRedo.js'
 import fs from 'fs/promises'
 import path from 'path'
 import { pageReplacementActive } from '../chapterPageReplacement.js'
@@ -77,6 +82,7 @@ export const FETCH_MARKER = '.r2-crops.json'
 
 /** What phoneCropImport records about the zip a Processed folder came from. */
 export interface FetchMarker {
+  restartRevision?: string
   key?: string
   etag?: string
   fetchedAt?: string
@@ -217,6 +223,8 @@ export interface SyncedPage {
   /** Why, for 'replaced', 'skipped' and 'failed'. Empty for 'imported'/'ready'. */
   reason: string
   cropCount: number
+  /** Obsolete incoming output was ignored; approved Studio crops still need current links. */
+  linkingRequired?: boolean
 }
 
 export interface ChapterSyncResult {
@@ -263,7 +271,7 @@ async function readDirOrNull(dir: string): Promise<import('fs').Dirent[] | null>
  * rebuilding the name would reject the whole chapter over a digit that
  * addresses nothing.
  */
-async function readProcessedDir(folderPath: string): Promise<ProcessedPageFiles[] | null> {
+export async function readProcessedDir(folderPath: string): Promise<ProcessedPageFiles[] | null> {
   // The series-level folder first; the old per-chapter one only if it holds
   // nothing, so a chapter that has been moved is never read from both.
   let dir = getProcessedDir(folderPath)
@@ -366,6 +374,8 @@ export interface SyncChapterInput {
    * rejects, which is worse than no preview at all.
    */
   dryRun?: boolean
+  /** The Sync json button only refreshes links on attached pages. */
+  storyLinksOnly?: boolean
 }
 
 /**
@@ -402,7 +412,10 @@ async function syncChapterProcessedLegacy(input: SyncChapterInput): Promise<Chap
   if (processed === null || processed.length === 0) return result
 
   const marker = await readFetchMarker(input.folderPath)
-  const applyReview = marker?.reviewed === true && marker.applied !== true
+  const review = await readEffectiveReview(input.folderPath)
+  const studioFinal = review.reviewed && (review.by === 'desktop' || review.by === 'cropped')
+  const applyReview = !studioFinal && marker?.reviewed === true && marker.applied !== true
+  const applyStoryLinks = !applyReview && (studioFinal || input.storyLinksOnly === true || !!marker?.restartRevision)
 
   // Images indexed by page number, so a Processed folder resolves to a real
   // file regardless of how that file is named. A number claimed by two images
@@ -441,25 +454,53 @@ async function syncChapterProcessedLegacy(input: SyncChapterInput): Promise<Chap
     }
 
     const stem = stemOf(image.filename)
+    const redo = await readPageRedo(input.folderPath, image.filename)
+    if (redo && (!page.pointersText || !page.metadataText || !matchesRedo(redo, page.pointersText, page.metadataText))) {
+      record('skipped', 'Waiting for Sleeper Cell to regenerate this rejected page.', image.filename)
+      continue
+    }
+    if (redo && sha256(await fs.readFile(path.join(getSourceFolderPath(input.folderPath), image.filename))) !== redo.sourceSha256) {
+      record('failed', 'The source page changed after the redo request. Request a redo for the current page.', image.filename)
+      continue
+    }
+
+    const replacingRejectedPage = redo?.status === 'pending'
 
     // Already finished — see the note above. A phone review goes on through
     // the same checks and is compared with the store before anything is
     // written.
     const attached = pointed.has(stem) && described.has(stem)
-    if (attached && !applyReview) {
+    if (attached && !replacingRejectedPage && !applyReview && !applyStoryLinks) {
       record('skipped', 'Already attached.', image.filename)
       continue
     }
     // A reviewed page that fails a check keeps what is attached: the reason
     // says the review was the problem, not the page on screen.
     const failPrefix = attached ? 'Reviewed on the phone, but not applied: ' : ''
+    const currentMeta = attached && applyStoryLinks ? await readImageMetadata(input.folderPath, image.filename) : null
+    // Studio review is final. An older phone export cannot replace completed
+    // links or turn that page into an attachment failure, even if malformed.
+    if (attached && !replacingRejectedPage && studioFinal && currentMeta != null) {
+      const script = await fs.readFile(path.join(getSourceFolderPath(input.folderPath), 'script.md'), 'utf8').catch(() => '')
+      const sourceHash = sha256(await fs.readFile(path.join(getSourceFolderPath(input.folderPath), image.filename)))
+      if (storyLinksCurrent(currentMeta, script, sourceHash)) {
+        record('skipped', 'Studio-reviewed crops and current script links preserved.', image.filename)
+        continue
+      }
+    }
+    const rejectIncoming = (reason: string, cropCount = 0) => {
+      if (attached && studioFinal) {
+        record('skipped', 'Studio-reviewed crops preserved; older incoming files ignored.', image.filename, cropCount)
+        result.pages[result.pages.length - 1].linkingRequired = true
+      } else record('failed', reason, image.filename, cropCount)
+    }
 
     if (!page.pointersText || !page.metadataText) {
       const missing = [
         !page.pointersText ? 'crop-pointers' : null,
         !page.metadataText ? 'crop-metadata' : null
       ].filter(Boolean).join(' and ')
-      record('failed', `${failPrefix}Missing ${missing} file.`, image.filename)
+      rejectIncoming(`${failPrefix}Missing ${missing} file.`)
       continue
     }
 
@@ -467,14 +508,14 @@ async function syncChapterProcessedLegacy(input: SyncChapterInput): Promise<Chap
     try {
       parsed = JSON.parse(page.pointersText)
     } catch (err) {
-      record('failed', `${failPrefix}Pointers file is not valid JSON: ${err instanceof Error ? err.message : 'could not parse'}`, image.filename)
+      rejectIncoming(`${failPrefix}Pointers file is not valid JSON: ${err instanceof Error ? err.message : 'could not parse'}`)
       continue
     }
 
     const artifact = toArtifact(parsed, image)
     const crops = extractCrops(artifact)
     if (crops.length === 0 && !(Array.isArray(parsed?.crops) && parsed.crops.length === 0)) {
-      record('failed', `${failPrefix}No usable four-point crop in the pointers file.`, image.filename)
+      rejectIncoming(`${failPrefix}No usable four-point crop in the pointers file.`)
       continue
     }
     artifact.crops = crops
@@ -483,11 +524,14 @@ async function syncChapterProcessedLegacy(input: SyncChapterInput): Promise<Chap
     // be left half-imported: pointers on disk with no metadata beside them is
     // exactly the state the workspace shows as "pending" for a reason the user
     // did not cause and cannot see.
-    // Rebuilt from the pointers before validation, for the same reason the
-    // paste route does it: these documents are AI-authored, and an
-    // `exportedFilename` that drifted from the cutter's own composition
-    // resolves nowhere downstream. See canonicalizeExportedFilenames.
-    const canonical = canonicalizeExportedFilenames(
+    // Retain an exact return of Studio's reviewed visual metadata, including
+    // approved filenames that differ from today's cutter composition. Other
+    // imports still use the existing filename normalization for older phone
+    // exports. Attached story-link updates must match the reviewed metadata
+    // after either path before anything can be written below.
+    const reviewedMetadataMatches = currentMeta != null &&
+      metadataKey(stripCropStory(currentMeta)) === metadataKey(stripCropStory(page.metadataText))
+    const canonical = reviewedMetadataMatches ? null : canonicalizeExportedFilenames(
       page.metadataText,
       input.seriesSlug,
       image.filename,
@@ -508,7 +552,28 @@ async function syncChapterProcessedLegacy(input: SyncChapterInput): Promise<Chap
       input.seriesSlug
     )
     if (!validation.isValid) {
-      record('failed', failPrefix + validation.errors.join(' '), image.filename, crops.length)
+      rejectIncoming(failPrefix + validation.errors.join(' '), crops.length)
+      continue
+    }
+
+    if (input.storyLinksOnly || studioFinal || redo) {
+      const script = await fs.readFile(path.join(getSourceFolderPath(input.folderPath), 'script.md'), 'utf8').catch(() => '')
+      const sourceHash = sha256(await fs.readFile(path.join(getSourceFolderPath(input.folderPath), image.filename)))
+      if (!storyLinksCurrent(metadataText, script, sourceHash)) {
+        rejectIncoming('Script links are missing, invalid or for an older script/source. Complete script linking in Sleeper Cell before syncing.', crops.length)
+        continue
+      }
+    }
+
+    if (attached && applyStoryLinks && !replacingRejectedPage) {
+      const current = await readImagePoints(input.folderPath, image.filename)
+      if (!current?.file || cropsKey(extractCrops(current.file)) !== cropsKey(crops) || currentMeta == null || metadataKey(stripCropStory(currentMeta)) !== metadataKey(stripCropStory(metadataText))) {
+        rejectIncoming(input.storyLinksOnly ? 'Phone crops differ from Studio’s saved geometry or descriptions. Studio files were preserved. Use Reject JSON / Request redo on the page to replace it.' : 'Restart story linking cannot change approved crop geometry or visual descriptions. Review those changes separately.', crops.length)
+        continue
+      }
+      if (metadataKey(currentMeta) === metadataKey(metadataText)) { record('skipped', 'Story links already current.', image.filename, crops.length); continue }
+      if (!input.dryRun) await writeImageMetadata(input.folderPath, image.filename, metadataText)
+      record('replaced', 'Story links refreshed; crop images and geometry preserved.', image.filename, crops.length)
       continue
     }
 
@@ -526,8 +591,10 @@ async function syncChapterProcessedLegacy(input: SyncChapterInput): Promise<Chap
     }
 
     try {
+      if (redo) (artifact as Clipper3ImageCropFile & { studioRedoRevision: string }).studioRedoRevision = redo.revision
       await writeImagePoints(input.folderPath, image.filename, artifact)
       await writeImageMetadata(input.folderPath, image.filename, metadataText)
+      if (redo?.status === 'pending') await finishPageRedo(input.folderPath, redo)
     } catch (err) {
       record('failed', `${failPrefix}Could not write: ${err instanceof Error ? err.message : String(err)}`, image.filename, crops.length)
       continue
@@ -653,7 +720,12 @@ async function unsyncChapterProcessedLegacy(
 }
 
 export async function syncChapterProcessed(input: SyncChapterInput):Promise<ChapterSyncResult> {
- return withUnmanagedCropChapter(input.folderPath,()=>syncChapterProcessedLegacy(input))
+ return withUnmanagedCropChapter(input.folderPath,async()=>{
+  const result = await syncChapterProcessedLegacy(input)
+  // Link-only returns don't recut images or rewrite alignment, so they need their own publish trigger.
+  if (!input.dryRun && (result.imported > 0 || result.replaced > 0)) queueEditorPublish(input.chapterId)
+  return result
+ })
 }
 
 export async function unsyncChapterProcessed(input: UnsyncChapterInput):Promise<ChapterUnsyncResult> {

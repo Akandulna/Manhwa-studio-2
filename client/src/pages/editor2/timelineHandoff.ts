@@ -154,7 +154,7 @@ export async function resetTimeline(chapterId: string, lang: NarrationLanguage):
   if (pending) clearTimeout(pending)
   pushTimers.delete(key)
   const row = await videoApi2.saveStoredTimeline(chapterId, lang, {
-    json: '', processedJson: null, updatedAt: localUpdatedAt(key)
+    json: '', processedJson: null, updatedAt: localUpdatedAt(key), reset: true
   })
   applyStored(row, lang)
   if (row.json || row.processedJson) throw new Error('The timeline changed elsewhere. Please reset it again.')

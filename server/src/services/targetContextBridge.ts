@@ -7,15 +7,15 @@ import {TARGET_CONTEXT_SCHEMA,CONTEXT_CONFIRMATION,parseContextStatus,parseConte
 import type {PackageSource} from './targetPackageProtocol.js'
 import type {targetPackageStatusTransport} from './targetPackageBridge.js'
 import type {RelayDeliveryPause} from './relayDeliveryPause.js'
-export function targetContextTransport(url:string,workspace:string,token:string,legacy:string|undefined,pause:RelayDeliveryPause){
+export function targetContextTransport(url:string,workspace:string,token:string,legacy:string|undefined,pause:RelayDeliveryPause,endpoint={path:'/managed/recovery/target-context',schema:TARGET_CONTEXT_SCHEMA,limit:16000}){
  managedArtifactTransport(url,workspace,token,legacy,pause)
  return async(operation:Record<string,unknown>)=>{
   await pause.beforeSend()
-  const response=await fetch(new URL('/managed/recovery/target-context',url),{method:'POST',redirect:'error',signal:AbortSignal.timeout(20000),headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({...operation,schema:TARGET_CONTEXT_SCHEMA,workspaceId:workspace})})
+  const response=await fetch(new URL(endpoint.path,url),{method:'POST',redirect:'error',signal:AbortSignal.timeout(20000),headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({...operation,schema:endpoint.schema,workspaceId:workspace})})
   if(response.status===429)await pause.record(response.headers.get('Retry-After'))
   if(!response.ok){await response.body?.cancel();throw new TaskConflict('Context review or inspection unavailable')}
   const reader=response.body?.getReader();if(!reader)throw new TaskConflict('Missing context response');let size=0;const chunks:Uint8Array[]=[]
-  try{while(true){const p=await reader.read();if(p.done)break;size+=p.value.length;if(size>16000){await reader.cancel();throw new TaskConflict('Context response exceeds bounds')}chunks.push(p.value)}}finally{reader.releaseLock()}
+  try{while(true){const p=await reader.read();if(p.done)break;size+=p.value.length;if(size>endpoint.limit){await reader.cancel();throw new TaskConflict('Context response exceeds bounds')}chunks.push(p.value)}}finally{reader.releaseLock()}
   return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks)))
  }
 }

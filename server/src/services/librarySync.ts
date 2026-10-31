@@ -12,6 +12,7 @@ import { setAutoSend, noteChapterDownloaded, flushAutoSend, updatePhoneIndexes, 
 import { importLibraryChapter } from './phonePull.js'
 import { parseLibraryManifest, type LibraryManifest } from './libraryManifest.js'
 import { notifySeriesProcessChanged } from './seriesProcess.js'
+import { applySeriesRestarts } from './seriesRestart.js'
 import { isLibraryDeleted, libraryControls, purgeDeletedLibrarySeries, saveLibraryControls } from './libraryControls.js'
 
 const OWNER = 'libraryOwner:'
@@ -28,8 +29,8 @@ let cleaning = false
 export function scheduleLibraryCleanup(): void {
   if (cleaning || cleanupTimer) return
   cleaning = true
-  void purgeDeletedLibrarySeries().then(() => { io?.emit('library:updated'); notifySeriesProcessChanged(true) }).catch(error => {
-    console.error('[library-sync] deletion cleanup will retry:', error)
+  void purgeDeletedLibrarySeries().then(() => applySeriesRestarts()).then(() => { io?.emit('library:updated'); notifySeriesProcessChanged(true) }).catch(error => {
+    console.error('[library-sync] library cleanup will retry:', error)
     cleanupTimer = setTimeout(() => { cleanupTimer = null; scheduleLibraryCleanup() }, 30_000)
     cleanupTimer.unref()
   }).finally(() => { cleaning = false })

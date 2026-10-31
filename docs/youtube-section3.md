@@ -1,0 +1,13 @@
+# YouTube section 3: English descriptions
+
+The Description tab supports manual ChatGPT generation, formatted JSON importing, direct writing/editing, copying, feedback-based regeneration, and version restoration. Sleeper-Cell dispatch and thumbnails are later sections.
+
+Selecting a different title prepares a description prompt with the canonical series name (provided by the route), exact selected title, available research, and the current description instruction revision and SHA-256. Research associated with a selected suggestion takes priority over newer batches. Custom titles can proceed without saved research; the prompt requests verification when needed. If instruction loading fails, title selection is preserved and the Description tab offers a retry.
+
+A generated response contains schemaVersion=1, requestId, seriesId, language=en, the exact title, status=ok, and description. Shared strict/Markdown-escaped JSON parsing is reused. Text is normalized to LF and limited to 5,000 Unicode characters, without control characters or angle brackets. Ambiguous/unavailable responses surface their message. Old-title responses cannot become the current description. Exact repeated imports are idempotent; changed replays are rejected.
+
+Description requests and immutable content versions live inside each series workspace. Each version records its title, text, source, request ID (for generated versions), and creation time. Current text remains in the existing description field for compatibility. Earlier workspaces are upgraded on open; earlier saved descriptions become legacy versions. Mutations share the existing numeric workspace revision in titles.revision, preventing title/description writes from overwriting one another. The field name is retained for client compatibility.
+
+Changing a title preserves all saved text and flags it for review. A new generation or reviewed manual save associates the text with the current title and clears the flag. Restoring a version for another title keeps the review flag. Regenerating retains the current output until a successful import. Response and edit drafts persist in sessionStorage for the same browser tab. No direct AI generation is called from Studio in this section.
+
+Validation: 38 focused YouTube storage/HTTP/parser tests, server and client TypeScript checks, client bundle build, and an isolated browser flow using synthetic descriptions. The browser checks cover automatic prompt creation, canonical name/title, copy/import with formatting escapes, invalid JSON and draft recovery, editing/history, regeneration feedback, title-change preservation, restoration and reviewed saves, persistence and a 1024px layout.

@@ -1,3 +1,4 @@
+import { restartRevision } from './seriesRestartModel.js'
 import fs from 'fs/promises'
 import path from 'path'
 import { createHash } from 'crypto'
@@ -159,6 +160,13 @@ export function recordPhoneActivity(kind: string, device: string, body: unknown,
   void store?.phone(kind, device, body, at).catch(error => console.error('[series-activity]', error))
 }
 
+const activeMutations = new Map<string, number>()
+export async function withSeriesMutation<T>(folder: string, work: () => Promise<T>): Promise<T> {
+  activeMutations.set(folder, (activeMutations.get(folder) ?? 0) + 1)
+  try { return await work() } finally { const count = (activeMutations.get(folder) ?? 1) - 1; if (count) activeMutations.set(folder, count); else activeMutations.delete(folder) }
+}
+export const seriesMutationBusy = (folder: string): boolean => (activeMutations.get(folder) ?? 0) > 0
+
 /** Successful processing requests also count before an asynchronous job writes its first file. */
 export function seriesActivityMiddleware(db: PrismaClient) {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -184,6 +192,28 @@ export function seriesActivityMiddleware(db: PrismaClient) {
       const at = Date.now()
       void folders.then(rows => Promise.all(rows.map(row => store?.touch(path.basename(row.rootFolder), at)))).catch(error => console.error('[series-activity]', error))
     })
-    next()
+    void folders.then(async rows => {
+      const names = [...new Set(rows.map(row => path.basename(row.rootFolder)))]
+      for (const folder of names) activeMutations.set(folder, (activeMutations.get(folder) ?? 0) + 1)
+      let released = false
+      const release = () => {
+        if (released) return
+        released = true
+        for (const folder of names) { const count = (activeMutations.get(folder) ?? 1) - 1; if (count) activeMutations.set(folder, count); else activeMutations.delete(folder) }
+      }
+      res.once('finish', release); res.once('close', release)
+      try {
+        for (const folder of names) {
+          const saved = await db.setting.findUnique({ where: { key: 'libraryControl:' + folder } })
+          const revision = saved ? restartRevision(JSON.parse(saved.value)) : null
+          if (revision && (await db.setting.findUnique({ where: { key: 'libraryRestartReady:' + folder } }))?.value !== revision) {
+            release()
+            res.status(409).json({ error: 'Series restart is synchronizing. Wait for Library to finish before starting work.' })
+            return
+          }
+        }
+        next()
+      } catch (error) { release(); next(error) }
+    }).catch(next)
   }
 }

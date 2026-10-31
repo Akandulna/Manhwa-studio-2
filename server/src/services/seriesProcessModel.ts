@@ -9,7 +9,7 @@ export type ProcessStage = typeof PROCESS_STAGES[number]
 export type ProcessState = 'pending' | 'active' | 'partial' | 'review' | 'failed' | 'done'
 export interface StageProgress { state: ProcessState; done?: number; total?: number }
 export type ChapterStages = Record<ProcessStage, StageProgress>
-export interface ProcessChapter { id: string; name: string; number: number; stages: ChapterStages; pageRevision?: string }
+export interface ProcessChapter { id: string; name: string; number: number; stages: ChapterStages; pageRevision?: string; restartRevision?: string }
 export interface StageCount { done: number; total: number; active: number; attention: number; unitsDone: number; unitsTotal: number }
 export interface ProcessPart {
   number: number; firstChapter: number; lastChapter: number; complete: boolean; manualComplete?: boolean; present: number; expected: number

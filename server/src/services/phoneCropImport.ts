@@ -13,7 +13,8 @@ import {withUnmanagedCropChapter,assertUnmanagedCropChapter} from './managedCrop
  *
  * which is the Sync json drop-off layout already, so fetching is: list the
  * series' folder in R2, download each chapter zip that is new or changed since
- * the last fetch, and unpack it into `<Series>/Processed/<Chapter>/`. Sync json
+ * the last fetch, and unpack it into `<Series>/Processed/<Chapter>/`. Exact current story-link returns
+ * are attached immediately without changing reviewed visual inputs. Other candidates wait for Sync json, which
  * then attaches it like any hand-made drop-off. The zip is read in memory and
  * never written to disk, so there is nothing to clean up after.
  *
@@ -38,20 +39,31 @@ import {withUnmanagedCropChapter,assertUnmanagedCropChapter} from './managedCrop
  * their uploads over it. It is written after every cut, backfilled by Sync
  * json for chapters cut before the marker existed, and by the Library's
  * "Publish cropped chapters" for every series. Only an explicit page replacement removes those markers.
+ *
+ * Reviewed: the desktop's own Mark reviewed (Preview) is told the same way,
+ *
+ *     <same folder as the zips>/<Chapter>.reviewed.json
+ *
+ * so the Master shows the chapter as reviewed in Studio and doesn't offer it
+ * for review again. Mark reviewed writes it and Unmark removes it; Sync json
+ * puts R2 back in step with the desktop's records when either call failed.
+ * Phone reviews need no marker: they travel in the zip's chapter.json.
  */
 
 import { recordManagerTransfer } from './managerReporting.js'
+import { withSeriesMutation } from './seriesActivity.js'
+import { requireSeriesRestartReady } from './seriesRestartGuard.js'
 import fs from 'fs/promises'
 import path from 'path'
-import { GetObjectCommand, ListObjectsV2Command, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3'
+import { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3'
 import { prisma } from '../index.js'
 import { readZip, type ZipEntry } from '../utils/zipReader.js'
 import { createClient, getR2Config, phoneFolders, type R2Config } from './r2Service.js'
 import { getChapterManifest } from './chapterManifest.js'
 import { getOutputDir, listOutputs, stemOf } from './clipper3/perImageStore.js'
 import { seriesSlug } from './clipper3/chapterCrop.js'
-import { FETCH_MARKER, getProcessedDir, type FetchMarker } from './clipper3/processedSync.js'
-import { notReviewed, parseManifestReview, writeChapterReview } from './clipper3/chapterReview.js'
+import { FETCH_MARKER, getProcessedDir, syncChapterProcessed, type FetchMarker } from './clipper3/processedSync.js'
+import { notReviewed, parseManifestReview, readChapterReview, readEffectiveReview, writeChapterReview } from './clipper3/chapterReview.js'
 import { matchesPageRevision, pageReplacementActive, readPageReplacement } from './chapterPageReplacement.js'
 
 /** Folder the phone uploads chapter zips to, inside its R2 prefix. Keep in step with FOLDER in ChapterUpload.kt. */
@@ -63,6 +75,10 @@ export { FETCH_MARKER }
 /** Beside `<Chapter>.zip`: the desktop has cut this chapter. Keep in step with the phones. */
 export const CROPPED_SUFFIX = '.cropped.json'
 export const CROPPED_SCHEMA = 'manhwa-studio-cropped/1'
+
+/** Beside `<Chapter>.zip`: the desktop marked this chapter reviewed. Keep in step with ReviewSync.REVIEWED_SUFFIX. */
+export const REVIEWED_SUFFIX = '.reviewed.json'
+export const REVIEWED_SCHEMA = 'manhwa-studio-reviewed/1'
 
 /** The chapter manifest the phone puts in each zip; kept alongside the pages. */
 const MANIFEST_FILE = 'chapter.json'
@@ -97,6 +113,17 @@ export interface PhoneCropsFetch {
   failed: { folder: string; reason: string }[]
   /** Cropped markers this run put in R2 for chapters cut before they existed. */
   cropped: CroppedPublish
+  /** Reviewed markers this run put in R2 or took out of it, to match the desktop's reviews. */
+  reviewedMarkers: ReviewedPublish
+}
+
+/** What putting the reviewed markers in step did. */
+export interface ReviewedPublish {
+  /** Chapter folders whose `.reviewed.json` was written. */
+  published: string[]
+  /** Chapter folders whose `.reviewed.json` was removed (no longer reviewed on the desktop). */
+  removed: string[]
+  failed: { folder: string; reason: string }[]
 }
 
 /** What a cropped-marker backfill wrote. */
@@ -184,12 +211,13 @@ interface ListedZip {
   size: number
 }
 
-/** One series folder in R2: its chapter zips and which chapters carry a cropped marker. */
+/** One series folder in R2: its chapter zips and which chapters carry a cropped or reviewed marker. */
 interface SeriesListing {
   /** The folder they were found in (`<prefix>crops/<Series>/`), or null when neither place has anything. */
   folder: string | null
   zips: ListedZip[]
   cropped: Set<string>
+  reviewed: Set<string>
 }
 
 /** Where each series' zips were found last time, so a re-run tries that folder first. */
@@ -198,6 +226,7 @@ const foundFolders = new Map<string, string>()
 async function listFolder(client: S3Client, config: R2Config, folder: string): Promise<Omit<SeriesListing, 'folder'>> {
   const zips: ListedZip[] = []
   const cropped = new Set<string>()
+  const reviewed = new Set<string>()
   let token: string | undefined
   do {
     const page = await client.send(new ListObjectsV2Command({
@@ -212,6 +241,10 @@ async function listFolder(client: S3Client, config: R2Config, folder: string): P
         cropped.add(rest.slice(0, -CROPPED_SUFFIX.length))
         continue
       }
+      if (rest.endsWith(REVIEWED_SUFFIX)) {
+        reviewed.add(rest.slice(0, -REVIEWED_SUFFIX.length))
+        continue
+      }
       // Otherwise only `<Chapter>.zip` directly in the folder.
       if (!rest.toLowerCase().endsWith('.zip')) continue
       zips.push({
@@ -223,13 +256,13 @@ async function listFolder(client: S3Client, config: R2Config, folder: string): P
     }
     token = page.IsTruncated ? page.NextContinuationToken : undefined
   } while (token)
-  return { zips, cropped }
+  return { zips, cropped, reviewed }
 }
 
 /**
  * The phone uploads under its own prefix setting, which may not match ours
  * (see readPolledReceipt), so the bucket root is tried too. The first of the
- * two holding anything (a zip or a cropped marker) is the series' folder.
+ * two holding anything (a zip or a marker) is the series' folder.
  */
 async function listSeries(client: S3Client, config: R2Config, seriesId: string, seriesName: string): Promise<SeriesListing> {
   const rel = `${CROPS_FOLDER}${seriesName}/`
@@ -239,13 +272,13 @@ async function listSeries(client: S3Client, config: R2Config, seriesId: string, 
 
   for (const folder of candidates) {
     const listed = await listFolder(client, config, folder)
-    if (listed.zips.length > 0 || listed.cropped.size > 0) {
+    if (listed.zips.length > 0 || listed.cropped.size > 0 || listed.reviewed.size > 0) {
       foundFolders.set(seriesId, folder)
       return { folder, ...listed }
     }
   }
   foundFolders.delete(seriesId)
-  return { folder: null, zips: [], cropped: new Set() }
+  return { folder: null, zips: [], cropped: new Set(), reviewed: new Set() }
 }
 
 // ============ Cropped markers ============
@@ -276,6 +309,7 @@ export async function chapterCropStats(
   folderPath: string,
   seriesTitle: string
 ): Promise<{ croppedAt: string; pages: number; crops: number } | null> {
+  if (!(await readEffectiveReview(folderPath)).reviewed) return null
   const outputs = await listOutputs(folderPath)
   if (outputs.length === 0) return null
 
@@ -408,6 +442,119 @@ export async function publishChapterCropped(chapterId: string): Promise<{ keys: 
   }
 }
 
+// ============ Reviewed markers ============
+
+/** The marker's body: pretty JSON, read by the phones. */
+export interface ReviewedMarker {
+  schema: typeof REVIEWED_SCHEMA
+  series: string
+  chapter: string
+  reviewed: true
+  reviewed_at: string | null
+  by: 'desktop'
+}
+
+/** `<folder><Chapter>.reviewed.json`, where `folder` is a series folder ending in '/'. */
+export function reviewedMarkerKey(seriesFolder: string, chapter: string): string {
+  return `${seriesFolder}${chapter}${REVIEWED_SUFFIX}`
+}
+
+export function buildReviewedMarker(series: string, chapter: string, reviewedAt: string | null): ReviewedMarker {
+  return { schema: REVIEWED_SCHEMA, series, chapter, reviewed: true, reviewed_at: reviewedAt, by: 'desktop' }
+}
+
+/** The desktop's own review of the chapter, or null: phone reviews and cuts have their own way to the phones. */
+async function desktopReviewedAt(folderPath: string): Promise<{ reviewedAt: string | null } | null> {
+  const review = await readChapterReview(folderPath)
+  return review.reviewed && review.by === 'desktop' ? { reviewedAt: review.reviewedAt } : null
+}
+
+async function putReviewedMarker(client: S3Client, config: R2Config, folders: string[], marker: ReviewedMarker): Promise<void> {
+  for (const folder of folders) {
+    await client.send(new PutObjectCommand({
+      Bucket: config.bucket,
+      Key: reviewedMarkerKey(folder, marker.chapter),
+      Body: JSON.stringify(marker, null, 2) + '\n',
+      ContentType: 'application/json'
+    }))
+  }
+}
+
+async function deleteReviewedMarker(client: S3Client, config: R2Config, folders: string[], chapter: string): Promise<void> {
+  for (const folder of folders) {
+    await client.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: reviewedMarkerKey(folder, chapter) }))
+  }
+}
+
+/**
+ * Puts R2's reviewed markers in step with the desktop's reviews: one for each
+ * chapter marked reviewed here that R2 doesn't list, and none for a chapter
+ * no longer reviewed here. Never throws; a failure is reported per chapter.
+ */
+async function syncReviewedMarkers(
+  client: S3Client,
+  config: R2Config,
+  series: MarkerSeries,
+  listing: SeriesListing
+): Promise<ReviewedPublish> {
+  const result: ReviewedPublish = { published: [], removed: [], failed: [] }
+  const seriesName = path.basename(series.rootFolder)
+  let folders: string[] | null = null
+
+  for (const chapter of series.chapters) {
+    const folder = path.basename(chapter.folderPath)
+    try {
+      const review = await desktopReviewedAt(chapter.folderPath)
+      const listed = listing.reviewed.has(folder)
+      if (review && !listed) {
+        folders ??= await markerFolders(client, config, listing.folder, seriesName)
+        await putReviewedMarker(client, config, folders, buildReviewedMarker(seriesName, folder, review.reviewedAt))
+        result.published.push(folder)
+      } else if (!review && listed && listing.folder) {
+        await deleteReviewedMarker(client, config, [listing.folder], folder)
+        result.removed.push(folder)
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      console.error(`[clipper3] updating the reviewed marker for ${seriesName}/${folder} failed:`, reason)
+      result.failed.push({ folder, reason })
+    }
+  }
+  return result
+}
+
+/**
+ * After the desktop's Mark reviewed or Unmark: writes or removes that
+ * chapter's reviewed marker. Resolves to null when R2 is not set up; never
+ * throws, so a failed PUT can't fail the review that triggered it (the next
+ * Sync json tries again).
+ */
+export async function publishChapterReviewed(chapterId: string): Promise<{ keys: string[]; reviewed: boolean } | { error: string } | null> {
+  const config = getR2Config()
+  if (!config) return null
+  try {
+    const chapter = await prisma.chapter.findUnique({
+      where: { id: chapterId },
+      select: { folderPath: true, seriesId: true, series: { select: { rootFolder: true } } }
+    })
+    if (!chapter) return null
+    const client = createClient(config)
+    const seriesName = path.basename(chapter.series.rootFolder)
+    const known = foundFolders.get(chapter.seriesId)
+    const folder = known ?? (await listSeries(client, config, chapter.seriesId, seriesName)).folder
+    const folders = await markerFolders(client, config, folder, seriesName)
+    const chapterName = path.basename(chapter.folderPath)
+    const review = await desktopReviewedAt(chapter.folderPath)
+    if (review) await putReviewedMarker(client, config, folders, buildReviewedMarker(seriesName, chapterName, review.reviewedAt))
+    else await deleteReviewedMarker(client, config, folders, chapterName)
+    return { keys: folders.map(f => reviewedMarkerKey(f, chapterName)), reviewed: review != null }
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    console.error(`[clipper3] publishing the reviewed marker for chapter ${chapterId} failed:`, reason)
+    return { error: reason }
+  }
+}
+
 /** What the Library's "Publish cropped chapters" did. */
 export interface CroppedPublishAll {
   configured: boolean
@@ -468,6 +615,21 @@ async function readMarkerEtag(processedDir: string): Promise<string | null> {
   }
 }
 
+/** Attach an exact story-link return without changing approved visual inputs or review state. */
+async function attachStoryOnlyReturn(chapter: { id: string; number: number; folderPath: string }, slug: string): Promise<boolean> {
+  let manifest
+  try { manifest = await getChapterManifest(chapter.folderPath) } catch { return false }
+  if (!manifest.images.length) return false
+  const input = { chapterId: chapter.id, chapterNumber: chapter.number, folderPath: chapter.folderPath,
+    seriesSlug: slug, images: manifest.images, storyLinksOnly: true }
+  const preview = await syncChapterProcessed({ ...input, dryRun: true })
+  if (preview.failed || preview.imported || preview.ready || preview.pages.length !== manifest.images.length ||
+      preview.pages.some(page => page.status !== 'replaced' && page.status !== 'skipped')) return false
+  const result = await syncChapterProcessed(input)
+  if (result.failed) throw new Error('Could not attach the current story-link return; retry Sync json')
+  return true
+}
+
 // ============ Fetch ============
 
 /**
@@ -484,7 +646,8 @@ export async function fetchPhoneCrops(seriesId: string, chapterIds?: string[]): 
     upToDate: 0,
     unmatched: [],
     failed: [],
-    cropped: { published: [], failed: [] }
+    cropped: { published: [], failed: [] },
+    reviewedMarkers: { published: [], removed: [], failed: [] }
   }
   const config = getR2Config()
   if (!config) return result
@@ -500,6 +663,7 @@ export async function fetchPhoneCrops(seriesId: string, chapterIds?: string[]): 
   })
   if (!series) throw new Error('Series not found')
 
+  return withSeriesMutation(path.basename(series.rootFolder), async () => {
   const client = createClient(config)
   const listing = await listSeries(client, config, seriesId, path.basename(series.rootFolder))
   const zips = listing.zips
@@ -523,6 +687,8 @@ export async function fetchPhoneCrops(seriesId: string, chapterIds?: string[]): 
 
     const processedDir = getProcessedDir(chapter.folderPath)
     if (zip.etag && (await readMarkerEtag(processedDir)) === zip.etag) {
+      // A previous fetch may have staged links before the server stopped or before auto-attach existed.
+      await withUnmanagedCropChapter(chapter.folderPath, () => attachStoryOnlyReturn(chapter, seriesSlug(series.title)))
       result.upToDate++
       continue
     }
@@ -537,17 +703,20 @@ export async function fetchPhoneCrops(seriesId: string, chapterIds?: string[]): 
       recordManagerTransfer({ seriesId, chapterId: chapter.id, stage: 'crop_json', phase: 'cloud', objectVersion: managerObjectVersion })
       const entries = readZip(body)
       const manifest = readZipManifest(entries)
+      const restartRevision = await requireSeriesRestartReady(path.basename(series.rootFolder), (manifest as { restart_revision?: unknown } | null)?.restart_revision, true)
       if (!matchesPageRevision(await readPageReplacement(chapter.folderPath), (manifest as { page_revision?: unknown } | null)?.page_revision)) {
         throw new Error('These crops belong to an older page revision. Sync the replacement pages on the phone and clip them again.')
       }
       const pages = await unpackChapterZip(entries, processedDir)
       const etag = (res.ETag ?? zip.etag).replace(/"/g, '')
       const review = parseManifestReview(manifest)
+      const storyOnlyReturn = await attachStoryOnlyReturn(chapter, seriesSlug(series.title))
 
-      // A new zip always rewrites the review record. An unreviewed one means
-      // the crops changed since any earlier review, so that review no longer
-      // describes what would be cut.
-      await writeChapterReview(chapter.folderPath, review
+      // Downloaded files are only candidates. They do not change Studio's
+      // approved store and cannot revoke a desktop review or completed cut.
+      const currentReview = await readEffectiveReview(chapter.folderPath)
+      const studioFinal = currentReview.reviewed && (currentReview.by === 'desktop' || currentReview.by === 'cropped')
+      if (!studioFinal && (review || !storyOnlyReturn)) await writeChapterReview(chapter.folderPath, review
         ? {
             reviewed: true,
             reviewedAt: review.reviewedAt,
@@ -563,6 +732,7 @@ export async function fetchPhoneCrops(seriesId: string, chapterIds?: string[]): 
       // `applied: false` asks the next Sync json to put the review over pages
       // already attached from the clipping phone's draft (processedSync.ts).
       const marker: FetchMarker = {
+        ...(restartRevision ? { restartRevision } : {}),
         key: zip.key,
         etag,
         fetchedAt: new Date().toISOString(),
@@ -587,6 +757,9 @@ export async function fetchPhoneCrops(seriesId: string, chapterIds?: string[]): 
   // series, not just `chapterIds`: it costs no extra LIST, and a phone
   // clipping an already-cut chapter is exactly what the marker prevents.
   result.cropped = await backfillCropped(client, config, series, listing)
+  // The desktop's own reviews, so the Master shows them (same listing, no extra LIST).
+  result.reviewedMarkers = await syncReviewedMarkers(client, config, series, listing)
 
   return result
+  })
 }

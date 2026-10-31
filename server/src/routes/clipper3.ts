@@ -1,3 +1,8 @@
+import { rejectPage, publishPageRedo, readPageRedo } from '../services/clipper3/pageRedo.js'
+import { relayPhones } from '../services/phoneRelay.js'
+import { libraryControl } from '../services/libraryControls.js'
+import { restartRevision } from '../services/seriesRestartModel.js'
+import { readPageReplacement } from '../services/chapterPageReplacement.js'
 import {hiddenLibraryFolders} from '../services/libraryControls.js'
 import {managedCropBinding,readManagedCrop,assertUnmanagedCropChapter} from '../services/managedCropProjection.js'
 import {TaskConflict} from '../services/managedTaskProtocol.js'
@@ -76,7 +81,7 @@ import {
   seriesSlug,
   type CropChapter
 } from '../services/clipper3/chapterCrop.js'
-import { fetchPhoneCrops, publishAllCroppedMarkers, publishChapterCropped } from '../services/phoneCropImport.js'
+import { fetchPhoneCrops, publishAllCroppedMarkers, publishChapterCropped, publishChapterReviewed } from '../services/phoneCropImport.js'
 import { readEffectiveReview, setDesktopReview } from '../services/clipper3/chapterReview.js'
 import { reconcileQuietly } from '../services/diskReconcile.js'
 import { queueEditorPublish } from '../services/editorAutoPublish.js'
@@ -302,7 +307,8 @@ export function initClipper3Routes(io: Server): Router {
           // Both halves required: crops say where to cut, metadata describes
           // the result, and an image is only finished once it has both AND
           // the metadata actually still matches those crops.
-          const status: 'done' | 'pending' = parseable && hasMetadata && metadataValid ? 'done' : 'pending'
+          const redo = await readPageRedo(chapter.folderPath, img.filename)
+          const status: 'done' | 'pending' = redo?.status !== 'pending' && parseable && hasMetadata && metadataValid ? 'done' : 'pending'
           if (status === 'done') {
             expectedOutputs.push(...exportedNames)
             doneFiles.push(img.filename)
@@ -310,6 +316,7 @@ export function initClipper3Routes(io: Server): Router {
 
           return {
             filename: img.filename,
+            redo,
             managed:binding?{taskId:binding.task.id,pageId:chapter.pages?.find(page=>page.localPath&&path.basename(page.localPath)===img.filename)?.id??null}:null,
             width: img.width,
             height: img.height,
@@ -409,6 +416,26 @@ export function initClipper3Routes(io: Server): Router {
    * something cuttable — but coordinates are NOT rewritten: they are normalized
    * against this image and stay that way.
    */
+  router.post('/chapters/:id/images/:filename/reject', async (req: Request, res: Response) => {
+    try {
+      const chapter = await prisma.chapter.findUnique({ where: { id: req.params.id }, include: { series: true } })
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+      if (isChapterCropping(chapter.id) || syncingSeries.has(chapter.seriesId) || unsyncingSeries.has(chapter.seriesId))
+        return res.status(409).json({ error: 'Wait for the chapter crop or sync to finish before rejecting a page' })
+      const filename = req.params.filename
+      if (!(await getChapterManifest(chapter.folderPath)).images.some(image => image.filename === filename))
+        return res.status(404).json({ error: 'Source page not found' })
+      const phone = relayPhones().filter(p => p.id).sort((a, b) => Number(b.connected) - Number(a.connected))[0]
+      const request = await rejectPage({ folderPath: chapter.folderPath, filename, chapterNumber: chapter.number,
+        seriesSlug: seriesSlug(chapter.series.title), deviceId: phone?.id ?? null,
+        restartRevision: restartRevision(await libraryControl(path.basename(path.dirname(chapter.folderPath)))),
+        pageRevision: (await readPageReplacement(chapter.folderPath))?.revision ?? null }, publishPageRedo)
+      res.json(request)
+    } catch (error) {
+      res.status(error instanceof TaskConflict ? 409 : 500).json({ error: error instanceof Error ? error.message : 'Could not request a page redo' })
+    }
+  })
+
   router.put('/chapters/:id/images/:filename/points', async (req: Request, res: Response) => {
     try {
       const chapter = await findChapter(req.params.id)
@@ -636,6 +663,8 @@ export function initClipper3Routes(io: Server): Router {
    *
    * The desktop's Mark reviewed / Unmark. Marking replaces a phone review
    * with the desktop's own (now, by: 'desktop'); unmarking clears either.
+   * Either way the chapter's reviewed marker in R2 follows, so the Master
+   * phone shows it.
    */
   router.put('/chapters/:id/review', async (req: Request, res: Response) => {
     try {
@@ -646,6 +675,9 @@ export function initClipper3Routes(io: Server): Router {
         return res.status(400).json({ error: 'reviewed (boolean) is required' })
       }
       await setDesktopReview(chapter.folderPath, reviewed)
+      if (reviewed) queueEditorPublish(chapter.id)
+      // Tell the phones (`<Chapter>.reviewed.json` in R2); a failure waits for the next Sync json.
+      await publishChapterReviewed(chapter.id)
       res.json(await readEffectiveReview(chapter.folderPath))
     } catch (error) {
       if(error instanceof TaskConflict)return res.status(409).json({error:'This chapter contains managed pages. Review and cut each exact page in its Preview controls; chapter-wide approval cannot replace those reviews.'})
@@ -935,7 +967,8 @@ export function initClipper3Routes(io: Server): Router {
    * uploaded to R2 (`crops/<Series>/<Chapter>.zip`, one per finished chapter)
    * and unpacks them into `<Series>/Processed/<Chapter>/`, where the scan below
    * finds them. Only new or re-uploaded zips are downloaded; nothing is
-   * attached here. Answers `configured: false` without touching R2 when it is
+   * attached here except verified current story-link returns matching every approved visual input.
+   * Answers `configured: false` without touching R2 when it is
    * not set up, so Sync json still works on local drop-offs alone.
    */
   router.post('/series/:seriesId/fetch-phone-crops', async (req: Request, res: Response) => {
@@ -1058,6 +1091,8 @@ export function initClipper3Routes(io: Server): Router {
         let failed = 0
 
         try {
+          // Fetch again on execution; a preview or another phone may have changed since scanning.
+          await fetchPhoneCrops(seriesId, chapters.map(c => c.id))
           for (let i = 0; i < chapters.length; i++) {
             const chapter = chapters[i]
             io.emit('clipper3:sync-progress', {
@@ -1099,6 +1134,7 @@ export function initClipper3Routes(io: Server): Router {
               // files for yet, and listing every one of them buries the few
               // that matter.
               if (result.pages.length > 0) results.push(result)
+
             } catch (err) {
               const message = err instanceof Error ? err.message : String(err)
               console.error(`[clipper3] syncing chapter ${chapter.number} failed:`, message)
@@ -1127,7 +1163,7 @@ export function initClipper3Routes(io: Server): Router {
           // so the cut reads exactly what this run wrote.
           let autoCrop: { chapterId: string; chapterNumber: number }[] = []
           try {
-            autoCrop = await queueAutoCrop(io, chapters satisfies CropChapter[])
+            autoCrop = await queueAutoCrop(io, chapters.filter(c => results.some(r => r.chapterId === c.id && (r.imported > 0 || r.replaced > 0))) satisfies CropChapter[])
           } catch (err) {
             console.error('[clipper3] queueing auto crop failed:', err instanceof Error ? err.message : err)
           }

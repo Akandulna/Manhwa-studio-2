@@ -312,8 +312,25 @@ function sweepOldJobs(): void {
   }
 }
 
+/** Cooperatively stop this series only; wait for final cleanup before its files move. */
+export function stopSeriesExports(seriesId: string): boolean {
+  let idle = true
+  for (const rt of jobs.values()) if (rt.job.seriesId === seriesId && !rt.job.finishedAt) { cancelExport2Job(rt.job.id); idle = false }
+  return idle
+}
+
 export function getExport2Job(jobId: string): Export2Job | null {
   return jobs.get(jobId)?.job ?? null
+}
+
+/** Recover the live render when a series/language view is reopened. */
+export function getActiveExport2Job(seriesId: string, language: NarrationLanguage): Export2Job | null {
+  let active: Export2Job | null = null
+  for (const { job } of jobs.values()) {
+    if (job.seriesId !== seriesId || job.language !== language || job.status !== 'running') continue
+    if (!active || job.startedAt >= active.startedAt) active = job
+  }
+  return active
 }
 
 /** Ask a running job to stop; every active FFmpeg child is killed. */
@@ -432,9 +449,9 @@ async function renderSection(
 
     const useFiller = isFiller || imgW === undefined
     if (useFiller) {
-      inputArgs.push('-f', 'lavfi', '-i', `color=c=black:s=${res.w}x${res.h}:r=${fps}:d=${img.duration.toFixed(3)}`)
+      inputArgs.push('-threads', '1', '-f', 'lavfi', '-i', `color=c=black:s=${res.w}x${res.h}:r=${fps}:d=${img.duration.toFixed(3)}`)
     } else {
-      inputArgs.push('-i', img.imagePath!)
+      inputArgs.push('-threads', '1', '-i', img.imagePath!)
     }
 
     const { filter, outLabel } = buildImageFilterChunk({
@@ -457,13 +474,17 @@ async function renderSection(
 
   const filterComplex = `${chunks.join('')}${labels.join('')}concat=n=${labels.length}:v=1:a=0[vout]`
 
-  const args = ['-hide_banner', '-nostats', '-progress', 'pipe:1', ...inputArgs]
+  // A section can contain dozens of crops. FFmpeg's automatic thread pools
+  // multiply across their decoders/scalers and can exhaust OS threads before
+  // frame one. Bound each pool; section workers already provide parallelism.
+  const args = ['-hide_banner', '-nostats', '-progress', 'pipe:1',
+    '-filter_threads', '1', '-filter_complex_threads', '1', ...inputArgs]
 
   if (section.audioPath) {
-    args.push('-i', section.audioPath)
+    args.push('-threads', '1', '-i', section.audioPath)
   } else {
     // A silent section still has to occupy its slot in the finished video.
-    args.push('-f', 'lavfi', '-t', section.audioDuration.toFixed(3), '-i', `anullsrc=r=${AUDIO_SAMPLE_RATE}:cl=stereo`)
+    args.push('-threads', '1', '-f', 'lavfi', '-t', section.audioDuration.toFixed(3), '-i', `anullsrc=r=${AUDIO_SAMPLE_RATE}:cl=stereo`)
   }
   const audioInputIndex = normalized.length
 
@@ -474,6 +495,7 @@ async function renderSection(
     '-r', String(fps),
     ...videoCodecArgs(caps, opts.preset), '-pix_fmt', 'yuv420p',
     '-c:a', 'aac', '-b:a', AUDIO_BITRATE, '-ar', String(AUDIO_SAMPLE_RATE),
+    '-threads:v', '1', '-threads:a', '1',
     '-shortest',
     '-y', outFile
   )

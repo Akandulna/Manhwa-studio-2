@@ -1,3 +1,4 @@
+import { youtubePhoneStatus, type YouTubePhoneActivity } from './youtubePhoneStatus.js'
 import { createLegacyR2S3Client } from './r2S3Client.js'
 import { parseAccountInventory, type PhoneAccountInventory } from './accountInventory.js'
 import { withSeriesActivity, recordPhoneActivity } from './seriesActivity.js'
@@ -1098,6 +1099,7 @@ export interface PhoneOverviewRun extends Omit<PhoneScriptRun, 'series' | 'tabs'
 
 /** Sleeper-Cell's automation settings, and the run it will start by itself (Automation.json on the phone). */
 export interface PhoneAutomation {
+  youtube?: YouTubePhoneActivity
   /** personal: shows over the lock screen, PIN kept. dedicated: dismisses the lock screen, locks after. */
   wakeMode: 'personal' | 'dedicated'
   resumeAfterLimit: boolean
@@ -1315,7 +1317,7 @@ export async function getPhoneOverview(sync: PhoneSyncStatus | null, fresh = fal
 function overviewPhones(overview: PhoneOverview, automations: Map<string, PhoneAutomation | null>): PhoneOverviewPhone[] {
   const busy = (device: string) => ({
     working: overview.working.filter(w => (w.device ?? '') === device).length,
-    runs: overview.runs.filter(r => (r.device ?? '') === device).length
+    runs: overview.runs.filter(r => (r.device ?? '') === device).length + (automations.get(device)?.youtube?.active ? 1 : 0)
   })
   if (!relayConfigured()) {
     if (!overview.reportedAt) return []
@@ -1356,6 +1358,7 @@ function parseAutomation(raw: unknown, seriesFor: (folder: string) => { id: stri
       ? { seriesId: row?.id ?? null, series: row?.title ?? (resume.series as string), tabs: Number(resume.tabs) || 1, at: resume.at as string }
       : null,
     runs: phoneRuns(raw),
+    youtube: youtubePhoneStatus(raw),
     clipper: isObject(raw.clipper)
       ? {
           ai: raw.clipper.ai === 'gemini' ? 'gemini' : raw.clipper.ai === 'aistudio' ? 'aistudio' : 'chatgpt',

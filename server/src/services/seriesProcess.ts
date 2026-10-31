@@ -20,12 +20,15 @@ import { alignmentFileName, scriptFileName } from './narrationLanguage.js'
 import { relayReceipts } from './phoneRelay.js'
 import { createClient, getR2Config } from './r2Service.js'
 import { libraryDeviceId } from './librarySync.js'
+import { chapterStoryLinksCurrent } from './seriesRestartFiles.js'
+import { restartRevision, sameRestart, preservedRestartStages } from './seriesRestartModel.js'
+import { seriesRestartPending } from './seriesRestartGuard.js'
 import { libraryControl } from './libraryControls.js'
 import { readPageReplacement, type PageReplacement } from './chapterPageReplacement.js'
 import { buildProcessSeries, emptyStages, mergeStage, PROCESS_STAGES, stage, processPublishDelay,
   type ChapterStages, type ProcessSnapshot } from './seriesProcessModel.js'
 
-type RemoteChapter = { stages?: Partial<ChapterStages>; pageRevision?: string }
+type RemoteChapter = { stages?: Partial<ChapterStages>; pageRevision?: string; restartRevision?: string }
 interface DeviceProcess { schema: 'device-process/1'; deviceId: string; updatedAt: string; series: { folder: string; chapters: Record<string, RemoteChapter> }[] }
 const phoneProgress = new Map<string, DeviceProcess>()
 let io: Server | null = null
@@ -115,12 +118,13 @@ async function localStages(chapter: any, title: string, timelines: any[]): Promi
   return result
 }
 
-function mergeRemote(stages: ChapterStages, folder: string, name: string, replacement: PageReplacement | null): void {
+function mergeRemote(stages: ChapterStages, folder: string, name: string, replacement: PageReplacement | null, revision: string | null): void {
   for (const receipt of phoneProgress.values()) {
     const chapter = receipt.series.find(s => s.folder === folder)?.chapters?.[name]
     const remote = chapter?.stages
     if (!remote) continue
     for (const key of PROCESS_STAGES) {
+      if (!preservedRestartStages.has(key) && !sameRestart(revision, chapter?.restartRevision)) continue
       if (replacement && ['crop_json', 'review'].includes(key) && chapter?.pageRevision !== replacement.revision) continue
       // Rendering, processing and alignment are desktop facts, never guessed from a phone's script or package.
       if (key.startsWith('export_') || key.startsWith('processed_') || key.startsWith('align_') || key === 'crop') continue
@@ -131,6 +135,7 @@ function mergeRemote(stages: ChapterStages, folder: string, name: string, replac
   // Older phone builds already report scripts, speech counts and crop pages. Keep their progress visible too.
   for (const receipt of relayReceipts<any>('scripts') ?? []) {
     const series = receipt.body.series?.[folder]
+    if (series?.restartPending || !sameRestart(revision, series?.restartRevision)) continue
     for (const language of ['en', 'hi'] as const) {
       const c = (language === 'en' ? series : series?.hi)?.chapters?.[name]
       if (!c) continue
@@ -145,7 +150,9 @@ function mergeRemote(stages: ChapterStages, folder: string, name: string, replac
   const donePages = new Set<string>()
   let total = 0
   for (const receipt of relayReceipts<any>('crops') ?? []) {
-    const c = receipt.body.series?.[folder]?.chapters?.[name]
+    const entry = receipt.body.series?.[folder]
+    if (entry?.restartPending || !sameRestart(revision, entry?.restartRevision)) continue
+    const c = entry?.chapters?.[name]
     if (replacement && c?.pageRevision !== replacement.revision) continue
     total = Math.max(total, Number(c?.total) || 0)
     for (const [page, state] of Object.entries(c?.pages ?? {})) if (state === 'done') donePages.add(page)
@@ -166,26 +173,31 @@ async function scan(): Promise<ProcessSnapshot> {
   for (const row of rows) {
     const control = await libraryControl(path.basename(row.rootFolder))
     if (control.deleted) continue
+    const revision = restartRevision(control)
+    const restarting = revision ? await seriesRestartPending(control.folder) : false
     const declaresRevision = await managerCanDeclareRevision(row.id,row.sourceSite).catch(() => false)
     const [en, hi] = await Promise.all([listExistingExports(row.rootFolder, 'en',new Map(row.chapters.map(c=>[c.number,c.folderPath]))), listExistingExports(row.rootFolder, 'hi',new Map(row.chapters.map(c=>[c.number,c.folderPath])))])
     const chapters = []
     for (const c of row.chapters) {
       const stages = await localStages(c, row.title, timelines.filter(t => t.chapterId === c.id))
       const replacement = await readPageReplacement(c.folderPath)
+      if (revision && !await chapterStoryLinksCurrent(root(), c.folderPath)) stages.crop_json = { state: 'pending', total: c.pageCount ?? 0 }
+      if (restarting) for (const key of PROCESS_STAGES) if (!preservedRestartStages.has(key)) stages[key] = { state: 'pending' }
       const local = structuredClone(stages)
       local.export_en = { state: !c.completedAt && en.has(c.number) ? 'done' : 'pending' }
       local.export_hi = { state: !c.completedAt && hi.has(c.number) ? 'done' : 'pending' }
       const identity = await managerChapterIdentity(c.id).catch(() => null)
       managerChapters.push({ declaresRevision, observedAt: managerObservedAt, sharedSeriesId: identity?.seriesId, sharedChapterId: identity?.chapterId, seriesId: row.id, chapterId: c.id, title: row.title, folder: path.basename(row.rootFolder), name: path.basename(c.folderPath), stages: local, pageRevision: replacement?.revision ?? null, archived: !!c.completedAt })
-      mergeRemote(stages, path.basename(row.rootFolder), path.basename(c.folderPath), replacement)
+      mergeRemote(stages, path.basename(row.rootFolder), path.basename(c.folderPath), replacement, revision)
       const managed=await managedCropBindingCount(c.folderPath)>0
       if(managed) {stages.crop_json=local.crop_json;stages.crop=local.crop;stages.review=local.review}
       stages.export_en = { state: (!managed && c.completedAt) || en.has(c.number) ? 'done' : 'pending' }
       stages.export_hi = { state: (!managed && c.completedAt) || hi.has(c.number) ? 'done' : 'pending' }
-      chapters.push({ id: c.id, name: path.basename(c.folderPath), number: c.number, stages, ...(replacement ? { pageRevision: replacement.revision } : {}) })
+      if (restarting) for (const key of PROCESS_STAGES) if (!preservedRestartStages.has(key)) { stages[key] = { state: 'pending' }; local[key] = { state: 'pending' } }
+      chapters.push({ ...(revision ? { restartRevision: revision } : {}), id: c.id, name: path.basename(c.folderPath), number: c.number, stages, ...(replacement ? { pageRevision: replacement.revision } : {}) })
     }
     series.push(buildProcessSeries({ ...row, rootFolder: path.basename(row.rootFolder) }, chapters,
-      Object.entries(control.parts ?? {}).filter(([, d]) => d.done).map(([n]) => Number(n))))
+      Object.entries(control.parts ?? {}).filter(([, d]) => d.done && d.at > (control.restart?.at ?? 0)).map(([n]) => Number(n))))
   }
   // Flush one scan together so reporter batching does not persist the full projection per chapter.
   for (const chapter of managerChapters) recordLocalManagerChapter(chapter)

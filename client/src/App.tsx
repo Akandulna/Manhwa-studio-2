@@ -10,6 +10,8 @@ import StitchLibrary from '@/pages/stitch/StitchLibrary'
 import StitchWorkspace from '@/pages/stitch/StitchWorkspace'
 import ChapterPreview from '@/pages/ChapterPreview'
 import Settings from '@/pages/Settings'
+import YouTubeLibrary from '@/pages/youtube/YouTubeLibrary'
+import YouTubeWorkspace from '@/pages/youtube/YouTubeWorkspace'
 import { SocketProvider } from '@/lib/socket'
 
 // Module 2: Narration Studio
@@ -66,6 +68,9 @@ function App() {
           <Route path="/editor2" element={<EditorLibrary2 />} />
           <Route path="/editor2/:seriesId" element={<EditorChapterList2 />} />
           <Route path="/editor2/chapter/:chapterId/preview" element={<Editor2Preview />} />
+
+          <Route path="/youtube" element={<YouTubeLibrary />} />
+          <Route path="/youtube/series/:seriesId" element={<YouTubeWorkspace />} />
 
           {/* Sleeper Cells */}
           <Route path="/sleeper-cells" element={<PhoneStatus />} />

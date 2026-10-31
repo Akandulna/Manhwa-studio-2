@@ -17,6 +17,7 @@ let timelines: any[]
 const sent: any[] = []
 const matches = (where: any) => (row: any) => row.chapterId === where.chapterId && row.language === where.language
 const database: any = {
+  setting: { findUnique: async () => null },
   chapter: { findUnique: async () => chapter },
   audioSection: {
     findMany: async ({ where }: any) => sections.filter(matches(where)),

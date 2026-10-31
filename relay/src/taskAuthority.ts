@@ -1,3 +1,4 @@
+import {assertStandaloneRequirements} from './inheritedContext'
 import {initTaskArchive} from './retainedInventory'
 import {parseProductionCandidateHandoff,type ProductionCandidateHandoff,parseHandoffRecord} from '../../server/src/services/accountHandoffProtocol'
 import {recordReleasedRecoveryLineage} from './recoveryLineage'
@@ -504,6 +505,7 @@ export class TaskAuthority {
     if(!this.handoffEnabled()||!r?.enabled||r.paused||r.cancelled||a?.phase!=='verified'||a.result.attempt.id!==attempt.id||a.result.command.id!==command.id||canonicalJson(a.result.command.handoff)!==canonicalJson(h)||attempt.accountId!==c.accountId)throw new TaskConflict('Exact account handoff execution is off or held')
     this.accounts.assertRetainedHandoff(task,attempt)
     assertRecoveryControls(this.sql,h.unit)
+    assertStandaloneRequirements(this.sql,h.unit,c.target)
     if(sharedRecoveryBudget(this.sql,h.unit).pending)throw new TaskConflict('Another original recovery outcome remains pending')
     const review=this.sql.exec<{body:string}>('SELECT body FROM managed_target_context_reviews WHERE id = ?',c.reviewId).toArray()[0],policy=this.sql.exec<{body:string}>("SELECT body FROM managed_account_policies WHERE id = 'crop_json'").toArray()[0]
     if(!review||JSON.parse(review.body).withdrawnAt!==null||!policy||canonicalJson(JSON.parse(policy.body))!==canonicalJson(attempt.accountSelection?.policy)||!attempt.accountSelection?.policy.contextPortable)throw new TaskConflict('Original requirements or pinned account policy changed')

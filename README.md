@@ -53,6 +53,9 @@ Manhwa → English / Hindi → chapters.
   the alignment document is written next to it (`script-timeline.md`, or
   `script-timeline.hi.md` for Hindi).
 - **Align again** re-runs alignment for a chapter that failed or is incomplete.
+  Long voiceovers use overlapping audio windows and a memory-bounded script
+  matcher; the timeout scales with the recording's duration. The script stays
+  intact and timestamps remain relative to the complete section audio.
 - **Reset alignment** opens a section picker, including for chapters already marked aligned. Choose the
   section named by the phone's error and use **Reset & realign section**. Its previous timestamps and
   this language's Editor timeline are backed up under `.alignment-resets/` before being cleared. Only

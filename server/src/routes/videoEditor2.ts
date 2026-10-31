@@ -11,6 +11,7 @@ import {managedChapterImage} from '../services/managedChapterAssets.js'
  */
 
 import { Router, Request, Response } from 'express'
+import { createHash } from 'crypto'
 import { reconcileQuietly } from '../services/diskReconcile.js'
 import { createReadStream, existsSync, statSync } from 'fs'
 import path from 'path'
@@ -31,13 +32,15 @@ import {
 import {
   cancelExport2Job,
   getExport2Job,
+  getActiveExport2Job,
   getExportedChapterIds,
   startBatchExport,
   type Export2Input
 } from '../services/editor2Export.js'
 import { NarrationLanguage, requestLanguage } from '../services/narrationLanguage.js'
-import { fetchPhoneTimelines, getEditorPrompt, saveEditorPrompt, sendEditorPackages } from '../services/phoneEditor.js'
+import { captureEditorTimelineSource, fetchPhoneTimelines, getEditorPrompt, saveEditorPrompt, sendEditorPackages } from '../services/phoneEditor.js'
 import { queueEditorPublish } from '../services/editorAutoPublish.js'
+import { retainEditorTimelineReset } from '../services/editorTimelineReset.js'
 import { editorWorkflowSession } from '../services/editorWorkflowStore.js'
 import { WorkflowReplyError } from '../services/editorWorkflow.js'
 
@@ -230,9 +233,12 @@ export function initVideoEditor2Routes(io: Server): Router {
    */
   router.put('/chapters/:id/timeline', async (req: Request, res: Response) => {
     try {
-      const { json, processedJson, updatedAt } = req.body
+      const { json, processedJson, updatedAt, reset } = req.body
       if (typeof json !== 'string') {
         return res.status(400).json({ error: 'json (string) is required' })
+      }
+      if ((reset !== undefined && typeof reset !== 'boolean') || (reset === true && json.trim())) {
+        return res.status(400).json({ error: 'reset requires an empty timeline' })
       }
       if (processedJson !== null && typeof processedJson !== 'string') {
         return res.status(400).json({ error: 'processedJson must be a string or null' })
@@ -247,14 +253,26 @@ export function initVideoEditor2Routes(io: Server): Router {
       if (existing && existing.updatedAt.getTime() >= updatedAt) {
         return res.json(toStored(existing))
       }
+      const changed = existing?.json !== json || reset === true
+      const sourceSha256 = changed && json.trim() ? await captureEditorTimelineSource(chapterId, language) : null
       const data = { json, processedJson, model: existing?.json.trim() === json.trim() && json.trim() ? existing.model : null, updatedAt: new Date(updatedAt) }
-      const row = await prisma.editor2Timeline.upsert({
-        where: key,
-        create: { chapterId, language, ...data },
-        update: data
+      const outcome = await prisma.$transaction(async tx => {
+        const latest = await tx.editor2Timeline.findUnique({ where: key })
+        if (latest && latest.updatedAt.getTime() >= updatedAt) return { row: latest, publish: false }
+        const saved = await tx.editor2Timeline.upsert({
+          where: key, create: { chapterId, language, ...data }, update: data
+        })
+        if (changed) {
+          await retainEditorTimelineReset(tx.setting, chapterId, language, json.trim() ? undefined : saved.updatedAt.toISOString())
+          const editKey = `editor2-phone-timeline-edit:${chapterId}:${language}`
+          const value = JSON.stringify({ jsonSha256: createHash('sha256').update(json).digest('hex'), madeAt: saved.updatedAt.toISOString(), sourceSha256 })
+          await tx.setting.upsert({ where: { key: editKey }, create: { key: editKey, value }, update: { value } })
+        }
+        return { row: saved, publish: changed }
       })
-      // A cleared paste needs a timeline JSON again, which the phone can make.
-      if (!json.trim()) queueEditorPublish(chapterId)
+      const row = outcome.row
+      // The saved edit and its durable publication intent commit together.
+      if (outcome.publish) queueEditorPublish(chapterId)
       res.json(toStored(row))
     } catch (error) {
       console.error('[videoEditor2] saving stored timeline failed:', error)
@@ -505,6 +523,12 @@ export function initVideoEditor2Routes(io: Server): Router {
       console.error('[videoEditor2] starting batch export failed:', message)
       res.status(500).json({ error: message })
     }
+  })
+
+  /** GET /series/:seriesId/active-export — reconnect after navigation or reload. */
+  router.get('/series/:seriesId/active-export', (req: Request, res: Response) => {
+    res.set('Cache-Control', 'no-store')
+    res.json(getActiveExport2Job(req.params.seriesId, requestLanguage(req)))
   })
 
   /** GET /exports/:jobId — batch export progress. */

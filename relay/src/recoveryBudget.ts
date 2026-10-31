@@ -15,6 +15,7 @@ import {parseSavedImportRecord,savedImportKey,type SavedImportFence} from '../..
 import {parseSavedUploadRecord} from '../../server/src/services/managedSavedUploadRecoveryProtocol'
 export function initRecoveryBudget(sql:TaskSql){
  initRecoveryLineage(sql)
+ sql.exec('CREATE TABLE IF NOT EXISTS managed_inherited_context_reviews (id TEXT PRIMARY KEY, target_key TEXT NOT NULL, body TEXT NOT NULL)')
  sql.exec('CREATE TABLE IF NOT EXISTS managed_account_handoff_episodes (id TEXT PRIMARY KEY, body TEXT NOT NULL)')
  sql.exec('CREATE TABLE IF NOT EXISTS managed_candidate_adoption_episodes (id TEXT PRIMARY KEY, body TEXT NOT NULL)')
  sql.exec('CREATE TABLE IF NOT EXISTS managed_recovery_dispatch (id TEXT PRIMARY KEY, unit_id TEXT NOT NULL, device_id TEXT NOT NULL, body TEXT NOT NULL)')

@@ -1,3 +1,5 @@
+import {queueEditorPublish} from '../services/editorAutoPublish.js'
+import {InheritedContextStudioBridge,inheritedContextTransport} from '../services/inheritedContextBridge.js'
 import {recoveryAllowedWhileDisabled} from '../services/recoveryAdmission.js'
 import {recoveryDispositionTransport} from '../services/recoveryDispositionBridge.js'
 import {parseDispositionIntent,parseDispositionReceipt,parseDispositionSnapshot} from '../services/recoveryDispositionProtocol.js'
@@ -63,7 +65,7 @@ export function initManagedPilotRoutes(db:PrismaClient):Router {
 
  router.use((req,res,next)=>{
   const endpoint=req.path.split('/').at(-1)??''
-  const recovery=new Set(['recovery-disposition','recovery-retained','recovery-dispatch','account-handoff','candidate-adoption','target-context','fallback-preflight','retained-binding','conversation-restoration','correction-recovery','ui-repair','navigation-recovery','account-recovery','upload-recovery','recovery','automation-recovery'])
+  const recovery=new Set(['recovery-disposition','recovery-retained','recovery-dispatch','account-handoff','candidate-adoption','target-context','inherited-context','fallback-preflight','retained-binding','conversation-restoration','correction-recovery','ui-repair','navigation-recovery','account-recovery','upload-recovery','recovery','automation-recovery'])
   if(req.method==='POST'&&recovery.has(endpoint)&&process.env.MANAGED_AUTOMATIC_RECOVERY!=='1'&&!recoveryAllowedWhileDisabled(req.body)){
    res.status(503).json({error:'Automatic recovery is off. Inspection, stop and retained receipt reconciliation remain available.'});return
   }
@@ -144,6 +146,17 @@ export function initManagedPilotRoutes(db:PrismaClient):Router {
   }})
   res.set('Cache-Control','no-store').json(await bridge.perform(req.body))
  }catch{res.status(409).json({error:'Candidate retention approval is unconfirmed. Inspect its original action and budget; no ownership transfer or provider work was authorized.'})}})
+ router.post('/pages/:pageId/inherited-context',async(req,res)=>{try{
+  if(!configured()||!identifier(req.params.pageId)||Object.keys(req.query).length)throw new TaskConflict('Exact configured page required')
+  const bridge=new InheritedContextStudioBridge({call:inheritedContextTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db)),resolve:async()=>{
+   const source=await input(req.params.pageId),binding=await managedCropBinding(source.folder,source.filename),expected=await cropTaskIdentity(source.identity,source.spec)
+   if(!binding||binding.task.id!==expected.taskId||binding.destination!==source.destination)throw new TaskConflict('Current original source binding required')
+   const verified=await resolveManagedCropInput(source.identity,source.spec,source.sourceFile),{task,attempt}=await authority().timeline(expected.taskId)
+   if(!attempt||task.fingerprint!==expected.fingerprint)throw new TaskConflict('Current original attempt required')
+   return {unit:{workspaceId:task.workspaceId,taskId:task.id,attemptId:attempt.id,generation:attempt.generation,fingerprint:task.fingerprint},source:verified.source}
+  }})
+  res.set('Cache-Control','no-store').json(await bridge.perform(req.body))
+ }catch{res.status(409).json({error:'Inherited text review is held or unconfirmed. Inspect its original receipt; provider delivery remains disabled.'})}})
  router.post('/pages/:pageId/target-context',async(req,res)=>{try{
   if(!configured()||!identifier(req.params.pageId)||Object.keys(req.query).length)throw new TaskConflict('Exact configured page required')
   const bridge=new TargetContextStudioBridge({call:targetContextTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db)),packages:targetPackageStatusTransport(process.env.RELAY_URL??'',process.env.MANAGED_WORKSPACE_ID!,process.env.MANAGED_STUDIO_TOKEN!,process.env.RELAY_TOKEN,relayPauseForDatabase(db)),resolve:async()=>{
@@ -314,7 +327,9 @@ export function initManagedPilotRoutes(db:PrismaClient):Router {
   const {source,chapterId}=await reviewPage(req.params.pageId)
   const before=await readManagedCropReview(source.folder,source.filename)
   if(before.taskId!==id)throw new Error('Task changed; reopen review')
-  res.json({...await setManagedCropReview(source.folder,source.filename,expectedRevision,reviewed),chapterId,filename:source.filename})
+  const result=await setManagedCropReview(source.folder,source.filename,expectedRevision,reviewed)
+  if(reviewed)queueEditorPublish(chapterId)
+  res.json({...result,chapterId,filename:source.filename})
  }catch(error){res.status(409).json({error:error instanceof Error?error.message:'Managed review not saved'})}})
  router.post('/pages/:pageId/cut',async(req,res)=>{try{
   const {taskId:id,expectedRevision,...extra}=req.body??{}
@@ -322,7 +337,9 @@ export function initManagedPilotRoutes(db:PrismaClient):Router {
   const {source,chapterId}=await reviewPage(req.params.pageId)
   const before=await readManagedCropReview(source.folder,source.filename)
   if(before.taskId!==id)throw new Error('Task changed; reopen review')
-  res.json({...await cutReviewedManagedCrop(source.folder,source.filename,expectedRevision),chapterId,filename:source.filename})
+  const result=await cutReviewedManagedCrop(source.folder,source.filename,expectedRevision)
+  queueEditorPublish(chapterId)
+  res.json({...result,chapterId,filename:source.filename})
  }catch(error){res.status(409).json({error:error instanceof Error?error.message:'Managed cut unavailable'})}})
  router.get('/pages/:pageId/cut/:filename',async(req,res)=>{try{
   if(Object.keys(req.query).join(',')!=='revision'||typeof req.query.revision!=='string')throw new Error('Exact crop revision required')

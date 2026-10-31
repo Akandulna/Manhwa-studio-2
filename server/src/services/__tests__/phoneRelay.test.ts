@@ -3,6 +3,9 @@ import { WebSocketServer, type WebSocket } from 'ws'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'net'
 
+const local=vi.hoisted(()=>({hub:null as any}))
+vi.mock('../wifiStatus.js',()=>({wifiHub:()=>local.hub}))
+
 // R2 must not be touched while the relay is set up.
 const send = vi.fn(async () => { throw new Error('R2 should not be called') })
 vi.mock('../librarySync.js', () => ({ receiveLibraryManifest: vi.fn(), scheduleLibraryPublish: vi.fn(), isLibraryOrigin: async () => false }))
@@ -85,6 +88,29 @@ const until = async (check: () => boolean) => {
 afterAll(() => { relay.close(); httpRelay.close() })
 
 describe('phone relay', () => {
+  it('routes only Refresh through Wi-Fi with an exact issue-time deadline and same-ID cloud fallback',async()=>{
+    await until(()=>relayStatus().connected)
+    const {sendPhoneRequest}=await import('../phoneRelay.js')
+    const refresh=vi.fn(async(_message:any)=>true)
+    local.hub={status:()=>({devices:['local-phone'],snapshots:[]}),refresh}
+    try {
+      const cloudBefore=received.length
+      const localResult=await sendPhoneRequest(undefined,{device:'local-phone'})
+      const message=refresh.mock.calls[0][0] as any
+      expect(message.id).toBe(localResult.id)
+      expect(message.deadline-Date.parse(message.requestedAt)).toBe(60_000)
+      expect(received).toHaveLength(cloudBefore)
+      await sendPhoneRequest('sync',{device:'local-phone'})
+      await until(()=>received.some(text=>JSON.parse(text).action==='sync'))
+      expect(refresh).toHaveBeenCalledTimes(1)
+      refresh.mockResolvedValue(false)
+      const fallback=await sendPhoneRequest(undefined,{device:'remote-phone'})
+      await until(()=>received.some(text=>JSON.parse(text).id===fallback.id))
+      const failed=refresh.mock.calls[1][0] as any
+      expect(failed.id).toBe(fallback.id)
+    } finally {local.hub=null}
+  })
+
   it('surfaces managed admission rejection without falling back to socket dispatch', async () => {
     await until(() => relayStatus().connected)
     rejectBrowserControl = true

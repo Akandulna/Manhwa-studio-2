@@ -1,3 +1,4 @@
+import { WifiStatusCard } from './WifiStatusCard'
 import { useEffect, useState } from 'react'
 import { r2Api, type R2Config } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -286,6 +287,7 @@ export function CloudflareTab() {
   const [version, setVersion] = useState(0)
   return (
     <>
+      <WifiStatusCard />
       <CloudflareR2Card onSaved={() => setVersion(v => v + 1)} />
       <PhoneRelayCard />
       <R2UsageCard key={version} />

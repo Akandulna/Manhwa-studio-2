@@ -26,6 +26,7 @@ import {readManagedChapterAssets} from '../managedChapterAssets.js'
  * rule; it is what the UI and the crop gate use.
  */
 
+import { hasPendingPageRedo } from './pageRedo.js'
 import fs from 'fs/promises'
 import path from 'path'
 import { getSourceFolderPath, latestOutputTime } from './perImageStore.js'
@@ -190,6 +191,7 @@ export async function readEffectiveReview(folderPath: string): Promise<ChapterRe
     catch { /* A chapter approval cannot replace a missing managed page review. */ }
     return notReviewed()
   }
+  if (await hasPendingPageRedo(folderPath)) return notReviewed()
   const { review, writtenAt } = await readReviewRecord(folderPath)
   return effectiveReview(review, writtenAt, await latestOutputTime(folderPath))
 }
@@ -213,6 +215,7 @@ export async function writeChapterReview(folderPath: string, review: ChapterRevi
 
 /** The desktop's own Mark reviewed / Unmark, from Preview. */
 export async function setDesktopReview(folderPath: string, reviewed: boolean): Promise<ChapterReview> {
+  if (reviewed && await hasPendingPageRedo(folderPath)) throw new Error('Wait for the requested page replacements before marking this chapter reviewed')
   return withUnmanagedCropChapter(folderPath,()=>writeChapterReview(
     folderPath,
     reviewed ? { reviewed: true, reviewedAt: new Date().toISOString(), by: 'desktop' } : notReviewed()

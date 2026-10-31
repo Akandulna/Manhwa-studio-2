@@ -1,3 +1,4 @@
+import { RejectPageButton } from '@/components/clipper3/RejectPageButton'
 /**
  * Clipper3ImageList — Module 3 v3: Image Clipper 3.0
  *
@@ -446,6 +447,9 @@ function Clipper3ChapterImageList() {
                   ) : phonePage && (
                     <PhonePageBadge state={phonePage} device={phoneCrops?.finished[img.filename]?.phone ?? phoneCrops?.device ?? null} finish={phoneCrops?.finished[img.filename]} />
                   )}
+                  {!img.managed && (img.hasPoints || img.hasMetadata || img.redo?.status === 'pending') &&
+                    <RejectPageButton chapterId={chapterId!} filename={img.filename} redo={img.redo} disabled={isCropping}
+                      onChanged={() => { setPreviewIndex(null); void clipper3Api.getImages(chapterId!).then(setData) }} />}
                   {isDone ? (
                     <Badge variant="success" className="flex items-center gap-1 flex-shrink-0">
                       <CheckCircle2 className="h-3 w-3" />
@@ -530,19 +534,9 @@ function Clipper3ChapterImageList() {
 
 /** Whether the whole chapter is reviewed — Crop Sections waits for it. */
 function ChapterReviewBadge({ review }: { review: Clipper3ChapterReview }) {
-  // Cut already, which counts as reviewed — a re-cut needs no new mark.
-  if (review.reviewed && review.cropped) {
-    return (
-      <Badge
-        variant="success"
-        className="flex items-center gap-1 flex-shrink-0"
-        title={['Cropped — counts as reviewed', review.croppedAt ? new Date(review.croppedAt).toLocaleString() : null].filter(Boolean).join(' · ')}
-      >
-        <Scissors className="h-3 w-3" />
-        Cropped
-      </Badge>
-    )
-  }
+  // A previous cut implies review; CropOutputsBadge shows the current output
+  // status without duplicating Cropped or hiding out-of-date crops.
+  if (review.reviewed && review.cropped) return null
   if (review.reviewed) {
     const onPhone = review.by === 'phone'
     return (

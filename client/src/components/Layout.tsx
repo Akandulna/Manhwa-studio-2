@@ -12,6 +12,7 @@ import {
   Mic,
   Target,
   Clapperboard,
+  Youtube,
   Wifi,
   WifiOff,
   PanelLeftClose,
@@ -270,6 +271,15 @@ export default function Layout({ children }: LayoutProps) {
             {renderSectionLabel('VIDEO EDITOR')}
             <nav className="space-y-2">
               {editorModuleItems.map((item) => renderNavLink(item, isInEditor2))}
+            </nav>
+          </div>
+
+          <Separator className="my-2" />
+
+          <div className="px-4 pb-4">
+            {renderSectionLabel('YOUTUBE')}
+            <nav className="space-y-2">
+              {renderNavLink({ icon: <Youtube className="h-5 w-5" />, label: 'YouTube', href: '/youtube' }, location.pathname.startsWith('/youtube'))}
             </nav>
           </div>
 

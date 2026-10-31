@@ -29,7 +29,7 @@ it('persists an empty timeline and clears processing only for the selected chapt
   expect(getProcessedJson('c', 'hi')).toBe('timeline')
   expect(getProcessedJson('other', 'en')).toBe('timeline')
   expect(api.saveStoredTimeline).toHaveBeenCalledWith('c', 'en', {
-    json: '', processedJson: null, updatedAt: expect.any(Number)
+    json: '', processedJson: null, updatedAt: expect.any(Number), reset: true
   })
   await vi.runAllTimersAsync()
   expect(api.saveStoredTimeline).toHaveBeenCalledTimes(1)

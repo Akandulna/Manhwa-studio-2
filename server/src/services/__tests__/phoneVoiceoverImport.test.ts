@@ -38,6 +38,7 @@ let nextId = 0
 const forChapter = (where: any) => (row: any) => row.chapterId === where.chapterId && row.language === where.language
 vi.mock('../../index.js', () => ({
   prisma: {
+    setting: { findUnique: async () => null },
     series: {
       findUnique: async () => ({
         rootFolder: 'Solo Hero',
@@ -75,8 +76,8 @@ Object.assign(process.env, { R2_ACCOUNT_ID: 'a', R2_ACCESS_KEY_ID: 'k', R2_SECRE
 const { fetchPhoneVoiceover, previewPhoneVoiceover, parseVoiceoverZip, zipChapter, FETCH_MARKER } = await import('../phoneVoiceoverImport.js')
 const { readZip } = await import('../../utils/zipReader.js')
 
-async function zipOf(entries: Record<string, string | Buffer>): Promise<Buffer> {
-  const archive = archiver('zip', { store: true })
+async function zipOf(entries: Record<string, string | Buffer>, store = true): Promise<Buffer> {
+  const archive = archiver('zip', { store })
   const out = new PassThrough()
   const chunks: Buffer[] = []
   out.on('data', c => chunks.push(c))
@@ -89,14 +90,13 @@ async function zipOf(entries: Record<string, string | Buffer>): Promise<Buffer> 
 }
 
 /** Half a second of a 16-bit mono 24 kHz WAV, as AI Studio makes them; [tone] tells files apart. */
-function wav(tone = 0): Buffer {
-  const samples = 12_000
+function wav(tone = 0, samples = 12_000): Buffer {
   const b = Buffer.alloc(44 + samples * 2)
   b.write('RIFF', 0); b.writeUInt32LE(36 + samples * 2, 4); b.write('WAVE', 8)
   b.write('fmt ', 12); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22)
   b.writeUInt32LE(24_000, 24); b.writeUInt32LE(48_000, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34)
   b.write('data', 36); b.writeUInt32LE(samples * 2, 40)
-  for (let i = 0; i < samples; i++) b.writeInt16LE(tone ? Math.round(Math.sin(i / tone) * 3000) : 0, 44 + i * 2)
+  if (tone) for (let i = 0; i < samples; i++) b.writeInt16LE(Math.round(Math.sin(i / tone) * 3000), 44 + i * 2)
   return b
 }
 
@@ -178,6 +178,28 @@ describe('zipChapter', () => {
 })
 
 describe('fetchPhoneVoiceover in Hinglish', () => {
+  it('imports a full-chapter WAV larger than 32 MiB and skips it on the next fetch', async () => {
+    // The largest WAV rejected in the reported screenshot, compressed as on the phone.
+    const bytes = 37_559_084
+    const audio = wav(0, (bytes - 44) / 2)
+    const key = 'voiceover/Solo Hero/Chapter 009.hi.zip'
+    zips.set(key, await zipOf({
+      'Solo Hero/Chapter 009/voiceover.json': manifest(['पूरा अध्याय।'], { language: 'hi' }),
+      'Solo Hero/Chapter 009/section_01.wav': audio
+    }, false))
+    etags.set(key, 'long-hi9')
+
+    const result = await fetchPhoneVoiceover('long-hi', ['c9'], null, 'hi')
+    expect(result.failed).toEqual([])
+    expect(result.fetched).toMatchObject([{ chapterId: 'c9', sections: 1 }])
+    expect(files).toMatchObject([{ language: 'hi', bytes }])
+    expect(aligned).toEqual(sections.map(s => s.id))
+    expect((await fs.readFile(path.join(audioDir('Chapter 009', 'audio_hi'), 'section_01.wav'))).equals(audio)).toBe(true)
+    send.mockClear()
+    expect(await fetchPhoneVoiceover('long-hi', ['c9'], null, 'hi')).toMatchObject({ fetched: [], failed: [], upToDate: 1 })
+    expect(send.mock.calls.map(([c]) => c.constructor.name)).toEqual(['ListObjectsV2Command'])
+  })
+
   it('fetches only <Chapter>.hi.zip into the Hindi sections and audio_hi/, and English never sees it', async () => {
     zips.set('voiceover/Solo Hero/Chapter 009.zip', await chapterZip('Chapter 009', ['One.']))
     etags.set('voiceover/Solo Hero/Chapter 009.zip', 'en9')

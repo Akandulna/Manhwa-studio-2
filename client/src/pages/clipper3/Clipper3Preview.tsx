@@ -1,3 +1,4 @@
+import { RejectPageButton } from '@/components/clipper3/RejectPageButton'
 import ManagedCropReview from '../sleeper/ManagedCropReview'
 /**
  * Clipper3Preview — Module 3 v3: Image Clipper 3.0
@@ -137,6 +138,7 @@ function Clipper3ChapterPreview() {
   const navigate = useNavigate()
   const { toast } = useToast()
   const [savingReview, setSavingReview] = useState(false)
+  const [redoVersion, setRedoVersion] = useState(0)
 
   const [data, setData] = useState<Clipper3ChapterImages | null>(null)
   const [session, setSession] = useState<CropReviewSession | null>(null)
@@ -193,7 +195,7 @@ function Clipper3ChapterPreview() {
       .finally(() => { if (!cancelled) setLoading(false) })
 
     return () => { cancelled = true }
-  }, [chapterId])
+  }, [chapterId, redoVersion])
 
   // Highlight whichever card is nearest the top of the viewport as the user
   // scrolls by hand, so the nav panel reflects where they actually are rather
@@ -434,7 +436,10 @@ function Clipper3ChapterPreview() {
               <p className="mb-3 text-sm text-muted-foreground">Review the proposed crops below. Use Adjust boundaries / flag feedback to save corrections before approving any cuts.</p>
               {img.managed.pageId?<ManagedCropReview pageId={img.managed.pageId} taskId={img.managed.taskId} onChanged={()=>{void clipper3Api.getChapterReview(chapterId!).then(review=>setData(previous=>previous?{...previous,review}:previous))}}/>:<p>Sync the exact source page before reviewing this managed task.</p>}
             </div>
-            if (!file) return null
+            if (!file) return img.redo?.status === 'pending' ? <div key={img.filename} className="w-full max-w-3xl rounded border bg-card p-4">
+              <p className="mb-2 font-mono text-sm">#{index + 1} · {img.filename}</p>
+              <RejectPageButton chapterId={chapterId!} filename={img.filename} redo={img.redo} onChanged={() => setRedoVersion(v => v + 1)} />
+            </div> : null
 
             return (
               <div
@@ -462,7 +467,11 @@ function Clipper3ChapterPreview() {
                   {file.crops.length > 0 ? ` · ${file.crops.length} crop${file.crops.length === 1 ? '' : 's'}` : ''}
                 </span>
 
-                <div className="pt-8">
+                <div className="flex justify-end px-2 pt-8">
+                  <RejectPageButton chapterId={chapterId!} filename={img.filename} redo={img.redo}
+                    disabled={unsaved || draggingFile !== null} onChanged={() => setRedoVersion(v => v + 1)} />
+                </div>
+                <div className="pt-2">
                   <CropPointerEditor
                     chapterId={chapterId!}
                     filename={img.filename}

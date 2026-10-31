@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { completionGroup, librarySections, sectionTitle } from '@/lib/librarySections'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
 import { Link } from 'react-router-dom'
 import { BookOpen, CheckCircle2, ChevronDown, Circle, Loader2, MoreVertical, Play, Trash2 } from 'lucide-react'
 import { SeriesAutomationDialog } from './SeriesAutomationDialog'
@@ -54,10 +56,10 @@ function Part({ part, active, onMark }: { part: ProcessPart; active: boolean; on
   </details>
 }
 
-function SeriesRow({ series, tracker, phoneSync, onDelete, onMarkPart, onRunAutomation, automationJob }: { series: Series; tracker?: ProcessSeries; phoneSync: PhoneSyncStatus | null; onRunAutomation: (series: Series) => void; automationJob?: ProductionJob } & Actions) {
+function SeriesRow({ series, tracker, phoneSync, onDelete, onMarkPart, onRunAutomation, automationJob, expanded }: { expanded: boolean; series: Series; tracker?: ProcessSeries; phoneSync: PhoneSyncStatus | null; onRunAutomation: (series: Series) => void; automationJob?: ProductionJob } & Actions) {
   const current = tracker?.parts.find(p => !p.complete) ?? tracker?.parts.at(-1)
   const exported = tracker?.stages
-  return <details className="group/series border-t first:border-t-0">
+  return <details className="group/series border-t first:border-t-0" open={expanded || undefined}>
     <summary className="flex cursor-pointer list-none items-center gap-3 p-4 hover:bg-accent/40 [&::-webkit-details-marker]:hidden">
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10"><BookOpen className="h-5 w-5 text-primary/60" /></div>
       <div className="min-w-0 flex-1">
@@ -94,8 +96,26 @@ function SeriesRow({ series, tracker, phoneSync, onDelete, onMarkPart, onRunAuto
 export function SeriesProcessTracker({ series, progress, phoneSync, ...actions }: { series: Series[]; progress: ProcessSnapshot | null; phoneSync: PhoneSyncStatus | null } & Actions) {
   const [automationSeries, setAutomationSeries] = useState<Series | null>(null)
   const jobs = useProductionJobs()
+  const [overrides, setOverrides] = useState<Record<number, boolean>>({})
   const byId = new Map(progress?.series.map(s => [s.seriesId, s]))
-  return <><div className="overflow-hidden rounded-xl border bg-card shadow-sm">{series.map(s => <SeriesRow key={s.id} series={s} tracker={byId.get(s.id)} phoneSync={phoneSync} onRunAutomation={setAutomationSeries} automationJob={jobs.get(s.id)} {...actions} />)}</div>
+  const sections = librarySections(series, byId, new Set([...jobs.values()].filter(job => job.status === 'running').map(job => job.seriesId)))
+  const latestId = series[0]?.id
+  const latestGroup = completionGroup(byId.get(latestId))
+  return <><div className="space-y-4">{sections.map(section => {
+    const open = overrides[section.completed] ?? section.completed === latestGroup
+    return <Collapsible key={section.completed} open={open} onOpenChange={value => setOverrides(previous => ({ ...previous, [section.completed]: value }))} className="overflow-hidden rounded-xl border bg-card shadow-sm">
+      <CollapsibleTrigger asChild>
+        <button type="button" className="flex w-full items-center gap-3 p-4 text-left hover:bg-accent/40">
+          <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${open ? '' : '-rotate-90'}`} />
+          <span className="flex-1 font-semibold">{sectionTitle(section.completed)}</span>
+          <span className="text-xs text-muted-foreground">{section.series.length} series · {section.processing ? `${section.processing} processing` : 'No active processing'}</span>
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="border-t">
+        {section.series.map(s => <SeriesRow key={s.id} series={s} expanded={s.id === latestId} tracker={byId.get(s.id)} phoneSync={phoneSync} onRunAutomation={setAutomationSeries} automationJob={jobs.get(s.id)} {...actions} />)}
+      </CollapsibleContent>
+    </Collapsible>
+  })}</div>
     {automationSeries && <SeriesAutomationDialog series={automationSeries} onClose={() => setAutomationSeries(null)} />}
   </>
 }

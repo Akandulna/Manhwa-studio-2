@@ -33,7 +33,7 @@ import {
   type PhoneVoiceoverFetch
 } from '../services/phoneVoiceoverImport.js'
 import { getR2Config } from '../services/r2Service.js'
-import { alignChapter, alignSection, checkAlignmentAvailable, pendingAlignments } from '../services/alignment/alignmentService.js'
+import { alignChapter, alignSection, alignmentProgress, checkAlignmentAvailable, pendingAlignments } from '../services/alignment/alignmentService.js'
 import { resetSectionAlignment } from '../services/alignment/resetAlignment.js'
 import { hasAlignmentDocument, writeAlignmentDocument } from '../services/alignment/alignmentDocument.js'
 import { NarrationLanguage, requestLanguage } from '../services/narrationLanguage.js'
@@ -238,6 +238,7 @@ router.get('/series/:id', async (req: Request, res: Response) => {
         hasScript: SCRIPT_WRITTEN.includes(c.scripts[0]?.status ?? ''),
         ...sections,
         aligning: pendingAlignments(c.id, language) > 0 || alignRuns.has(`${c.id}:${language}`),
+        alignmentProgress: alignmentProgress(c.id, language),
         documentWritten,
         fetchedAt
       }

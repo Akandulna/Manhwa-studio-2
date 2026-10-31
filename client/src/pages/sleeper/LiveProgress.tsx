@@ -160,6 +160,7 @@ function PhoneProgress({ phone, overview, several, averageTook, now }: {
             <AlertTriangle className="h-3.5 w-3.5" /> Sleeper-Cell is closed, so this is its last report ({ago(phone.reportedAt, now)}).
           </p>
         )}
+        {activity.youtube && <div className="space-y-2 rounded-lg border bg-muted/20 p-3"><p role="status" className="text-sm">{activity.youtube.paused ? 'Paused · ' : ''}{activity.youtube.step}</p><Link to={activity.youtube.seriesId ? `/youtube/${encodeURIComponent(activity.youtube.seriesId)}` : '/youtube'} className="text-sm text-primary hover:underline">Open YouTube workspace</Link></div>}
         {resume && (
           <p className="flex items-center gap-1.5 text-sm">
             <Clock className="h-4 w-4 flex-shrink-0 text-amber-500" />
@@ -247,7 +248,7 @@ export default function LiveProgress() {
   const relay = usePhoneRelay()
   const overview = receipt.status
   const orderedSeries = useSeriesOrder(overview?.series ?? [])
-  const busy = (overview?.working.length ?? 0) + (overview?.runs.length ?? 0) > 0
+  const busy = (overview?.working.length ?? 0) + (overview?.runs.length ?? 0) > 0 || !!overview?.phones?.some(p => p.automation?.youtube?.active)
   const now = useNow(busy)
   const [showAllRecent, setShowAllRecent] = useState(false)
   const phones = useMemo(() => phoneList(overview, relay), [overview, relay])

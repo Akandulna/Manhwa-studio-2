@@ -11,6 +11,8 @@ const zips = new Map<string, Buffer>()
 const etags = new Map<string, string>()
 /** Objects the desktop wrote (cropped markers), by key. */
 const puts = new Map<string, string>()
+/** Keys the desktop deleted (reviewed markers no longer true). */
+const deletes: string[] = []
 const send = vi.fn(async (command: { constructor: { name: string }; input: { Key?: string; Prefix?: string; Body?: unknown } }) => {
   if (command.constructor.name === 'ListObjectsV2Command') {
     const prefix = command.input.Prefix!
@@ -26,6 +28,10 @@ const send = vi.fn(async (command: { constructor: { name: string }; input: { Key
     puts.set(command.input.Key!, String(command.input.Body))
     return { ETag: '"put"' }
   }
+  if (command.constructor.name === 'DeleteObjectCommand') {
+    deletes.push(command.input.Key!)
+    return {}
+  }
   throw new Error(`unexpected ${command.constructor.name}`)
 })
 
@@ -36,6 +42,7 @@ vi.mock('@aws-sdk/client-s3', async importOriginal => {
 vi.mock('../r2Usage.js', () => ({ FREE_PLAN: {}, attachUsageCounter: () => {}, getMonthUsage: () => ({}), monthKey: () => '' }))
 vi.mock('../../index.js', () => ({
   prisma: {
+    setting: { findUnique: async () => null },
     series: {
       findUnique: async () => ({
         rootFolder: 'Solo Hero',
@@ -50,6 +57,8 @@ vi.mock('../../index.js', () => ({
 }))
 
 Object.assign(process.env, { R2_ACCOUNT_ID: 'a', R2_ACCESS_KEY_ID: 'k', R2_SECRET_ACCESS_KEY: 's', R2_BUCKET: 'b', R2_PREFIX: 'Manhwa' })
+const queuedEditor = vi.hoisted(() => vi.fn())
+vi.mock('../editorAutoPublish.js', () => ({ queueEditorPublish: queuedEditor }))
 const { fetchPhoneCrops, unpackChapterZip, FETCH_MARKER } = await import('../phoneCropImport.js')
 const { readZip } = await import('../../utils/zipReader.js')
 
@@ -88,6 +97,7 @@ beforeEach(async () => {
   zips.clear()
   etags.clear()
   puts.clear()
+  deletes.length = 0
   send.mockClear()
 })
 
@@ -223,6 +233,31 @@ describe('fetchPhoneCrops', () => {
     expect(after.applied).toBeUndefined()
   })
 
+  it.each([false, true])('keeps desktop review byte-identical when fetching phone reviewed=%s', async reviewed => {
+    const { setDesktopReview } = await import('../clipper3/chapterReview.js')
+    const key = 'crops/Solo Hero/Chapter 009.zip'
+    const reviewFile = path.join(root, 'Solo Hero', 'Chapter 009', '.clipper3-review.json')
+    await setDesktopReview('Solo Hero/Chapter 009', true)
+    const before = await fs.readFile(reviewFile, 'utf8')
+    zips.set(key, await chapterZip('Chapter 009', [1], 'v2', { reviewed, reviewed_at: '2026-10-28T10:00:00Z' }))
+    etags.set(key, 'new-phone-zip')
+    expect((await fetchPhoneCrops('s1')).failed).toEqual([])
+    expect(await fs.readFile(reviewFile, 'utf8')).toBe(before)
+    expect(await fs.readFile(path.join(processed('Chapter 009'), 'page_001', 'crop-pointers-ch009-p001.json'), 'utf8')).toBe('{"tag":"v2"}')
+  })
+
+  it('keeps an existing cut reviewed when an unreviewed ZIP is fetched', async () => {
+    const { readEffectiveReview } = await import('../clipper3/chapterReview.js')
+    const dir = path.join(root, 'Solo Hero', 'Chapter 009', 'crops3')
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(path.join(dir, 'solo_hero_page_001_01.png'), 'approved cut')
+    const key = 'crops/Solo Hero/Chapter 009.zip'
+    zips.set(key, await chapterZip('Chapter 009', [1]))
+    etags.set(key, 'old-geometry')
+    expect((await fetchPhoneCrops('s1')).failed).toEqual([])
+    expect(await readEffectiveReview('Solo Hero/Chapter 009')).toMatchObject({ reviewed: true, cropped: true })
+  })
+
   it('backfills a cropped marker beside the zips for each cut chapter R2 has none for', async () => {
     zips.set('crops/Solo Hero/Chapter 009.zip', await chapterZip('Chapter 009', [1]))
     etags.set('crops/Solo Hero/Chapter 009.zip', 'e9')
@@ -258,6 +293,43 @@ describe('fetchPhoneCrops', () => {
     })
   })
 
+  it('puts reviewed markers in step with the desktop\'s own reviews', async () => {
+    const { writeChapterReview } = await import('../clipper3/chapterReview.js')
+    zips.set('crops/Solo Hero/Chapter 009.zip', await chapterZip('Chapter 009', [1]))
+    etags.set('crops/Solo Hero/Chapter 009.zip', 'e9')
+    zips.set('crops/Solo Hero/Chapter 010.zip', await chapterZip('Chapter 010', [1]))
+    etags.set('crops/Solo Hero/Chapter 010.zip', 'e10')
+    // Chapter 009 was unmarked on the desktop after its marker went up; Chapter 010 is reviewed here.
+    zips.set('crops/Solo Hero/Chapter 009.reviewed.json', Buffer.from('{}'))
+    etags.set('crops/Solo Hero/Chapter 009.reviewed.json', 'r9')
+    await writeChapterReview('Solo Hero/Chapter 010', { reviewed: true, reviewedAt: '2026-10-28T01:50:26.864Z', by: 'desktop' })
+
+    const result = await fetchPhoneCrops('s1')
+    expect(result.reviewedMarkers).toEqual({ published: ['Chapter 010'], removed: ['Chapter 009'], failed: [] })
+    expect(deletes).toEqual(['crops/Solo Hero/Chapter 009.reviewed.json'])
+    expect([...puts.keys()]).toEqual(['crops/Solo Hero/Chapter 010.reviewed.json'])
+    expect(JSON.parse(puts.get('crops/Solo Hero/Chapter 010.reviewed.json')!)).toEqual({
+      schema: 'manhwa-studio-reviewed/1',
+      series: 'Solo Hero',
+      chapter: 'Chapter 010',
+      reviewed: true,
+      reviewed_at: '2026-10-28T01:50:26.864Z',
+      by: 'desktop'
+    })
+    // The fetched clipping-phone zip did not reset the desktop's review.
+    const { readChapterReview } = await import('../clipper3/chapterReview.js')
+    expect(await readChapterReview('Solo Hero/Chapter 010')).toMatchObject({ reviewed: true, by: 'desktop' })
+
+    // Once in step, a second Sync json writes and removes nothing.
+    puts.clear()
+    deletes.length = 0
+    zips.delete('crops/Solo Hero/Chapter 009.reviewed.json')
+    zips.set('crops/Solo Hero/Chapter 010.reviewed.json', Buffer.from('{}'))
+    etags.set('crops/Solo Hero/Chapter 010.reviewed.json', 'r10')
+    expect((await fetchPhoneCrops('s1')).reviewedMarkers).toEqual({ published: [], removed: [], failed: [] })
+    expect(puts.size + deletes.length).toBe(0)
+  })
+
   it('finds zips under our prefix as well, and narrows to the chosen chapters', async () => {
     zips.set('Manhwa/crops/Solo Hero/Chapter 009.zip', await chapterZip('Chapter 009', [1]))
     etags.set('Manhwa/crops/Solo Hero/Chapter 009.zip', 'a')
@@ -266,5 +338,71 @@ describe('fetchPhoneCrops', () => {
     const result = await fetchPhoneCrops('s2', ['c10'])
     expect(result.found).toBe(2)
     expect(result.fetched.map(c => c.chapterId)).toEqual(['c10'])
+  })
+})
+
+
+describe('verified story-link returns', () => {
+  async function fixture(change: 'none' | 'geometry' | 'description' | 'script' = 'none', reviewed = false) {
+    const { writeImagePoints, writeImageMetadata } = await import('../clipper3/perImageStore.js')
+    const { setDesktopReview } = await import('../clipper3/chapterReview.js')
+    const { sha256 } = await import('../clipper3/studioCropAuthorityModel.js')
+    const folder = 'Solo Hero/Chapter 009', dir = path.join(root, folder), script = 'The hero arrives.'
+    await fs.mkdir(dir, { recursive: true })
+    const source = await sharp({ create: { width: 10, height: 20, channels: 3, background: '#fff' } }).png().toBuffer()
+    await fs.writeFile(path.join(dir, 'page_001.png'), source)
+    await fs.writeFile(path.join(dir, 'script.md'), script)
+    const points = { format: 'four-point-crop', version: '1.0', coordinateSystem: 'normalized', image: { filename: 'page_001.png', width: 10, height: 20 },
+      crops: [{ id: 'crop-01', reason: 'panel', crop: { mode: 'rectangle' as const, points: [{ id: 'P1', x: 0, y: 0 }, { id: 'P2', x: 1, y: 0 }, { id: 'P3', x: 1, y: 1 }, { id: 'P4', x: 0, y: 1 }] } }] }
+    const crop = { id: 'crop-01', exportedFilename: 'solo_hero_page_001_01_panel.png', description: 'The hero at a gate.' }
+    await writeImagePoints(folder, 'page_001.png', points)
+    await writeImageMetadata(folder, 'page_001.png', JSON.stringify({ crops: [crop] }))
+    await setDesktopReview(folder, true)
+    const linked = { storyLinking: { schema_version: 'crop-script-links/1', scriptSha256: sha256(change === 'script' ? 'old' : script), sourceSha256: sha256(source), inputRevision: 'b'.repeat(64), scriptSegments: [{ id: 'P0001', text: script }] },
+      crops: [{ ...crop, description: change === 'description' ? 'Different visuals' : crop.description, scriptRefs: ['P0001'], matchType: 'direct', storyContext: 'He arrives.', evidence: 'He is visible.', reviewReason: '' }] }
+    if (change === 'geometry') points.crops[0].crop.points[0].y = 0.1
+    const key = 'crops/Solo Hero/Chapter 009.zip'
+    zips.set(key, await zipOf({ 'Solo Hero/Chapter 009/chapter.json': JSON.stringify(reviewed ? { review: { reviewed: true } } : {}),
+      'Solo Hero/Chapter 009/page_001/crop-pointers-ch009-p001.json': JSON.stringify(points),
+      'Solo Hero/Chapter 009/page_001/crop-metadata-ch009-p001.json': JSON.stringify(linked) }))
+    etags.set(key, 'linked')
+    queuedEditor.mockClear()
+    return { folder, dir }
+  }
+  it('attaches exact current links on fetch, preserves approval and publishes without another cut', async () => {
+    const { folder, dir } = await fixture()
+    const before = await fs.readFile(path.join(dir, '.clipper3-review.json'), 'utf8')
+    expect((await fetchPhoneCrops('s1')).failed).toEqual([])
+    const meta = JSON.parse(await fs.readFile(path.join(dir, 'crop_metadata3/page_001.txt'), 'utf8'))
+    expect(meta.storyLinking.schema_version).toBe('crop-script-links/1')
+    expect(await fs.readFile(path.join(dir, '.clipper3-review.json'), 'utf8')).toBe(before)
+    expect(queuedEditor).toHaveBeenCalledWith('c9')
+    queuedEditor.mockClear()
+    expect((await fetchPhoneCrops('s1')).upToDate).toBe(1)
+    expect(queuedEditor).not.toHaveBeenCalled()
+  })
+  it('also attaches exact returns carrying an explicit phone review', async () => {
+    const { dir } = await fixture('none', true)
+    expect((await fetchPhoneCrops('s1')).failed).toEqual([])
+    expect(JSON.parse(await fs.readFile(path.join(dir, 'crop_metadata3/page_001.txt'), 'utf8')).storyLinking).toBeDefined()
+    expect(queuedEditor).toHaveBeenCalledWith('c9')
+  })
+  it.each(['geometry', 'description', 'script'] as const)('leaves a %s mismatch staged without attaching or publishing', async change => {
+    const { dir } = await fixture(change)
+    expect((await fetchPhoneCrops('s1')).failed).toEqual([])
+    expect(JSON.parse(await fs.readFile(path.join(dir, 'crop_metadata3/page_001.txt'), 'utf8')).storyLinking).toBeUndefined()
+    expect(queuedEditor).not.toHaveBeenCalled()
+  })
+  it('catches up staged links even when the cloud ETag was already remembered', async () => {
+    const { dir } = await fixture()
+    // First fetch leaves stale-script metadata staged; a later local script correction makes the same upload valid.
+    const scriptFile = path.join(dir, 'script.md')
+    await fs.writeFile(scriptFile, 'temporary script')
+    await fetchPhoneCrops('s1')
+    await fs.writeFile(scriptFile, 'The hero arrives.')
+    queuedEditor.mockClear()
+    expect((await fetchPhoneCrops('s1')).upToDate).toBe(1)
+    expect(JSON.parse(await fs.readFile(path.join(dir, 'crop_metadata3/page_001.txt'), 'utf8')).storyLinking).toBeDefined()
+    expect(queuedEditor).toHaveBeenCalledWith('c9')
   })
 })

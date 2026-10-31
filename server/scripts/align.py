@@ -5,7 +5,7 @@ Forced Alignment Sidecar Script
 Aligns KNOWN script text against its audio using WhisperX's wav2vec2 aligner,
 producing per-word timings. Because the text is already known, nothing is
 transcribed and nothing is guessed - the aligner only decides *when* each
-word is spoken. English only for now.
+word is spoken. Supports English and Hindi.
 
 Usage:
   python align.py --check        # Check if dependencies are available
@@ -33,6 +33,28 @@ responsible for deciding what to do with them.
 import sys
 import json
 import argparse
+import os
+import threading
+import time
+from contextlib import redirect_stdout
+from alignment_progress import progress_reporter
+
+PARENT_PID = os.getppid()
+
+
+def watch_parent():
+    """Release model memory if the server exits or its dev watcher restarts."""
+    if os.name != "posix":
+        return
+
+    def monitor():
+        while True:
+            time.sleep(2)
+            if os.getppid() != PARENT_PID:
+                # The main thread may be inside a long native model operation.
+                os._exit(1)
+
+    threading.Thread(target=monitor, daemon=True).start()
 
 WHISPERX_AVAILABLE = False
 IMPORT_ERROR = ""
@@ -70,18 +92,26 @@ def align(payload):
     if not text:
         raise ValueError("text is required")
 
-    # CPU on Apple Silicon: MPS is not reliably supported by the aligner's
-    # ops, and int8 keeps the memory footprint small on an 8GB machine.
+    # CPU on Apple Silicon: MPS is not reliably supported by the aligner's ops.
     device = "cpu"
-    compute_type = "int8"
+    progress = progress_reporter()
+    progress(0, "loading")
 
     audio = whisperx.load_audio(audio_path)
     duration = len(audio) / 16000.0
+    progress(2, "loading")
 
     model_a, metadata = whisperx.load_align_model(
         language_code=language,
         device=device,
     )
+    progress(5, "audio")
+
+    if duration > 30:
+        from long_alignment import align_long
+        words = align_long(audio, text, model_a, metadata, device, progress=progress)
+        progress(99, "saving")
+        return {"words": words, "durationSec": duration}
 
     # A single segment spanning the whole file: we are aligning the entire
     # known text, not transcribing into separate utterances.
@@ -94,6 +124,7 @@ def align(payload):
         audio,
         device,
         return_char_alignments=False,
+        progress_callback=lambda percent: progress(5 + 93 * percent / 100, "matching"),
     )
 
     words = []
@@ -110,7 +141,8 @@ def align(payload):
                 "end": float(end) if end is not None else None,
             })
 
-    return {"words": words, "durationSec": duration, "computeType": compute_type}
+    progress(99, "saving")
+    return {"words": words, "durationSec": duration}
 
 
 def main():
@@ -137,7 +169,9 @@ def main():
         sys.exit(1)
 
     try:
-        result = align(payload)
+        # Model/library status messages must not corrupt the JSON protocol.
+        with redirect_stdout(sys.stderr):
+            result = align(payload)
     except Exception as e:  # surfaced verbatim to the Node caller
         sys.stderr.write(f"{type(e).__name__}: {e}\n")
         sys.exit(1)
@@ -147,4 +181,5 @@ def main():
 
 
 if __name__ == "__main__":
+    watch_parent()
     main()

@@ -32,6 +32,7 @@ async function request(url: string, body = {}, status = 200, method = 'POST') {
   const response = Object.assign(new EventEmitter(), { statusCode: status })
   const next = vi.fn()
   seriesActivityMiddleware(db as never)({ method, path: url, body } as never, response as never, next)
+  await new Promise<void>(resolve => setImmediate(resolve))
   expect(next).toHaveBeenCalledOnce()
   response.emit('finish')
   await new Promise<void>(resolve => setImmediate(resolve))

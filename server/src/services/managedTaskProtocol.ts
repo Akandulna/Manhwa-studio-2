@@ -180,6 +180,6 @@ export function parseManagedOperation(value:unknown):ManagedOperation {
 
 /** Legacy controls cannot mutate an enrolled device's browser or run state. */
 export const LEGACY_BROWSER_ACTIONS = new Set([
-  'clipper_start', 'narration_start', 'editor_start', 'voiceover_start',
+  'clipper_start', 'narration_start', 'editor_start', 'voiceover_start', 'youtube_start',
   'clipper_stop', 'run_stop', 'run_finish', 'profile_select', 'chatgpt_options',
 ])

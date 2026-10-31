@@ -1,3 +1,4 @@
+import { sha256 } from '../studioCropAuthorityModel.js'
 /**
  * Tests for the chapter review that gates cropping:
  * - parsing the Master phone's `review` object out of chapter.json
@@ -154,6 +155,32 @@ describe('syncChapterProcessed after a phone review', () => {
     await dropOff('page_002', JSON.stringify({ crops: [crop('c1', 0.5), crop('c2', 0.9)] }), JSON.stringify(metadata('page_002', ['c1', 'c2'])))
     await writeMarker({ etag: 'draft', reviewed: false })
     expect((await sync()).imported).toBe(2)
+  })
+
+  it('refreshes restarted story links without touching crop geometry or rendered images', async () => {
+    const points = getPointsFilePathFor(FOLDER, 'page_001.png')
+    const before = await fs.readFile(points, 'utf8')
+    const output = path.join(getOutputDir(FOLDER), 'keep.png')
+    await fs.mkdir(path.dirname(output), { recursive: true }); await fs.writeFile(output, 'keep original image')
+    const script = 'The hero arrives.\nNew event'
+    await fs.writeFile(path.join(root, FOLDER, 'script.md'), script)
+    for (const image of IMAGES) await fs.writeFile(path.join(root, FOLDER, image.filename), 'source')
+    const linked = { ...metadata('page_001', ['c1']), storyLinking: { schema_version: 'crop-script-links/1',
+      scriptSha256: sha256(script), sourceSha256: sha256('source'), inputRevision: 'b'.repeat(64),
+      scriptSegments: [{ id: 'P0002', text: 'New event' }] } }
+    Object.assign(linked.crops[0], { scriptRefs: ['P0002'], storyContext: 'New event', matchType: 'direct', evidence: 'A panel.', reviewReason: '' })
+    await dropOff('page_001', JSON.stringify({ crops: [crop('c1', 0.5)] }), JSON.stringify(linked))
+    await writeMarker({ restartRevision: '123-nord', reviewed: false })
+    expect((await sync()).replaced).toBe(1)
+    expect(await fs.readFile(points, 'utf8')).toBe(before)
+    expect(await fs.readFile(output, 'utf8')).toBe('keep original image')
+    expect(JSON.parse((await readImageMetadata(FOLDER, 'page_001.png'))!).crops[0].scriptRefs).toEqual(['P0002'])
+    // A later geometry change cannot sneak through the association-only path.
+    await dropOff('page_001', JSON.stringify({ crops: [crop('c1', 0.3)] }), JSON.stringify(linked))
+    const changed = await sync()
+    expect(changed).toMatchObject({ skipped: 2, replaced: 0, failed: 0 })
+    expect(changed.pages[0].reason).toContain('Studio-reviewed crops')
+    expect(await fs.readFile(points, 'utf8')).toBe(before)
   })
 
   it('leaves attached pages alone when the zip was not reviewed', async () => {

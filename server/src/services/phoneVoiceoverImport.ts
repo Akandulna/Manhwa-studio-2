@@ -35,6 +35,8 @@
 
 import crypto from 'crypto'
 import { recordManagerTransfer } from './managerReporting.js'
+import { withSeriesMutation } from './seriesActivity.js'
+import { requireSeriesRestartReady } from './seriesRestartGuard.js'
 import fs from 'fs/promises'
 import path from 'path'
 import { GetObjectCommand, ListObjectsV2Command, type S3Client } from '@aws-sdk/client-s3'
@@ -57,7 +59,7 @@ export const FETCH_MARKER = '.r2-voiceover.json'
 const MANIFEST_FILE = 'voiceover.json'
 const SCHEMA = /^sleeper-cell-voiceover-chapter\/1\./
 
-/** A chapter of 500-character splits is a few dozen MB of WAV; anything far bigger is not one of ours. */
+/** Allow full-chapter WAVs as well as short splits, while bounding compressed and expanded chapter sizes. */
 const MAX_ZIP_BYTES = 512 * 1024 * 1024
 
 /** What the desktop accepts as uploaded section audio (see uploadSectionAudio). */
@@ -74,6 +76,7 @@ export interface PhoneVoiceoverSection {
 
 /** A chapter zip, read and checked. */
 export interface PhoneVoiceoverChapter {
+  restartRevision?: string
   provider: string | null
   model: string | null
   voice: string | null
@@ -186,6 +189,7 @@ export function parseVoiceoverZip(entries: ZipEntry[], language: NarrationLangua
   })
 
   return {
+    ...(text(manifest.restartRevision) ? { restartRevision: text(manifest.restartRevision)! } : {}),
     provider: text(manifest.provider),
     model: text(manifest.model),
     voice: text(manifest.voice),
@@ -355,7 +359,7 @@ async function listFolder(client: S3Client, config: R2Config, folder: string): P
     for (const obj of page.Contents ?? []) {
       const rest = obj.Key?.slice(folder.length) ?? ''
       // Only `<Chapter>.zip` directly in the folder.
-      if (!rest.toLowerCase().endsWith('.zip') || rest.includes('/')) continue
+      if (obj.Size === 0 || !rest.toLowerCase().endsWith('.zip') || rest.includes('/')) continue
       zips.push({
         key: obj.Key!,
         base: rest.slice(0, -'.zip'.length),
@@ -495,6 +499,7 @@ export async function fetchPhoneVoiceover(
     const listed = await listLanguageZips(seriesId, language)
     if (!listed) return { ...result, configured: false }
     const { client, config, zips, byFolder } = listed
+    return await withSeriesMutation(path.basename(path.dirname([...byFolder.values()][0]?.folderPath ?? '_/_')), async () => {
     result.found = zips.length
 
     const wanted = chapterIds ? new Set(chapterIds) : null
@@ -523,9 +528,14 @@ export async function fetchPhoneVoiceover(
         if (zip.size > MAX_ZIP_BYTES) throw new Error(`The zip is unexpectedly large (${zip.size} bytes)`)
         const res = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: zip.key }))
         const body = Buffer.from(await res.Body!.transformToByteArray())
+        if (body.length > MAX_ZIP_BYTES) throw new Error(`The zip is unexpectedly large (${body.length} bytes)`)
         managerObjectVersion = res.VersionId ?? res.ETag ?? zip.etag ?? null
         recordManagerTransfer({ seriesId,chapterId:chapter.id,stage:`voice_${language}`,phase:'cloud',objectVersion:managerObjectVersion })
-        const voiceover = parseVoiceoverZip(readZip(body), language)
+        const voiceover = parseVoiceoverZip(readZip(body, {
+          maxEntryBytes: MAX_ZIP_BYTES,
+          maxTotalBytes: MAX_ZIP_BYTES
+        }), language)
+        await requireSeriesRestartReady(path.dirname(chapter.folderPath).split(path.sep).at(-1)!, voiceover.restartRevision, true)
         const replacement = await fs.readFile(path.join(chapterDir(chapter.folderPath), `.script-replacement${language === 'hi' ? '.hi' : ''}.json`), 'utf-8')
           .then(text => JSON.parse(text) as { sha256?: string }).catch((e: NodeJS.ErrnoException) => { if (e.code === 'ENOENT') return null; throw e })
         if (replacement?.sha256 && replacement.sha256 !== voiceover.scriptSha256) {
@@ -560,6 +570,7 @@ export async function fetchPhoneVoiceover(
     }
 
     return result
+    })
   } finally {
     fetching.delete(lock)
   }

@@ -32,6 +32,8 @@
  * together with the voiceover fetch (see routes/narration.ts).
  */
 
+import { withSeriesMutation } from './seriesActivity.js'
+import { requireSeriesRestartReady } from './seriesRestartGuard.js'
 import { createHash } from 'crypto'
 import { recordManagerTransfer } from './managerReporting.js'
 import fs from 'fs/promises'
@@ -84,6 +86,7 @@ export interface PhoneChapterFiles {
 }
 
 export interface ParsedScriptsZip {
+  restartRevision?: string
   about: string | null
   chapters: PhoneChapterFiles[]
 }
@@ -107,6 +110,7 @@ function zipFiles(language: NarrationLanguage): { script: string; continuity: st
 export function parseScriptsZip(zip: Buffer, language: NarrationLanguage = 'en'): ParsedScriptsZip {
   const names = zipFiles(language)
   let about: string | null = null
+  let restartRevision: string | null = null
   const byFolder = new Map<string, PhoneChapterFiles>()
   const chapter = (folder: string) => {
     let entry = byFolder.get(folder)
@@ -124,7 +128,9 @@ export function parseScriptsZip(zip: Buffer, language: NarrationLanguage = 'en')
     const rel = parts.length > 1 ? parts.slice(1) : parts
     const text = data.toString('utf8')
 
-    if (rel.length === 1 && file === 'about.md' && language === 'en') {
+    if (rel.length === 1 && file === 'restart.json') {
+      restartRevision = nonBlank(JSON.parse(text)?.restartRevision)
+    } else if (rel.length === 1 && file === 'about.md' && language === 'en') {
       about = nonBlank(text)
     } else if (rel.length === 2 && file === names.script) {
       chapter(rel[0]).script = nonBlank(text)
@@ -149,7 +155,7 @@ export function parseScriptsZip(zip: Buffer, language: NarrationLanguage = 'en')
   const chapters = [...byFolder.values()]
     .filter(c => c.script)
     .sort((a, b) => a.folder.localeCompare(b.folder, undefined, { numeric: true }))
-  return { about, chapters }
+  return { about, chapters, ...(restartRevision ? { restartRevision } : {}) }
 }
 
 // ============ Finding the zip ============
@@ -195,6 +201,7 @@ async function findZip(seriesId: string, language: NarrationLanguage): Promise<P
   for (const key of candidates) {
     try {
       const head = await client.send(new HeadObjectCommand({ Bucket: config.bucket, Key: key }))
+      if (head.ContentLength === 0) continue // A restart tombstone is not an uploaded ZIP.
       foundKeys.set(found, key)
       return {
         key,
@@ -304,6 +311,7 @@ async function buildPreview(
     }
   })
   if (!series) throw new Error('Series not found')
+  await requireSeriesRestartReady(path.basename(series.rootFolder), parsed.restartRevision, true)
   const published = (await getPublishedChapters(seriesId, language)).chapters
   const byFolder = new Map(series.chapters.map(c => [path.basename(c.folderPath), c]))
 
@@ -388,12 +396,14 @@ export async function importPhoneScripts(
   const wanted = new Set(chapterIds)
   const byFolder = new Map(parsed.chapters.map(c => [c.folder, c]))
   const series = await prisma.series.findUniqueOrThrow({ where: { id: seriesId } })
+  return withSeriesMutation(path.basename(series.rootFolder), async () => {
   const chapters = await prisma.chapter.findMany({
     where: { id: { in: preview.chapters.filter(c => wanted.has(c.chapterId)).map(c => c.chapterId) } },
   })
 
   let imported = 0
   for (const chapter of chapters) {
+    await requireSeriesRestartReady(path.basename(series.rootFolder), parsed.restartRevision, true)
     const phone = byFolder.get(path.basename(chapter.folderPath))
     if (!phone?.script) continue
     recordManagerTransfer({ seriesId,chapterId:chapter.id,stage:`script_${language}`,phase:'cloud',objectVersion:zip.etag })
@@ -448,4 +458,5 @@ export async function importPhoneScripts(
     create: { key: importSettingKey(seriesId, language), value: record }
   })
   return { imported, aboutUpdated }
+  })
 }

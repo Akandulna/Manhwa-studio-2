@@ -1,3 +1,4 @@
+import { requireSeriesRestartReady } from './seriesRestartGuard.js'
 import fs from 'fs/promises'
 import path from 'path'
 import { createHash, randomUUID } from 'crypto'
@@ -61,6 +62,7 @@ export async function replaceChapterScript(chapterId: string, language: Narratio
     }
     if (pendingAlignments(chapterId, 'en') || pendingAlignments(chapterId, 'hi')) throw new ScriptReplacementError('Wait for this chapter’s alignment to finish', 409)
     const { chapter, dir } = await chapterInfo(chapterId)
+    const restartRevision = await requireSeriesRestartReady(path.basename(chapter.series.rootFolder))
     const scriptPath = path.join(dir, scriptFileName(language))
     const current = await readText(scriptPath)
     if ((current === null ? null : sha(current)) !== input.expectedSha256) throw new ScriptReplacementError('The local script changed. Reopen Replace to load the latest text.', 409)
@@ -134,7 +136,7 @@ export async function replaceChapterScript(chapterId: string, language: Narratio
             throw new Error('The phone has a different English source. Fetch its English script before sending this Hinglish replacement.')
           }
           await client.send(new PutObjectCommand({ Bucket: config.bucket, Key: key,
-            Body: JSON.stringify({ ...bundle, files: { ...remote?.files, ...bundle.files } }), ContentType: 'application/json',
+            Body: JSON.stringify({ ...bundle, ...(restartRevision ? { restartRevision } : {}), files: { ...remote?.files, ...bundle.files } }), ContentType: 'application/json',
             ...(previous?.ETag ? { IfMatch: previous.ETag } : previous ? {} : { IfNoneMatch: '*' }) }))
         }
         phoneSent = true

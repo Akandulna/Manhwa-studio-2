@@ -1,3 +1,4 @@
+import {assertStandaloneRequirements} from './inheritedContext'
 import {retainedInventory} from './retainedInventory'
 import type {TaskSql,TaskAuthority} from './taskAuthority'
 import type {TargetPackageAuthority} from './targetPackage'
@@ -19,12 +20,13 @@ export class TargetContextAuthority {
   return c
  }
  private compatible(deviceId:string){const row=this.sql.exec<{body:string}>('SELECT body FROM managed_peers WHERE id = ?',deviceId).toArray()[0];if(!row||!JSON.parse(row.body).capabilities.includes(TARGET_CONTEXT_CAPABILITY))throw new TaskConflict('Target context inspection capability required')}
- private matches(review:any,candidate:ReturnType<TargetContextAuthority['candidate']>){const p=candidate.receipt;if(review.packageId!==p.id||recoveryUnitKey(review.unit)!==recoveryUnitKey(p.unit)||canonicalJson(review.target)!==canonicalJson(p.target)||review.accountId!==p.accountId||review.policyRevision!==p.policyRevision||canonicalJson(review.source)!==canonicalJson(p.source)||review.manifestSha256!==p.manifestSha256||review.promptSha256!==p.promptSha256||review.contextScope!==STANDALONE_CONTEXT)throw new TaskConflict('Reviewed context candidate changed')}
+ private matches(review:any,candidate:ReturnType<TargetContextAuthority['candidate']>){const p=candidate.receipt;assertStandaloneRequirements(this.sql,p.unit,p.target);if(review.packageId!==p.id||recoveryUnitKey(review.unit)!==recoveryUnitKey(p.unit)||canonicalJson(review.target)!==canonicalJson(p.target)||review.accountId!==p.accountId||review.policyRevision!==p.policyRevision||canonicalJson(review.source)!==canonicalJson(p.source)||review.manifestSha256!==p.manifestSha256||review.promptSha256!==p.promptSha256||review.contextScope!==STANDALONE_CONTEXT)throw new TaskConflict('Reviewed context candidate changed')}
  review(actor:TaskPrincipal,id:string,unit:RecoveryUnit,rawTarget:unknown,packageId:string,confirmation:unknown){
   if(actor.role!=='studio'||!recoveryId(id)||!recoveryId(packageId)||confirmation!==CONTEXT_CONFIRMATION)throw new TaskConflict('Explicit standalone context requirements review required')
   recoveryUnitKey(unit);const target=fallbackTargets([rawTarget])[0]
   return this.tx(()=>{
    this.authority.assertWorkspace(unit.taskId,unit.workspaceId);this.authority.artifactOwner(actor,unit.taskId,unit.attemptId,unit.generation,unit.fingerprint)
+   assertStandaloneRequirements(this.sql,unit,target,true)
    const c=this.candidate({role:'phone',deviceId:target.deviceId},packageId),p=c.receipt
    if(recoveryUnitKey(p.unit)!==recoveryUnitKey(unit)||canonicalJson(p.target)!==canonicalJson(target))throw new TaskConflict('Exact selected candidate required')
    const old=this.read('reviews',id)

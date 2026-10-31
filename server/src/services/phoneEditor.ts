@@ -1,3 +1,5 @@
+import { editorTimelineResetRevision } from './editorTimelineReset.js'
+import { editorFinalCrops } from './editorFinalCrops.js'
 import {readManagedChapterAssets,assertManagedChapterRevision} from './managedChapterAssets.js'
 /**
  * Editor 2.0 ⇄ the Sleeper-Cell phone app, through Cloudflare R2.
@@ -10,10 +12,11 @@ import {readManagedChapterAssets,assertManagedChapterRevision} from './managedCh
  *
  *   <phone prefix>editor/_prompt.json                         this → phone
  *   <phone prefix>editor/<Series>/<Chapter>.package.json     this → phone
- *   <phone prefix>editor/<Series>/<Chapter>.timeline.json    phone → this
+ *   <phone prefix>editor/<Series>/<Chapter>.timeline.json    phone ⇄ this
  *
  * A chapter goes up by itself once it's ready for its timeline JSON
- * (voiceover, alignment, reviewed crops cut, no JSON yet): see
+ * (voiceover, alignment, reviewed crops cut), including refreshed packages
+ * for chapters with saved timelines: see
  * publishReadyEditorPackages and editorAutoPublish.ts. Send to phone still
  * sends a series' chapters at once, whether or not they changed.
  *
@@ -40,10 +43,14 @@ import {readManagedChapterAssets,assertManagedChapterRevision} from './managedCh
  * R2 cost: saving the prompt is one PUT (Class A) plus the phone's nudge; a
  * send is one PUT per chapter plus the prompt's and the nudge; a
  * fetch is one LIST per folder tried, plus one GET (Class B) per timeline.
- * Nothing here runs on a timer.
+ * editorAutoPublish.ts queues saved Studio edits, retries failed uploads and
+ * recovers unsent edits at startup. Phones receive changes through their
+ * existing sync request handling; offline phones catch up when reconnected.
  */
 
 import { createHash } from 'crypto'
+import { chapterStoryLinksCurrent } from './seriesRestartFiles.js'
+import { requireSeriesRestartReady } from './seriesRestartGuard.js'
 import fs from 'fs/promises'
 import path from 'path'
 import { GetObjectCommand, ListObjectsV2Command, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3'
@@ -149,12 +156,12 @@ export interface EditorSendResult {
 
 interface PackageChapter { id: string; number: number; title: string | null; folderPath: string }
 
-/** One chapter's package, ready to PUT; `sha256` covers everything but `sentAt`, so an unchanged chapter reads the same. */
-interface BuiltPackage { name: string; body: string; sha256: string }
+/** `sha256` binds timeline inputs; `deliverySha256` also tracks final crop provenance, excluding send time. */
+interface BuiltPackage { name: string; body: string; sha256: string; deliverySha256: string }
 
 /** Matches EditorPackage.sha256 on the phone. */
-function timelinePackageSha256(timeline: string, metadata: string, scriptSha256: string | null, workflowHash?: string): string {
-  return createHash('sha256').update(`${timeline}\u0000${metadata}${scriptSha256 ? `\u0000${scriptSha256}` : ''}${workflowHash ? `\u0000${workflowHash}` : ''}`).digest('hex')
+function timelinePackageSha256(timeline: string, metadata: string, scriptSha256: string | null, workflowHash?: string, resetRevision?: string | null): string {
+  return createHash('sha256').update(`${timeline}\u0000${metadata}${scriptSha256 ? `\u0000${scriptSha256}` : ''}${workflowHash ? `\u0000${workflowHash}` : ''}${resetRevision ? `\u0000editor-reset:${resetRevision}` : ''}`).digest('hex')
 }
 
 async function voicedScriptSha256(folderPath: string, language: NarrationLanguage): Promise<string | null> {
@@ -174,6 +181,8 @@ async function buildPackage(
   language: NarrationLanguage,
   workflowMode: 'legacy' | 'staged' = 'legacy'
 ): Promise<BuiltPackage | { skip: string }> {
+  const restartRevision = await requireSeriesRestartReady(seriesFolder)
+  if (restartRevision && !await chapterStoryLinksCurrent(process.env.DOWNLOAD_ROOT || './downloads', chapter.folderPath)) return { skip: 'link crop metadata to the current English script first' }
   const managed=await readManagedChapterAssets(chapter.folderPath)
   const [timeline, metadata] = await Promise.all([
     getChapterTimelineBundle(chapter.id, language),
@@ -209,9 +218,12 @@ async function buildPackage(
   // This hash belongs to the script the fetched audio was actually voiced from,
   // rather than a Markdown file that may have been edited since that recording.
   const scriptSha256 = await voicedScriptSha256(chapter.folderPath, language)
+  const resetRevision = await editorTimelineResetRevision(prisma.setting, chapter.id, language)
   const content = {
+    ...(resetRevision ? { timelineResetRevision: resetRevision } : {}),
     schema: workflowMode === 'staged' ? 'manhwa-studio-editor-package/3' : PACKAGE_SCHEMA,
     series: seriesFolder,
+    ...(restartRevision ? { restartRevision } : {}),
     chapter: chapterFolder,
     chapterId: chapter.id,
     number: chapter.number,
@@ -224,10 +236,12 @@ async function buildPackage(
     metadata: metadata.text,
     ...(workflowMode === 'staged' ? { workflow: buildEditorWorkflow(timeline.text, metadata.text, images, scriptSha256, sections) } : {})
   }
+  const delivery = { ...content, finalCropAuthority: await editorFinalCrops(chapter, language, metadata.text, images) }
   return {
     name: `${seriesFolder}/${chapterFolder}${languageSuffix(language)}${PACKAGE_SUFFIX}`,
-    body: JSON.stringify({ ...content, sentAt: new Date().toISOString() }),
-    sha256: createHash('sha256').update(JSON.stringify(content)).digest('hex')
+    body: JSON.stringify({ ...delivery, sentAt: new Date().toISOString() }),
+    sha256: createHash('sha256').update(JSON.stringify(content)).digest('hex'),
+    deliverySha256: createHash('sha256').update(JSON.stringify(delivery)).digest('hex')
   }
 }
 
@@ -248,7 +262,7 @@ async function putPackage(client: S3Client, config: R2Config, folders: string[],
  * changed. Only ever a hint: a missing or unreadable record means a resend.
  */
 const SENT_RECORD = '.editor2-phone.json'
-type SentRecord = Partial<Record<NarrationLanguage, { sha256: string; sentAt: string; workflow?: 'legacy' | 'staged' }>>
+type SentRecord = Partial<Record<NarrationLanguage, { sha256: string; deliverySha256?: string; sentAt: string; workflow?: 'legacy' | 'staged' }>>
 
 async function readSentRecord(folderPath: string): Promise<SentRecord> {
   try {
@@ -258,10 +272,10 @@ async function readSentRecord(folderPath: string): Promise<SentRecord> {
   }
 }
 
-async function recordSent(folderPath: string, language: NarrationLanguage, sha256: string, workflow: 'legacy' | 'staged' = 'legacy'): Promise<void> {
+async function recordSent(folderPath: string, language: NarrationLanguage, pkg: BuiltPackage, workflow: 'legacy' | 'staged' = 'legacy'): Promise<void> {
   try {
     const record = await readSentRecord(folderPath)
-    record[language] = { sha256, sentAt: new Date().toISOString(), workflow }
+    record[language] = { sha256: pkg.sha256, deliverySha256: pkg.deliverySha256, sentAt: new Date().toISOString(), workflow }
     await fs.writeFile(path.join(getSourceFolderPath(folderPath), SENT_RECORD), JSON.stringify(record, null, 2), 'utf-8')
   } catch {
     // The chapter folder is gone; the next automatic send just sends it again.
@@ -310,6 +324,7 @@ export async function sendEditorPackages(
   const folders = await phoneFolders(client, config)
   const seriesFolder = path.basename(series.rootFolder)
   const result: EditorSendResult = { sent: [], skipped: [], phoneNotified: false }
+  const pending: { folderPath: string; pkg: BuiltPackage }[] = []
 
   for (const chapter of series.chapters) {
     const skip = (reason: string) => result.skipped.push({ chapterId: chapter.id, number: chapter.number, reason })
@@ -317,14 +332,17 @@ export async function sendEditorPackages(
       const pkg = await buildPackage(seriesFolder, chapter, language, workflowMode)
       if ('skip' in pkg) { skip(pkg.skip); continue }
       await putPackage(client, config, folders, pkg)
-      await recordSent(chapter.folderPath, language, pkg.sha256, workflowMode)
+      pending.push({ folderPath: chapter.folderPath, pkg })
       result.sent.push({ chapterId: chapter.id, number: chapter.number })
     } catch (error) {
       skip(errorMessage(error))
     }
   }
 
-  if (result.sent.length > 0) result.phoneNotified = await nudgePhone()
+  if (result.sent.length > 0) {
+    result.phoneNotified = await nudgePhone()
+    if (result.phoneNotified) for (const item of pending) await recordSent(item.folderPath, language, item.pkg, workflowMode)
+  }
   return result
 }
 
@@ -332,18 +350,19 @@ export async function sendEditorPackages(
 
 export interface EditorPublishResult {
   sent: { chapterId: string; number: number; language: NarrationLanguage }[]
-  failed: { chapterId: string; language: NarrationLanguage; error: string }[]
+  failed: { chapterId: string; language: NarrationLanguage; error: string; retryable?: boolean }[]
 }
 
 /**
- * Sends every chapter that's ready for its timeline JSON straight to the
- * phone, without a Send to phone: voiceover audio, alignment, reviewed crops
- * cut to crops3/ (the checklist's inputsReady) and no timeline JSON here yet.
+ * Sends every ready, reviewed chapter's current package straight to the
+ * phone: voiceover audio, alignment and reviewed crops cut to crops3/.
+ * Saved timelines remain intact; a provenance-only refresh keeps their input
+ * hashes unchanged. Changed inputs still invalidate old phone timelines.
  * Each language goes on its own, as Send to phone does from its tab. A
  * package already up with the same content is left alone, unless it's no
  * longer in R2. `chapterIds` narrows it to those chapters; null checks all.
  *
- * Run from editorAutoPublish.ts after an alignment or a cut, and at startup.
+ * Run from editorAutoPublish.ts after review, alignment or a cut, and at startup.
  * R2 cost: one LIST per phone folder when there's something to check, one PUT
  * per changed package, and one nudge when anything went up.
  */
@@ -352,6 +371,7 @@ export async function publishReadyEditorPackages(chapterIds: string[] | null): P
   const config = getR2Config()
   if (!config) return result
   let r2: { client: S3Client; folders: string[]; keys: Set<string> } | null = null
+  const pending: { chapter: { id: string; number: number; folderPath: string }; language: NarrationLanguage; pkg: BuiltPackage; workflow: 'legacy' | 'staged' }[] = []
 
   for (const language of NARRATION_LANGUAGES) {
     const chapters = await prisma.chapter.findMany({
@@ -363,15 +383,7 @@ export async function publishReadyEditorPackages(chapterIds: string[] | null): P
       orderBy: [{ seriesId: 'asc' }, { number: 'asc' }],
       select: { id: true, number: true, title: true, folderPath: true, series: { select: { rootFolder: true } } }
     })
-    const withJson = new Set(
-      (await prisma.editor2Timeline.findMany({
-        where: { chapterId: { in: chapters.map(c => c.id) }, language },
-        select: { chapterId: true, json: true }
-      })).filter(r => r.json.trim()).map(r => r.chapterId)
-    )
-
     for (const chapter of chapters) {
-      if (withJson.has(chapter.id)) continue
       try {
         const blockers = await getChapterBlockers(chapter.id, language)
         if (blockers === null || blockers.length > 0) continue
@@ -379,7 +391,10 @@ export async function publishReadyEditorPackages(chapterIds: string[] | null): P
         const previous = (await readSentRecord(chapter.folderPath))[language]
         const workflow = previous?.workflow === 'staged' ? 'staged' : 'legacy'
         const pkg = await buildPackage(path.basename(chapter.series.rootFolder), chapter, language, workflow)
-        if ('skip' in pkg) continue
+        if ('skip' in pkg) {
+          result.failed.push({ chapterId: chapter.id, language, error: pkg.skip })
+          continue
+        }
 
         if (!r2) {
           const client = createClient(config)
@@ -388,18 +403,28 @@ export async function publishReadyEditorPackages(chapterIds: string[] | null): P
         }
         const { client, folders, keys } = r2
         const upEverywhere = folders.every(folder => keys.has(`${folder}${EDITOR_FOLDER}${pkg.name}`))
-        if (upEverywhere && previous?.sha256 === pkg.sha256) continue
+        if (upEverywhere && previous?.deliverySha256 === pkg.deliverySha256) continue
 
         await putPackage(client, config, folders, pkg)
-        await recordSent(chapter.folderPath, language, pkg.sha256, workflow)
-        result.sent.push({ chapterId: chapter.id, number: chapter.number, language })
+        pending.push({ chapter, language, pkg, workflow })
       } catch (error) {
         result.failed.push({ chapterId: chapter.id, language, error: errorMessage(error) })
       }
     }
   }
 
-  if (result.sent.length > 0) await nudgePhone()
+  if (pending.length > 0) {
+    const notified = await nudgePhone()
+    for (const { chapter, language, pkg, workflow } of pending) {
+      if (!notified) {
+        // No delivery receipt: the publication queue retries even though the PUT succeeded.
+        result.failed.push({ chapterId: chapter.id, language, error: 'Could not request device sync' })
+        continue
+      }
+      await recordSent(chapter.folderPath, language, pkg, workflow)
+      result.sent.push({ chapterId: chapter.id, number: chapter.number, language })
+    }
+  }
   return result
 }
 
@@ -410,7 +435,7 @@ export async function listEditorKeys(client: S3Client, config: R2Config, folders
     let token: string | undefined
     do {
       const page = await client.send(new ListObjectsV2Command({ Bucket: config.bucket, Prefix: `${folder}${EDITOR_FOLDER}`, ContinuationToken: token }))
-      for (const object of page.Contents ?? []) if (object.Key) keys.add(object.Key)
+      for (const object of page.Contents ?? []) if (object.Key && object.Size !== 0) keys.add(object.Key)
       token = page.IsTruncated ? page.NextContinuationToken : undefined
     } while (token)
   }
@@ -445,6 +470,7 @@ export async function editorWaitingChapters(seriesId: string, language: Narratio
     do {
       const page = await client.send(new ListObjectsV2Command({ Bucket: config.bucket, Prefix: base, ContinuationToken: token }))
       for (const object of page.Contents ?? []) {
+        if (object.Size === 0) continue
         const name = object.Key?.slice(base.length) ?? ''
         if (name && !name.includes('/')) names.add(name)
       }
@@ -536,6 +562,11 @@ export async function getEditorReadiness(seriesId: string, language: NarrationLa
     if (chapter._count.audioSections === 0) { result.notReady.push({ ...ref, missing: ['voiceover'] }); continue }
     const missing = [...((await getChapterBlockers(chapter.id, language)) ?? [])]
     if (!(await readEffectiveReview(chapter.folderPath)).reviewed) missing.push('crop review')
+    try {
+      const revision = await requireSeriesRestartReady(seriesFolder)
+      if (revision && !await chapterStoryLinksCurrent(process.env.DOWNLOAD_ROOT || './downloads', chapter.folderPath))
+        missing.push('current English script-to-crop links (Sync json)')
+    } catch (error) { missing.push(errorMessage(error)) }
     if (missing.length) result.notReady.push({ ...ref, missing })
     else result.toSend.push(ref)
   }
@@ -577,6 +608,7 @@ async function listTimelines(
     do {
       const page = await client.send(new ListObjectsV2Command({ Bucket: config.bucket, Prefix: base, ContinuationToken: token }))
       for (const object of page.Contents ?? []) {
+        if (object.Size === 0) continue
         const name = object.Key?.slice(base.length) ?? ''
         if (!object.Key || name.includes('/') || !name.endsWith(suffix)) continue
         const chapterFolder = name.slice(0, -suffix.length)
@@ -626,6 +658,7 @@ export async function fetchPhoneTimelines(seriesId: string, language: NarrationL
     try {
       const object = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: key }))
       const body = JSON.parse(await object.Body!.transformToString('utf-8'))
+      await requireSeriesRestartReady(path.basename(series.rootFolder), body.restartRevision, true)
       if (typeof body?.schema !== 'string' || !TIMELINE_SCHEMA.test(body.schema)) throw new Error('not a Sleeper-Cell timeline')
       if ((body.language ?? 'en') !== language) throw new Error(`made for language "${body.language}"`)
       const json = typeof body.timeline === 'string' ? body.timeline.trim() : ''
@@ -635,6 +668,8 @@ export async function fetchPhoneTimelines(seriesId: string, language: NarrationL
 
       const where = { chapterId_language: { chapterId: chapter.id, language } }
       const existing = await prisma.editor2Timeline.findUnique({ where })
+      const resetRevision = await editorTimelineResetRevision(prisma.setting, chapter.id, language)
+      if (resetRevision && body.timelineResetRevision !== resetRevision) throw new Error('timeline is from before the Studio reset; make it again from the refreshed Editor package')
       const mode = (await readSentRecord(chapter.folderPath))[language]?.workflow
       let currentWorkflowHash: string | undefined
       if (mode === 'staged' || typeof body.workflowHash === 'string') {
@@ -642,18 +677,18 @@ export async function fetchPhoneTimelines(seriesId: string, language: NarrationL
         if ('skip' in current) throw new Error(current.skip)
         const pkg = JSON.parse(current.body)
         currentWorkflowHash = pkg.workflow.sourceHash
-        if (body.workflowHash !== currentWorkflowHash || body.packageSha256 !== timelinePackageSha256(pkg.timeline, pkg.metadata, pkg.scriptSha256, currentWorkflowHash)) throw new Error('staged timeline inputs or prompts changed; make it again from the current Editor package')
+        if (body.workflowHash !== currentWorkflowHash || body.packageSha256 !== timelinePackageSha256(pkg.timeline, pkg.metadata, pkg.scriptSha256, currentWorkflowHash, resetRevision)) throw new Error('staged timeline inputs or prompts changed; make it again from the current Editor package')
         validateWorkflowTimeline(pkg.workflow, json)
       }
       // A newer empty row is the invalidation left by replacement audio.
       // Never restore an old phone timeline over it, even if R2 still holds one.
-      if (existing && !existing.json.trim()) {
+      if (resetRevision || (existing && !existing.json.trim())) {
         const [timeline, metadata, scriptSha256] = await Promise.all([
           getChapterTimelineBundle(chapter.id, language), getChapterCropMetadataBundle(chapter.id),
           voicedScriptSha256(chapter.folderPath, language)
         ])
-        if (!timeline?.text || !metadata?.text || body.packageSha256 !== timelinePackageSha256(timeline.text, metadata.text, scriptSha256, currentWorkflowHash) || madeAt < existing.updatedAt.getTime()) {
-          throw new Error('timeline is from before the voiceover replacement; make it again from the new Editor package')
+        if (!timeline?.text || !metadata?.text || body.packageSha256 !== timelinePackageSha256(timeline.text, metadata.text, scriptSha256, currentWorkflowHash, resetRevision) || (existing && !existing.json.trim() && madeAt < existing.updatedAt.getTime())) {
+          throw new Error(resetRevision ? 'timeline is from before the Studio reset; make it again from the refreshed Editor package' : 'timeline is from before the voiceover replacement; make it again from the new Editor package')
         }
       }
       if (existing && existing.json.trim() === json) {
@@ -688,6 +723,164 @@ export async function fetchPhoneTimelines(seriesId: string, language: NarrationL
     } catch (error) {
       result.failed.push({ key, error: errorMessage(error) })
     }
+  }
+  return result
+}
+
+
+class TimelinePublicationConflict extends Error {}
+
+/** Capture the inputs at edit time, so retries cannot rebind an old edit to new audio/crops. */
+export async function captureEditorTimelineSource(chapterId: string, language: NarrationLanguage): Promise<string | null> {
+  try {
+    const chapter = await prisma.chapter.findUnique({ where: { id: chapterId },
+      select: { id: true, number: true, title: true, folderPath: true, series: { select: { rootFolder: true } } } })
+    if (!chapter) return null
+    const mode = (await readSentRecord(chapter.folderPath))[language]?.workflow === 'staged' ? 'staged' : 'legacy'
+    const pkg = await buildPackage(path.basename(chapter.series.rootFolder), chapter, language, mode)
+    return 'skip' in pkg ? null : pkg.sha256
+  } catch { return null }
+}
+
+/** Publish saved Studio edits using the existing phone timeline envelope.
+ * The durable receipt is written only after the sync request succeeds, so startup
+ * and failed-upload retries recover without turning every check into an upload.
+ */
+export async function publishSavedEditorTimelines(chapterIds: string[] | null): Promise<EditorPublishResult> {
+  const result: EditorPublishResult = { sent: [], failed: [] }
+  const config = getR2Config()
+  if (!config) return result
+  const client = createClient(config)
+  const folders = [...new Set(await phoneFolders(client, config))].sort()
+  const chapters = await prisma.chapter.findMany({
+    where: chapterIds ? { id: { in: chapterIds } } : {},
+    select: { id: true, number: true, title: true, folderPath: true, series: { select: { rootFolder: true } } }
+  })
+  const pending: { key: string; value: string; chapterId: string; number: number; language: NarrationLanguage }[] = []
+  for (const chapter of chapters) for (const language of NARRATION_LANGUAGES) {
+    try {
+      const row = await prisma.editor2Timeline.findUnique({ where: { chapterId_language: { chapterId: chapter.id, language } } })
+      if (!row?.json.trim()) continue
+      const intentRow = await prisma.setting.findUnique({ where: { key: `editor2-phone-timeline-edit:${chapter.id}:${language}` } })
+      if (!intentRow) continue // Phone imports and old unsent work are never relabelled as Studio edits.
+      const intent = JSON.parse(intentRow.value) as { jsonSha256: string; madeAt: string; sourceSha256: string | null }
+      if (intent.jsonSha256 !== createHash('sha256').update(row.json).digest('hex')) continue
+      // Invalid drafts must never become completed timelines on devices.
+      const parsed = JSON.parse(row.json)
+      if (!Array.isArray(parsed?.sections) || parsed.sections.length === 0) throw new TimelinePublicationConflict('timeline must contain sections')
+      const workflow = (await readSentRecord(chapter.folderPath))[language]?.workflow === 'staged' ? 'staged' : 'legacy'
+      const pkg = await buildPackage(path.basename(chapter.series.rootFolder), chapter, language, workflow)
+      if ('skip' in pkg) throw new TimelinePublicationConflict(pkg.skip)
+      if (!intent.sourceSha256 || intent.sourceSha256 !== pkg.sha256) throw new TimelinePublicationConflict('Editor inputs changed or were unavailable when saved; review and save the timeline again')
+      const content = JSON.parse(pkg.body)
+      if (content.workflow) {
+        try { validateWorkflowTimeline(content.workflow, row.json) }
+        catch (error) { throw new TimelinePublicationConflict(errorMessage(error)) }
+      }
+      const body = JSON.stringify({
+        schema: 'sleeper-cell-editor-timeline/1',
+        series: content.series, chapter: content.chapter, chapterId: chapter.id, language,
+        ...(content.restartRevision ? { restartRevision: content.restartRevision } : {}),
+        packageSentAt: content.sentAt,
+        packageSha256: timelinePackageSha256(content.timeline, content.metadata, content.scriptSha256, content.workflow?.sourceHash, content.timelineResetRevision),
+        ...(content.timelineResetRevision ? { timelineResetRevision: content.timelineResetRevision } : {}),
+        matchingPolicy: language === 'hi' ? 'hinglish-direct-crops/1' : 'english-script-links/1',
+        ...(content.workflow ? { workflowHash: content.workflow.sourceHash } : {}),
+        madeAt: intent.madeAt, model: row.model ?? null, profile: null,
+        deviceId: 'manhwa-studio', review: [], timeline: row.json
+      })
+      const key = `editor2-phone-timeline:${chapter.id}:${language}`
+      const value = createHash('sha256').update(JSON.stringify({
+        intent, package: pkg.sha256,
+        bucket: config.bucket, accountId: config.accountId, folders
+      })).digest('hex')
+      if ((await prisma.setting.findUnique({ where: { key } }))?.value === value) continue
+      // Do not overwrite newer work uploaded by a phone while Studio was offline.
+      for (const folder of folders) {
+        const timelineKey = `${folder}${EDITOR_FOLDER}${content.series}/${content.chapter}${languageSuffix(language)}${TIMELINE_SUFFIX}`
+        let remoteText: string | undefined
+        try {
+          const remote = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: timelineKey }))
+          remoteText = await remote.Body?.transformToString('utf-8')
+        } catch (error) {
+          const missing = error as { name?: string; message?: string; $metadata?: { httpStatusCode?: number } }
+          if (missing.name !== 'NoSuchKey' && missing.message !== 'NoSuchKey' && missing.$metadata?.httpStatusCode !== 404) throw error
+        }
+        if (remoteText) {
+          const remote = JSON.parse(remoteText)
+          if ((Date.parse(remote.madeAt) || 0) > Date.parse(intent.madeAt)) throw new TimelinePublicationConflict('A newer device timeline is already published; fetch it before editing again')
+        }
+      }
+      // Send the matching package first; phones validate the timeline against it.
+      await putPackage(client, config, folders, pkg)
+      for (const folder of folders) await client.send(new PutObjectCommand({
+        Bucket: config.bucket,
+        Key: `${folder}${EDITOR_FOLDER}${content.series}/${content.chapter}${languageSuffix(language)}${TIMELINE_SUFFIX}`,
+        Body: body, ContentType: 'application/json'
+      }))
+      await recordSent(chapter.folderPath, language, pkg, workflow)
+      pending.push({ key, value, chapterId: chapter.id, number: chapter.number, language })
+    } catch (error) {
+      result.failed.push({ chapterId: chapter.id, language, error: errorMessage(error), retryable: !(error instanceof TimelinePublicationConflict || error instanceof SyntaxError) })
+    }
+  }
+  if (pending.length === 0) return result
+  const notified = await nudgePhone()
+  for (const item of pending) {
+    try {
+      if (!notified) throw new Error('Could not request device sync')
+      await prisma.setting.upsert({ where: { key: item.key }, create: { key: item.key, value: item.value }, update: { value: item.value } })
+      result.sent.push({ chapterId: item.chapterId, number: item.number, language: item.language })
+    } catch (error) {
+      result.failed.push({ chapterId: item.chapterId, language: item.language, error: errorMessage(error) })
+    }
+  }
+  return result
+}
+
+/** A reset is independent of audio/crop readiness. Publish its durable revision
+ * even while a replacement package is blocked, and retain it after new results. */
+export async function publishEditorTimelineResets(chapterIds: string[] | null): Promise<EditorPublishResult> {
+  const result: EditorPublishResult = { sent: [], failed: [] }
+  const config = getR2Config()
+  if (!config) return result
+  const chapters = await prisma.chapter.findMany({
+    where: chapterIds ? { id: { in: chapterIds } } : {},
+    select: { id: true, number: true, folderPath: true, series: { select: { rootFolder: true } } }
+  })
+  let r2: { client: S3Client; folders: string[] } | undefined
+  const pending: { chapterId: string; number: number; language: NarrationLanguage; key: string; value: string }[] = []
+  for (const chapter of chapters) for (const language of NARRATION_LANGUAGES) {
+    try {
+      const revision = await editorTimelineResetRevision(prisma.setting, chapter.id, language)
+      if (!revision) continue
+      if (!r2) {
+        const client = createClient(config)
+        r2 = { client, folders: [...new Set(await phoneFolders(client, config))].sort() }
+      }
+      const series = path.basename(chapter.series.rootFolder), name = path.basename(chapter.folderPath)
+      const restartRevision = await requireSeriesRestartReady(series)
+      const key = `editor2-phone-timeline-reset-delivered:${chapter.id}:${language}`
+      const value = createHash('sha256').update(JSON.stringify({ revision, restartRevision, bucket: config.bucket, accountId: config.accountId, folders: r2.folders })).digest('hex')
+      if ((await prisma.setting.findUnique({ where: { key } }))?.value === value) continue
+      const body = JSON.stringify({ schema: 'manhwa-studio-editor-reset/1', series, chapter: name, chapterId: chapter.id, language, revision, ...(restartRevision ? { restartRevision } : {}) })
+      for (const folder of r2.folders) await r2.client.send(new PutObjectCommand({
+        Bucket: config.bucket, Key: `${folder}${EDITOR_FOLDER}${series}/${name}${languageSuffix(language)}.reset.json`,
+        Body: body, ContentType: 'application/json'
+      }))
+      pending.push({ chapterId: chapter.id, number: chapter.number, language, key, value })
+    } catch (error) {
+      result.failed.push({ chapterId: chapter.id, language, error: errorMessage(error) })
+    }
+  }
+  if (!pending.length) return result
+  const notified = await nudgePhone()
+  for (const { chapterId, number, language, key, value } of pending) {
+    try {
+      if (!notified) throw new Error('Could not request device sync')
+      await prisma.setting.upsert({ where: { key }, create: { key, value }, update: { value } })
+      result.sent.push({ chapterId, number, language })
+    } catch (error) { result.failed.push({ chapterId, language, error: errorMessage(error) }) }
   }
   return result
 }
