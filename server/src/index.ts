@@ -24,7 +24,8 @@ import {initManagedPilotRoutes} from './routes/managedPilot.js';
 import { initStitchRoutes } from './routes/stitch.js';
 import { initPagePreviewRoutes } from './routes/pagePreview.js';
 import { DownloadManager } from './services/downloadManager.js';
-import { startPhoneRelay } from './services/phoneRelay.js';
+import { startPhoneRelay, receiveWifiReceipt, sendPhoneRequest } from './services/phoneRelay.js';
+import { installWifiStatus, wifiHub } from './services/wifiStatus.js';
 import { reconcileQuietly } from './services/diskReconcile.js';
 import { backfillAlignmentDocumentsQuietly } from './services/alignment/alignmentDocument.js';
 import { publishEditorPackagesAtStartup } from './services/editorAutoPublish.js';
@@ -80,6 +81,7 @@ app.post('/api/library/publish', async (_req, res) => {
   catch (error) { console.error('[library-sync]', error); res.status(500).json({ error: 'Could not publish the shared library' }); }
 });
 
+installWifiStatus(app,{receipt:receiveWifiReceipt,cloudRefresh:async m=>{await sendPhoneRequest(undefined,{device:m.device},m,true)}});
 
 // Routes
 app.use('/api/series', seriesRoutes);
@@ -178,6 +180,7 @@ const shutdown=async () => {
   if(shuttingDown)return;
   shuttingDown=true;
   console.log('Shutting down...');
+  wifiHub()?.close();
   await stopProductionAutomation().catch(error=>console.error('[production] shutdown:',error));
   await downloadManager.shutdown();
   await flushSeriesActivity();

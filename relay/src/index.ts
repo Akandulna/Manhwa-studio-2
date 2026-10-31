@@ -1,5 +1,5 @@
 import { boundedBody } from './managedArtifactStorage'
-import { receiptContent, PRESENCE_CHECKPOINT_MS } from './receiptState'
+import { receiptContent, PRESENCE_CHECKPOINT_MS, staleReceipt } from './receiptState'
 /**
  * Sleeper-Cell relay: carries the phones' status receipts to Manhwa Studio,
  * and Manhwa Studio's "Refresh from phone" requests to the phones, without
@@ -114,7 +114,7 @@ function tokenMatches(given: string | null, expected: string): boolean {
   return a.byteLength === b.byteLength && crypto.subtle.timingSafeEqual(a, b)
 }
 
-const FEATURES = ['youtube-automation/1','manager-batch/1','native-manager-coverage/1','account-audit-deadline/1','recovery-dispatch-hints/1']
+const FEATURES = ['receipt-source-revision/1','youtube-automation/1','manager-batch/1','native-manager-coverage/1','account-audit-deadline/1','recovery-dispatch-hints/1']
 const pauses = new WeakMap<Env,{until:number}>()
 async function forwardRelay(request:Request,env:Env):Promise<Response> {
   const cached=pauses.get(env)
@@ -602,6 +602,11 @@ export class Relay extends DurableObject<Env> {
       return Response.json({ ok: true, at, device, desktops: desktops.length })
     }
     const prior=this.sql.exec<{body:string;at:number}>('SELECT body,at FROM phone_receipts WHERE device = ? AND kind = ?',device,kind).toArray()[0]
+    if(prior && staleReceipt(JSON.parse(prior.body),parsed)) {
+      const answers=(parsed as Record<string,unknown>).answers
+      if(answers!==undefined)for(const ws of this.sockets('desktop'))ws.send(receiptMessage(kind,device,JSON.stringify({...JSON.parse(prior.body),answers}),at))
+      return Response.json({ok:true,at:prior.at,device,stale:true})
+    }
     if(prior && !('answers' in (parsed as Record<string,unknown>)) && receiptContent(JSON.parse(prior.body))===receiptContent(parsed))return Response.json({ok:true,at:prior.at,device,desktops:this.sockets('desktop').length,unchanged:true})
     this.sql.exec(
       'INSERT INTO phone_receipts (device, kind, body, at) VALUES (?, ?, ?, ?) ' +

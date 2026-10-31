@@ -1,3 +1,4 @@
+import { wifiHub } from './wifiStatus.js'
 import { RelayReconnect } from './relayReconnect.js'
 import { beforeRelaySend, beforeRelaySocket, relayFetch, relayRetryDelay, recordRelayBudget, recordRelayUpgrade, learnRelayFeatures } from './relayTraffic.js'
 /**
@@ -239,6 +240,7 @@ export function relayPhones(): RelayPhone[] {
   if (!presence.length && connected && phones > 0) {
     named.set('', { name: named.get('')?.name ?? '', connected: true })
   }
+  for(const device of wifiHub()?.status().devices??[]){const prior=named.get(device);named.set(device,{name:prior?.name??device,connected:true})}
   const list = [...named].map(([id, phone]) => {
     const last = id ? seen.get(id) : undefined
     return {
@@ -267,8 +269,8 @@ export function relayStatus(): RelayStatus {
     url,
     hasToken: !!(process.env.RELAY_TOKEN || '').trim(),
     connected,
-    phones: connected ? phones : 0,
-    devices: connected || receipts.size ? relayPhones() : [],
+    phones: relayPhones().filter(p=>p.connected).length,
+    devices: relayPhones(),
     lastError,
     lastReceiptAt: lastReceiptAt ? new Date(lastReceiptAt).toISOString() : null
   }
@@ -407,6 +409,14 @@ function parseSeen(raw: unknown): Map<string, { at: number; left: PhoneLeft | nu
   return map
 }
 
+export function receiveWifiReceipt(m: {device:string;kind:string;at:number;body:any;revision:number}):void {
+ const body={...m.body,wifiStatus:{route:'wifi',revision:m.revision,observedAt:m.at}}
+ if(m.kind==='process'){receiveDeviceProcess(body);return}
+ if(m.kind==='library'){receiveLibraryManifest(body);return}
+ if(m.kind==='screen'){const kinds=screens.get(m.device)??new Map();kinds.set('screen',{at:m.at,body});screens.set(m.device,kinds);io?.emit('phone:screen',{device:m.device,kind:m.kind});return}
+ if(!KINDS.has(m.kind))return
+ const kinds=receipts.get(m.device)??new Map();kinds.set(m.kind as ReceiptKind,{at:m.at,body});receipts.set(m.device,kinds);lastReceiptAt=m.at;io?.emit('phone:receipt',{kind:m.kind});notifySeriesProcessChanged()
+}
 function handle(text: string): void {
   if (text === 'pong') return
   let message: { type?: string; kind?: string; retryAfter?: unknown; features?: unknown; device?: unknown; at?: number; body?: unknown; phones?: number; devices?: unknown; seen?: unknown }
@@ -431,6 +441,8 @@ function handle(text: string): void {
     case 'receipt': {
       const { kind, body } = message
       if (!kind || !body || typeof body !== 'object' || Array.isArray(body)) return
+      const current=wifiHub()?.status().snapshots.find(s=>s.device===message.device&&s.kind===kind)
+      if(current && (body as any).wifiRevision && current.revision>=(body as any).wifiRevision && !(body as any).answers)return
       if (kind === 'library') { receiveLibraryManifest(body); return }
       if (kind === 'process') { receiveDeviceProcess(body); return }
       // A relay deployed before phones had ids sends none: one phone, as before.
@@ -460,6 +472,7 @@ function handle(text: string): void {
     }
     case 'forgotten': {
       if (typeof message.device !== 'string') return
+      wifiHub()?.forget(message.device)
       seen.delete(message.device)
       if (screens.delete(message.device)) io?.emit('phone:screen', { device: message.device })
       if (!receipts.delete(message.device)) return
@@ -484,13 +497,15 @@ function handle(text: string): void {
  */
 export async function sendPhoneRequest(
   action?: PhoneAction,
-  args: PhoneRequestArgs = {}
+  args: PhoneRequestArgs = {},
+  original?: {id:string;requestedAt:string;deadline?:number},
+  cloudOnly=false
 ): Promise<{ id: string; requestedAt: string; phones: number }> {
   const env = relayEnv()
   if (!env) throw new Error('The phone relay is not set up')
   const request = {
-    id: randomUUID(),
-    requestedAt: new Date().toISOString(),
+    id: original?.id??randomUUID(),
+    requestedAt: original?.requestedAt??new Date().toISOString(),
     ...(action ? { action } : {}),
     ...(args.device ? { device: args.device } : {}),
     ...(args.series ? { series: args.series } : {}),
@@ -502,6 +517,13 @@ export async function sendPhoneRequest(
     ...(args.language ? { language: args.language } : {}),
     ...(args.profile ? { profile: args.profile } : {}),
     ...(args.chatGpt ? { chatGpt: args.chatGpt } : {})
+  }
+  if(!action&&!cloudOnly&&wifiHub()){
+    const targets=args.device?[args.device]:[...new Set([...presence.map(p=>p.id),...wifiHub()!.status().devices])]
+    if(targets.length){await Promise.all(targets.map(async device=>{
+      const m={type:'refresh_status',id:request.id,requestedAt:request.requestedAt,deadline:original?.deadline??Date.parse(request.requestedAt)+60_000,device}
+      if(!await wifiHub()!.refresh(m))await sendPhoneRequest(undefined,{device},m,true)
+    }));return {...request,phones:targets.length}}
   }
   await beforeRelaySend()
   // Browser commands require the authority's admission response. Socket send alone cannot prove admission.

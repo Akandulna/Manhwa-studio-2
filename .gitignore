@@ -46,3 +46,7 @@ server/.venv-whisperx/
 
 # Mac app (desktop/): machine-specific repo path
 desktop/app-config.json
+
+# Wi-Fi pairing credentials, certificate keys and local status
+/server/.config/wifi-status/
+/.config/wifi-status/
