@@ -124,17 +124,19 @@ export function runTitle(run: PhoneOverviewRun): string {
 export function phoneActivity(overview: PhoneOverview | null, phone: PhoneOverviewPhone, several: boolean) {
   const working = (overview?.working ?? []).filter(w => onPhone(w, phone, several))
   const runs = (overview?.runs ?? []).filter(r => onPhone(r, phone, several))
+  const youtube = phone.automation?.youtube?.active ? phone.automation.youtube : null
   const clipping = working.filter(w => !w.paused).length
   const activeRuns = runs.filter(r => !r.paused)
   // Image Clipper first: "Clipping 2 pages", then "Writing scripts", "Voicing 3 splits".
-  const going = [...(clipping ? [`Clipping ${plural(clipping, 'page')}`] : []), ...activeRuns.map(runTitle)]
-  const paused = working.length - clipping + runs.length - activeRuns.length
+  const going = [...(clipping ? [`Clipping ${plural(clipping, 'page')}`] : []), ...activeRuns.map(runTitle), ...(youtube && !youtube.paused ? [youtube.label] : [])]
+  const paused = working.length - clipping + runs.length - activeRuns.length + (youtube?.paused ? 1 : 0)
   return {
     working,
     runs,
+    youtube,
     going,
     paused,
-    busy: working.length + runs.length > 0,
+    busy: working.length + runs.length > 0 || !!youtube,
     title: going.length ? going.join(' · ') : paused ? 'Paused' : null
   }
 }

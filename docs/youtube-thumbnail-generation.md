@@ -1,0 +1,13 @@
+# Sleeper Cell thumbnail generation
+
+Each prepared request offers three independent variations. Generate variation sends its frozen prompt, selected reference snapshots, and optional edit base to one supported idle beta phone. `thumbnail_generate` opens a fresh ChatGPT conversation, attaches verified images, marks submission before Send, waits for the generated image, and returns the original image bytes through R2. The `youtube-thumbnail-generate/1` capability keeps older betas unavailable for this operation.
+
+The collector only reads a new assistant turn, excludes user reference images and small icons, requires exactly one generated image, and bounds streaming download to 20 MB. PNG, JPEG and WebP are accepted. Native bounds checks, a job-scoped object key, byte count and SHA-256 are checked again in Studio before import. Image metadata must match its descriptor. No arbitrary model-supplied URL is downloaded by Studio.
+
+Images enter the existing variation history without selecting or replacing the selected thumbnail. Imports identify their automation job and recover idempotently after a crash between import and completion. A late phone result cannot overwrite a manually imported variation. Changed workspace revisions or titles require review.
+
+A completed image is saved on the phone before upload. Retry image transfer re-delivers the same job, and the phone reuploads its saved result and image without sending another prompt. If local state is missing but a remote result exists, the phone refuses generation. A submission marker also prevents automatic replay after uncertain submission. Transfer failures remain visible; users can still import manually.
+
+Regeneration uses the existing edit/fresh request controls: feedback, reference snapshots, base image and three variation prompts are frozen into a new request. Each generated result stays separate for review. Hindi overlays continue to derive from the selected thumbnail in Studio.
+
+Live fresh-thumbnail validation passed on Note Beta on 2026-10-31. Job `320a9720-5a9f-495a-bf30-dbf085b98a00` used a fictional QA character and two drawn references. ChatGPT returned an original PNG (1,942,942 bytes, 1672 × 941). Studio validated its exact key, SHA-256, size and metadata, imported one generated variation, and left selection unchanged. The imported image was visually inspected. Note’s installed beta was `1.0.212-beta.editor-profiles-20261031`; its collector asset matched tested source. Android Debug and Beta each passed 965 tests; Studio passed 111 focused regression tests, web build and server TypeScript. No real series workspace was changed by live testing. Regeneration with an edit base has automated coverage; its live validation is a subsequent stage.

@@ -1893,6 +1893,7 @@ export interface PhoneOverviewRun extends Omit<PhoneScriptRun, 'series' | 'tabs'
 
 /** Sleeper-Cell's automation settings (Tools → Settings → Automation), and the run it will start by itself. */
 export interface PhoneAutomation {
+  youtube?: import('../../../server/src/services/youtubePhoneStatus').YouTubePhoneActivity
   /** personal: shows over the lock screen, PIN kept. dedicated: dismisses the lock screen, locks after. */
   wakeMode: 'personal' | 'dedicated'
   resumeAfterLimit: boolean

@@ -1,0 +1,36 @@
+The series is identifiable as the Korean manhwa I'm Gonna Annihilate This Land, also known as I'm Going to Destroy This Country, I'm Going to Wipe Out This Country, and Holy Hella's Ultimate End.
+
+The central hook is distinctive: the former Skeleton King is betrayed by the gods and reincarnated as a baby saint inside the very Holy Empire he intends to destroy.&#x20;
+
+{\
+&#x20; "schemaVersion": 1,\
+&#x20; "requestId": "677e34ac-bf79-4627-a068-f9f1386d118c",\
+&#x20; "seriesId": "62757989-875d-43bf-bfad-3382a8cb0a73",\
+&#x20; "language": "en",\
+&#x20; "status": "ok",\
+&#x20; "research": {\
+&#x20;   "resolvedTitle": "I'm Gonna Annihilate This Land (Holy Hella's Ultimate End)",\
+&#x20;   "summary": "This is a Korean fantasy manhwa adapted from the web novel 이 나라를 없앨 예정인데요. The story follows the Skeleton King, a feared demon king who is deceived by the gods with a fraudulent contract promising to turn him human, then sealed away. He awakens reincarnated as a baby saint, stripped of his former appearance and power, inside the religious world that serves the very gods who betrayed him. Although he cannot walk or talk, he retains his memories and plots revenge. His new holy identity creates an unusual opportunity: he intends to use the position of a saint to undermine the Holy Empire and take revenge on the gods. His loyal demon followers also operate behind the scenes. The central hook is the contrast between a helpless-looking baby saint and the former Skeleton King plotting the destruction of his enemies.",\
+&#x20;   "sources": [\
+&#x20;     {\
+&#x20;       "title": "CNC Revolution – I'm Gonna Annihilate This Land (Official Webtoon IP Page)",\
+&#x20;       "url": "https\://www\.cncrevolution.kr/ip/webtoon?category_code=1012&code=876&tpf=product/view"\
+&#x20;     },\
+&#x20;     {\
+&#x20;       "title": "Holy Hella's Ultimate End – Comix.moe",\
+&#x20;       "url": "https\://comix.moe/manhwa/holy-hellas-ultimate-end/"\
+&#x20;     },\
+&#x20;     {\
+&#x20;       "title": "Kakao Webtoon – 이 나라를 없앨 예정인데요",\
+&#x20;       "url": "https\://webtoon.kakao.com/content/%EC%9D%B4-%EB%82%98%EB%9D%BC%EB%A5%BC-%EC%97%86%EC%95%A8-%EC%98%88%EC%A0%95%EC%9D%B8%EB%8D%B0%EC%9A%94/4388"\
+&#x20;     }\
+&#x20;   ]\
+&#x20; },\
+&#x20; "titles": [\
+&#x20;   "The Gods Betrayed the Skeleton King—Now He’s Reborn as Their BABY SAINT!",\
+&#x20;   "The Gods Turned Their Greatest Enemy Into a Helpless Baby—BIG MISTAKE!",\
+&#x20;   "He Was the Most Feared Skeleton King, But Now He Must Destroy His Enemies as a Saint",\
+&#x20;   "The Gods Sealed Away the Skeleton King—But He Returned Inside Their Holy Empire!",\
+&#x20;   "He Cannot Even Walk or Talk, Yet This Baby Saint Is Already Plotting the Gods’ Downfall"\
+&#x20; ]\
+}

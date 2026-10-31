@@ -114,7 +114,7 @@ function tokenMatches(given: string | null, expected: string): boolean {
   return a.byteLength === b.byteLength && crypto.subtle.timingSafeEqual(a, b)
 }
 
-const FEATURES = ['manager-batch/1','native-manager-coverage/1','account-audit-deadline/1','recovery-dispatch-hints/1']
+const FEATURES = ['youtube-automation/1','manager-batch/1','native-manager-coverage/1','account-audit-deadline/1','recovery-dispatch-hints/1']
 const pauses = new WeakMap<Env,{until:number}>()
 async function forwardRelay(request:Request,env:Env):Promise<Response> {
   const cached=pauses.get(env)
@@ -183,7 +183,7 @@ const SILENT_MS = 150_000
 
 /** What a request may ask of the phone besides its receipts. */
 const ACTIONS = new Set([
-  'sync', 'clipper_start', 'clipper_stop', 'narration_start', 'editor_start', 'voiceover_start', 'run_stop', 'run_finish',
+  'sync', 'clipper_start', 'clipper_stop', 'narration_start', 'editor_start', 'voiceover_start', 'youtube_start', 'run_stop', 'run_finish',
   'screen_on', 'screen_off', 'screenshot', 'profile_select', 'chatgpt_options'
 ])
 
@@ -208,7 +208,7 @@ function chatGptSettings(value: unknown): ChatGptSettings | null {
 }
 
 /** The actions that start a run on `series`. */
-const START_ACTIONS = new Set(['clipper_start', 'narration_start', 'editor_start', 'voiceover_start'])
+const START_ACTIONS = new Set(['clipper_start', 'narration_start', 'editor_start', 'voiceover_start', 'youtube_start'])
 /** The runs that take `tabs`. */
 const TAB_ACTIONS = new Set(['clipper_start', 'editor_start', 'voiceover_start'])
 /** The runs that take `chapters`: a phone's share of a series split between phones (or a running one's new scope). */

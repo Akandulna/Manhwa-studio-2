@@ -176,7 +176,7 @@ function PhoneCard({ phone, overview, relay, screen, screens, several, startable
   const [open, setOpen] = useState(false)
   const [stopOpen, setStopOpen] = useState(false)
   const target = several && phone.id ? { device: phone.id } : {}
-  const stop = stopChoice(activity.working.length, activity.runs, automation?.clipperStopping === true)
+  const stop = stopChoice(activity.working.length, activity.runs, automation?.clipperStopping === true, !!activity.youtube)
   const key = phone.id || phone.name
 
   const [forgetting, setForgetting] = useState(false)
@@ -226,6 +226,7 @@ function PhoneCard({ phone, overview, relay, screen, screens, several, startable
               <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
             </Link>
           </Row>
+          {activity.youtube && <Row label="YouTube status"><span>{activity.youtube.paused ? 'Paused · ' : ''}{activity.youtube.step}</span></Row>}
           <Row label="ChatGPT images">
             <Link to="/sleeper-cells/accounts" className="inline-flex items-center gap-1 tabular-nums hover:underline">
               {usages.length
@@ -345,10 +346,10 @@ function StopAllBar({ phones, startable, overview, send, sending }: {
   phones: PhoneOverviewPhone[]; startable: PhoneOverviewPhone[]; overview: PhoneOverview | null; send: Send; sending: string | null
 }) {
   const [open, setOpen] = useState(false)
-  const going = !!(overview?.working.length || overview?.runs.length || startable.some(p => p.automation?.resume))
+  const going = !!(overview?.working.length || overview?.runs.length || startable.some(p => p.automation?.resume || p.automation?.youtube?.active))
   const choice = stopAllChoice(phones.flatMap(p => {
     const activity = phoneActivity(overview, p, true)
-    return stopChoice(activity.working.length, activity.runs, p.automation?.clipperStopping === true) ?? []
+    return stopChoice(activity.working.length, activity.runs, p.automation?.clipperStopping === true, !!activity.youtube) ?? []
   }))
   // The server sends a finish to every phone only when each reported build takes it.
   const canFinish = phones.every(p => !p.automation || p.automation.stopAfter === true)

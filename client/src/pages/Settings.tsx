@@ -15,6 +15,7 @@ import { CloudflareTab } from '@/components/settings/CloudflareR2Card'
 import { archiveVersion, readHistory, type DocVersion } from '@/lib/docHistory'
 import { loadSavedEditorPrompt, phoneEditorApi } from '@/pages/editor2/phoneEditor'
 import StorageManager from '@/pages/storage/StorageManager'
+import YouTubeGuidelines from '@/components/settings/YouTubeGuidelines'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Save, RotateCcw, FolderOpen, Gauge, UserCircle, ImageIcon, Download, Wand2, FileText, Film, Moon, Sun, Monitor, Palette, Cloud, HardDrive } from 'lucide-react'
 
@@ -25,7 +26,8 @@ const settingsTabTrigger =
 export default function Settings() {
   const { toast } = useToast()
   // ?tab=<value> deep-links to a tab (e.g. Clipper 3.0's "add your API key" link).
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const activeTab = searchParams.get('tab') || 'appearance'
   const { theme, resolvedTheme, setTheme } = useTheme()
   const [settings, setSettings] = useState<SettingsType | null>(null)
   const [loading, setLoading] = useState(true)
@@ -122,11 +124,12 @@ export default function Settings() {
           <div>
             <h1 className="text-3xl font-bold">Settings</h1>
             <p className="text-muted-foreground">
-              Appearance, downloads, the Editor 2.0 prompt, Cloudflare and storage
+              Appearance, downloads, Editor 2.0, YouTube guidelines, Cloudflare and storage
             </p>
           </div>
 
           <div className="flex gap-2">
+            {activeTab !== 'youtube' && <>
             <Button variant="outline" onClick={handleReset}>
               <RotateCcw className="h-4 w-4 mr-2" />
               Reset
@@ -139,6 +142,7 @@ export default function Settings() {
               )}
               Save Changes
             </Button>
+            </>}
           </div>
         </div>
       </div>
@@ -146,7 +150,8 @@ export default function Settings() {
       {/* Tabs */}
       <div className="flex-1 min-h-0">
         <Tabs
-          defaultValue={searchParams.get('tab') || 'appearance'}
+          value={activeTab}
+          onValueChange={value => setSearchParams({ tab: value }, { replace: true })}
           orientation="vertical"
           className="flex w-full h-full"
         >
@@ -163,6 +168,10 @@ export default function Settings() {
               <Film className="h-4 w-4" />
               <span>Editor 2.0</span>
             </TabsTrigger>
+            <TabsTrigger value="youtube" className={settingsTabTrigger}>
+              <FileText className="h-4 w-4" />
+              <span>YouTube Guidelines</span>
+            </TabsTrigger>
             <TabsTrigger value="cloudflare" className={settingsTabTrigger}>
               <Cloud className="h-4 w-4" />
               <span>Cloudflare</span>
@@ -174,6 +183,9 @@ export default function Settings() {
           </TabsList>
 
           <div className="flex-1 min-w-0 overflow-auto">
+          <TabsContent value="youtube" className="mt-0 p-6 max-w-5xl">
+            <YouTubeGuidelines />
+          </TabsContent>
           {/* Appearance Tab */}
           <TabsContent value="appearance" className="mt-0 p-6 max-w-4xl space-y-6">
             <Card>

@@ -31,7 +31,8 @@
     "sharp": "^0.34.5",
     "socket.io": "^4.7.4",
     "uuid": "^9.0.1",
-    "ws": "^8.22.0"
+    "ws": "^8.22.0",
+    "pdf-parse": "2.4.5"
   },
   "devDependencies": {
     "@types/archiver": "^7.0.0",

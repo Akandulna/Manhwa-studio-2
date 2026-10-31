@@ -23,7 +23,7 @@ export interface StopChoice {
 }
 
 /** For one phone: its clipper pages (`pages`, with `clipperStopping`), else its first run. Null when nothing runs. */
-export function stopChoice(pages: number, runs: PhoneOverviewRun[], clipperStopping: boolean): StopChoice | null {
+export function stopChoice(pages: number, runs: PhoneOverviewRun[], clipperStopping: boolean, youtube = false): StopChoice | null {
   if (pages > 0) {
     const one = pages === 1
     return {
@@ -35,7 +35,7 @@ export function stopChoice(pages: number, runs: PhoneOverviewRun[], clipperStopp
     }
   }
   const run = runs[0]
-  if (!run) return null
+  if (!run) return youtube ? {stopping:false,after:'Finish this response, then stop',message:'Stop now, or let the YouTube response finish and return to Studio? A submitted prompt will not be sent again automatically.',stoppingMessage:'Waiting for the YouTube response.',stoppingLabel:'Finishing YouTube response'} : null
   if (run.kind === 'voiceover') {
     return {
       stopping: run.stopping,

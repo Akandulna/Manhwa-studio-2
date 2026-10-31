@@ -13,6 +13,7 @@ import seriesRoutes from './routes/series.js';
 import chapterRoutes from './routes/chapters.js';
 import downloadRoutes from './routes/downloads.js';
 import settingsRoutes from './routes/settings.js';
+import { createYouTubeRouter } from './routes/youtube.js';
 import manualRoutes from './routes/manual.js';
 import { initNarrationRoutes } from './routes/narration.js';
 import { initClipper3Routes } from './routes/clipper3.js';
@@ -79,11 +80,17 @@ app.post('/api/library/publish', async (_req, res) => {
   catch (error) { console.error('[library-sync]', error); res.status(500).json({ error: 'Could not publish the shared library' }); }
 });
 
+
 // Routes
 app.use('/api/series', seriesRoutes);
 app.use('/api/chapters', chapterRoutes);
 app.use('/api/downloads', downloadRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/youtube', createYouTubeRouter({
+  seriesExists: async id => !!await prisma.series.findUnique({ where: { id }, select: { id: true } }),
+  seriesTitle: async id => (await prisma.series.findUnique({ where: { id }, select: { title: true } }))?.title ?? null,
+  chapters: async seriesId => prisma.chapter.findMany({ where: { seriesId, completedAt: null }, select: { id: true, number: true, folderPath: true }, orderBy: { number: 'asc' } })
+}));
 app.use('/api/manual', manualRoutes);  // Manual upload mode
 app.use('/api/narration', initNarrationRoutes(io));  // Module 2: Narration — fetch phone scripts + voiceovers, align
 app.use('/api/clipper3', initClipper3Routes(io));  // Module 3: Image Clipper 3.0 — per-image crop JSONs, page-local coordinates

@@ -58,6 +58,7 @@ export type PhoneAction =
   | 'clipper_start'
   | 'clipper_stop'
   | 'narration_start'
+  | 'youtube_start'
   | 'editor_start'
   | 'voiceover_start'
   | 'run_stop'
