@@ -6,4 +6,4 @@ The isolated workflow verified selecting the new variation, replacing it while r
 
 Studio passes its YouTube regression and component checks, TypeScript, and web build. Android's full beta workspace passes 965 tests per variant. The isolated YouTube-only release candidate passes 929 tests per variant, excluding unrelated unfinished beta changes. Production APK packaging is reserved for GitHub Actions.
 
-Final beta `1.0.216-beta.youtube-final-20261101` is installed on Note. The final active/idle progress receipt check is pending reopening Beta after installation. Release publication is pending that check. No other phone was used for these final tests.
+Final beta `1.0.216-beta.youtube-final-20261101` is installed on Note. The final live progress check passed: Note job `feea2c80-c1c0-49f1-ab7c-1d5d26c04cd0` showed “YouTube references / Attaching 3 reference images” with one active run. It prepared all three images and stopped before Send; afterward Studio reported inactive with zero runs. Release publication proceeds through GitHub Actions. No other phone was used for these final tests.
