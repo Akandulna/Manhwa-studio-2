@@ -1,0 +1,30 @@
+{
+  "checkedAt": "2026-10-19T18:51:06.636Z",
+  "records": [
+    {
+      "publisherDeviceId": "mac-fa250252-9b2a-4641-a52b-46b72ccd5df9",
+      "publisher": "Manhwa Studio",
+      "observedAt": "2026-10-19T18:49:59.386Z",
+      "folder": "I Became The Rogue First Prince",
+      "seriesId": "775891fa-bdfd-47b2-bb1d-a0c109341fa8",
+      "chapter": {
+        "id": "9fee19f4-de13-4051-8cb2-c6e5b40b8265",
+        "name": "Chapter 001",
+        "number": 1
+      }
+    },
+    {
+      "publisherDeviceId": "304527cb8fc1440a",
+      "publisher": "Nord",
+      "observedAt": "2026-10-18T18:52:16.235220Z",
+      "folder": "Sandmancer of the Scorched Desert",
+      "seriesId": "7c5ac077-2b43-478c-aadd-8116190d0a96",
+      "chapter": {
+        "id": "d5fd1a64-2eef-472d-aeea-8813307af423",
+        "name": "Chapter 001",
+        "number": 1
+      }
+    }
+  ],
+  "scope": "Read-only replay of real shared library identities. No source URLs, credentials or synthetic catalogs."
+}

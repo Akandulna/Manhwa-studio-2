@@ -1,0 +1,56 @@
+{
+  "task": {
+    "workspaceId": "fixture-workspace",
+    "seriesId": "fixture-series",
+    "chapterId": "fixture-chapter",
+    "pageId": "fixture-page",
+    "id": "task:sha256:23b559e6a3acabf796a0fc3009afee34a64d18331a2c5bea95630bd237fae1d7",
+    "fingerprint": "4d2fc98221a396b1f427f24c3b42546d0f8bea5f0cb6537ae45151c6bd4c1eb8",
+    "spec": {
+      "version": "crop-page/1",
+      "provider": "chatgpt",
+      "product": "chatgpt-web",
+      "model": "owner-selected-model-🧪",
+      "settings": {
+        "mode": "Chat",
+        "effort": null
+      },
+      "pageRevision": "page-r1",
+      "promptVersion": "prompt-1",
+      "validatorVersion": "crop-validator-1",
+      "dependencies": [
+        {
+          "id": "fixture-page",
+          "revision": "page-r1",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    },
+    "state": "assigned",
+    "generation": 1,
+    "attemptId": "fixture-attempt",
+    "canonical": null
+  },
+  "attempt": {
+    "id": "fixture-attempt",
+    "activeCommandId": "fixture-command",
+    "taskId": "task:sha256:23b559e6a3acabf796a0fc3009afee34a64d18331a2c5bea95630bd237fae1d7",
+    "generation": 1,
+    "deviceId": "fixture-phone",
+    "profileId": "fixture-profile",
+    "accountId": null,
+    "leaseExpiresAt": "2026-10-19T00:05:00Z",
+    "phase": "assigned",
+    "submission": "unsent",
+    "checkpointRef": null
+  },
+  "command": {
+    "id": "fixture-command",
+    "taskId": "task:sha256:23b559e6a3acabf796a0fc3009afee34a64d18331a2c5bea95630bd237fae1d7",
+    "attemptId": "fixture-attempt",
+    "generation": 1,
+    "fingerprint": "4d2fc98221a396b1f427f24c3b42546d0f8bea5f0cb6537ae45151c6bd4c1eb8",
+    "action": "start",
+    "phase": "queued"
+  }
+}

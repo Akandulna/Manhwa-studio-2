@@ -1,0 +1,2356 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Manager agents accepted records v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "manager-agents/1"
+        },
+        "kind": {
+          "const": "identity"
+        },
+        "eventId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "deviceId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "manager": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "id",
+            "deviceId",
+            "manager",
+            "sequence"
+          ]
+        },
+        "observedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "receivedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "capturedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "redacted": {
+                "const": true
+              },
+              "expiresAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "ref",
+              "sha256",
+              "capturedAt",
+              "redacted",
+              "expiresAt"
+            ]
+          },
+          "maxItems": 1000
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "originDeviceId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "localEntityId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "entityKind": {
+              "enum": [
+                "series",
+                "chapter",
+                "page"
+              ]
+            },
+            "sharedId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "originOwnerId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          },
+          "required": [
+            "originDeviceId",
+            "localEntityId",
+            "entityKind",
+            "sharedId",
+            "originOwnerId"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "kind",
+        "eventId",
+        "workspaceId",
+        "source",
+        "observedAt",
+        "receivedAt",
+        "evidence",
+        "body"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "manager-agents/1"
+        },
+        "kind": {
+          "const": "observation"
+        },
+        "eventId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "deviceId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "manager": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "id",
+            "deviceId",
+            "manager",
+            "sequence"
+          ]
+        },
+        "observedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "receivedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "capturedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "redacted": {
+                "const": true
+              },
+              "expiresAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "ref",
+              "sha256",
+              "capturedAt",
+              "redacted",
+              "expiresAt"
+            ]
+          },
+          "maxItems": 1000
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "entity": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "seriesId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "chapterId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "stage": {
+                  "enum": [
+                    "download",
+                    "cleanup",
+                    "stitch",
+                    "script_en",
+                    "script_hi",
+                    "split_en",
+                    "split_hi",
+                    "voice_en",
+                    "voice_hi",
+                    "align_en",
+                    "align_hi",
+                    "crop_json",
+                    "review",
+                    "crop",
+                    "timeline_en",
+                    "timeline_hi",
+                    "processed_en",
+                    "processed_hi",
+                    "export_en",
+                    "export_hi"
+                  ]
+                },
+                "language": {
+                  "enum": [
+                    null,
+                    "en",
+                    "hi"
+                  ]
+                },
+                "unit": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "chapter",
+                        "page",
+                        "section",
+                        "editor_batch"
+                      ]
+                    },
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 512
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ]
+                }
+              },
+              "required": [
+                "seriesId",
+                "chapterId",
+                "stage",
+                "language",
+                "unit"
+              ]
+            },
+            "inputFingerprint": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "workState": {
+              "enum": [
+                "queued",
+                "assigned",
+                "running",
+                "uncertain",
+                "recovering",
+                "waiting",
+                "awaiting_review",
+                "verified_complete",
+                "failed",
+                "cancelled",
+                "superseded"
+              ]
+            },
+            "revisionCompatibility": {
+              "enum": [
+                "current",
+                "outdated",
+                "unknown"
+              ]
+            },
+            "review": {
+              "enum": [
+                "not_required",
+                "pending",
+                "accepted"
+              ]
+            },
+            "availability": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "destination": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "state": {
+                    "enum": [
+                      "produced_local",
+                      "uploaded",
+                      "downloaded",
+                      "imported",
+                      "validated",
+                      "missing",
+                      "unknown"
+                    ]
+                  },
+                  "artifactId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  }
+                },
+                "required": [
+                  "destination",
+                  "state",
+                  "artifactId"
+                ]
+              },
+              "maxItems": 1000
+            },
+            "validator": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          },
+          "required": [
+            "entity",
+            "inputFingerprint",
+            "workState",
+            "revisionCompatibility",
+            "review",
+            "availability",
+            "validator"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "kind",
+        "eventId",
+        "workspaceId",
+        "source",
+        "observedAt",
+        "receivedAt",
+        "evidence",
+        "body"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "manager-agents/1"
+        },
+        "kind": {
+          "const": "task"
+        },
+        "eventId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "deviceId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "manager": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "id",
+            "deviceId",
+            "manager",
+            "sequence"
+          ]
+        },
+        "observedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "receivedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "capturedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "redacted": {
+                "const": true
+              },
+              "expiresAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "ref",
+              "sha256",
+              "capturedAt",
+              "redacted",
+              "expiresAt"
+            ]
+          },
+          "maxItems": 1000
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "pattern": "^task:sha256:[a-f0-9]{64}$"
+            },
+            "entity": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "seriesId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "chapterId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "stage": {
+                  "enum": [
+                    "download",
+                    "cleanup",
+                    "stitch",
+                    "script_en",
+                    "script_hi",
+                    "split_en",
+                    "split_hi",
+                    "voice_en",
+                    "voice_hi",
+                    "align_en",
+                    "align_hi",
+                    "crop_json",
+                    "review",
+                    "crop",
+                    "timeline_en",
+                    "timeline_hi",
+                    "processed_en",
+                    "processed_hi",
+                    "export_en",
+                    "export_hi"
+                  ]
+                },
+                "language": {
+                  "enum": [
+                    null,
+                    "en",
+                    "hi"
+                  ]
+                },
+                "unit": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "chapter",
+                        "page",
+                        "section",
+                        "editor_batch"
+                      ]
+                    },
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 512
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ]
+                }
+              },
+              "required": [
+                "seriesId",
+                "chapterId",
+                "stage",
+                "language",
+                "unit"
+              ]
+            },
+            "inputFingerprint": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "policyId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "runIds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "maxItems": 1000
+            },
+            "state": {
+              "enum": [
+                "queued",
+                "assigned",
+                "running",
+                "uncertain",
+                "recovering",
+                "waiting",
+                "awaiting_review",
+                "verified_complete",
+                "failed",
+                "cancelled",
+                "superseded"
+              ]
+            },
+            "currentAttemptId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "taskId",
+            "entity",
+            "inputFingerprint",
+            "policyId",
+            "runIds",
+            "state",
+            "currentAttemptId"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "kind",
+        "eventId",
+        "workspaceId",
+        "source",
+        "observedAt",
+        "receivedAt",
+        "evidence",
+        "body"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "manager-agents/1"
+        },
+        "kind": {
+          "const": "attempt"
+        },
+        "eventId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "deviceId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "manager": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "id",
+            "deviceId",
+            "manager",
+            "sequence"
+          ]
+        },
+        "observedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "receivedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "capturedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "redacted": {
+                "const": true
+              },
+              "expiresAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "ref",
+              "sha256",
+              "capturedAt",
+              "redacted",
+              "expiresAt"
+            ]
+          },
+          "maxItems": 1000
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "pattern": "^task:sha256:[a-f0-9]{64}$"
+            },
+            "attemptId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "generation": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "inputFingerprint": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "deviceId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "profileId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "accountId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "provider": {
+              "enum": [
+                "chatgpt",
+                "gemini",
+                "aistudio"
+              ]
+            },
+            "product": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "settings": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "mode": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "effort": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "mode",
+                "effort"
+              ]
+            },
+            "fallbackPolicy": {
+              "enum": [
+                "wait",
+                "approved_only"
+              ]
+            },
+            "allowedAlternatives": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "maxItems": 1000
+            },
+            "leaseExpiresAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "lastProgressAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "checkpointRefs": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "maxItems": 1000
+            },
+            "submissionOutcome": {
+              "enum": [
+                "unsent",
+                "submitted",
+                "unknown",
+                "saved",
+                "rejected"
+              ]
+            },
+            "state": {
+              "enum": [
+                "queued",
+                "assigned",
+                "running",
+                "uncertain",
+                "recovering",
+                "waiting",
+                "awaiting_review",
+                "verified_complete",
+                "failed",
+                "cancelled",
+                "superseded"
+              ]
+            }
+          },
+          "required": [
+            "taskId",
+            "attemptId",
+            "generation",
+            "inputFingerprint",
+            "deviceId",
+            "profileId",
+            "accountId",
+            "provider",
+            "product",
+            "model",
+            "settings",
+            "fallbackPolicy",
+            "allowedAlternatives",
+            "leaseExpiresAt",
+            "lastProgressAt",
+            "checkpointRefs",
+            "submissionOutcome",
+            "state"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "kind",
+        "eventId",
+        "workspaceId",
+        "source",
+        "observedAt",
+        "receivedAt",
+        "evidence",
+        "body"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "manager-agents/1"
+        },
+        "kind": {
+          "const": "command"
+        },
+        "eventId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "deviceId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "manager": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "id",
+            "deviceId",
+            "manager",
+            "sequence"
+          ]
+        },
+        "observedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "receivedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "capturedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "redacted": {
+                "const": true
+              },
+              "expiresAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "ref",
+              "sha256",
+              "capturedAt",
+              "redacted",
+              "expiresAt"
+            ]
+          },
+          "maxItems": 1000
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "commandId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "taskId": {
+              "type": "string",
+              "pattern": "^task:sha256:[a-f0-9]{64}$"
+            },
+            "attemptId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "generation": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "inputFingerprint": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "action": {
+              "enum": [
+                "start",
+                "stop",
+                "finish_current",
+                "upload",
+                "submit",
+                "import",
+                "publish"
+              ]
+            },
+            "phase": {
+              "enum": [
+                "queued",
+                "accepted",
+                "started",
+                "result_saved",
+                "result_verified",
+                "stop_requested",
+                "stop_confirmed"
+              ]
+            },
+            "checkpointRef": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "commandId",
+            "taskId",
+            "attemptId",
+            "generation",
+            "inputFingerprint",
+            "action",
+            "phase",
+            "checkpointRef"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "kind",
+        "eventId",
+        "workspaceId",
+        "source",
+        "observedAt",
+        "receivedAt",
+        "evidence",
+        "body"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "manager-agents/1"
+        },
+        "kind": {
+          "const": "artifact"
+        },
+        "eventId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "deviceId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "manager": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "id",
+            "deviceId",
+            "manager",
+            "sequence"
+          ]
+        },
+        "observedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "receivedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "capturedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "redacted": {
+                "const": true
+              },
+              "expiresAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "ref",
+              "sha256",
+              "capturedAt",
+              "redacted",
+              "expiresAt"
+            ]
+          },
+          "maxItems": 1000
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "artifactId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "taskId": {
+              "type": "string",
+              "pattern": "^task:sha256:[a-f0-9]{64}$"
+            },
+            "attemptId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "generation": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "inputFingerprint": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "destination": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "objectVersion": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "contentHash": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "publication": {
+              "enum": [
+                "staged",
+                "canonical",
+                "superseded"
+              ]
+            },
+            "validation": {
+              "enum": [
+                "pending",
+                "passed",
+                "failed"
+              ]
+            },
+            "validator": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "validatedAt": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "artifactId",
+            "taskId",
+            "attemptId",
+            "generation",
+            "inputFingerprint",
+            "destination",
+            "objectVersion",
+            "contentHash",
+            "publication",
+            "validation",
+            "validator",
+            "validatedAt"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "kind",
+        "eventId",
+        "workspaceId",
+        "source",
+        "observedAt",
+        "receivedAt",
+        "evidence",
+        "body"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "manager-agents/1"
+        },
+        "kind": {
+          "const": "reservation"
+        },
+        "eventId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "deviceId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "manager": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "id",
+            "deviceId",
+            "manager",
+            "sequence"
+          ]
+        },
+        "observedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "receivedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "capturedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "redacted": {
+                "const": true
+              },
+              "expiresAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "ref",
+              "sha256",
+              "capturedAt",
+              "redacted",
+              "expiresAt"
+            ]
+          },
+          "maxItems": 1000
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reservationId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "taskId": {
+              "type": "string",
+              "pattern": "^task:sha256:[a-f0-9]{64}$"
+            },
+            "attemptId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "generation": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "resourceKind": {
+              "enum": [
+                "device",
+                "browser",
+                "profile",
+                "account_capacity"
+              ]
+            },
+            "resourceId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "quotaScope": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "units": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "state": {
+              "enum": [
+                "held",
+                "uncertain",
+                "released"
+              ]
+            }
+          },
+          "required": [
+            "reservationId",
+            "taskId",
+            "attemptId",
+            "generation",
+            "resourceKind",
+            "resourceId",
+            "quotaScope",
+            "units",
+            "state"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "kind",
+        "eventId",
+        "workspaceId",
+        "source",
+        "observedAt",
+        "receivedAt",
+        "evidence",
+        "body"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "manager-agents/1"
+        },
+        "kind": {
+          "const": "incident"
+        },
+        "eventId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "deviceId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "manager": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "id",
+            "deviceId",
+            "manager",
+            "sequence"
+          ]
+        },
+        "observedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "receivedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "capturedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "redacted": {
+                "const": true
+              },
+              "expiresAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "ref",
+              "sha256",
+              "capturedAt",
+              "redacted",
+              "expiresAt"
+            ]
+          },
+          "maxItems": 1000
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "incidentId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "causeKey": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "resourceKey": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "type": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "severity": {
+              "enum": [
+                "info",
+                "warning",
+                "blocking"
+              ]
+            },
+            "state": {
+              "enum": [
+                "detected",
+                "recovering",
+                "waiting",
+                "action_required",
+                "resolved"
+              ]
+            },
+            "acknowledgedAt": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "affectedEntities": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "maxItems": 1000
+            },
+            "confirmedFacts": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "maxItems": 1000
+            },
+            "suspectedCause": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "firstOccurredAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "lastOccurredAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "responsibleManager": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "recoveries": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "action": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "outcome": {
+                    "enum": [
+                      "pending",
+                      "verified",
+                      "failed",
+                      "unknown"
+                    ]
+                  },
+                  "evidenceRefs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 512
+                    },
+                    "maxItems": 1000
+                  }
+                },
+                "required": [
+                  "id",
+                  "action",
+                  "outcome",
+                  "evidenceRefs"
+                ]
+              },
+              "maxItems": 1000
+            },
+            "blocker": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "nextAction": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "notificationId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "incidentId",
+            "causeKey",
+            "resourceKey",
+            "type",
+            "severity",
+            "state",
+            "acknowledgedAt",
+            "affectedEntities",
+            "confirmedFacts",
+            "suspectedCause",
+            "firstOccurredAt",
+            "lastOccurredAt",
+            "responsibleManager",
+            "recoveries",
+            "blocker",
+            "nextAction",
+            "notificationId"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "kind",
+        "eventId",
+        "workspaceId",
+        "source",
+        "observedAt",
+        "receivedAt",
+        "evidence",
+        "body"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "manager-agents/1"
+        },
+        "kind": {
+          "const": "account"
+        },
+        "eventId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "deviceId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "manager": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "id",
+            "deviceId",
+            "manager",
+            "sequence"
+          ]
+        },
+        "observedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "receivedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "capturedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "redacted": {
+                "const": true
+              },
+              "expiresAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "ref",
+              "sha256",
+              "capturedAt",
+              "redacted",
+              "expiresAt"
+            ]
+          },
+          "maxItems": 1000
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "accountId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "deviceId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "profileId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "provider": {
+              "enum": [
+                "chatgpt",
+                "gemini",
+                "aistudio"
+              ]
+            },
+            "identityConfirmed": {
+              "type": "boolean"
+            },
+            "login": {
+              "enum": [
+                "ready",
+                "signed_out",
+                "unknown"
+              ]
+            },
+            "plan": {
+              "enum": [
+                "paid",
+                "free",
+                "unknown"
+              ]
+            },
+            "evidenceQuality": {
+              "enum": [
+                "observed",
+                "locally_counted",
+                "estimated",
+                "owner_supplied",
+                "unknown"
+              ]
+            },
+            "capabilities": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "maxItems": 1000
+            },
+            "quotas": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "scope": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "state": {
+                    "enum": [
+                      "available",
+                      "exhausted",
+                      "unknown"
+                    ]
+                  },
+                  "quality": {
+                    "enum": [
+                      "observed",
+                      "locally_counted",
+                      "estimated",
+                      "owner_supplied",
+                      "unknown"
+                    ]
+                  },
+                  "resetAt": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "scope",
+                  "state",
+                  "quality",
+                  "resetAt"
+                ]
+              },
+              "maxItems": 1000
+            },
+            "audit": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "intervalHours": {
+                  "enum": [
+                    24,
+                    48
+                  ]
+                },
+                "lastSuccessAt": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "nextDueAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "state": {
+                  "enum": [
+                    "due",
+                    "deferred_busy",
+                    "deferred_offline",
+                    "complete",
+                    "failed"
+                  ]
+                }
+              },
+              "required": [
+                "intervalHours",
+                "lastSuccessAt",
+                "nextDueAt",
+                "state"
+              ]
+            }
+          },
+          "required": [
+            "accountId",
+            "deviceId",
+            "profileId",
+            "provider",
+            "identityConfirmed",
+            "login",
+            "plan",
+            "evidenceQuality",
+            "capabilities",
+            "quotas",
+            "audit"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "kind",
+        "eventId",
+        "workspaceId",
+        "source",
+        "observedAt",
+        "receivedAt",
+        "evidence",
+        "body"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "manager-agents/1"
+        },
+        "kind": {
+          "const": "ui_change"
+        },
+        "eventId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "deviceId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "manager": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "id",
+            "deviceId",
+            "manager",
+            "sequence"
+          ]
+        },
+        "observedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "receivedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "capturedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "redacted": {
+                "const": true
+              },
+              "expiresAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "ref",
+              "sha256",
+              "capturedAt",
+              "redacted",
+              "expiresAt"
+            ]
+          },
+          "maxItems": 1000
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "changeId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "provider": {
+              "enum": [
+                "chatgpt",
+                "gemini",
+                "aistudio"
+              ]
+            },
+            "deviceId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "profileId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "workflow": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "variant": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "viewport": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "locale": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "theme": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                }
+              },
+              "required": [
+                "viewport",
+                "locale",
+                "theme"
+              ]
+            },
+            "baselineVersion": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "state": {
+              "enum": [
+                "baseline_missing",
+                "unchanged",
+                "suspected",
+                "confirmed_info",
+                "compatibility_blocker"
+              ]
+            },
+            "lastMatchedAt": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "firstChangedAt": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "expected": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "observed": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "clippingImpact": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "handoffs": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "from": {
+                    "enum": [
+                      "website_ui_monitor",
+                      "device_image_clipper_manager"
+                    ]
+                  },
+                  "to": {
+                    "enum": [
+                      "device_image_clipper_manager",
+                      "issues_manager"
+                    ]
+                  },
+                  "eventId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "acknowledgedAt": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "from",
+                  "to",
+                  "eventId",
+                  "acknowledgedAt"
+                ]
+              },
+              "maxItems": 1000
+            },
+            "incidentId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "notificationId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "baselineAcceptedAt": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "changeId",
+            "provider",
+            "deviceId",
+            "profileId",
+            "workflow",
+            "variant",
+            "baselineVersion",
+            "state",
+            "lastMatchedAt",
+            "firstChangedAt",
+            "expected",
+            "observed",
+            "clippingImpact",
+            "handoffs",
+            "incidentId",
+            "notificationId",
+            "baselineAcceptedAt"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "kind",
+        "eventId",
+        "workspaceId",
+        "source",
+        "observedAt",
+        "receivedAt",
+        "evidence",
+        "body"
+      ]
+    }
+  ]
+}

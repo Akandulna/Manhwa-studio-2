@@ -1,0 +1,50 @@
+{
+  "date": "2026-10-19",
+  "productionChanged": false,
+  "apkBuiltOrInstalled": false,
+  "server": {
+    "files": 51,
+    "tests": 385
+  },
+  "androidJvm": {
+    "tests": 307,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "instrumentedPhone": false
+  },
+  "builds": [
+    "server TypeScript",
+    "relay TypeScript"
+  ],
+  "artifactTests": {
+    "unitAndDestinationCases": 16,
+    "kotlinInteroperability": true,
+    "realLocalSourceImageHashAndDimensions": true,
+    "realPrivateFilesystemReadbackAndFlush": true,
+    "unitObjectStore": "synthetic conditional bucket"
+  },
+  "localIntegration": {
+    "authority": "Wrangler Durable Object SQLite",
+    "objectStorage": "local R2 emulation",
+    "output": "synthetic explicit empty crop/metadata arrays",
+    "concurrentIdenticalUploads": true,
+    "realStudioHttpTransport": true,
+    "canonicalPublication": true,
+    "relayProcessRestart": true,
+    "objectAndSqlAndLocalReceiptReplay": true
+  },
+  "limits": {
+    "maxDocumentBytes": 1000000,
+    "maxUploadSlots": 256,
+    "maxReservedObjectBytes": 64000000,
+    "slotsPerTask": 1,
+    "failedSlotsRemainCharged": true
+  },
+  "limitations": [
+    "No production R2 binding or account-wide free allowance verification.",
+    "No real website/phone executor workflow or installed-phone SQLite crash instrumentation.",
+    "ProductionRunner task routing, structured executor export and canonical crop reader/import integration remain pending.",
+    "Legacy crop paths are not used by this isolated adapter."
+  ]
+}

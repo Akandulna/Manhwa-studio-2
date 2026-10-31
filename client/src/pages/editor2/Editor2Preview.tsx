@@ -14,7 +14,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { videoApi2, type PlanImage, type TimelinePlan } from '@/lib/api'
-import { getTimelineJson, markProcessed } from './timelineHandoff'
+import { TimelineModelBadge } from './TimelineModelBadge'
+import { getTimelineJson, markProcessed, syncChapterTimeline } from './timelineHandoff'
+import { LANGUAGE_LABEL, useNarrationLanguage } from '@/lib/narrationLanguage'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -45,9 +47,7 @@ function fmt(seconds: number): string {
  * CSS transform approximating one image's Ken Burns motion at a given
  * progress (0..1) through its slot.
  *
- * Deliberately the same formulas as Editor 1.0's PreviewPlayer, so what the
- * two editors show for the same effect and intensity matches — including the
- * ×3 amplification, which exists because the render-time intensity is far too
+ * Includes a ×3 amplification, because the render-time intensity is far too
  * subtle to read on a small preview.
  */
 function motionStyle(image: PlanImage, progress: number, enabled: boolean): React.CSSProperties {
@@ -84,6 +84,8 @@ function motionStyle(image: PlanImage, progress: number, enabled: boolean): Reac
 export default function Editor2Preview() {
   const { chapterId } = useParams<{ chapterId: string }>()
   const navigate = useNavigate()
+  // Which of the chapter's two videos this previews (its paste and voice).
+  const [language] = useNarrationLanguage('editor2')
 
   const [plan, setPlan] = useState<TimelinePlan | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -93,7 +95,7 @@ export default function Editor2Preview() {
   const [elapsed, setElapsed] = useState(0)
   const [playing, setPlaying] = useState(false)
 
-  // Ken Burns motion, on by default to match Editor 1.0. Remembered locally
+  // Ken Burns motion, on by default to match the export. Remembered locally
   // because it is a viewing preference, not part of the timeline.
   const [motion, setMotion] = useState(() => {
     try {
@@ -120,26 +122,32 @@ export default function Editor2Preview() {
 
   useEffect(() => {
     if (!chapterId) return
-    const json = getTimelineJson(chapterId)
-    if (!json) {
-      setProcessing(false)
-      setError('No timeline JSON was handed over. Go back and paste it on the chapter card, then press Start Processing.')
-      return
-    }
     let cancelled = false
+    let json: string | null = null
     setProcessing(true)
-    videoApi2.processTimeline(chapterId, json)
+    // The paste may have been made in another browser, so check the server
+    // copy first.
+    syncChapterTimeline(chapterId, language)
+      .then(() => {
+        if (cancelled) return null
+        json = getTimelineJson(chapterId, language)
+        if (!json) {
+          setError('No timeline JSON was handed over. Go back and paste it on the chapter card, then press Start Processing.')
+          return null
+        }
+        return videoApi2.processTimeline(chapterId, language, json)
+      })
       .then(result => {
-        if (cancelled) return
+        if (cancelled || !result || !json) return
         setPlan(result)
         // Only a successful build counts as processed — that is what lets the
         // chapter card offer Preview instead of Start Processing.
-        markProcessed(chapterId, json)
+        markProcessed(chapterId, language, json)
       })
       .catch(err => { if (!cancelled) setError(err instanceof Error ? err.message : 'Processing failed') })
       .finally(() => { if (!cancelled) setProcessing(false) })
     return () => { cancelled = true }
-  }, [chapterId])
+  }, [chapterId, language])
 
   // ---------- Derived timeline ----------
 
@@ -344,8 +352,9 @@ export default function Editor2Preview() {
             {plan.chapterTitle ? ` — ${plan.chapterTitle}` : ''}
           </h1>
           <p className="text-xs text-muted-foreground">
-            {plan.seriesTitle} · {plan.sections.length} sections · {plan.imageCount} images · {fmt(plan.totalDuration)}
+            {plan.seriesTitle} · {LANGUAGE_LABEL[language]} · {plan.sections.length} sections · {plan.imageCount} images · {fmt(plan.totalDuration)}
           </p>
+          <TimelineModelBadge chapterId={chapterId!} language={language} />
         </div>
       </div>
 
@@ -382,7 +391,7 @@ export default function Editor2Preview() {
             {currentImage?.url ? (
               <>
                 {/* Blurred, darkened fill behind the image — same treatment as
-                    Editor 1.0, so tall crops sit on a soft backdrop rather
+                    the export, so tall crops sit on a soft backdrop rather
                     than hard black bars. */}
                 <img
                   src={currentImage.url}
@@ -455,7 +464,7 @@ export default function Editor2Preview() {
             <p className="text-xs text-muted-foreground">
               Current effect: <span className="font-mono">{currentImage.motionEffect}</span>
               {' · '}intensity {currentImage.motionIntensity}
-              {' · '}the same gentle set Editor 1.0 applies at render time
+              {' · '}the same gentle set the export applies at render time
             </p>
           )}
 

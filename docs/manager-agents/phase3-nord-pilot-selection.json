@@ -1,0 +1,90 @@
+{
+  "recordedAt": "2026-10-19T11:46:43.456Z",
+  "selectedByOwner": true,
+  "deviceId": "304527cb8fc1440a",
+  "series": {
+    "title": "I Became The Rogue First Prince",
+    "studioId": "775891fa-bdfd-47b2-bb1d-a0c109341fa8"
+  },
+  "chapter": {
+    "number": 1,
+    "studioId": "9fee19f4-de13-4051-8cb2-c6e5b40b8265"
+  },
+  "page": {
+    "ordinal": 1,
+    "studioId": "9431b5f1-9db0-4619-a587-41736f7f33a3",
+    "index": 0,
+    "filename": "page_001.jpg",
+    "bytes": 724013,
+    "sha256": "155d022b85274a5237814223fb6a570f2cb81b5d17fd5ddde61dead2d79181a5",
+    "width": 800,
+    "height": 10683
+  },
+  "provider": "chatgpt",
+  "profile": {
+    "name": "Saran",
+    "id": "profile-1",
+    "plan": "free",
+    "planEvidence": "owner-supplied correction"
+  },
+  "model": null,
+  "mode": null,
+  "modelEvidenceAt": null,
+  "effort": null,
+  "readyForDispatch": false,
+  "blockers": [
+    "Prior task remains paused with actual stop acknowledgment, submission unsent and no reservation. Retained binding/history must not be deleted.",
+    "Owner requested a genuinely pending page; see separate Sandmancer selection and assignment evidence."
+  ],
+  "scope": "Compatible Nord 1.0.135 paired; selected source bound and task claimed. Phone acknowledged accepted/started and owner reports a new ChatGPT chat. Last checked authority phase is started/submission unsent; no completed provider result or publication verified.",
+  "installedApkRechecked": {
+    "versionName": "1.0.135",
+    "releaseCertificateMatches": true,
+    "sharedPersistentRateLimitMarkers": true,
+    "managedPilotPrerequisitesPackaged": true,
+    "managedDispatchReady": true
+  },
+  "modelPolicy": "Use the model available by default in Saran’s free ChatGPT profile; do not require or attempt model selection.",
+  "executionPreflight": "Observe available provider configuration before planning; record only supported evidence in the resolved specification. Do not reuse historical paid-plan model options or fabricate a model identity.",
+  "executionPolicy": {
+    "model": "provider-default",
+    "meaning": "Use the account default; no assertion about the provider’s underlying model identity.",
+    "settings": {
+      "mode": null,
+      "effort": null
+    },
+    "promptVersion": "managed-chatgpt-default-crop/1",
+    "provider": "chatgpt"
+  },
+  "sourceImplementation": {
+    "explicitSinglePageExecutor": true,
+    "phonePairingAndReconciledUnpairing": true,
+    "studioPlanBindClaimAndImportControls": true,
+    "fullProductionRunnerIntegration": false,
+    "installedPhoneAcceptance": false
+  },
+  "updatedAt": "2026-10-19T18:45:55.216Z",
+  "productionPreparation": {
+    "studioEnabled": true,
+    "relayEnabled": true,
+    "workspaceId": "studio_01df7f214f87472e802b2bc43b8d9165",
+    "artifactStorageConfigured": true,
+    "phonePaired": true,
+    "enrollmentCreated": true,
+    "taskCreated": true
+  },
+  "activePilot": {
+    "taskId": "task:sha256:30fa8bbd2591315c2cdbdbd569c95f98ea1d517d1328eddd7849f829c2e2a623",
+    "attemptId": "7e2d55db-f448-45b4-a655-d811f92c2840",
+    "commandId": "2e004d93-23a4-418f-b97c-06afe0e653ea",
+    "phase": "stop_confirmed",
+    "submission": "unsent",
+    "leaseExpiresAt": "2026-10-19T18:43:10.793Z",
+    "state": "paused",
+    "lastAuthorityCheck": "2026-10-19T18:43:26.687Z",
+    "ownerReportsNewChat": true,
+    "reserved": false,
+    "ownerComposerObservation": "blank"
+  },
+  "replacedAsPilotSelectionBy": "phase3-nord-pending-pilot-selection.json"
+}

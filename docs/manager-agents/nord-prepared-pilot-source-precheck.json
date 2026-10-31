@@ -1,0 +1,16 @@
+{
+  "checkedAt": "2026-10-19T21:18:39.956Z",
+  "chapterId": "01fef395-d351-41bc-911a-9b4e7e035cd8",
+  "completedAt": null,
+  "pageCount": 29,
+  "firstPage": {
+    "id": "4e3e6a40-b81a-4347-ba49-abce0df2c5d1",
+    "index": 1,
+    "status": "done",
+    "localPath": "Sandmancer of the Scorched Desert/Chapter 001/page_001.jpg",
+    "bytes": 317920,
+    "sha256": "9966acd8c0fae11c398594fac034b8b1ca0e3d16c5ca615a66a1f67d89e520c2"
+  },
+  "sentAt": "2026-10-19T20:11:02.014Z",
+  "scope": "Read-only Studio source readiness before the owner sends prepared chapter 1. No task assignment or provider prompt."
+}

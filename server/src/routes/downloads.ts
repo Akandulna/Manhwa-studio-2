@@ -4,9 +4,6 @@
 
 import { Router, Request, Response } from 'express';
 import { downloadManager, prisma } from '../index.js';
-import { exec } from 'child_process';
-import * as path from 'path';
-import * as os from 'os';
 
 const router = Router();
 
@@ -71,38 +68,6 @@ router.post('/retry-failed', async (req: Request, res: Response) => {
     message: 'Retrying failed chapters',
     status: downloadManager.getQueueStatus()
   });
-});
-
-// Open folder in file explorer
-router.post('/open-folder', async (req: Request, res: Response) => {
-  try {
-    const { path: folderPath } = req.body;
-    const downloadRoot = process.env.DOWNLOAD_ROOT || './downloads';
-    const fullPath = path.resolve(downloadRoot, folderPath);
-    
-    // Platform-specific open command
-    const platform = os.platform();
-    let command: string;
-    
-    if (platform === 'darwin') {
-      command = `open "${fullPath}"`;
-    } else if (platform === 'win32') {
-      command = `explorer "${fullPath}"`;
-    } else {
-      command = `xdg-open "${fullPath}"`;
-    }
-    
-    exec(command, (error) => {
-      if (error) {
-        console.error('Error opening folder:', error);
-        return res.status(500).json({ error: 'Failed to open folder' });
-      }
-      res.json({ message: 'Folder opened' });
-    });
-  } catch (error) {
-    console.error('Error opening folder:', error);
-    res.status(500).json({ error: 'Failed to open folder' });
-  }
 });
 
 // Get download statistics

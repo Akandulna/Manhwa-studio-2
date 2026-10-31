@@ -1,0 +1,23 @@
+{
+  "checkedAt": "2026-10-20T05:47:37.214Z",
+  "series": "Sandmancer of the Scorched Desert",
+  "chapter": 1,
+  "chapterId": "01fef395-d351-41bc-911a-9b4e7e035cd8",
+  "page": {
+    "id": "bf3df14a-5d08-4d49-94fa-4e21ffd7cf6b",
+    "index": 4,
+    "filename": "page_004.jpg",
+    "bytes": 1098524,
+    "sha256": "00c40a1a3952a3a22302bb72c3ae2f0bf917edbbae1e8215c10e58eae6f35588",
+    "width": 800,
+    "height": 11561
+  },
+  "deviceId": "304527cb8fc1440a",
+  "profileId": "Default",
+  "profileName": "Abhishek",
+  "ownerDeclaredPlan": "Go",
+  "model": "provider-default",
+  "legacyOrManagedOutputPresent": false,
+  "scope": "Read-only pending source selection for explicitly requested Go verification. No assignment or prompt yet.",
+  "phoneSourceHashMatches": true
+}

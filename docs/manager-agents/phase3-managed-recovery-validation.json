@@ -1,0 +1,18 @@
+{
+  "verifiedAt": "2026-10-19T11:45:19.156Z",
+  "savedOutputAfterRestart": true,
+  "lostCheckpointAckReplay": true,
+  "immutableUploadReplay": true,
+  "lostPublicationAckReplay": true,
+  "cutWidth": 50,
+  "cutHeight": 200,
+  "cancelledPublicationRejected": true,
+  "unknownSubmissionNotReplayed": true,
+  "secondRelayRestart": true,
+  "unknownReservationSurvivedRestart": true,
+  "completedArtifactStillVerified": true,
+  "scope": "Synthetic worker over real local Durable Object SQL and emulated R2, plus Studio filesystem/Sharp adapters. No installed-phone executor, provider prompt, production task or deployment.",
+  "concurrentClaimOneOwner": true,
+  "commandAcceptedAcrossRelayRestart": true,
+  "harness": "relay/scripts/managed-recovery-check.mts (prepare \u2192 relay process restart \u2192 resume \u2192 relay process restart \u2192 verify); managed-task-check.mjs before/after restart"
+}

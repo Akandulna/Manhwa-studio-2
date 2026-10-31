@@ -1,0 +1,41 @@
+{
+  "checkedAt": "2026-10-19T20:41:07.248991+00:00",
+  "device": "192.168.1.34:40529",
+  "versionName": "1.0.137",
+  "versionCode": 1000137,
+  "releaseCertificateMatches": true,
+  "websiteUiProbePackaged": true,
+  "probeSha256": "656542fdbb645f32e3928b1b3a11f9c818e9f3636e1d5f829d996a5437a98b2e",
+  "quotaBackoffMarkersPackaged": true,
+  "managedPilotPrerequisitesPackaged": true,
+  "managedPilotMarkers": {
+    "workflowCapability": true,
+    "defaultModelPrompt": true,
+    "immutableUpload": true,
+    "durableActionGuard": true,
+    "explicitPhoneEntry": true
+  },
+  "managedStartupPrerequisitesPackaged": true,
+  "managedStartupMarkers": {
+    "navigationGuard": true,
+    "visibleTimeout": true,
+    "composerStage": true,
+    "savedStatus": true
+  },
+  "preparationPrerequisitesPackaged": true,
+  "preparationMarkers": {
+    "durableQueue": true,
+    "libraryControls": true,
+    "verifiedReceipt": true,
+    "managedSourceGuard": true
+  },
+  "preparationReleasePrerequisitesPackaged": false,
+  "preparationReleaseMarkers": {
+    "chapterAction": false,
+    "cancelledAuthorityRequired": false,
+    "localStopReceiptRequired": false,
+    "releasedRevisionFence": false
+  },
+  "probeMatchesCurrentSource": true,
+  "scope": "Installed APK packaging only. Does not prove five-minute cadence, Retry-After persistence or managed execution behavior. No installation or app-data change."
+}

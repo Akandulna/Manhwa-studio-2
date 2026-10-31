@@ -1,0 +1,9 @@
+{
+  "checkedAt": "2026-10-19T18:50:00.312Z",
+  "status": 200,
+  "result": {
+    "published": true
+  },
+  "reason": "Phone reported missing exact shared chapter identity. Republish the authoritative Studio catalog through the existing library sync path; no source or crop reset.",
+  "scope": "Normal shared catalog/index publication only; no managed task resume, prompt submission, unpair or file deletion command."
+}

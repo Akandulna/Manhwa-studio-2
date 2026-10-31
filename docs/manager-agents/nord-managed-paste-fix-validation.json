@@ -1,0 +1,34 @@
+{
+  "checkedAt": "2026-10-20T04:57:19.958081+00:00",
+  "totals": {
+    "tests": 338,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "jvmCommand": "./gradlew testDebugUnitTest --offline",
+  "scriptChecks": [
+    "node tools/test_managed_composer.mjs",
+    "node tools/test_page_geometry.mjs",
+    "node tools/test_popup_scripts.mjs"
+  ],
+  "gitDiffCheck": "passed",
+  "sha256": {
+    "app/src/main/java/com/sleepercell/browser/autorun/ManagedCropRun.kt": "1a80733c08a39587bf38373b5e1b1df1c44aa4b9b8dd3e89029711881d01b6ce",
+    "app/src/main/java/com/sleepercell/browser/autorun/PageDriver.kt": "520c9d8f03620fd9a9e4625ce15bf23dc2cb0dc2c5771bf3b75bae4f2ca97364",
+    "app/src/main/java/com/sleepercell/browser/autorun/ChatGpt.kt": "f7f8ed7e933b334b4f4076b33d6111959d6e0dc2af2117f799e6aaaeccf218cc",
+    "app/src/main/java/com/sleepercell/browser/manhwa/ManagedCropPilotModel.kt": "00360bcc5ffc08818cdcc1b57d4fc1fa9a66e96ed86ad2aa35971566c64ab2d4",
+    "app/src/test/java/com/sleepercell/browser/manhwa/ManagedCropPilotModelTest.kt": "847d304c32fbe8a2c8e012dcf5c2f27722481c52f0a3df3385646980ccbb6e29",
+    "tools/test_managed_composer.mjs": "15d0fed833096b1230ddfb632a372c0687290709f04518d30238ffa18a9c3e9b"
+  },
+  "runtimeEvidence": "Owner explicitly corrected the earlier interpretation: pasted letters were visible as ordinary editor text, not an attachment. Authority pause is stop_confirmed / unsent, no checkpoint.",
+  "fixScope": "Keep exactly one Ctrl+V clipboard paste, require stable focused empty composer, normalize whitespace only for full expected-text comparison before upload/send, and report expected/observed character counts on verification timeout. Remove the unnecessary native IME entry path. Unexpected attachment cases still fail closed.",
+  "notVerified": [
+    "Actual live inline-text mismatch",
+    "Installed updated APK with corrected single-paste verification",
+    "Successful page attachment, prompt submission, saved-result upload and publication"
+  ],
+  "installedApk": "Last checked 1.0.138 lacks the corrected managed paste verification markers",
+  "apkBuiltOrInstalledLocally": false,
+  "confirmedFailure": "The inline prompt arrived, but exact prompt verification timed out. Specific text mismatch remains unconfirmed; attachment-conversion diagnosis withdrawn."
+}

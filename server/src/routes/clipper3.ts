@@ -1,26 +1,40 @@
+import {hiddenLibraryFolders} from '../services/libraryControls.js'
+import {managedCropBinding,readManagedCrop,assertUnmanagedCropChapter} from '../services/managedCropProjection.js'
+import {TaskConflict} from '../services/managedTaskProtocol.js'
+import { withSeriesActivity } from '../services/seriesActivity.js'
 /**
  * Image Clipper 3.0 — per-image crop artifacts and cutting.
  *
- * The defining difference from 2.0: a chapter is NOT one stitched canvas here.
- * Each source image is independent —
+ * The AI clipping happens on the Sleeper-Cell phones now: they make each
+ * page's crop JSON and upload a zip per finished chapter to R2, and a Master
+ * phone can review the whole chapter. The desktop pulls those zips in (Sync
+ * json), lets the user look over / fix the boxes (Preview) and cuts the images
+ * (Crop Sections). A chapter the Master phone reviewed is cut automatically
+ * right after Sync json attaches it (chapterCrop.ts).
  *
- *   GET    /chapters/:id/images                    every image + its own status
+ * A chapter is NOT one stitched canvas here. Each source image is independent —
+ *
+ *   GET    /series                                 series with downloaded chapters
+ *   GET    /chapters                               every downloaded chapter
+ *   GET    /chapters/:id/image/:filename           one source page image
+ *   GET    /chapters/:id/images                    every image + its own status, prev/next chapter, review
+ *   GET    /chapters/:id/review                    whether the whole chapter is reviewed (cropping needs it; cropped counts)
+ *   PUT    /chapters/:id/review                    the desktop's Mark reviewed / Unmark
  *   GET    /chapters/:id/images/:filename/points   that image's crop artifact
- *   PUT    /chapters/:id/images/:filename/points   store that image's crop artifact
- *   DELETE /chapters/:id/images/:filename/points   drop it
+ *   PUT    /chapters/:id/images/:filename/points   store that image's crop artifact (Preview's box edits)
  *   GET    /chapters/:id/images/:filename/metadata that image's metadata document
  *   PUT    /chapters/:id/images/:filename/metadata store that image's metadata
- *   DELETE /chapters/:id/images/:filename/metadata drop it
- *   POST   /chapters/:id/crop                      cut every done image
+ *   POST   /chapters/:id/crop                      cut every done image, replacing the previous cut (reviewed chapters only)
+ *   GET    /series/:seriesId/summary               per-chapter attached / cut / reviewed chips
  *   GET    /chapters/:id/outputs                   what was cut
  *   GET    /chapters/:id/output/:filename          one cut image
- *   POST   /chapters/:id/images/:filename/slices      cut that page into parts
- *   POST   /chapters/:id/images/:filename/slices/open reveal the slice folder
- *   POST   /series/:seriesId/slices                   slice every page of every chapter
- *   POST   /series/:seriesId/sync-processed           import hand-made JSON from Processed/
+ *   POST   /series/:seriesId/slices                slice every page of the chosen chapters
+ *   POST   /series/:seriesId/fetch-phone-crops     unpack the phone's chapter zips from R2 into Processed/
+ *   POST   /series/:seriesId/sync-processed        attach the JSON in Processed/, then auto-crop phone-reviewed chapters
  *   POST   /series/:seriesId/sync-processed/preview    what that import would attach
  *   POST   /series/:seriesId/unsync-processed          remove attached JSON from the store
  *   POST   /series/:seriesId/unsync-processed/preview  what that removal would clear
+ *   POST   /cropped-markers/publish                    tell the phones about every chapter already cut (R2 markers)
  *
  * "Done" is a fact about the filesystem — this image has BOTH a parseable crop
  * artifact and a metadata document of its own — never an inference from another
@@ -30,15 +44,14 @@
 import { Router, Request, Response } from 'express'
 import path from 'path'
 import fs from 'fs/promises'
-import { exec } from 'child_process'
 import { Server } from 'socket.io'
 import { prisma } from '../index.js'
-import { getChapterManifest } from '../services/clipperService.js'
+import { getChapterManifest } from '../services/chapterManifest.js'
 import {
-  deleteImageMetadata,
-  deleteImagePoints,
   extractCrops,
+  hasNoCrops,
   getOutputDir,
+  getSourceFolderPath,
   listMetadataImageStems,
   listOutputs,
   listPointedImageStems,
@@ -48,14 +61,26 @@ import {
   validateMetadata,
   expectedExportedFilenames,
   canonicalizeExportedFilenames,
-  findUnresolvedMetadataNames,
+  chapterCropOutputs,
   writeImageMetadata,
   writeImagePoints,
-  type Clipper3CropEntry,
   type Clipper3ImageCropFile
 } from '../services/clipper3/perImageStore.js'
-import { cutImageCrops } from '../services/clipper3/perImageCrop.js'
-import { sliceImage, getSliceDir } from '../services/clipper3/perImageSlice.js'
+import { sliceImage } from '../services/clipper3/perImageSlice.js'
+import {
+  isChapterCropping,
+  onChapterCropped,
+  queueAutoCrop,
+  readChapterCropState,
+  runChapterCrop,
+  seriesSlug,
+  type CropChapter
+} from '../services/clipper3/chapterCrop.js'
+import { fetchPhoneCrops, publishAllCroppedMarkers, publishChapterCropped } from '../services/phoneCropImport.js'
+import { readEffectiveReview, setDesktopReview } from '../services/clipper3/chapterReview.js'
+import { reconcileQuietly } from '../services/diskReconcile.js'
+import { queueEditorPublish } from '../services/editorAutoPublish.js'
+import { doneNeighbours } from '../services/pageStitch.js'
 import {
   syncChapterProcessed,
   unsyncChapterProcessed,
@@ -65,9 +90,6 @@ import {
 
 const FORMAT = 'four-point-crop'
 const VERSION = '1.0'
-
-/** Chapters currently being cut, so two runs cannot interleave their writes. */
-const cropping = new Set<string>()
 
 /** Series currently being bulk-sliced, so two runs cannot overwrite each other. */
 const slicingSeries = new Set<string>()
@@ -94,21 +116,126 @@ async function findChapter(chapterId: string) {
       title: true,
       folderPath: true,
       seriesId: true,
-      series: { select: { title: true } }
+      series: { select: { title: true } },
+      pages:{select:{id:true,localPath:true}}
     }
   })
 }
 
-function seriesSlug(title: string): string {
-  return title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, 40) || 'series'
+const IMAGE_MIME: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif'
 }
-
 export function initClipper3Routes(io: Server): Router {
   const router = Router()
+
+  // Every finished cut (Crop Sections or auto) tells the phones the chapter is
+  // cropped, so the Master shows it as such and clipping phones leave it be.
+  onChapterCropped(chapter => publishChapterCropped(chapter.id))
+  // A cut chapter may be ready for its timeline JSON: Editor 2.0 sends it to the phone.
+  onChapterCropped(async chapter => queueEditorPublish(chapter.id))
+
+  // ============ Series & chapter listing ============
+
+  /** GET /series — every series with at least one downloaded chapter. */
+  router.get('/series', async (_req: Request, res: Response) => {
+    try {
+      await reconcileQuietly()
+      const hidden=await hiddenLibraryFolders()
+      const series = await prisma.series.findMany({
+        where:{rootFolder:{notIn:hidden}},
+        select: {
+          id: true,
+          title: true,
+          sourceSite: true,
+          coverPath: true,
+          rootFolder: true,
+          createdAt: true,
+          _count: { select: { chapters: { where: { status: 'done' } } } }
+        },
+        // Creation time breaks ties until a series has processing activity.
+        orderBy: { createdAt: 'desc' }
+      })
+      res.json(
+        (await withSeriesActivity(series))
+          .filter(s => s._count.chapters > 0)
+          .map(s => ({
+            id: s.id,
+            title: s.title,
+            sourceSite: s.sourceSite,
+            coverPath: s.coverPath,
+            rootFolder: s.rootFolder,
+            lastActivityAt: s.lastActivityAt,
+            chapterCount: s._count.chapters
+          }))
+      )
+    } catch (error) {
+      console.error('[clipper3] listing series failed:', error)
+      res.status(500).json({ error: 'Failed to fetch series' })
+    }
+  })
+
+  /** GET /chapters — every downloaded chapter; downloaded is the only requirement. */
+  router.get('/chapters', async (_req: Request, res: Response) => {
+    try {
+      await reconcileQuietly()
+      const chapters = await prisma.chapter.findMany({
+        where: { status: 'done' },
+        select: {
+          id: true,
+          number: true,
+          title: true,
+          seriesId: true,
+          pageCount: true,
+          series: { select: { title: true } }
+        },
+        orderBy: [{ series: { title: 'asc' } }, { number: 'asc' }]
+      })
+      res.json(
+        chapters.map(c => ({
+          id: c.id,
+          number: c.number,
+          title: c.title,
+          seriesId: c.seriesId,
+          seriesTitle: c.series.title,
+          pageCount: c.pageCount ?? 0
+        }))
+      )
+    } catch (error) {
+      console.error('[clipper3] listing chapters failed:', error)
+      res.status(500).json({ error: 'Failed to fetch chapters' })
+    }
+  })
+
+  /** GET /chapters/:id/image/:filename — one source page, scoped to the chapter folder. */
+  router.get('/chapters/:id/image/:filename', async (req: Request, res: Response) => {
+    try {
+      const chapter = await findChapter(req.params.id)
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+
+      const filename = path.basename(req.params.filename)
+      const fullPath = path.resolve(getSourceFolderPath(chapter.folderPath), filename)
+      try {
+        await fs.access(fullPath)
+      } catch {
+        return res.status(404).json({ error: 'Image not found' })
+      }
+
+      res.setHeader('Content-Type', IMAGE_MIME[path.extname(filename).toLowerCase()] || 'application/octet-stream')
+      res.setHeader('Cache-Control', 'public, max-age=86400, immutable')
+      res.sendFile(fullPath)
+    } catch (error) {
+      console.error('[clipper3] serving image failed:', error)
+      // Don't cache error responses
+      res.setHeader('Cache-Control', 'no-store')
+      res.status(500).json({ error: 'Failed to serve image' })
+    }
+  })
+
+  // ============ Per-image crop artifacts ============
 
   /**
    * GET /chapters/:id/images
@@ -134,8 +261,12 @@ export function initClipper3Routes(io: Server): Router {
       const pointed = await listPointedImageStems(chapter.folderPath)
       const described = await listMetadataImageStems(chapter.folderPath)
 
+      const expectedOutputs: string[] = []
+      const doneFiles: string[] = []
       const images = await Promise.all(
         manifest.images.map(async img => {
+          const binding=await managedCropBinding(chapter.folderPath,img.filename)
+          const publication=binding?await readManagedCrop(chapter.folderPath,img.filename):null
           const stem = stemOf(img.filename)
           const hasArtifact = pointed.has(stem)
           const hasMetadata = described.has(stem)
@@ -143,22 +274,23 @@ export function initClipper3Routes(io: Server): Router {
           let parseable = false
           let metadataValid = false
           let metadataErrors: string[] = []
+          let exportedNames: string[] = []
 
           if (hasArtifact) {
             const stored = await readImagePoints(chapter.folderPath, img.filename)
             const crops = extractCrops(stored?.file ?? null)
             cropCount = crops.length
-            // An artifact that exists but does not parse (or carries no usable
-            // crop) is not done — it cannot be cut.
-            parseable = crops.length > 0
+            // Empty crop lists are intentional; malformed crop entries remain pending.
+            parseable = crops.length > 0 || hasNoCrops(stored?.file ?? null)
 
             if (parseable && hasMetadata) {
               const metadataText = await readImageMetadata(chapter.folderPath, img.filename)
               if (metadataText != null) {
-                const validation = validateMetadata(
+                exportedNames = expectedExportedFilenames(seriesSlug(chapter.series.title), img.filename, crops)
+                const validation = publication ? {isValid:true,errors:[] as string[]} : validateMetadata(
                   metadataText,
                   crops.map(c => c.id),
-                  expectedExportedFilenames(seriesSlug(chapter.series.title), img.filename, crops),
+                  exportedNames,
                   seriesSlug(chapter.series.title)
                 )
                 metadataValid = validation.isValid
@@ -167,8 +299,18 @@ export function initClipper3Routes(io: Server): Router {
             }
           }
 
+          // Both halves required: crops say where to cut, metadata describes
+          // the result, and an image is only finished once it has both AND
+          // the metadata actually still matches those crops.
+          const status: 'done' | 'pending' = parseable && hasMetadata && metadataValid ? 'done' : 'pending'
+          if (status === 'done') {
+            expectedOutputs.push(...exportedNames)
+            doneFiles.push(img.filename)
+          }
+
           return {
             filename: img.filename,
+            managed:binding?{taskId:binding.task.id,pageId:chapter.pages?.find(page=>page.localPath&&path.basename(page.localPath)===img.filename)?.id??null}:null,
             width: img.width,
             height: img.height,
             hasPoints: hasArtifact,
@@ -179,10 +321,7 @@ export function initClipper3Routes(io: Server): Router {
             // this whole check exists to surface.
             metadataErrors,
             cropCount,
-            // Both halves required: crops say where to cut, metadata describes
-            // the result, and an image is only finished once it has both AND
-            // the metadata actually still matches those crops.
-            status: parseable && hasMetadata && metadataValid ? 'done' : 'pending'
+            status
           }
         })
       )
@@ -193,7 +332,15 @@ export function initClipper3Routes(io: Server): Router {
         title: chapter.title,
         seriesId: chapter.seriesId,
         seriesTitle: chapter.series.title,
-        images
+        images,
+        cropOutputs: await chapterCropOutputs(
+          chapter.folderPath,
+          expectedOutputs,
+          images.length > 0 && images.every(img => img.status === 'done'),
+          { slug: seriesSlug(chapter.series.title), filenames: doneFiles }
+        ),
+        review: await readEffectiveReview(chapter.folderPath),
+        neighbours: await doneNeighbours(chapter.seriesId, chapter.number)
       })
     } catch (error) {
       console.error('[clipper3] listing images failed:', error)
@@ -231,7 +378,7 @@ export function initClipper3Routes(io: Server): Router {
       }
 
       const crops = extractCrops(stored.file)
-      const metadataValid = hasMetadata && crops.length > 0
+      const metadataValid = hasMetadata && (crops.length > 0 || hasNoCrops(stored.file))
         && validateMetadata(
           metadataText!,
           crops.map(c => c.id),
@@ -245,7 +392,7 @@ export function initClipper3Routes(io: Server): Router {
         cropCount: crops.length,
         hasMetadata,
         metadataValid,
-        status: crops.length > 0 && hasMetadata && metadataValid ? 'done' : 'pending'
+        status: metadataValid ? 'done' : 'pending'
       })
     } catch (error) {
       console.error('[clipper3] reading image points failed:', error)
@@ -308,7 +455,7 @@ export function initClipper3Routes(io: Server): Router {
       }
 
       const crops = extractCrops(file)
-      if (crops.length === 0) {
+      if (crops.length === 0 && !(Array.isArray(parsed?.crops) && parsed.crops.length === 0)) {
         return res.status(400).json({
           error: 'No usable four-point crop found — each crop needs exactly 4 numeric points'
         })
@@ -336,20 +483,6 @@ export function initClipper3Routes(io: Server): Router {
     }
   })
 
-  /** DELETE /chapters/:id/images/:filename/points — back to pending. */
-  router.delete('/chapters/:id/images/:filename/points', async (req: Request, res: Response) => {
-    try {
-      const chapter = await findChapter(req.params.id)
-      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
-
-      const deleted = await deleteImagePoints(chapter.folderPath, req.params.filename)
-      res.json({ deleted })
-    } catch (error) {
-      console.error('[clipper3] deleting image points failed:', error)
-      res.status(500).json({ error: 'Failed to delete crop points' })
-    }
-  })
-
   /**
    * GET /chapters/:id/images/:filename/metadata
    *
@@ -367,7 +500,7 @@ export function initClipper3Routes(io: Server): Router {
       const stored = await readImagePoints(chapter.folderPath, req.params.filename)
       const crops = extractCrops(stored?.file ?? null)
 
-      const validation = content != null && crops.length > 0
+      const validation = content != null && (crops.length > 0 || hasNoCrops(stored?.file ?? null))
         ? validateMetadata(
             content,
             crops.map(c => c.id),
@@ -419,7 +552,7 @@ export function initClipper3Routes(io: Server): Router {
 
       const storedPoints = await readImagePoints(chapter.folderPath, image.filename)
       const crops = extractCrops(storedPoints?.file ?? null)
-      if (crops.length === 0) {
+      if (crops.length === 0 && !hasNoCrops(storedPoints?.file ?? null)) {
         return res.status(400).json({
           error: 'This image has no crop pointers yet — attach the crop JSON before its metadata.'
         })
@@ -477,17 +610,47 @@ export function initClipper3Routes(io: Server): Router {
     }
   })
 
-  /** DELETE /chapters/:id/images/:filename/metadata */
-  router.delete('/chapters/:id/images/:filename/metadata', async (req: Request, res: Response) => {
+  // ============ Chapter review ============
+
+  /**
+   * GET /chapters/:id/review
+   *
+   * Whether the whole chapter has been looked over — on the Master phone (it
+   * arrives with Sync json's R2 fetch) or in Preview — which is what cropping
+   * waits for. `reviewed: false` when it never was. A chapter already cut
+   * counts as reviewed (`by: 'cropped'`) — see chapterReview.ts.
+   */
+  router.get('/chapters/:id/review', async (req: Request, res: Response) => {
     try {
       const chapter = await findChapter(req.params.id)
       if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
-
-      const deleted = await deleteImageMetadata(chapter.folderPath, req.params.filename)
-      res.json({ deleted })
+      res.json(await readEffectiveReview(chapter.folderPath))
     } catch (error) {
-      console.error('[clipper3] deleting image metadata failed:', error)
-      res.status(500).json({ error: 'Failed to delete metadata' })
+      console.error('[clipper3] reading chapter review failed:', error)
+      res.status(500).json({ error: 'Failed to read the chapter review' })
+    }
+  })
+
+  /**
+   * PUT /chapters/:id/review   body: { reviewed: boolean }
+   *
+   * The desktop's Mark reviewed / Unmark. Marking replaces a phone review
+   * with the desktop's own (now, by: 'desktop'); unmarking clears either.
+   */
+  router.put('/chapters/:id/review', async (req: Request, res: Response) => {
+    try {
+      const chapter = await findChapter(req.params.id)
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+      const reviewed: unknown = req.body?.reviewed
+      if (typeof reviewed !== 'boolean') {
+        return res.status(400).json({ error: 'reviewed (boolean) is required' })
+      }
+      await setDesktopReview(chapter.folderPath, reviewed)
+      res.json(await readEffectiveReview(chapter.folderPath))
+    } catch (error) {
+      if(error instanceof TaskConflict)return res.status(409).json({error:'This chapter contains managed pages. Review and cut each exact page in its Preview controls; chapter-wide approval cannot replace those reviews.'})
+      console.error('[clipper3] saving chapter review failed:', error)
+      res.status(500).json({ error: 'Failed to save the chapter review' })
     }
   })
 
@@ -497,122 +660,43 @@ export function initClipper3Routes(io: Server): Router {
    * Cuts every image that has its own artifact — that is exactly the set the UI
    * shows as Done, because both answer the same question of the filesystem.
    * Runs in the background; progress arrives over `clipper3:crop-*`.
+   *
+   * Only for a reviewed chapter (409 CHAPTER_NOT_REVIEWED otherwise): phone
+   * crops are a draft until somebody has looked at the whole chapter, and a
+   * cut made from the draft would feed the editor boxes nobody checked.
    */
   router.post('/chapters/:id/crop', async (req: Request, res: Response) => {
     try {
       const chapterId = req.params.id
       const chapter = await findChapter(chapterId)
       if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
-      if (cropping.has(chapterId)) {
+      await assertUnmanagedCropChapter(chapter.folderPath)
+      if (isChapterCropping(chapterId)) {
         return res.status(409).json({ error: 'This chapter is already being cropped' })
       }
-
-      const manifest = await getChapterManifest(chapter.folderPath)
-      const pointed = await listPointedImageStems(chapter.folderPath)
-      const described = await listMetadataImageStems(chapter.folderPath)
+      // Effective review, so a chapter cut before reviews existed can be
+      // re-cut without first being marked.
+      if (!(await readEffectiveReview(chapter.folderPath)).reviewed) {
+        return res.status(409).json({
+          error: 'CHAPTER_NOT_REVIEWED',
+          message: 'Mark this chapter reviewed before cropping — on the Master phone or in Preview.'
+        })
+      }
 
       // Resolved before responding: "nothing is ready to cut" is an answer to
       // this request, not an event to wait for. Only images that are actually
       // done — crops AND metadata — are cut, matching what the list shows.
-      const targets: { filename: string; crops: Clipper3CropEntry[] }[] = []
-      for (const img of manifest.images) {
-        const stem = stemOf(img.filename)
-        if (!pointed.has(stem) || !described.has(stem)) continue
-        const stored = await readImagePoints(chapter.folderPath, img.filename)
-        const crops = extractCrops(stored?.file ?? null)
-        if (crops.length === 0) continue
-
-        // Matches the Done definition the list uses: metadata that no longer
-        // validates against these crops must not be cut as if it still did.
-        const metadataText = await readImageMetadata(chapter.folderPath, img.filename)
-        if (
-          metadataText == null ||
-          !validateMetadata(
-            metadataText,
-            crops.map(c => c.id),
-            expectedExportedFilenames(seriesSlug(chapter.series.title), img.filename, crops),
-            seriesSlug(chapter.series.title)
-          ).isValid
-        ) continue
-
-        targets.push({ filename: img.filename, crops })
-      }
-
+      const { targets } = await readChapterCropState(chapter)
       if (targets.length === 0) {
         return res.status(400).json({
           error: 'No image is ready to cut — each needs its crop JSON and metadata that still matches it'
         })
       }
 
-      cropping.add(chapterId)
-      const slug = seriesSlug(chapter.series.title)
-
-      void (async () => {
-        const allFiles = []
-        let failed = 0
-        const warnings: string[] = []
-
-        try {
-          for (let i = 0; i < targets.length; i++) {
-            const target = targets[i]
-            io.emit('clipper3:crop-progress', {
-              chapterId,
-              current: i + 1,
-              total: targets.length,
-              filename: target.filename
-            })
-
-            try {
-              const result = await cutImageCrops({
-                folderPath: chapter.folderPath,
-                imageFilename: target.filename,
-                crops: target.crops,
-                slug
-              })
-              allFiles.push(...result.files)
-              failed += result.failed
-              warnings.push(...result.warnings)
-            } catch (err) {
-              // One unreadable image must not abandon the rest of the chapter.
-              failed += target.crops.length
-              const message = err instanceof Error ? err.message : String(err)
-              warnings.push(`${target.filename}: ${message}`)
-              console.error(`[clipper3] cutting ${target.filename} failed:`, message)
-            }
-          }
-
-          // The whole chapter has now been cut, so crops3/ is complete and a
-          // metadata name with no file behind it can only be a real mismatch.
-          // Checked here rather than in the image listing because only a
-          // finished run can tell a bad name from a page not cut yet.
-          const unresolved = await findUnresolvedMetadataNames(chapter.folderPath)
-          if (unresolved.length > 0) {
-            console.warn(
-              `[clipper3] ${chapter.folderPath}: ${unresolved.length} page(s) name crops that are not in crops3/ — ` +
-                unresolved.map(u => `${u.imageFilename} (${u.missing.length}/${u.total})`).join(', ')
-            )
-          }
-
-          io.emit('clipper3:crop-complete', {
-            chapterId,
-            images: targets.length,
-            exported: allFiles.length,
-            failed,
-            warnings,
-            unresolved,
-            exportDir: path.resolve(getOutputDir(chapter.folderPath))
-          })
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err)
-          console.error('[clipper3] crop job crashed:', message)
-          io.emit('clipper3:crop-complete', { chapterId, error: message })
-        } finally {
-          cropping.delete(chapterId)
-        }
-      })()
-
+      void runChapterCrop(io, chapter, targets)
       res.json({ started: true, images: targets.length })
     } catch (error) {
+      if(error instanceof TaskConflict)return res.status(409).json({error:'Use the exact managed page review/cut controls in Preview for this chapter.'})
       console.error('[clipper3] starting crop failed:', error)
       res.status(500).json({ error: 'Failed to start cropping' })
     }
@@ -623,10 +707,11 @@ export function initClipper3Routes(io: Server): Router {
    *
    * One row per chapter in the series, for the chapter-list chips: whether
    * every image already has BOTH its crop JSON and its metadata ("fully
-   * attached"), and whether the chapter has cut output on disk ("chopped").
-   * Chopped is read from crops3/ directly rather than inferred from the
-   * attached count, because a chapter can be re-detected or re-pasted after
-   * cropping — outputs existing is the only fact that answers "was this cut".
+   * attached"), whether the chapter has cut output on disk ("chopped"), and
+   * whether it is reviewed. Chopped is read from crops3/ directly rather than
+   * inferred from the attached count, because a chapter can be re-synced or
+   * edited after cropping — outputs existing is the only fact that answers
+   * "was this cut". `cropping` is true while a cut (by hand or auto) runs.
    */
   router.get('/series/:seriesId/summary', async (req: Request, res: Response) => {
     try {
@@ -641,52 +726,24 @@ export function initClipper3Routes(io: Server): Router {
       const summaries = await Promise.all(
         chapters.map(async chapter => {
           // A chapter not yet downloaded (or whose folder is otherwise
-          // unreadable) has no manifest to build — it is simply not ready for
-          // pointer detection yet, same as it is left out of clipper2Api's own
-          // chapter listing, so it is omitted here rather than failing the
-          // whole series summary.
-          let manifest
+          // unreadable) has no manifest to build, so it is omitted here
+          // rather than failing the whole series summary.
+          let state
           try {
-            manifest = await getChapterManifest(chapter.folderPath)
+            state = await readChapterCropState(chapter)
           } catch {
             return null
           }
 
-          const pointed = await listPointedImageStems(chapter.folderPath)
-          const described = await listMetadataImageStems(chapter.folderPath)
-          const outputs = await listOutputs(chapter.folderPath)
-
-          const totalImages = manifest.images.length
-          let attachedImages = 0
-          for (const img of manifest.images) {
-            const stem = stemOf(img.filename)
-            if (!pointed.has(stem) || !described.has(stem)) continue
-            // Matches /images' `parseable` + `metadataValid` checks: an
-            // artifact with no usable crop, or metadata that no longer
-            // validates against those crops, does not count as attached.
-            const stored = await readImagePoints(chapter.folderPath, img.filename)
-            const crops = extractCrops(stored?.file ?? null)
-            if (crops.length === 0) continue
-            const metadataText = await readImageMetadata(chapter.folderPath, img.filename)
-            if (
-              metadataText != null &&
-              validateMetadata(
-                metadataText,
-                crops.map(c => c.id),
-                expectedExportedFilenames(seriesSlug(chapter.series.title), img.filename, crops),
-                seriesSlug(chapter.series.title)
-              ).isValid
-            ) {
-              attachedImages++
-            }
-          }
-
           return {
             chapterId: chapter.id,
-            totalImages,
-            attachedImages,
-            fullyAttached: totalImages > 0 && attachedImages === totalImages,
-            chopped: outputs.length > 0
+            totalImages: state.totalImages,
+            attachedImages: state.targets.length,
+            fullyAttached: state.fullyAttached,
+            chopped: state.chopped,
+            cropComplete: state.outputs.complete,
+            cropping: isChapterCropping(chapter.id),
+            review: await readEffectiveReview(chapter.folderPath)
           }
         })
       )
@@ -738,31 +795,6 @@ export function initClipper3Routes(io: Server): Router {
     } catch (error) {
       console.error('[clipper3] serving output failed:', error)
       res.status(500).json({ error: 'Failed to serve output' })
-    }
-  })
-
-  /**
-   * POST /chapters/:id/images/:filename/slices
-   *
-   * Cuts one page into vertical parts on disk and reports the folder. The
-   * browser cannot put many images on the clipboard at once, so the slices are
-   * written somewhere the user can select them all in the file explorer.
-   */
-  router.post('/chapters/:id/images/:filename/slices', async (req: Request, res: Response) => {
-    try {
-      const chapter = await findChapter(req.params.id)
-      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
-
-      const result = await sliceImage({
-        folderPath: chapter.folderPath,
-        imageFilename: req.params.filename
-      })
-
-      res.json(result)
-    } catch (error) {
-      console.error('[clipper3] slicing failed:', error)
-      const message = error instanceof Error ? error.message : 'Failed to slice the image'
-      res.status(500).json({ error: message })
     }
   })
 
@@ -895,59 +927,59 @@ export function initClipper3Routes(io: Server): Router {
     }
   })
 
-  /** GET /chapters/:id/images/:filename/slices/:sliceName — one slice file. */
-  router.get(
-    '/chapters/:id/images/:filename/slices/:sliceName',
-    async (req: Request, res: Response) => {
-      try {
-        const chapter = await findChapter(req.params.id)
-        if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
 
-        // basename only: both names come from the client.
-        const dir = getSliceDir(chapter.folderPath, req.params.filename)
-        const target = path.join(dir, path.basename(req.params.sliceName))
-
-        try {
-          await fs.access(target)
-        } catch {
-          return res.status(404).json({ error: 'Slice not found' })
-        }
-
-        res.sendFile(path.resolve(target))
-      } catch (error) {
-        console.error('[clipper3] serving slice failed:', error)
-        res.status(500).json({ error: 'Failed to serve the slice' })
-      }
-    }
-  )
-
-  /** POST /chapters/:id/images/:filename/slices/open — reveal the slice folder. */
-  router.post('/chapters/:id/images/:filename/slices/open', async (req: Request, res: Response) => {
+  /**
+   * POST /series/:seriesId/fetch-phone-crops
+   *
+   * Sync json's first step: downloads the chapter zips the Sleeper-Cell phone
+   * uploaded to R2 (`crops/<Series>/<Chapter>.zip`, one per finished chapter)
+   * and unpacks them into `<Series>/Processed/<Chapter>/`, where the scan below
+   * finds them. Only new or re-uploaded zips are downloaded; nothing is
+   * attached here. Answers `configured: false` without touching R2 when it is
+   * not set up, so Sync json still works on local drop-offs alone.
+   */
+  router.post('/series/:seriesId/fetch-phone-crops', async (req: Request, res: Response) => {
     try {
-      const chapter = await findChapter(req.params.id)
-      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
-
-      const dir = getSliceDir(chapter.folderPath, req.params.filename)
-      try {
-        await fs.access(dir)
-      } catch {
-        return res.status(404).json({ error: 'This image has not been sliced yet' })
+      const seriesId = req.params.seriesId
+      if (syncingSeries.has(seriesId)) {
+        return res.status(409).json({ error: 'This series is already being synced' })
       }
-
-      const resolved = path.resolve(dir)
-      const command =
-        process.platform === 'darwin' ? `open "${resolved}"`
-          : process.platform === 'win32' ? `explorer "${resolved}"`
-            : `xdg-open "${resolved}"`
-      exec(command, err => { if (err) console.error('[clipper3] open slice folder failed:', err) })
-
-      res.json({ success: true, path: resolved })
+      if (unsyncingSeries.has(seriesId)) {
+        return res.status(409).json({ error: 'This series is being unsynced right now' })
+      }
+      const requested: unknown = req.body?.chapterIds
+      if (requested !== undefined && !Array.isArray(requested)) {
+        return res.status(400).json({ error: 'chapterIds must be an array of chapter ids' })
+      }
+      const chapterIds = Array.isArray(requested)
+        ? requested.filter((v): v is string => typeof v === 'string')
+        : undefined
+      res.json(await fetchPhoneCrops(seriesId, chapterIds))
     } catch (error) {
-      console.error('[clipper3] opening slice folder failed:', error)
-      res.status(500).json({ error: 'Failed to open the folder' })
+      const message = error instanceof Error ? error.message : String(error)
+      console.error('[clipper3] fetching phone crops failed:', message)
+      res.status(500).json({ error: message })
     }
   })
 
+
+  /**
+   * POST /cropped-markers/publish
+   *
+   * The Library's "Publish cropped chapters": writes `<Chapter>.cropped.json`
+   * beside the phone zips for every chapter already cut that R2 has no marker
+   * for — one LIST per series with a cut chapter, one PUT per missing marker.
+   * Answers `configured: false` when R2 isn't set up.
+   */
+  router.post('/cropped-markers/publish', async (_req: Request, res: Response) => {
+    try {
+      res.json(await publishAllCroppedMarkers())
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error('[clipper3] publishing cropped markers failed:', message)
+      res.status(500).json({ error: message })
+    }
+  })
 
   /**
    * POST /series/:seriesId/sync-processed
@@ -967,6 +999,12 @@ export function initClipper3Routes(io: Server): Router {
    *
    * The preview route below answers the same question without writing, so the
    * confirmation dialog can list what is about to be attached.
+   *
+   * Once everything is attached, every chapter of the run that the Master
+   * phone reviewed, with all its pages attached and crops3/ not already
+   * matching, is queued for cutting (chapterCrop.ts) — no click needed. The
+   * completion event names them in `autoCrop`; their cuts report over
+   * `clipper3:crop-*` like Crop Sections.
    */
   router.post('/series/:seriesId/sync-processed', async (req: Request, res: Response) => {
     try {
@@ -997,6 +1035,7 @@ export function initClipper3Routes(io: Server): Router {
           id: true,
           number: true,
           folderPath: true,
+          seriesId: true,
           series: { select: { title: true } }
         },
         orderBy: { number: 'asc' }
@@ -1014,6 +1053,7 @@ export function initClipper3Routes(io: Server): Router {
       void (async () => {
         const results: ChapterSyncResult[] = []
         let imported = 0
+        let replaced = 0
         let skipped = 0
         let failed = 0
 
@@ -1051,6 +1091,7 @@ export function initClipper3Routes(io: Server): Router {
               })
 
               imported += result.imported
+              replaced += result.replaced
               skipped += result.skipped
               failed += result.failed
               // Only chapters that actually had something in Processed/ are
@@ -1067,6 +1108,7 @@ export function initClipper3Routes(io: Server): Router {
                 chapterNumber: chapter.number,
                 imported: 0,
                 ready: 0,
+                replaced: 0,
                 skipped: 0,
                 failed: 1,
                 pages: [{
@@ -1080,13 +1122,25 @@ export function initClipper3Routes(io: Server): Router {
             }
           }
 
+          // Phone-reviewed chapters are cut straight away; the rest wait for
+          // Preview → Crop on the desktop. Queued after the attach finished,
+          // so the cut reads exactly what this run wrote.
+          let autoCrop: { chapterId: string; chapterNumber: number }[] = []
+          try {
+            autoCrop = await queueAutoCrop(io, chapters satisfies CropChapter[])
+          } catch (err) {
+            console.error('[clipper3] queueing auto crop failed:', err instanceof Error ? err.message : err)
+          }
+
           io.emit('clipper3:sync-complete', {
             seriesId,
             chapters: chapters.length,
             imported,
+            replaced,
             skipped,
             failed,
-            results
+            results,
+            autoCrop
           })
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err)
@@ -1152,6 +1206,7 @@ export function initClipper3Routes(io: Server): Router {
 
       const results: ChapterSyncResult[] = []
       let ready = 0
+      let replaced = 0
       let skipped = 0
       let failed = 0
 
@@ -1178,6 +1233,7 @@ export function initClipper3Routes(io: Server): Router {
           })
 
           ready += result.ready
+          replaced += result.replaced
           skipped += result.skipped
           failed += result.failed
           if (result.pages.length > 0) results.push(result)
@@ -1190,6 +1246,7 @@ export function initClipper3Routes(io: Server): Router {
             chapterNumber: chapter.number,
             imported: 0,
             ready: 0,
+            replaced: 0,
             skipped: 0,
             failed: 1,
             pages: [{
@@ -1203,7 +1260,7 @@ export function initClipper3Routes(io: Server): Router {
         }
       }
 
-      res.json({ chapters: chapters.length, ready, skipped, failed, results })
+      res.json({ chapters: chapters.length, ready, replaced, skipped, failed, results })
     } catch (error) {
       console.error('[clipper3] previewing sync failed:', error)
       res.status(500).json({ error: 'Failed to preview the sync' })

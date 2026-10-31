@@ -55,18 +55,40 @@ model Chapter {
   downloadedCount Int            @default(0)
   error           String?
   createdAt       DateTime       @default(now())
+  completedAt     DateTime?      // Its Part was completed on the Storage page: files deleted, only script continuity kept (partArchive.ts)
+  completedPart   Int?           // Which narration Part that was
   
   series          Series         @relation(fields: [seriesId], references: [id], onDelete: Cascade)
   pages           Page[]
-  script          ChapterScript? // Module 2: One-to-one relation with narration script
-  audioSections   AudioSection[] // Module 2: Voiceover sections
-  audioFiles      AudioFile[]    // Module 2: Audio files (per-section + joined)
-  audioAnalysis   AudioAnalysis? // Module 2: Voice consistency analysis
+  scripts         ChapterScript[] // Module 2: Narration scripts, one per language
+  audioSections   AudioSection[]  // Module 2: Voiceover sections (per language)
+  audioFiles      AudioFile[]     // Module 2: Audio files (per-section + joined, per language)
+  audioAnalyses   AudioAnalysis[] // Module 2: Voice consistency analysis, one per language
   cropSession     CropSession?   // Module 3: Image Clipper
   aiSuggestions   AISuggestion[] // Module 3 AI: Auto-crop suggestions for this chapter
   cropPointSet    CropPointSet?  // Module 3 v2: Image Clipper 2.0 pointer set
+  phoneSend       PhoneChapterSend? // Sleeper-Cell: this chapter's zip sent to the phone through R2
 
   @@unique([seriesId, number])
+}
+
+// Sleeper-Cell: each chapter is sent to the phone as its own zip in R2
+// (<phone prefix>manhwa/<Series>/<Chapter>.zip, see services/phoneSend.ts),
+// so new chapters join the series on the phone and done ones can be cleared there.
+model PhoneChapterSend {
+  chapterId   String    @id
+  seriesId    String
+  key         String?   // R2 key of the chapter zip; null once deleted (cleared on the phone)
+  etag        String?
+  fingerprint String?   // over the pages sent (name + size), to tell a changed chapter
+  files       Int       @default(0)
+  bytes       Int       @default(0)
+  sentAt      DateTime? // null: never sent one by one (cleared from an older whole-series copy)
+  clearedAt   DateTime? // the phone cleared it; it isn't sent again unless picked by hand
+
+  chapter     Chapter   @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+
+  @@index([seriesId])
 }
 
 model Page {
@@ -91,7 +113,8 @@ model Setting {
 // Module 2: Narration Studio - Chapter script and continuity metadata
 model ChapterScript {
   id               String   @id @default(uuid())
-  chapterId        String   @unique
+  chapterId        String
+  language         String   @default("en") // Narration language: en | hi (each has its own script, continuity and parts)
   provider         String?  // AI provider used (gemini, openai, etc.)
   model            String?  // Model name used
   mode             String   @default("api") // api | manual
@@ -103,16 +126,21 @@ model ChapterScript {
   outroText        String?  // Closing/epilogue lines (only when isPartEnd=true)
   error            String?  // Error message if failed
   tokensUsed       Int?     // Optional token count
+  sourceSha256     String?  // Hindi only: SHA-256 of the trimmed English script it was converted from (stale once that changes)
+  review           String?  // Hindi only: JSON array of check issues when saved despite failing the check; null = passed
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
   
   chapter          Chapter  @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+
+  @@unique([chapterId, language])
 }
 
 // Module 2: Narration Studio - Voiceover audio sections
 model AudioSection {
   id        String   @id @default(uuid())
   chapterId String
+  language  String   @default("en") // Narration language: en | hi
   index     Int      // Reading order within the chapter
   text      String   // The section's script text
   status    String   @default("none") // none, generating, done, failed
@@ -124,7 +152,7 @@ model AudioSection {
   chapter   Chapter     @relation(fields: [chapterId], references: [id], onDelete: Cascade)
   audioFile AudioFile?  // The audio file for this section (if generated/uploaded)
   
-  @@unique([chapterId, index])
+  @@unique([chapterId, language, index])
 }
 
 // Module 2: Narration Studio - Voiceover audio files
@@ -132,6 +160,7 @@ model AudioFile {
   id         String   @id @default(uuid())
   chapterId  String
   sectionId  String?  @unique // Null for joined chapter audio
+  language   String   @default("en") // Narration language: en | hi
   kind       String   // generated, uploaded, joined
   provider   String?  // TTS provider (for generated)
   model      String?  // TTS model (for generated)
@@ -153,13 +182,16 @@ model AudioFile {
 // Module 2: Narration Studio - Voice consistency analysis results
 model AudioAnalysis {
   id        String   @id @default(uuid())
-  chapterId String   @unique
+  chapterId String
+  language  String   @default("en") // Narration language: en | hi
   threshold Float    // Similarity threshold used
   verdict   String   // consistent, mismatch, inconclusive
   details   String   // JSON: per-file scores, outlier ids, pairwise matrix
   createdAt DateTime @default(now())
   
   chapter   Chapter  @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+
+  @@unique([chapterId, language])
 }
 
 // Module 3: Image Clipper — Crop session per chapter
@@ -422,4 +454,20 @@ model VideoEditEvent {
   createdAt   DateTime @default(now())
 
   project VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+// Editor 2.0 — each chapter's pasted timeline JSON and the exact paste that
+// last processed successfully (what turns Start Processing into Preview).
+// Kept here rather than only in the browser so Chrome and the desktop app see
+// the same chapters as processed. One row per chapter and narration language
+// (English and Hindi are edited as separate videos), plain id (no relation).
+model Editor2Timeline {
+  model         String?  // AI recorded by the phone for this exact timeline
+  chapterId     String
+  language      String   @default("en") // en | hi
+  json          String   // "" once cleared — kept so other browsers drop their copy too
+  processedJson String?  // null = not processed
+  updatedAt     DateTime // the client's write time; the newest write wins
+
+  @@id([chapterId, language])
 }

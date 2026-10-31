@@ -1,0 +1,39 @@
+{
+  "name": "manhwa-studio-desktop",
+  "productName": "Manhwa Studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "macOS app shell for Manhwa Studio (runs the server from this repo)",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "build:client": "cd ../client && npx vite build",
+    "icon": "node scripts/make-icon.mjs",
+    "pack": "node scripts/write-config.cjs && electron-builder --mac dir",
+    "install-app": "node scripts/install-app.cjs",
+    "app": "npm run build:client && npm run pack && npm run install-app"
+  },
+  "build": {
+    "appId": "local.manhwastudio.app",
+    "productName": "Manhwa Studio",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.cjs",
+      "app-config.json",
+      "package.json"
+    ],
+    "mac": {
+      "target": "dir",
+      "icon": "build/icon.icns",
+      "identity": null,
+      "category": "public.app-category.productivity"
+    }
+  },
+  "devDependencies": {
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3"
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "checkedAt": "2026-10-20T07:43:22.652829+00:00",
+  "workerVersion": "22204621-0e30-46b2-84a3-0b698e41d85b",
+  "deployment": "wrangler deploy --keep-vars",
+  "sameAttemptAndLeasePreserved": true,
+  "result": {
+    "schema": "managed-task/1",
+    "task": {
+      "workspaceId": "studio_01df7f214f87472e802b2bc43b8d9165",
+      "seriesId": "7c5ac077-2b43-478c-aadd-8116190d0a96",
+      "chapterId": "d5fd1a64-2eef-472d-aeea-8813307af423",
+      "pageId": "page_30d567b0d78861b03c372948619ea01d4f07a2d17937a1a8389bd16746979a43",
+      "id": "task:sha256:c5ddae3bb5f6fb927df1533da5491e380c2902b33db771a835dd4eeecee5c9a7",
+      "fingerprint": "987c4ed24c99451298e209ab35608e93a13e1034c5620d32ae9c89f5ee9ff239",
+      "spec": {
+        "version": "crop-page/1",
+        "provider": "chatgpt",
+        "product": "chatgpt-web",
+        "model": "provider-default",
+        "settings": {
+          "mode": null,
+          "effort": null
+        },
+        "pageRevision": "sha256:b18044a1bdaff837d3119b55756251654e7e2079f3d394694d46081968bcb449",
+        "promptVersion": "managed-chatgpt-default-crop/1",
+        "validatorVersion": "managed-crop-validator/1",
+        "dependencies": [
+          {
+            "id": "page_30d567b0d78861b03c372948619ea01d4f07a2d17937a1a8389bd16746979a43",
+            "revision": "sha256:b18044a1bdaff837d3119b55756251654e7e2079f3d394694d46081968bcb449",
+            "sha256": "b18044a1bdaff837d3119b55756251654e7e2079f3d394694d46081968bcb449"
+          }
+        ]
+      },
+      "state": "uncertain",
+      "generation": 1,
+      "attemptId": "59b4fcbd-c2e2-479d-8ac2-0bc7ebf9943b",
+      "canonical": null
+    },
+    "attempt": {
+      "id": "59b4fcbd-c2e2-479d-8ac2-0bc7ebf9943b",
+      "activeCommandId": "bd1a2217-a714-4f60-b05f-e591f9cd15c3",
+      "taskId": "task:sha256:c5ddae3bb5f6fb927df1533da5491e380c2902b33db771a835dd4eeecee5c9a7",
+      "generation": 1,
+      "deviceId": "304527cb8fc1440a",
+      "profileId": "profile-2",
+      "accountId": null,
+      "leaseExpiresAt": "2026-10-20T07:23:54.901Z",
+      "phase": "submitted",
+      "submission": "submitted",
+      "checkpointRef": null
+    },
+    "commands": [
+      {
+        "id": "bd1a2217-a714-4f60-b05f-e591f9cd15c3",
+        "taskId": "task:sha256:c5ddae3bb5f6fb927df1533da5491e380c2902b33db771a835dd4eeecee5c9a7",
+        "attemptId": "59b4fcbd-c2e2-479d-8ac2-0bc7ebf9943b",
+        "generation": 1,
+        "fingerprint": "987c4ed24c99451298e209ab35608e93a13e1034c5620d32ae9c89f5ee9ff239",
+        "action": "start",
+        "phase": "started"
+      }
+    ]
+  },
+  "scope": "Production deployment/read-only verification only. No recovery operation, provider prompt, lease renewal, checkpoint synthesis or publication performed."
+}

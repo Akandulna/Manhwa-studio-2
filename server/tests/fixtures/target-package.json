@@ -1,0 +1,222 @@
+{
+  "sourceBytes": "exact source",
+  "attachmentData": [
+    "first slice",
+    "second slice"
+  ],
+  "original": {
+    "schema": "managed-target-source-check/1",
+    "id": "source_check",
+    "unit": {
+      "workspaceId": "workspace",
+      "taskId": "task:sha256:7887aeaa9de5e38286807d2fe32a9d35c7fca218ea682ed594fd90c5a3a7645c",
+      "attemptId": "original",
+      "generation": 1,
+      "fingerprint": "5733d593073cebaf324c4fd9b419b8303a6984009857c996b13572fb0f7e3750"
+    },
+    "target": {
+      "deviceId": "two",
+      "profileId": "profile"
+    },
+    "accountId": "alternative",
+    "policyRevision": 1,
+    "stopCommandId": "stop",
+    "scope": {
+      "workspaceId": "workspace",
+      "seriesId": "series",
+      "chapterId": "chapter",
+      "pageId": "page_3c223f39990ffc4a9e4ebab9afcb323677edd619af6228cfd87d1a8f87fcfca6"
+    },
+    "spec": {
+      "version": "crop-page/1",
+      "provider": "chatgpt",
+      "product": "chatgpt-web",
+      "model": "provider-default",
+      "settings": {
+        "mode": null,
+        "effort": null
+      },
+      "pageRevision": "r1",
+      "promptVersion": "managed-chatgpt-sliced-crop/1",
+      "validatorVersion": "managed-crop-validator/1",
+      "dependencies": [
+        {
+          "id": "page_3c223f39990ffc4a9e4ebab9afcb323677edd619af6228cfd87d1a8f87fcfca6",
+          "revision": "r1",
+          "sha256": "da2df902a025f99567ef7d1e93839e9b5b2e5644d39e01d7231a227e2b0e52ab"
+        }
+      ]
+    },
+    "sourceSha256": "da2df902a025f99567ef7d1e93839e9b5b2e5644d39e01d7231a227e2b0e52ab",
+    "issuedAt": 1000,
+    "validUntil": 16000,
+    "executionAllowed": false,
+    "handoffAllowed": false,
+    "resendAllowed": false,
+    "portableInputVerified": false
+  },
+  "sourceProof": {
+    "challengeId": "source_check",
+    "observedAt": 2000,
+    "sourceSha256": "da2df902a025f99567ef7d1e93839e9b5b2e5644d39e01d7231a227e2b0e52ab",
+    "sourceBytes": 12,
+    "specFingerprint": "5733d593073cebaf324c4fd9b419b8303a6984009857c996b13572fb0f7e3750"
+  },
+  "sourceReceipt": {
+    "schema": "managed-target-source-check/1",
+    "challengeId": "source_check",
+    "unit": {
+      "workspaceId": "workspace",
+      "taskId": "task:sha256:7887aeaa9de5e38286807d2fe32a9d35c7fca218ea682ed594fd90c5a3a7645c",
+      "attemptId": "original",
+      "generation": 1,
+      "fingerprint": "5733d593073cebaf324c4fd9b419b8303a6984009857c996b13572fb0f7e3750"
+    },
+    "target": {
+      "deviceId": "two",
+      "profileId": "profile"
+    },
+    "accountId": "alternative",
+    "policyRevision": 1,
+    "sourceSha256": "da2df902a025f99567ef7d1e93839e9b5b2e5644d39e01d7231a227e2b0e52ab",
+    "sourceBytes": 12,
+    "observedAt": 2000,
+    "receivedAt": 2100,
+    "validUntil": 16000,
+    "sourceVerified": true,
+    "portableInputVerified": false,
+    "executionAllowed": false,
+    "handoffAllowed": false,
+    "resendAllowed": false
+  },
+  "proof": {
+    "id": "package_check",
+    "sourceCheckId": "source_check",
+    "observedAt": 4500,
+    "manifest": {
+      "schema_version": "handoff/1.0",
+      "job_id": "managed_original-ch001-page-da2df902a025",
+      "created_at": "1970-01-01T00:00:03.000Z",
+      "source": {
+        "series_title": "Managed original",
+        "series_slug": "managed_original",
+        "chapter_folder": "Managed attempt",
+        "chapter_number": 1,
+        "page_stem": "page",
+        "original_filename": "page.png",
+        "sha256": "da2df902a025f99567ef7d1e93839e9b5b2e5644d39e01d7231a227e2b0e52ab",
+        "width": 800,
+        "height": 3000,
+        "format": "png",
+        "orientation": "stored_pixels"
+      },
+      "coordinate_system": "canonical_original_pixels",
+      "slicing": {
+        "mode": "full_width_fixed_height",
+        "slice_height": 2048,
+        "encoding": "webp_lossless"
+      },
+      "slices": [
+        {
+          "id": "slice-01",
+          "file": "page_slice-01.webp",
+          "x0": 0,
+          "y0": 0,
+          "x1": 800,
+          "y1": 2048,
+          "width": 800,
+          "height": 2048,
+          "sha256": "20586547d0672f108a0c28e90894643255ebcb3b47e6d364ca2f932e3d3bee6f"
+        },
+        {
+          "id": "slice-02",
+          "file": "page_slice-02.webp",
+          "x0": 0,
+          "y0": 2048,
+          "x1": 800,
+          "y1": 3000,
+          "width": 800,
+          "height": 952,
+          "sha256": "091ccb00e1e67ed233184cd8372c4bf0273d3704e59bf4bfa3dfca4e5e3c21a9"
+        }
+      ],
+      "verification": {
+        "tiling": "exact",
+        "pixels": "identical",
+        "verified_at": "1970-01-01T00:00:03.000Z"
+      },
+      "manifest_sha256": "3dc73815ede1290d8d4782b0f9c7232c2b3a7627bf726e2e1fbeae4206e3ebec"
+    },
+    "promptSha256": "67eaf16347ba9ad5042f3ffcd726dc9c8e9c4a8d9223918a24f99e8b68eb3693",
+    "attachmentBytes": [
+      11,
+      12
+    ]
+  },
+  "challenge": {
+    "schema": "managed-target-package-check/1",
+    "id": "package_check",
+    "sourceCheckId": "source_check",
+    "unit": {
+      "workspaceId": "workspace",
+      "taskId": "task:sha256:7887aeaa9de5e38286807d2fe32a9d35c7fca218ea682ed594fd90c5a3a7645c",
+      "attemptId": "original",
+      "generation": 1,
+      "fingerprint": "5733d593073cebaf324c4fd9b419b8303a6984009857c996b13572fb0f7e3750"
+    },
+    "target": {
+      "deviceId": "two",
+      "profileId": "profile"
+    },
+    "accountId": "alternative",
+    "policyRevision": 1,
+    "stopCommandId": "stop",
+    "sourceObservedAt": 2000,
+    "issuedAt": 4000,
+    "validUntil": 19000,
+    "executionAllowed": false,
+    "handoffAllowed": false,
+    "resendAllowed": false,
+    "portableInputVerified": false,
+    "contextVerified": false
+  },
+  "receipt": {
+    "schema": "managed-target-package-check/1",
+    "id": "package_check",
+    "sourceCheckId": "source_check",
+    "unit": {
+      "workspaceId": "workspace",
+      "taskId": "task:sha256:7887aeaa9de5e38286807d2fe32a9d35c7fca218ea682ed594fd90c5a3a7645c",
+      "attemptId": "original",
+      "generation": 1,
+      "fingerprint": "5733d593073cebaf324c4fd9b419b8303a6984009857c996b13572fb0f7e3750"
+    },
+    "target": {
+      "deviceId": "two",
+      "profileId": "profile"
+    },
+    "accountId": "alternative",
+    "policyRevision": 1,
+    "sourceObservedAt": 2000,
+    "source": {
+      "filename": "page.png",
+      "sha256": "da2df902a025f99567ef7d1e93839e9b5b2e5644d39e01d7231a227e2b0e52ab",
+      "width": 800,
+      "height": 3000
+    },
+    "manifestSha256": "3dc73815ede1290d8d4782b0f9c7232c2b3a7627bf726e2e1fbeae4206e3ebec",
+    "promptSha256": "67eaf16347ba9ad5042f3ffcd726dc9c8e9c4a8d9223918a24f99e8b68eb3693",
+    "attachmentCount": 2,
+    "totalBytes": 23,
+    "observedAt": 4500,
+    "receivedAt": 4600,
+    "validUntil": 19000,
+    "packageVerified": true,
+    "executionAllowed": false,
+    "handoffAllowed": false,
+    "resendAllowed": false,
+    "portableInputVerified": false,
+    "contextVerified": false
+  },
+  "prompt": "You are analyzing ONE manhwa page: \"page\" from Managed original, Managed attempt.\n\nThe 2 images attached to this message are losslessly cut, ordered, full-width vertical slices of that single page (800×3000 px). Attach order and file names:\n  slice-01 = page_slice-01.webp — 800×2048 px, page y 0–2048\n  slice-02 = page_slice-02.webp — 800×952 px, page y 2048–3000\n\nHOW TO LOOK\n- Inspect the whole page top to bottom, including both sides of every slice seam. A seam is NOT a panel boundary.\n- Identify every independently readable illustrated moment: framed panels, distinct shots inside continuous artwork, small inserts, grayscale scenes, objects, landscapes and effects shots.\n- Do not split continuous action just because it is tall. Do not merge different shots just because their backgrounds match.\n- Speech bubbles, narration boxes and SFX never start or split a crop.\n- Edges follow the artwork: a crop starts where its artwork starts and ends where it ends. A bubble, narration box or caption/system text window above or below the art stays outside the crop; keep only what overlaps the art.\n- Between two unframed shots, end each crop at its own artwork. The plain, dark or textured background between them belongs to neither crop — do not share it out between them.\n- A stretch holding only speech/thought/narration bubbles, caption boxes or SFX is NOT a crop. A plain, gradient, sky, sparkle, particle, glow or speed-line background behind them does not count as artwork — leave that stretch uncovered.\n- Self-check every crop: if its honest description would be mainly bubbles, narration or lettering over a background (not a person, creature, object, place or action), drop it.\n- Keep people, faces, hands, clothing, weapons and important effects whole.\n- If crop rules were shared earlier in this conversation, apply them to decide WHAT to crop. The JSON contract below overrides any output format they describe.\n\nHOW TO MEASURE (important)\n- Give each crop's top-left and bottom-right corner in the pixel grid of the SLICE that corner falls in: { \"slice_id\", \"x\", \"y\" }, with x from 0 to the slice width and y from 0 to that slice's height. Do NOT add slice offsets yourself.\n- bottom_right is exclusive (the first pixel row/column outside the crop). A crop crossing a seam simply has its two corners in different slices.\n- Use integers. If a boundary is uncertain, give your best estimate AND add the flag \"boundary_uncertain\" — never invent precision.\n\nWHAT TO WRITE PER CROP\n- reason: a short factual snake_case label (e.g. framed_reaction, action_effects, wide_landscape).\n- description: ONE plain sentence of 12–35 words ending in a period, describing only visible artwork. No character names, no plot, no dialogue transcription.\n- visual_evidence: a short phrase saying why this is its own crop.\n- review_flags: zero or more of \"seam_crossing\", \"boundary_uncertain\", \"possible_multiple_shots\", \"tall_continuous_scene\", \"small_detail_unreadable\", \"clipped_subject\", \"possible_duplicate\", \"needs_closer_view\".\n\nIDENTITY — copy these EXACTLY:\n  job_id: managed_original-ch001-page-da2df902a025\n  source_sha256: da2df902a025f99567ef7d1e93839e9b5b2e5644d39e01d7231a227e2b0e52ab\n  page_stem: page\n  source_width: 800\n  source_height: 3000\n\nIf detail is too small to judge, set \"page_inspection_complete\" to false and say what needs a closer view in \"page_review_flags\" instead of guessing.\n\nReturn ONE JSON object in exactly this shape (chatgpt-analysis/1.0), with no prose and no Markdown fences.\nThe identity fields below are real; the candidate is only an example of the shape — replace it with your own crops, one entry per crop:\n{\n  \"schema_version\": \"chatgpt-analysis/1.0\",\n  \"job_id\": \"managed_original-ch001-page-da2df902a025\",\n  \"source_sha256\": \"da2df902a025f99567ef7d1e93839e9b5b2e5644d39e01d7231a227e2b0e52ab\",\n  \"page_stem\": \"page\",\n  \"source_width\": 800,\n  \"source_height\": 3000,\n  \"coordinate_system\": \"slice_local_pixels\",\n  \"page_inspection_complete\": true,\n  \"candidates\": [\n    {\n      \"candidate_id\": \"candidate-01\",\n      \"reason\": \"framed_reaction\",\n      \"top_left\": {\n        \"slice_id\": \"slice-01\",\n        \"x\": 35,\n        \"y\": 110\n      },\n      \"bottom_right\": {\n        \"slice_id\": \"slice-01\",\n        \"x\": 800,\n        \"y\": 810\n      },\n      \"description\": \"A dark-haired character appears in a close reaction shot against a softly shaded background.\",\n      \"visual_evidence\": \"Distinct framed shot with one main reaction\",\n      \"review_flags\": []\n    }\n  ],\n  \"page_review_flags\": []\n}\n\nHandoff manifest for reference:\n{\n  \"schema_version\": \"handoff/1.0\",\n  \"job_id\": \"managed_original-ch001-page-da2df902a025\",\n  \"created_at\": \"1970-01-01T00:00:03.000Z\",\n  \"source\": {\n    \"series_title\": \"Managed original\",\n    \"series_slug\": \"managed_original\",\n    \"chapter_folder\": \"Managed attempt\",\n    \"chapter_number\": 1,\n    \"page_stem\": \"page\",\n    \"original_filename\": \"page.png\",\n    \"sha256\": \"da2df902a025f99567ef7d1e93839e9b5b2e5644d39e01d7231a227e2b0e52ab\",\n    \"width\": 800,\n    \"height\": 3000,\n    \"format\": \"png\",\n    \"orientation\": \"stored_pixels\"\n  },\n  \"coordinate_system\": \"canonical_original_pixels\",\n  \"slicing\": {\n    \"mode\": \"full_width_fixed_height\",\n    \"slice_height\": 2048,\n    \"encoding\": \"webp_lossless\"\n  },\n  \"slices\": [\n    {\n      \"id\": \"slice-01\",\n      \"file\": \"page_slice-01.webp\",\n      \"x0\": 0,\n      \"y0\": 0,\n      \"x1\": 800,\n      \"y1\": 2048,\n      \"width\": 800,\n      \"height\": 2048,\n      \"sha256\": \"20586547d0672f108a0c28e90894643255ebcb3b47e6d364ca2f932e3d3bee6f\"\n    },\n    {\n      \"id\": \"slice-02\",\n      \"file\": \"page_slice-02.webp\",\n      \"x0\": 0,\n      \"y0\": 2048,\n      \"x1\": 800,\n      \"y1\": 3000,\n      \"width\": 800,\n      \"height\": 952,\n      \"sha256\": \"091ccb00e1e67ed233184cd8372c4bf0273d3704e59bf4bfa3dfca4e5e3c21a9\"\n    }\n  ],\n  \"verification\": {\n    \"tiling\": \"exact\",\n    \"pixels\": \"identical\",\n    \"verified_at\": \"1970-01-01T00:00:03.000Z\"\n  },\n  \"manifest_sha256\": \"3dc73815ede1290d8d4782b0f9c7232c2b3a7627bf726e2e1fbeae4206e3ebec\"\n}"
+}

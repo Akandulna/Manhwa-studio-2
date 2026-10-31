@@ -1,0 +1,71 @@
+{
+  "checkedAt": "2026-10-20T04:48:32.896266+00:00",
+  "authority": {
+    "schema": "managed-task/1",
+    "task": {
+      "workspaceId": "studio_01df7f214f87472e802b2bc43b8d9165",
+      "seriesId": "7c5ac077-2b43-478c-aadd-8116190d0a96",
+      "chapterId": "d5fd1a64-2eef-472d-aeea-8813307af423",
+      "pageId": "page_bcc6a095f68d5cd3b6c4b8875029a7374c8cbed3f66baa28f64f209b72b7545b",
+      "id": "task:sha256:528b50d16e3c74efe4320e25e5a0041a459ee4b18fa3c24b9062024de13b6e4a",
+      "fingerprint": "83187eba717717bb783e6c586753c3d14d57d7a9e3836212c3a00ce0777d7ad4",
+      "spec": {
+        "version": "crop-page/1",
+        "provider": "chatgpt",
+        "product": "chatgpt-web",
+        "model": "provider-default",
+        "settings": {
+          "mode": null,
+          "effort": null
+        },
+        "pageRevision": "sha256:7c7517f05d0e51456e5e27aacc6318642af4d39781d48361842c98e4f53ae2cd",
+        "promptVersion": "managed-chatgpt-default-crop/1",
+        "validatorVersion": "managed-crop-validator/1",
+        "dependencies": [
+          {
+            "id": "page_bcc6a095f68d5cd3b6c4b8875029a7374c8cbed3f66baa28f64f209b72b7545b",
+            "revision": "sha256:7c7517f05d0e51456e5e27aacc6318642af4d39781d48361842c98e4f53ae2cd",
+            "sha256": "7c7517f05d0e51456e5e27aacc6318642af4d39781d48361842c98e4f53ae2cd"
+          }
+        ]
+      },
+      "state": "paused",
+      "generation": 1,
+      "attemptId": "4498d7f0-d206-4a28-906f-f786045bfecc",
+      "canonical": null
+    },
+    "attempt": {
+      "id": "4498d7f0-d206-4a28-906f-f786045bfecc",
+      "activeCommandId": "b1484dac-5f52-40bd-b70f-16e404494e33",
+      "taskId": "task:sha256:528b50d16e3c74efe4320e25e5a0041a459ee4b18fa3c24b9062024de13b6e4a",
+      "generation": 1,
+      "deviceId": "304527cb8fc1440a",
+      "profileId": "profile-1",
+      "accountId": null,
+      "leaseExpiresAt": "2026-10-20T04:46:53.107Z",
+      "phase": "stop_requested",
+      "submission": "unsent",
+      "checkpointRef": null
+    },
+    "commands": [
+      {
+        "id": "b1484dac-5f52-40bd-b70f-16e404494e33",
+        "taskId": "task:sha256:528b50d16e3c74efe4320e25e5a0041a459ee4b18fa3c24b9062024de13b6e4a",
+        "attemptId": "4498d7f0-d206-4a28-906f-f786045bfecc",
+        "generation": 1,
+        "fingerprint": "83187eba717717bb783e6c586753c3d14d57d7a9e3836212c3a00ce0777d7ad4",
+        "action": "stop",
+        "phase": "stop_requested"
+      },
+      {
+        "id": "df4b634a-8367-4804-aaf6-1d343cb0d9e3",
+        "taskId": "task:sha256:528b50d16e3c74efe4320e25e5a0041a459ee4b18fa3c24b9062024de13b6e4a",
+        "attemptId": "4498d7f0-d206-4a28-906f-f786045bfecc",
+        "generation": 1,
+        "fingerprint": "83187eba717717bb783e6c586753c3d14d57d7a9e3836212c3a00ce0777d7ad4",
+        "action": "start",
+        "phase": "started"
+      }
+    ]
+  }
+}

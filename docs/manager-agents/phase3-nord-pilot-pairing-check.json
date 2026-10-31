@@ -1,0 +1,11 @@
+{
+  "checkedAt": "2026-10-19T18:37:08.695Z",
+  "deviceId": "304527cb8fc1440a",
+  "status": 200,
+  "result": {
+    "enrolled": false,
+    "peerRegistered": true,
+    "reserved": false
+  },
+  "scope": "Authenticated read-only device enrollment and handshake status; no task or provider action."
+}

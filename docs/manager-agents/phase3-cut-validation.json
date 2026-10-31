@@ -1,0 +1,38 @@
+{
+  "date": "2026-10-19",
+  "productionChanged": false,
+  "apkBuiltOrInstalled": false,
+  "server": {
+    "files": 51,
+    "tests": 408,
+    "newCutTests": 8,
+    "buildPassed": true
+  },
+  "androidSourceChanged": false,
+  "relaySourceChanged": false,
+  "cloudRequestsAdded": 0,
+  "verification": {
+    "renderer": "real Sharp PNG extraction from validated source buffer",
+    "storage": "real temporary filesystem with exclusive file writes, fsync and directory rename",
+    "taskAndSourceAndArtifactFences": true,
+    "outputHashesAndDimensionsVerified": true,
+    "reuseWithoutRewrite": true,
+    "concurrentCallsReuseOneSet": true,
+    "corruptMissingExtraFilesRejected": true,
+    "symlinkDirectoryRejected": true,
+    "sourceChangeAtCommitRejectsCompletion": true,
+    "newFingerprintDoesNotReuseOldCut": true,
+    "explicitEmptyResult": true
+  },
+  "limits": {
+    "sourceBytes": 64000000,
+    "totalEncodedOutputBytes": 64000000,
+    "aggregateOutputPixels": 100000000
+  },
+  "remaining": [
+    "ProductionRunner and real executor registration/dispatch",
+    "Managed cut chapter completion and downstream review/timeline integration",
+    "Interrupted-stage reconciliation and explicit unbinding",
+    "Installed-phone acceptance"
+  ]
+}

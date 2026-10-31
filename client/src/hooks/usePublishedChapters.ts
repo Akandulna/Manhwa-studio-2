@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from 'react'
 import { storageApi } from '@/lib/api'
+import type { NarrationLanguage } from '@/lib/narrationLanguage'
 
 export interface SeriesPublished {
   published: number
@@ -27,12 +28,24 @@ export interface PublishedState {
   publishedCount: (chapterIds: string[]) => number
   /** Published/total for a whole series, or null if it is not known yet. */
   seriesPublished: (seriesId: string) => SeriesPublished | null
+  /** The Part this chapter was completed with (its files deleted), or null. */
+  completedPart: (chapterId: string) => number | null
+  /** A series' completed Part numbers, ascending. */
+  seriesCompletedParts: (seriesId: string) => number[]
   loading: boolean
 }
 
-export function usePublishedChapters(seriesId?: string): PublishedState {
+/**
+ * `language` asks about one narration language's video only — the narration
+ * tabs pass it, because an English render doesn't make the Hindi voiceover
+ * redundant. Without it any render counts, which is what the image modules
+ * want (both languages share the same crops).
+ */
+export function usePublishedChapters(seriesId?: string, language?: NarrationLanguage): PublishedState {
   const [map, setMap] = useState<Record<string, boolean>>({})
   const [seriesMap, setSeriesMap] = useState<Record<string, SeriesPublished>>({})
+  const [completed, setCompleted] = useState<Record<string, number>>({})
+  const [completedParts, setCompletedParts] = useState<Record<string, number[]>>({})
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -40,29 +53,35 @@ export function usePublishedChapters(seriesId?: string): PublishedState {
     setLoading(true)
 
     storageApi
-      .getPublished(seriesId)
+      .getPublished(seriesId, language)
       .then(result => {
         if (cancelled) return
         setMap(result.chapters)
         setSeriesMap(result.series ?? {})
+        setCompleted(result.completed ?? {})
+        setCompletedParts(result.completedParts ?? {})
       })
       .catch(() => {
         // Advisory only — leave every chapter unmarked.
         if (cancelled) return
         setMap({})
         setSeriesMap({})
+        setCompleted({})
+        setCompletedParts({})
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
       })
 
     return () => { cancelled = true }
-  }, [seriesId])
+  }, [seriesId, language])
 
   return {
     isPublished: (chapterId: string) => map[chapterId] === true,
     publishedCount: (chapterIds: string[]) => chapterIds.filter(id => map[id] === true).length,
     seriesPublished: (seriesId: string) => seriesMap[seriesId] ?? null,
+    completedPart: (chapterId: string) => completed[chapterId] ?? null,
+    seriesCompletedParts: (seriesId: string) => completedParts[seriesId] ?? [],
     loading
   }
 }

@@ -2,7 +2,7 @@
  * Image Clipper 3.0 — slicing ONE image into vertical parts on disk.
  *
  * Distinct from perImageCrop: that cuts the panels a crop artifact describes,
- * this cuts the whole page into evenly-sized pieces so it can be handed to a
+ * this cuts the whole page into fixed-height pieces so it can be handed to a
  * chat model without being downscaled into mush.
  *
  * Slicing happens here rather than in the browser for two reasons: sharp reads
@@ -17,12 +17,11 @@ import path from 'path'
 import sharp from 'sharp'
 import { getSourceFolderPath } from './perImageStore.js'
 
-/**
- * The slice count must stay BELOW this, i.e. at most MAX_SLICES - 1 = 8.
- * Squares are used while they fit that budget; past it the slices grow taller
- * than wide so the count never exceeds it.
- */
-export const MAX_SLICES = 9
+/** Every slice is this tall except the last, which takes whatever is left. */
+export const SLICE_HEIGHT = 2048
+
+/** WebP cannot encode either side past this many pixels. */
+const WEBP_MAX_DIMENSION = 16383
 
 export interface SliceRect {
   /** 1-based, in top-to-bottom order. */
@@ -34,22 +33,17 @@ export interface SliceRect {
 }
 
 /**
- * Cuts a W×H image into at most `MAX_SLICES - 1` vertical slices, top to bottom.
- *
- * Squares (height = W) are preferred and used while they fit the budget; only
- * the final slice may then be shorter. Past the budget the height grows to
- * ceil(H / limit) — the shortest uniform height that still tiles H in `limit`
- * pieces — so the slices turn taller than wide and the count stays capped.
- * Either way the slices tile the full height with no gap or overlap.
+ * Cuts a W×H image into full-width vertical slices of `SLICE_HEIGHT`, top to
+ * bottom. Only the final slice may be shorter: an 11240px page gives five
+ * 2048px slices and one of 1000px. The slices tile the full height with no gap
+ * or overlap, and there is no cap on how many a very tall page produces.
  */
 export function computeSlices(width: number, height: number): SliceRect[] {
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     return []
   }
 
-  const limit = MAX_SLICES - 1
-  const squareCount = Math.ceil(height / width)
-  const sliceHeight = squareCount <= limit ? width : Math.ceil(height / limit)
+  const sliceHeight = SLICE_HEIGHT
 
   const rects: SliceRect[] = []
   for (let top = 0, index = 1; top < height; top += sliceHeight, index++) {
@@ -83,14 +77,24 @@ export interface SliceImageResult {
   files: SliceFile[]
 }
 
-/** Where one image's slices live: `slices3/<image stem>/`. */
+/**
+ * Where one image's slices live, kept out of the source chapter folder:
+ *
+ *   <Series>/<Series>/<Chapter>/slices3/<image stem>/
+ *
+ * The inner folder repeats the series folder's own name and mirrors its
+ * chapter folders one for one. Its name holds no "chapter N", so the importer
+ * never mistakes it for a chapter.
+ */
 export function getSliceDir(folderPath: string, imageFilename: string): string {
   const base = path.basename(imageFilename)
   if (!base || base === '.' || base === '..') {
     throw new Error(`Unusable image filename: ${imageFilename}`)
   }
   const stem = base.replace(/\.[^/.]+$/, '')
-  return path.join(getSourceFolderPath(folderPath), 'slices3', stem)
+  const chapterDir = getSourceFolderPath(folderPath)
+  const seriesDir = path.dirname(chapterDir)
+  return path.join(seriesDir, path.basename(seriesDir), path.basename(chapterDir), 'slices3', stem)
 }
 
 /**
@@ -113,6 +117,10 @@ export async function sliceImage(opts: {
     throw new Error(`Could not read dimensions of ${imageFilename}`)
   }
 
+  if (sourceWidth > WEBP_MAX_DIMENSION) {
+    throw new Error(`${imageFilename} is ${sourceWidth}px wide; WebP slices cannot be wider than ${WEBP_MAX_DIMENSION}px`)
+  }
+
   const rects = computeSlices(sourceWidth, sourceHeight)
   if (rects.length === 0) {
     throw new Error(`${imageFilename} has no usable dimensions to slice`)
@@ -129,12 +137,14 @@ export async function sliceImage(opts: {
   for (const rect of rects) {
     // Zero-padded so the OS sorts them in reading order, which is the order
     // they get attached in after a select-all.
-    const filename = `${stem}_slice-${String(rect.index).padStart(pad, '0')}.png`
+    const filename = `${stem}_slice-${String(rect.index).padStart(pad, '0')}.webp`
     const outputPath = path.join(dir, filename)
 
     const info = await sharp(sourcePath)
       .extract({ left: rect.left, top: rect.top, width: rect.width, height: rect.height })
-      .png()
+      // Lossless, so a slice decodes to the original's visible pixels. Only the hidden RGB of fully transparent pixels
+      // may change: sharp does not expose libwebp's `exact` flag.
+      .webp({ lossless: true, effort: 4 })
       .toFile(outputPath)
 
     const stat = await fs.stat(outputPath)

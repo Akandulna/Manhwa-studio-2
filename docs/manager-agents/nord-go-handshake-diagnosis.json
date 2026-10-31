@@ -1,0 +1,55 @@
+{
+  "checkedAt": "2026-10-20T05:58:00.546083+00:00",
+  "ownerReported": "handshake unavailable; retry performed",
+  "readiness": "Authenticated Studio readiness and registered Nord-token enrollment reads returned 200. Nord remains unenrolled, peer unregistered, reservation false.",
+  "budgetSnapshot": {
+    "operations": 1411,
+    "rowsRead": 462850,
+    "rowsWritten": 8431
+  },
+  "privateTokenFileMatchesRegisteredNordToken": true,
+  "sanitizedManagedOperationEvents": [
+    {
+      "capturedAt": "2026-10-20T05:56:18.864200+00:00",
+      "method": "POST",
+      "path": "/managed/operation",
+      "httpStatus": 403,
+      "outcome": "ok",
+      "eventTimestamp": 1792475778820
+    },
+    {
+      "capturedAt": "2026-10-20T05:56:19.746886+00:00",
+      "method": "POST",
+      "path": "/managed/operation",
+      "httpStatus": 403,
+      "outcome": "ok",
+      "eventTimestamp": 1792475778772
+    },
+    {
+      "capturedAt": "2026-10-20T05:56:40.428124+00:00",
+      "method": "POST",
+      "path": "/managed/operation",
+      "httpStatus": 403,
+      "outcome": "ok",
+      "eventTimestamp": 1792475800354
+    },
+    {
+      "capturedAt": "2026-10-20T05:56:40.469402+00:00",
+      "method": "POST",
+      "path": "/managed/operation",
+      "httpStatus": 403,
+      "outcome": "ok",
+      "eventTimestamp": 1792475800312
+    }
+  ],
+  "result": "Owner completed guarded unpairing, corrected workspace and reported Paired as Abhishek. Production enrollment confirms fresh peer registration and no reservation. Page 4 hash rechecked on Studio and Nord; both match selected source. Awaiting signed-in empty composer confirmation before assigning Go task.",
+  "scope": "No synthetic hello, budget override, profile enrollment, Go task or provider prompt. Tail headers, tokens, bodies and console logs were discarded before persistence.",
+  "ownerConfirmedWorkspaceMismatch": true,
+  "latestReadOnlyEnrollment": {
+    "enrolled": false,
+    "peerRegistered": true,
+    "reserved": false
+  },
+  "resolvedAt": "2026-10-20T06:05:42.919944+00:00",
+  "ownerReportedAfterCorrection": "Paired as Abhishek"
+}

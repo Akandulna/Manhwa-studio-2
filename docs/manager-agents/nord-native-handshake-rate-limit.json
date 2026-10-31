@@ -1,0 +1,37 @@
+{
+  "checkedAt": "2026-10-19T21:33:26.510738+00:00",
+  "httpStatus": 429,
+  "retryAfter": "8794",
+  "resetAtUtc": "2026-10-20T00:00:00+00:00",
+  "resetAtIst": "2026-10-20T05:30:00+05:30",
+  "response": {
+    "error": "Relay daily safety budget reached; queued work must wait until the next UTC day.",
+    "usage": {
+      "day": "2026-10-19",
+      "operations": 7621,
+      "rowsRead": 1695830,
+      "rowsWritten": 50002,
+      "limits": {
+        "operations": 20000,
+        "rowsRead": 3000000,
+        "rowsWritten": 60000
+      },
+      "scope": "This relay only; excludes other Workers and traffic rejected before admission."
+    }
+  },
+  "nativeObservation": "Owner tapped Pair / refresh handshake on Nord APK 1.0.138 and reported Handshake unavailable; configuration and exclusion retained.",
+  "sourceBehavior": "ManagedRelayClient.execute persists Retry-After in RelayBudgetPause on 429 before hello returns false. Subsequent pause admission and restart persistence need native observation.",
+  "scope": "Actual production daily cutoff, read-only authenticated observation. No cap increase, daily state reset, synthetic worker handshake, new managed task, or provider prompt.",
+  "nativeRestartPersistence": {
+    "recordedAt": "2026-10-19T21:42:19.446969+00:00",
+    "method": "Owner performed requested App info \u2192 Force stop, reopened Sleeper-Cell, and tapped Pair / refresh handshake.",
+    "ownerReportedMessage": "Relay safety budget is paused; queued commands are retained",
+    "result": "passed by owner-reported native observation",
+    "verified": "The shared Android pause survived process exit and blocked the next pairing attempt locally.",
+    "notVerified": [
+      "Direct inspection of app-private pause preferences",
+      "Actual post-deadline successful delivery",
+      "Real prepared-page managed execution/publication"
+    ]
+  }
+}

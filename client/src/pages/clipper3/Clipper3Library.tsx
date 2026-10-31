@@ -1,131 +1,113 @@
+import { useSeriesOrder } from '@/hooks/useSeriesOrder'
 /**
  * Clipper3Library — Module 3 v3: Image Clipper 3.0
  *
- * Landing page for the four-pointer technique: a grid of series, mirroring
- * Image Clipper v1/v2's "pick a series first" flow. Selecting a series
- * navigates to its chapter list (Clipper3SeriesView), which links into the
- * actual pointer workspace (Clipper3Workspace).
+ * Landing page: the manhwa list. Selecting a series opens its chapters
+ * (Clipper3SeriesView), and a chapter its pages (Clipper3ImageList), where
+ * the crop boxes made on the Sleeper-Cell phones are previewed and cut.
+ * "Get from phones" pulls the Master phone's downloaded pages into the library.
+ * "Publish cropped chapters" tells the phones which chapters are already cut
+ * (R2 `<Chapter>.cropped.json` markers), so the Master shows them as Cropped
+ * and clipping phones leave them alone.
  *
- * This is currently a frontend-only fork of Image Clipper 2.0: it reads and
- * writes the same clipper2Api / crop_points.json pipeline, just under its own
- * nav tab and routes, so it can be pointed at its own backend later without
- * disturbing 2.0. `PointerStateBadge`/`formatWhen` are exported for reuse by
- * Clipper3SeriesView's chapter cards.
+ * Per-series progress is read from clipper3Api's own summary (crops +
+ * metadata attached for every page).
  */
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import {
   Locate,
   Loader2,
   AlertTriangle,
-  FileJson,
-  FileText,
   CheckCircle2,
-  Pencil,
-  XCircle,
   Globe,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Scissors,
+  Smartphone,
+  UploadCloud
 } from 'lucide-react'
+import { useToast } from '@/components/ui/use-toast'
 import {
-  clipperApi,
-  clipper2Api,
-  type ClipperSeries,
-  type Clipper2Status,
-  type Clipper2ChapterSummary
+  clipper3Api,
+  type Clipper3Chapter,
+  type Clipper3Series,
+  type Clipper3ChapterSummary
 } from '@/lib/api'
-
-// ============ Helpers ============
-
-export function formatWhen(iso: string | null): string {
-  if (!iso) return 'never'
-  const at = new Date(iso)
-  return Number.isNaN(at.getTime()) ? 'unknown' : at.toLocaleString()
-}
-
-/**
- * The pointer state of one chapter. `hasPoints` is a fact about the disk while
- * `status` comes from the index row, and the artifact is user-deletable — so a
- * row can claim 'detected' with no file behind it. The disk wins.
- */
-export function PointerStateBadge({ chapter }: { chapter: Clipper2ChapterSummary }) {
-  if (chapter.status === 'detecting') {
-    return (
-      <Badge variant="secondary" className="flex items-center gap-1">
-        <Loader2 className="h-3 w-3 animate-spin" />
-        Detecting…
-      </Badge>
-    )
-  }
-
-  if (chapter.status === 'failed') {
-    return (
-      <Badge variant="destructive" className="flex items-center gap-1">
-        <XCircle className="h-3 w-3" />
-        Detection failed
-      </Badge>
-    )
-  }
-
-  if (!chapter.hasPoints) {
-    return (
-      <Badge variant="outline" className="flex items-center gap-1 text-muted-foreground">
-        <FileJson className="h-3 w-3" />
-        No pointers
-      </Badge>
-    )
-  }
-
-  if (chapter.status === 'applied') {
-    return (
-      <Badge variant="success" className="flex items-center gap-1">
-        <CheckCircle2 className="h-3 w-3" />
-        Applied · {chapter.exportedCount} exported
-      </Badge>
-    )
-  }
-
-  if (chapter.status === 'edited') {
-    return (
-      <Badge variant="secondary" className="flex items-center gap-1">
-        <Pencil className="h-3 w-3" />
-        {chapter.cropCount} pointers · edited
-      </Badge>
-    )
-  }
-
-  return (
-    <Badge variant="secondary" className="flex items-center gap-1">
-      <Locate className="h-3 w-3" />
-      {chapter.cropCount} pointers detected
-    </Badge>
-  )
-}
+import { usePublishedChapters } from '@/hooks/usePublishedChapters'
+import { SeriesCompletedBadge } from '@/components/PublishedBadge'
+import { PhonePullDialog } from '@/components/PhonePullDialog'
 
 // ============ Page ============
 
 export default function Clipper3Library() {
-  const [status, setStatus] = useState<Clipper2Status | null>(null)
-  const [seriesList, setSeriesList] = useState<ClipperSeries[]>([])
-  const [chapters, setChapters] = useState<Clipper2ChapterSummary[]>([])
+  // Parts completed on the Storage page (files deleted, continuity kept).
+  const { seriesCompletedParts } = usePublishedChapters()
+  const [seriesList, setSeriesList] = useState<Clipper3Series[]>([])
+  const orderedSeries = useSeriesOrder(seriesList)
+  const [chapters, setChapters] = useState<Clipper3Chapter[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  /**
+   * Clipper 3's own per-chapter progress, keyed by chapter id. `chopped` is
+   * read from crops3/ on disk, which is the fact this module produces. Empty until the summaries resolve — the rows then re-render.
+   */
+  const [summaries, setSummaries] = useState<Record<string, Clipper3ChapterSummary>>({})
+  /** Get from phones: the Master phone's downloaded chapters, pulled from R2. */
+  const [pullOpen, setPullOpen] = useState(false)
+  /** Bumped after a pull so the listing reloads with the new chapters. */
+  const [reloadKey, setReloadKey] = useState(0)
+  const { toast } = useToast()
+  const [publishingCropped, setPublishingCropped] = useState(false)
+
+  /**
+   * Writes the cropped markers R2 is missing, for every series. New cuts
+   * publish their own; this is for chapters cut before markers existed.
+   */
+  const publishCropped = useCallback(async () => {
+    setPublishingCropped(true)
+    try {
+      const result = await clipper3Api.publishCroppedMarkers()
+      if (!result.configured) {
+        toast({ title: 'Cloudflare R2 is not set up', description: 'Nothing was published.', variant: 'destructive' })
+        return
+      }
+      const n = result.published.length
+      toast({
+        title: n > 0
+          ? `Published ${n} cropped chapter${n === 1 ? '' : 's'}`
+          : 'The phones already know every cropped chapter',
+        description: [
+          result.series > 0 ? `${result.series} series with cut chapters checked` : 'No chapter has been cut yet',
+          result.failed.length > 0
+            ? `${result.failed.length} failed: ${result.failed.slice(0, 3).map(f => `${f.series}/${f.folder}`).join(', ')}${result.failed.length > 3 ? '…' : ''}`
+            : null
+        ].filter(Boolean).join(' · '),
+        variant: result.failed.length > 0 ? 'destructive' : undefined
+      })
+    } catch (err) {
+      toast({
+        title: 'Could not publish cropped chapters',
+        description: err instanceof Error ? err.message : 'Failed to reach R2',
+        variant: 'destructive'
+      })
+    } finally {
+      setPublishingCropped(false)
+    }
+  }, [toast])
 
   useEffect(() => {
     let cancelled = false
 
-    // Settled independently on purpose: a failed status probe must not hide the
-    // chapter list (an already-detected artifact stays inspectable and appliable
-    // even with the detector down), and a failed listing must not hide what the
-    // detector is configured with. Series come from the same source Image
-    // Clipper v1 uses for its own library grid (title/cover/source site).
-    Promise.allSettled([clipper2Api.getStatus(), clipper2Api.getChapters(), clipperApi.getSeries()])
-      .then(([statusResult, listing, seriesResult]) => {
+    // Settled independently on purpose: a failed series listing must not hide
+    // the chapter error, and the other way round.
+    Promise.allSettled([clipper3Api.getChapters(), clipper3Api.getSeries()])
+      .then(([listing, seriesResult]) => {
         if (cancelled) return
-        if (statusResult.status === 'fulfilled') setStatus(statusResult.value)
         if (listing.status === 'fulfilled') setChapters(listing.value)
         else {
           setError(listing.reason instanceof Error ? listing.reason.message : 'Failed to load chapters')
@@ -135,25 +117,64 @@ export default function Clipper3Library() {
       })
 
     return () => { cancelled = true }
-  }, [])
+  }, [reloadKey])
 
-  // Only series with at least one chapter eligible for pointer detection.
+  // Only series with at least one downloaded chapter.
   const seriesWithChapters = useMemo(
     () => seriesList.filter(s => chapters.some(c => c.seriesId === s.id)),
     [seriesList, chapters]
   )
 
+  // Per-series, because that is the shape the endpoint has. Settled
+  // independently so one unreadable series folder leaves the other rows'
+  // counts intact rather than blanking the whole list.
+  useEffect(() => {
+    if (seriesWithChapters.length === 0) return
+    let cancelled = false
+
+    Promise.allSettled(
+      seriesWithChapters.map(s => clipper3Api.getSeriesSummary(s.id))
+    ).then(results => {
+      if (cancelled) return
+      const next: Record<string, Clipper3ChapterSummary> = {}
+      for (const result of results) {
+        if (result.status !== 'fulfilled') continue
+        for (const summary of result.value.chapters) next[summary.chapterId] = summary
+      }
+      setSummaries(next)
+    })
+
+    return () => { cancelled = true }
+  }, [seriesWithChapters])
+
   const header = (
-    <div className="mb-6">
-      <div className="flex items-center gap-2">
-        <Locate className="h-7 w-7 text-primary" />
-        <h1 className="text-3xl font-bold">Image Clipper 3.0</h1>
+    <div className="mb-6 flex items-start justify-between gap-4">
+      <div>
+        <div className="flex items-center gap-2">
+          <Locate className="h-7 w-7 text-primary" />
+          <h1 className="text-3xl font-bold">Image Clipper 3.0</h1>
+        </div>
+        <p className="text-muted-foreground mt-1">
+          The Sleeper-Cell phones mark each page&apos;s crop boxes. Sync json brings them in,
+          Preview checks and fixes them, and Crop cuts the images. Chapters reviewed on the
+          Master phone are cut as soon as they sync.
+        </p>
       </div>
-      <p className="text-muted-foreground mt-1">
-        A vision model reads the crop guidelines and marks four crop pointers (P1–P4) per
-        section into a JSON file; a second, fully deterministic pass cuts the images from
-        those pointers.
-      </p>
+      <div className="flex items-center gap-2 shrink-0">
+        <Button
+          variant="outline"
+          onClick={publishCropped}
+          disabled={publishingCropped}
+          title="Mark every chapter already cut as Cropped for the phones (the Master won't review them)"
+        >
+          {publishingCropped ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <UploadCloud className="h-4 w-4 mr-2" />}
+          Publish cropped chapters
+        </Button>
+        <Button variant="outline" onClick={() => setPullOpen(true)}>
+          <Smartphone className="h-4 w-4 mr-2" />
+          Get from phones
+        </Button>
+      </div>
     </div>
   )
 
@@ -169,81 +190,6 @@ export default function Clipper3Library() {
     <div className="p-6">
       {header}
 
-      {/* Status strip: what the detector will run with, before anything is started. */}
-      <Card className="mb-6">
-        <CardContent className="p-4 space-y-3">
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
-            <span className="flex items-center gap-2">
-              <span className="text-muted-foreground">Detection model</span>
-              <code className="text-xs bg-muted rounded px-1.5 py-0.5">
-                {status?.model || 'unknown'}
-              </code>
-            </span>
-            <span className="flex items-center gap-2">
-              <span className="text-muted-foreground">Artifact format</span>
-              <code className="text-xs bg-muted rounded px-1.5 py-0.5">
-                {status ? `${status.format} v${status.formatVersion}` : 'unknown'}
-              </code>
-            </span>
-            <span className="flex items-center gap-2">
-              {status?.geminiAvailable ? (
-                <>
-                  <CheckCircle2 className="h-4 w-4 text-green-500" />
-                  <span className="text-muted-foreground">Gemini ready</span>
-                </>
-              ) : (
-                <>
-                  <AlertTriangle className="h-4 w-4 text-amber-500" />
-                  <span className="text-muted-foreground">Gemini unavailable</span>
-                </>
-              )}
-            </span>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
-            <span className="flex items-center gap-2">
-              <FileText className="h-4 w-4 text-muted-foreground" />
-              <span className="text-muted-foreground">Guidelines</span>
-              {status?.guidelinesPresent ? (
-                <Badge variant={status.guidelinesIsDefault ? 'outline' : 'secondary'}>
-                  {status.guidelinesIsDefault ? 'shipped default' : 'customised'}
-                </Badge>
-              ) : (
-                <Badge variant="destructive">missing</Badge>
-              )}
-            </span>
-            <span className="text-muted-foreground">
-              Last edited {formatWhen(status?.guidelinesUpdatedAt ?? null)}
-            </span>
-            <Link to="/settings" className="text-sm underline text-primary">
-              Edit guidelines in Settings
-            </Link>
-          </div>
-
-          {status && !status.geminiAvailable && (
-            <div className="flex items-start gap-2 text-xs text-amber-600 bg-amber-500/10 rounded p-2">
-              <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-              <span>
-                Gemini is unavailable
-                {status.geminiError ? <> — {status.geminiError}</> : <> — set <code>GEMINI_API_KEY</code></>}.
-                Existing pointer files can still be edited and applied.
-              </span>
-            </div>
-          )}
-
-          {status && !status.guidelinesPresent && (
-            <div className="flex items-start gap-2 text-xs text-amber-600 bg-amber-500/10 rounded p-2">
-              <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-              <span>
-                The crop detection guidelines document is missing — detection has no rules to
-                follow. Open <Link to="/settings" className="underline">Settings</Link> to
-                restore the shipped default.
-              </span>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
       {error && (
         <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 rounded p-2 mb-6">
           <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
@@ -256,71 +202,91 @@ export default function Clipper3Library() {
       {chapters.length === 0 && !error && (
         <div className="text-center py-12">
           <Locate className="h-16 w-16 mx-auto text-muted-foreground mb-4 opacity-30" />
-          <h2 className="text-xl font-semibold mb-2">No Chapters Ready for Pointer Detection</h2>
+          <h2 className="text-xl font-semibold mb-2">No Chapters Yet</h2>
           <p className="text-muted-foreground max-w-md mx-auto">
-            Download some chapters using the Library &amp; Downloader module first — only
-            fully downloaded chapters can have their crop pointers detected.
+            Download chapters in the Library, or on the Master phone and bring them
+            here with Get from phones.
           </p>
         </div>
       )}
 
       {seriesWithChapters.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {seriesWithChapters.map(s => {
+        <Card className="overflow-hidden divide-y">
+          {orderedSeries.filter(s => chapters.some(c => c.seriesId === s.id)).map(s => {
             const seriesChapters = chapters.filter(c => c.seriesId === s.id)
-            const applied = seriesChapters.filter(c => c.status === 'applied').length
-            const progress = seriesChapters.length > 0 ? Math.round((applied / seriesChapters.length) * 100) : 0
+            // Done here means "every page has its crops and matching metadata",
+            // the same bar Clipper 3's own chapter list calls fully attached.
+            // Chapters with no summary row yet (still loading, or a folder the
+            // server could not read) count as not-done rather than being dropped
+            // from the denominator, so the bar never overstates progress.
+            const done = seriesChapters.filter(c => summaries[c.id]?.fullyAttached).length
+            // Cut output is tracked separately: a chapter can be re-synced
+            // after being cut, so this is a note on the row, not the progress.
+            const chopped = seriesChapters.filter(c => summaries[c.id]?.chopped).length
+            const progress = seriesChapters.length > 0 ? Math.round((done / seriesChapters.length) * 100) : 0
             return (
-              <Link key={s.id} to={`/clipper3/series/${s.id}`}>
-                <Card className="h-full hover:border-primary transition-colors cursor-pointer">
-                  <CardContent className="p-4">
-                    <div className="aspect-[3/4] bg-muted rounded-lg mb-3 flex items-center justify-center overflow-hidden">
-                      {s.coverPath ? (
-                        <img
-                          src={`file://${s.coverPath}`}
-                          alt={s.title}
-                          className="w-full h-full object-cover"
-                          onError={(e) => {
-                            e.currentTarget.style.display = 'none'
-                            e.currentTarget.parentElement!.innerHTML = `<div class="flex items-center justify-center w-full h-full"><span class="text-4xl">📚</span></div>`
-                          }}
-                        />
-                      ) : (
-                        <span className="text-4xl">📚</span>
-                      )}
-                    </div>
+              <Link
+                key={s.id}
+                to={`/clipper3/series/${s.id}`}
+                className="flex items-center gap-4 px-4 py-3 hover:bg-accent/50 transition-colors"
+              >
+              <div className="h-10 w-10 shrink-0 rounded-md bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center">
+                <Scissors className="h-5 w-5 text-primary/40" />
+              </div>
 
-                    <h3 className="font-semibold truncate mb-2">{s.title}</h3>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <h3 className="font-semibold truncate">{s.title}</h3>
+                  <SeriesCompletedBadge parts={seriesCompletedParts(s.id)} />
+                </div>
+                <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <Globe className="h-3 w-3 shrink-0" />
+                  <span className="truncate">{s.sourceSite}</span>
+                </div>
+              </div>
 
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground mb-3">
-                      <Globe className="h-3 w-3" />
-                      <span className="truncate">{s.sourceSite}</span>
-                    </div>
+                <div className="hidden md:flex items-center gap-1.5 shrink-0">
+                  {chopped > 0 && (
+                    <Badge
+                      variant="outline"
+                      className="flex items-center gap-1"
+                      title={`${chopped} of ${seriesChapters.length} chapters have cut output in crops3/`}
+                    >
+                      <Scissors className="h-3 w-3" />
+                      {chopped} cut
+                    </Badge>
+                  )}
+                </div>
 
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        {progress === 100 ? (
-                          <Badge variant="success" className="flex items-center gap-1">
-                            <CheckCircle2 className="h-3 w-3" />
-                            Complete
-                          </Badge>
-                        ) : (
-                          <Badge variant="secondary" className="flex items-center gap-1">
-                            <ImageIcon className="h-3 w-3" />
-                            {applied}/{seriesChapters.length}
-                          </Badge>
-                        )}
-                        <span className="text-xs text-muted-foreground">{progress}%</span>
-                      </div>
-                      <Progress value={progress} className="h-1.5" />
-                    </div>
-                  </CardContent>
-                </Card>
+                <span className="w-24 shrink-0 text-sm text-muted-foreground text-right">
+                  {seriesChapters.length} chapters
+                </span>
+
+                <div className="hidden sm:flex w-36 shrink-0 items-center gap-2">
+                  <Progress value={progress} className="h-1 flex-1" />
+                  <span className="w-9 text-xs text-muted-foreground text-right">{progress}%</span>
+                </div>
+
+                <div className="w-32 shrink-0 flex justify-end">
+                  {progress === 100 ? (
+                    <Badge variant="success" className="flex items-center gap-1">
+                      <CheckCircle2 className="h-3 w-3" />
+                      Complete
+                    </Badge>
+                  ) : (
+                    <Badge variant="secondary" className="flex items-center gap-1">
+                      <ImageIcon className="h-3 w-3" />
+                      {done}/{seriesChapters.length}
+                    </Badge>
+                  )}
+                </div>
               </Link>
             )
           })}
-        </div>
+        </Card>
       )}
+
+      <PhonePullDialog open={pullOpen} onOpenChange={setPullOpen} onPulled={() => setReloadKey(k => k + 1)} />
     </div>
   )
 }

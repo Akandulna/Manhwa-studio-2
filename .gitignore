@@ -12,6 +12,10 @@ build/
 # Downloads folder
 downloads/
 
+# Private immutable managed-pilot output
+/server/private/managed-crops/
+/server/private/progress-resets/
+
 # Environment files (keep .env.example)
 .env
 .env.local
@@ -39,3 +43,6 @@ server/prisma/migrations/
 
 # WhisperX alignment sidecar venv
 server/.venv-whisperx/
+
+# Mac app (desktop/): machine-specific repo path
+desktop/app-config.json

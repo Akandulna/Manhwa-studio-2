@@ -1,0 +1,11 @@
+{
+  "checkedAt": "2026-10-19T19:28:57.506794+00:00",
+  "device": "Nord CPH2467",
+  "serial": "54a03a76",
+  "installedVersion": "1.0.135",
+  "series": "Sandmancer of the Scorched Desert",
+  "chapterDirectories": 20,
+  "phonePreparationReceipts": 0,
+  "legacyStitchReceipts": 0,
+  "scope": "Read-only existing phone directory/receipt checks. No source mutation, task, prompt, APK build or install."
+}

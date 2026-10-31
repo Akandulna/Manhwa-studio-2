@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sleeper-cell-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "durable_objects": {
+    "bindings": [{ "name": "RELAY", "class_name": "Relay" }]
+  },
+  "r2_buckets": [
+    { "binding": "MANAGED_ARTIFACTS", "bucket_name": "sleeper-cell-managed-artifacts" }
+  ],
+  // SQLite-backed Durable Objects are the kind the Workers free plan includes.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Relay"] }]
+}

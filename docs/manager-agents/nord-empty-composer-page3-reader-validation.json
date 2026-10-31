@@ -1,0 +1,18 @@
+{
+  "checkedAt": "2026-10-20T05:38:21.317254+00:00",
+  "filename": "page_003.jpg",
+  "cropCount": 4,
+  "hasMetadata": true,
+  "metadataValid": true,
+  "status": "done",
+  "sourceImage": {
+    "filename": "page_003.jpg",
+    "width": 800,
+    "height": 10808
+  },
+  "scope": "Read-only existing Studio clipper reader integration, after actual trusted managed publication. No review approval or cutting.",
+  "metadataValidFromMetadataEndpoint": true,
+  "metadataErrors": [],
+  "pointsSha256": "1603c9b985b785b257640135f2d0cd691f99ed488528915e844f6e916e18f141",
+  "metadataSha256": "8dd757aa522e6a177c638d21462a7ab15819afde33363150f6c29d3a3546a1c1"
+}

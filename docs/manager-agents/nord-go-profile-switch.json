@@ -1,0 +1,10 @@
+{
+  "checkedAt": "2026-10-20T05:46:50.958137+00:00",
+  "httpStatus": 200,
+  "result": {
+    "deviceId": "304527cb8fc1440a",
+    "enrolled": false
+  },
+  "purpose": "Owner requested Go verification followed by Plus. Reconciled cloud unenrollment permits safe switch from Nord/Saran to Nord/Abhishek; phone Finish unpairing and fresh pairing remain required.",
+  "preserved": "Published Saran result and paused/stopped command history; no provider prompt or new task."
+}

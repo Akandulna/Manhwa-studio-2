@@ -1,0 +1,25 @@
+{
+  "checkedAt": "2026-10-19T18:24:30.301Z",
+  "pageId": "9431b5f1-9db0-4619-a587-41736f7f33a3",
+  "title": "I Became The Rogue First Prince",
+  "chapter": 1,
+  "pageIndex": 0,
+  "status": "done",
+  "chapterArchived": false,
+  "filename": "page_001.jpg",
+  "folder": "I Became The Rogue First Prince/Chapter 001",
+  "bytes": 724013,
+  "sha256": "155d022b85274a5237814223fb6a570f2cb81b5d17fd5ddde61dead2d79181a5",
+  "matchesSelectedSnapshot": true,
+  "width": 800,
+  "height": 10683,
+  "scope": "Read-only current Studio database/source check; no binding, claim or output change.",
+  "phone": {
+    "device": "192.168.1.34:40529",
+    "deviceId": "304527cb8fc1440a",
+    "sha256": "155d022b85274a5237814223fb6a570f2cb81b5d17fd5ddde61dead2d79181a5",
+    "matchesStudio": true,
+    "checkedAt": "2026-10-19T18:25:22.296Z",
+    "method": "Read-only ADB toybox sha256sum of the exact external workspace page; private shared-identity preferences not inspected."
+  }
+}

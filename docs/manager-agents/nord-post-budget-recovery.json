@@ -1,0 +1,32 @@
+{
+  "checkedAt": "2026-10-20T04:40:25.622692+00:00",
+  "ownerReported": "paired after daily safety pause",
+  "checks": {
+    "studio": {
+      "httpStatus": 200,
+      "body": {
+        "schema": "managed-task/1",
+        "result": {
+          "workspaceId": "studio_01df7f214f87472e802b2bc43b8d9165",
+          "artifactStorageConfigured": true,
+          "capabilities": [
+            "chatgpt-default-crop/1"
+          ]
+        }
+      }
+    },
+    "phone": {
+      "httpStatus": 200,
+      "body": {
+        "schema": "managed-task/1",
+        "result": {
+          "enrolled": true,
+          "peerRegistered": true,
+          "reserved": false
+        }
+      }
+    }
+  },
+  "nordConnected": true,
+  "result": "Post-deadline managed transport recovered: both authenticated checks returned 200; owner reported native pairing succeeded. No daily budget override."
+}

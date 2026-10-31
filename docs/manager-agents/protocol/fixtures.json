@@ -1,0 +1,579 @@
+{
+  "valid": [
+    {
+      "schema": "manager-agents/1",
+      "kind": "identity",
+      "eventId": "event-identity",
+      "workspaceId": "fixture-workspace",
+      "source": {
+        "id": "phone-1/clipper",
+        "deviceId": "phone-1",
+        "manager": "device_image_clipper",
+        "sequence": 1
+      },
+      "observedAt": "2026-10-18T06:30:00Z",
+      "receivedAt": "2026-10-18T06:31:00Z",
+      "evidence": [],
+      "body": {
+        "originDeviceId": "origin-phone",
+        "localEntityId": "origin-chapter-uuid",
+        "entityKind": "chapter",
+        "sharedId": "chapter-origin-1",
+        "originOwnerId": "origin-phone"
+      }
+    },
+    {
+      "schema": "manager-agents/1",
+      "kind": "observation",
+      "eventId": "event-observation",
+      "workspaceId": "fixture-workspace",
+      "source": {
+        "id": "phone-1/clipper",
+        "deviceId": "phone-1",
+        "manager": "device_image_clipper",
+        "sequence": 2
+      },
+      "observedAt": "2026-10-18T06:30:00Z",
+      "receivedAt": "2026-10-18T06:31:00Z",
+      "evidence": [],
+      "body": {
+        "entity": {
+          "seriesId": "series-origin-1",
+          "chapterId": "chapter-origin-1",
+          "stage": "crop_json",
+          "language": null,
+          "unit": {
+            "kind": "page",
+            "id": "page-1"
+          }
+        },
+        "inputFingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "workState": "verified_complete",
+        "revisionCompatibility": "current",
+        "review": "pending",
+        "availability": [
+          {
+            "destination": "phone:phone-1",
+            "state": "validated",
+            "artifactId": "artifact-1"
+          },
+          {
+            "destination": "cloud",
+            "state": "uploaded",
+            "artifactId": "artifact-1"
+          },
+          {
+            "destination": "mac:mac-1",
+            "state": "missing",
+            "artifactId": "artifact-1"
+          }
+        ],
+        "validator": "ClipperPage.export/1"
+      }
+    },
+    {
+      "schema": "manager-agents/1",
+      "kind": "task",
+      "eventId": "event-task",
+      "workspaceId": "fixture-workspace",
+      "source": {
+        "id": "phone-1/clipper",
+        "deviceId": "phone-1",
+        "manager": "device_image_clipper",
+        "sequence": 3
+      },
+      "observedAt": "2026-10-18T06:30:00Z",
+      "receivedAt": "2026-10-18T06:31:00Z",
+      "evidence": [],
+      "body": {
+        "taskId": "task:sha256:5fa6302bba08f00059f21a134cb4b6be17bbc58f7199034683cdab34867d3bad",
+        "entity": {
+          "seriesId": "series-origin-1",
+          "chapterId": "chapter-origin-1",
+          "stage": "crop_json",
+          "language": null,
+          "unit": {
+            "kind": "page",
+            "id": "page-1"
+          }
+        },
+        "inputFingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "policyId": "wait-only",
+        "runIds": [
+          "run-1",
+          "run-2"
+        ],
+        "state": "assigned",
+        "currentAttemptId": "attempt-1"
+      }
+    },
+    {
+      "schema": "manager-agents/1",
+      "kind": "attempt",
+      "eventId": "event-attempt",
+      "workspaceId": "fixture-workspace",
+      "source": {
+        "id": "phone-1/clipper",
+        "deviceId": "phone-1",
+        "manager": "device_image_clipper",
+        "sequence": 4
+      },
+      "observedAt": "2026-10-18T06:30:00Z",
+      "receivedAt": "2026-10-18T06:31:00Z",
+      "evidence": [],
+      "body": {
+        "taskId": "task:sha256:5fa6302bba08f00059f21a134cb4b6be17bbc58f7199034683cdab34867d3bad",
+        "attemptId": "attempt-1",
+        "generation": 1,
+        "inputFingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "deviceId": "phone-1",
+        "profileId": "profile-1",
+        "accountId": null,
+        "provider": "chatgpt",
+        "product": "chatgpt-web",
+        "model": "fixture-model",
+        "settings": {
+          "mode": null,
+          "effort": null
+        },
+        "fallbackPolicy": "wait",
+        "allowedAlternatives": [],
+        "leaseExpiresAt": "2026-10-18T06:32:00Z",
+        "lastProgressAt": "2026-10-18T06:30:00Z",
+        "checkpointRefs": [],
+        "submissionOutcome": "unknown",
+        "state": "uncertain"
+      }
+    },
+    {
+      "schema": "manager-agents/1",
+      "kind": "command",
+      "eventId": "event-command",
+      "workspaceId": "fixture-workspace",
+      "source": {
+        "id": "phone-1/clipper",
+        "deviceId": "phone-1",
+        "manager": "device_image_clipper",
+        "sequence": 5
+      },
+      "observedAt": "2026-10-18T06:30:00Z",
+      "receivedAt": "2026-10-18T06:31:00Z",
+      "evidence": [],
+      "body": {
+        "commandId": "command-1",
+        "taskId": "task:sha256:5fa6302bba08f00059f21a134cb4b6be17bbc58f7199034683cdab34867d3bad",
+        "attemptId": "attempt-1",
+        "generation": 1,
+        "inputFingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "action": "submit",
+        "phase": "accepted",
+        "checkpointRef": null
+      }
+    },
+    {
+      "schema": "manager-agents/1",
+      "kind": "artifact",
+      "eventId": "event-artifact",
+      "workspaceId": "fixture-workspace",
+      "source": {
+        "id": "phone-1/clipper",
+        "deviceId": "phone-1",
+        "manager": "device_image_clipper",
+        "sequence": 6
+      },
+      "observedAt": "2026-10-18T06:30:00Z",
+      "receivedAt": "2026-10-18T06:31:00Z",
+      "evidence": [],
+      "body": {
+        "artifactId": "artifact-1",
+        "taskId": "task:sha256:5fa6302bba08f00059f21a134cb4b6be17bbc58f7199034683cdab34867d3bad",
+        "attemptId": "attempt-1",
+        "generation": 1,
+        "inputFingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "destination": "cloud",
+        "objectVersion": "fixture-version-1",
+        "contentHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "publication": "staged",
+        "validation": "passed",
+        "validator": "crop-page/1",
+        "validatedAt": "2026-10-18T06:30:00Z"
+      }
+    },
+    {
+      "schema": "manager-agents/1",
+      "kind": "reservation",
+      "eventId": "event-reservation",
+      "workspaceId": "fixture-workspace",
+      "source": {
+        "id": "phone-1/clipper",
+        "deviceId": "phone-1",
+        "manager": "device_image_clipper",
+        "sequence": 7
+      },
+      "observedAt": "2026-10-18T06:30:00Z",
+      "receivedAt": "2026-10-18T06:31:00Z",
+      "evidence": [],
+      "body": {
+        "reservationId": "reservation-1",
+        "taskId": "task:sha256:5fa6302bba08f00059f21a134cb4b6be17bbc58f7199034683cdab34867d3bad",
+        "attemptId": "attempt-1",
+        "generation": 1,
+        "resourceKind": "profile",
+        "resourceId": "phone-1/profile-1",
+        "quotaScope": null,
+        "units": 1,
+        "state": "uncertain"
+      }
+    },
+    {
+      "schema": "manager-agents/1",
+      "kind": "incident",
+      "eventId": "event-incident",
+      "workspaceId": "fixture-workspace",
+      "source": {
+        "id": "phone-1/clipper",
+        "deviceId": "phone-1",
+        "manager": "device_image_clipper",
+        "sequence": 8
+      },
+      "observedAt": "2026-10-18T06:30:00Z",
+      "receivedAt": "2026-10-18T06:31:00Z",
+      "evidence": [],
+      "body": {
+        "incidentId": "incident-1",
+        "causeKey": "quota-exhausted",
+        "resourceKey": "account-1/chatgpt/model/generation",
+        "type": "quota",
+        "severity": "warning",
+        "state": "waiting",
+        "acknowledgedAt": "2026-10-18T06:30:00Z",
+        "affectedEntities": [
+          "phone-1/profile-1",
+          "phone-2/profile-2"
+        ],
+        "confirmedFacts": [
+          "Provider reported quota exhausted"
+        ],
+        "suspectedCause": null,
+        "firstOccurredAt": "2026-10-18T06:30:00Z",
+        "lastOccurredAt": "2026-10-18T06:30:00Z",
+        "responsibleManager": "accounts",
+        "recoveries": [],
+        "blocker": "Capacity unavailable",
+        "nextAction": "Recheck observed reset; keep accepted checkpoints",
+        "notificationId": null
+      }
+    },
+    {
+      "schema": "manager-agents/1",
+      "kind": "account",
+      "eventId": "event-account",
+      "workspaceId": "fixture-workspace",
+      "source": {
+        "id": "phone-1/clipper",
+        "deviceId": "phone-1",
+        "manager": "device_image_clipper",
+        "sequence": 9
+      },
+      "observedAt": "2026-10-18T06:30:00Z",
+      "receivedAt": "2026-10-18T06:31:00Z",
+      "evidence": [],
+      "body": {
+        "accountId": null,
+        "deviceId": "phone-1",
+        "profileId": "profile-1",
+        "provider": "chatgpt",
+        "identityConfirmed": false,
+        "login": "unknown",
+        "plan": "unknown",
+        "evidenceQuality": "unknown",
+        "capabilities": [],
+        "quotas": [
+          {
+            "scope": "chatgpt/model/generation",
+            "state": "unknown",
+            "quality": "unknown",
+            "resetAt": null
+          }
+        ],
+        "audit": {
+          "intervalHours": 24,
+          "lastSuccessAt": null,
+          "nextDueAt": "2026-10-18T06:30:00Z",
+          "state": "failed"
+        }
+      }
+    },
+    {
+      "schema": "manager-agents/1",
+      "kind": "ui_change",
+      "eventId": "event-ui_change",
+      "workspaceId": "fixture-workspace",
+      "source": {
+        "id": "phone-1/clipper",
+        "deviceId": "phone-1",
+        "manager": "device_image_clipper",
+        "sequence": 10
+      },
+      "observedAt": "2026-10-18T06:30:00Z",
+      "receivedAt": "2026-10-18T06:31:00Z",
+      "evidence": [],
+      "body": {
+        "changeId": "change-1",
+        "provider": "gemini",
+        "deviceId": "phone-1",
+        "profileId": "profile-1",
+        "workflow": "crop-page/composer",
+        "variant": {
+          "viewport": "412x915",
+          "locale": "en-IN",
+          "theme": "dark"
+        },
+        "baselineVersion": "fixture-baseline-1",
+        "state": "confirmed_info",
+        "lastMatchedAt": "2026-10-17T06:30:00Z",
+        "firstChangedAt": "2026-10-18T06:30:00Z",
+        "expected": "Upload label",
+        "observed": "Attachment label",
+        "clippingImpact": "Required controls still verified",
+        "handoffs": [
+          {
+            "from": "website_ui_monitor",
+            "to": "device_image_clipper_manager",
+            "eventId": "handoff-1",
+            "acknowledgedAt": "2026-10-18T06:30:00Z"
+          },
+          {
+            "from": "device_image_clipper_manager",
+            "to": "issues_manager",
+            "eventId": "handoff-2",
+            "acknowledgedAt": "2026-10-18T06:30:00Z"
+          }
+        ],
+        "incidentId": "ui-incident-1",
+        "notificationId": "notification-1",
+        "baselineAcceptedAt": null
+      }
+    },
+    {
+      "schema": "manager-agents/1",
+      "kind": "ui_change",
+      "eventId": "event-ui-chatgpt",
+      "workspaceId": "fixture-workspace",
+      "source": {
+        "id": "phone-1/clipper",
+        "deviceId": "phone-1",
+        "manager": "device_image_clipper",
+        "sequence": 10
+      },
+      "observedAt": "2026-10-18T06:30:00Z",
+      "receivedAt": "2026-10-18T06:31:00Z",
+      "evidence": [],
+      "body": {
+        "changeId": "change-chatgpt",
+        "provider": "chatgpt",
+        "deviceId": "phone-1",
+        "profileId": "profile-1",
+        "workflow": "crop-page/composer",
+        "variant": {
+          "viewport": "412x915",
+          "locale": "en-IN",
+          "theme": "dark"
+        },
+        "baselineVersion": "fixture-baseline-1",
+        "state": "confirmed_info",
+        "lastMatchedAt": "2026-10-17T06:30:00Z",
+        "firstChangedAt": "2026-10-18T06:30:00Z",
+        "expected": "Upload label",
+        "observed": "Attachment label",
+        "clippingImpact": "Required controls still verified",
+        "handoffs": [
+          {
+            "from": "website_ui_monitor",
+            "to": "device_image_clipper_manager",
+            "eventId": "handoff-1-chatgpt",
+            "acknowledgedAt": "2026-10-18T06:30:00Z"
+          },
+          {
+            "from": "device_image_clipper_manager",
+            "to": "issues_manager",
+            "eventId": "handoff-2-chatgpt",
+            "acknowledgedAt": "2026-10-18T06:30:00Z"
+          }
+        ],
+        "incidentId": "ui-incident-chatgpt",
+        "notificationId": "notification-chatgpt",
+        "baselineAcceptedAt": null
+      }
+    },
+    {
+      "schema": "manager-agents/1",
+      "kind": "ui_change",
+      "eventId": "event-ui-aistudio",
+      "workspaceId": "fixture-workspace",
+      "source": {
+        "id": "phone-1/clipper",
+        "deviceId": "phone-1",
+        "manager": "device_image_clipper",
+        "sequence": 10
+      },
+      "observedAt": "2026-10-18T06:30:00Z",
+      "receivedAt": "2026-10-18T06:31:00Z",
+      "evidence": [],
+      "body": {
+        "changeId": "change-aistudio",
+        "provider": "aistudio",
+        "deviceId": "phone-1",
+        "profileId": "profile-1",
+        "workflow": "crop-page/composer",
+        "variant": {
+          "viewport": "412x915",
+          "locale": "en-IN",
+          "theme": "dark"
+        },
+        "baselineVersion": "fixture-baseline-1",
+        "state": "confirmed_info",
+        "lastMatchedAt": "2026-10-17T06:30:00Z",
+        "firstChangedAt": "2026-10-18T06:30:00Z",
+        "expected": "Upload label",
+        "observed": "Attachment label",
+        "clippingImpact": "Required controls still verified",
+        "handoffs": [
+          {
+            "from": "website_ui_monitor",
+            "to": "device_image_clipper_manager",
+            "eventId": "handoff-1-aistudio",
+            "acknowledgedAt": "2026-10-18T06:30:00Z"
+          },
+          {
+            "from": "device_image_clipper_manager",
+            "to": "issues_manager",
+            "eventId": "handoff-2-aistudio",
+            "acknowledgedAt": "2026-10-18T06:30:00Z"
+          }
+        ],
+        "incidentId": "ui-incident-aistudio",
+        "notificationId": "notification-aistudio",
+        "baselineAcceptedAt": null
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "unsupported version",
+      "base": "observation",
+      "path": [
+        "schema"
+      ],
+      "value": "manager-agents/2"
+    },
+    {
+      "name": "missing source sequence",
+      "base": "observation",
+      "path": [
+        "source",
+        "sequence"
+      ],
+      "delete": true
+    },
+    {
+      "name": "unsafe sequence precision",
+      "base": "observation",
+      "path": [
+        "source",
+        "sequence"
+      ],
+      "value": 9007199254740992
+    },
+    {
+      "name": "invalid original timestamp",
+      "base": "observation",
+      "path": [
+        "observedAt"
+      ],
+      "value": "today"
+    },
+    {
+      "name": "missing input revision",
+      "base": "task",
+      "path": [
+        "body",
+        "inputFingerprint"
+      ],
+      "delete": true
+    },
+    {
+      "name": "unknown stage",
+      "base": "observation",
+      "path": [
+        "body",
+        "entity",
+        "stage"
+      ],
+      "value": "everything"
+    },
+    {
+      "name": "missing generation",
+      "base": "command",
+      "path": [
+        "body",
+        "generation"
+      ],
+      "delete": true
+    },
+    {
+      "name": "invalid acknowledgment phase",
+      "base": "command",
+      "path": [
+        "body",
+        "phase"
+      ],
+      "value": "sent_so_done"
+    },
+    {
+      "name": "unscoped quota",
+      "base": "account",
+      "path": [
+        "body",
+        "quotas",
+        0,
+        "scope"
+      ],
+      "delete": true
+    },
+    {
+      "name": "acknowledged is not resolved state",
+      "base": "incident",
+      "path": [
+        "body",
+        "state"
+      ],
+      "value": "acknowledged"
+    },
+    {
+      "name": "bad baseline state",
+      "base": "ui_change",
+      "path": [
+        "body",
+        "state"
+      ],
+      "value": "redesign_proved_on_first_visit"
+    },
+    {
+      "name": "unredacted evidence",
+      "base": "artifact",
+      "path": [
+        "evidence"
+      ],
+      "value": [
+        {
+          "ref": "evidence-1",
+          "sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "capturedAt": "2026-10-18T06:30:00Z",
+          "redacted": false,
+          "expiresAt": "2026-10-25T06:30:00Z"
+        }
+      ]
+    }
+  ]
+}

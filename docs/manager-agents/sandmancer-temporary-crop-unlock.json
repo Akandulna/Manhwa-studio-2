@@ -1,0 +1,23 @@
+{
+  "changedAt": "2026-10-19T20:10:02.889Z",
+  "folder": "Sandmancer of the Scorched Desert/Chapter 001",
+  "filename": "page_001.jpg",
+  "taskId": "task:sha256:cee56902b889bc86272711d485ac7ad3de3af7b4bdc908a3ba6744a31e9ff7ba",
+  "attemptId": "ef0dcaed-6a75-4423-9276-e65ec9f44c80",
+  "authorityState": "paused",
+  "stopConfirmed": true,
+  "submission": "unsent",
+  "sourceHashAtUnlock": "9966acd8c0fae11c398594fac034b8b1ca0e3d16c5ca615a66a1f67d89e520c2",
+  "originalBindingHash": "5ca1a95bfc95df77ec086fbdd84a1ecdd4868a07e3f33cd78b243199bd402bbc",
+  "archiveRelativePath": ".managed-crops/.suspended/443400bc-d414-497e-8cce-62b845ca4837",
+  "scope": "Owner explicitly requested temporary normal crop access for Sandmancer chapter 1 only. Retained the exact binding and cloud task history. No global guard disabled, source edits, provider prompt or task resume.",
+  "restorePolicy": "Explicit reconciliation required. Do not restore automatically after edits: compare the current source and original task specification first.",
+  "activeLocalBindings": 0,
+  "verification": {
+    "checkedAt": "2026-10-19T20:10:16.387Z",
+    "chapterCropGuardPassed": true,
+    "pageCropGuardPassed": true,
+    "protectedScope": false,
+    "otherPilotStillProtected": true
+  }
+}

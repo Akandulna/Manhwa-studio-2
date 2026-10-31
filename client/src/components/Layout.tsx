@@ -2,29 +2,25 @@ import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { useSocket } from '@/lib/socket'
-import { useTheme } from '@/lib/theme'
+import { usePhoneRelay } from '@/hooks/usePhoneRelay'
+import ManagerNotifications from '@/components/ManagerNotifications'
 import {
   Library,
   Download,
   Settings,
   Plus,
   Mic,
-  Scissors,
-  Crosshair,
   Target,
-  Film,
   Clapperboard,
-  Music,
-  SplitSquareHorizontal,
-  FlaskConical,
-  Droplet,
+  Youtube,
   Wifi,
   WifiOff,
   PanelLeftClose,
   PanelLeftOpen,
-  Moon,
-  Sun,
-  HardDrive
+  Smartphone,
+  Layers,
+  Users,
+  Activity
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
@@ -39,7 +35,9 @@ interface NavItem {
   label: string
   href: string
   badge?: number
-  disabled?: boolean
+  /** A status dot on the icon (a bg-* class). */
+  dot?: string
+  dotTitle?: string
 }
 
 const SIDEBAR_STORAGE_KEY = 'sidebarCollapsed'
@@ -47,7 +45,7 @@ const SIDEBAR_STORAGE_KEY = 'sidebarCollapsed'
 export default function Layout({ children }: LayoutProps) {
   const location = useLocation()
   const { isConnected, queueStatus } = useSocket()
-  const { resolvedTheme, toggleTheme } = useTheme()
+  const relay = usePhoneRelay()
 
   const [collapsed, setCollapsed] = useState<boolean>(
     () => localStorage.getItem(SIDEBAR_STORAGE_KEY) === 'true'
@@ -66,20 +64,25 @@ export default function Layout({ children }: LayoutProps) {
   // Library & Downloader module items
   const libraryModuleItems: NavItem[] = [
     {
-      icon: <Library className="h-5 w-5" />,
-      label: 'Library',
-      href: '/'
-    },
-    {
       icon: <Plus className="h-5 w-5" />,
       label: 'Add Series',
       href: '/add'
+    },
+    {
+      icon: <Library className="h-5 w-5" />,
+      label: 'Library',
+      href: '/'
     },
     {
       icon: <Download className="h-5 w-5" />,
       label: 'Downloads',
       href: '/queue',
       badge: activeDownloads > 0 ? activeDownloads : undefined
+    },
+    {
+      icon: <Layers className="h-5 w-5" />,
+      label: 'Page Stitcher',
+      href: '/stitch'
     }
   ]
 
@@ -95,84 +98,60 @@ export default function Layout({ children }: LayoutProps) {
   // Module 3: Image Clipper items
   const clipperModuleItems: NavItem[] = [
     {
-      icon: <Scissors className="h-5 w-5" />,
-      label: 'Image Clipper',
-      href: '/clipper'
-    },
-    {
-      icon: <Crosshair className="h-5 w-5" />,
-      label: 'Image Clipper 2.0',
-      href: '/clipper2'
-    },
-    {
       icon: <Target className="h-5 w-5" />,
       label: 'Image Clipper 3.0',
       href: '/clipper3'
-    },
-    {
-      icon: <Droplet className="h-5 w-5" />,
-      label: 'Watermark Lab',
-      href: '/clipper/watermark'
-    },
-    {
-      icon: <FlaskConical className="h-5 w-5" />,
-      label: 'AI Crop Lab',
-      href: '/clipper/lab'
     }
   ]
 
   // Module 4: Video Editor items
   const editorModuleItems: NavItem[] = [
     {
-      icon: <Film className="h-5 w-5" />,
-      label: 'Editor',
-      href: '/editor'
-    },
-    {
       icon: <Clapperboard className="h-5 w-5" />,
       label: 'Editor 2.0',
       href: '/editor2'
-    },
-    {
-      icon: <Music className="h-5 w-5" />,
-      label: 'Music',
-      href: '/music'
     }
   ]
 
-  // Future modules (disabled)
-  const futureModules: NavItem[] = [
+  // Sleeper Cells: the phone app, its accounts, and what it's doing. The dot is live only with the phone relay.
+  const sleeperModuleItems: NavItem[] = [
     {
-      icon: <SplitSquareHorizontal className="h-5 w-5" />,
-      label: 'Panel Splitter',
-      href: '#',
-      disabled: true
+      icon: <Smartphone className="h-5 w-5" />,
+      label: 'Phone Status',
+      href: '/sleeper-cells',
+      ...(relay?.configured && {
+        dot: !relay.connected ? 'bg-amber-500' : relay.phones > 0 ? 'bg-emerald-500' : 'bg-muted-foreground/60',
+        dotTitle: !relay.connected ? 'Relay offline' : relay.phones > 0 ? 'Sleeper-Cell is open' : 'Sleeper-Cell is closed'
+      })
+    },
+    {
+      icon: <Users className="h-5 w-5" />,
+      label: 'Accounts',
+      href: '/sleeper-cells/accounts'
+    },
+    {
+      icon: <Activity className="h-5 w-5" />,
+      label: 'Live Progress',
+      href: '/sleeper-cells/live'
+    },
+    {
+      icon: <Activity className="h-5 w-5" />,
+      label: 'Production Issues',
+      href: '/sleeper-cells/issues'
     }
   ]
 
   // Check if current path is in narration module
   const isInNarration = location.pathname.startsWith('/narration')
-  // Check if current path is in clipper module.
-  // '/clipper' is a PREFIX of '/clipper2', so a startsWith('/clipper') test also
-  // matches every Image Clipper 2.0 route and would light up the v1 nav item there.
-  // The v1 subtree is therefore matched exactly, and 2.0 gets its own test.
-  const isInClipper = location.pathname === '/clipper' || location.pathname.startsWith('/clipper/')
-  const isInClipper2 = location.pathname.startsWith('/clipper2')
   const isInClipper3 = location.pathname.startsWith('/clipper3')
-  // Check if current path is in editor module.
-  // '/editor' is a PREFIX of '/editor2', so a startsWith('/editor') test also
-  // matches Editor 2.0 routes and would light up the v1 nav item there.
-  // The v1 subtree is therefore matched exactly, and 2.0 gets its own test.
-  const isInEditor = location.pathname === '/editor' || location.pathname.startsWith('/editor/')
   const isInEditor2 = location.pathname.startsWith('/editor2')
-  const isInMusic = location.pathname.startsWith('/music')
 
   // Renders a single nav link, collapsing to an icon-only button when needed.
   const renderNavLink = (item: NavItem, active: boolean) => (
     <Link
       key={item.href}
       to={item.href}
-      title={collapsed ? item.label : undefined}
+      title={collapsed ? [item.label, item.dotTitle].filter(Boolean).join(' · ') : item.dotTitle}
       className={cn(
         "flex items-center gap-3 px-3 py-2 rounded-lg transition-colors",
         collapsed && "justify-center px-0",
@@ -183,6 +162,9 @@ export default function Layout({ children }: LayoutProps) {
     >
       <span className="relative flex-shrink-0">
         {item.icon}
+        {item.dot && (
+          <span className={cn("absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-card", item.dot)} />
+        )}
         {/* Collapsed: surface the badge as a small dot on the icon */}
         {collapsed && item.badge && (
           <span className="absolute -top-1.5 -right-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
@@ -247,14 +229,16 @@ export default function Layout({ children }: LayoutProps) {
 
         {/* Modules Navigation */}
         <ScrollArea className="flex-1">
-          {/* Module 1: Library & Downloader */}
+          {/* Library & Downloader */}
           <div className="p-4">
             {renderSectionLabel('LIBRARY & DOWNLOADER')}
             <nav className="space-y-2">
               {libraryModuleItems.map((item) =>
                 renderNavLink(
                   item,
-                  location.pathname === item.href && !isInNarration
+                  (location.pathname === item.href ||
+                    (item.href === '/stitch' && location.pathname.startsWith('/stitch/'))) &&
+                    !isInNarration
                 )
               )}
             </nav>
@@ -262,7 +246,7 @@ export default function Layout({ children }: LayoutProps) {
 
           <Separator className="my-2" />
 
-          {/* Module 2: Narration Studio */}
+          {/* Narration Studio */}
           <div className="px-4 pb-4">
             {renderSectionLabel('NARRATION STUDIO')}
             <nav className="space-y-2">
@@ -272,105 +256,46 @@ export default function Layout({ children }: LayoutProps) {
 
           <Separator className="my-2" />
 
-          {/* Module 3: Image Clipper */}
+          {/* Image Clipper */}
           <div className="px-4 pb-4">
             {renderSectionLabel('IMAGE CLIPPER')}
             <nav className="space-y-2">
-              {clipperModuleItems.map((item) => {
-                const onLab = location.pathname.startsWith('/clipper/lab')
-                const onWatermark = location.pathname.startsWith('/clipper/watermark')
-                let active: boolean
-                if (item.href === '/clipper/lab') active = onLab
-                else if (item.href === '/clipper/watermark') active = onWatermark
-                else if (item.href === '/clipper2') active = isInClipper2
-                else if (item.href === '/clipper3') active = isInClipper3
-                // isInClipper excludes the '/clipper2' and '/clipper3' subtrees, so the
-                // v1 item cannot be lit by a 2.0 or 3.0 route.
-                else active = isInClipper && !onLab && !onWatermark
-                return renderNavLink(item, active)
-              })}
+              {clipperModuleItems.map((item) => renderNavLink(item, isInClipper3))}
             </nav>
           </div>
 
           <Separator className="my-2" />
 
-          {/* Module 4: Video Editor */}
+          {/* Video Editor */}
           <div className="px-4 pb-4">
             {renderSectionLabel('VIDEO EDITOR')}
             <nav className="space-y-2">
-              {editorModuleItems.map((item) => {
-                let active: boolean
-                if (item.href === '/music') active = isInMusic
-                else if (item.href === '/editor2') active = isInEditor2
-                else active = isInEditor
-                return renderNavLink(item, active)
-              })}
+              {editorModuleItems.map((item) => renderNavLink(item, isInEditor2))}
             </nav>
           </div>
 
           <Separator className="my-2" />
 
-          {/* Future Modules */}
           <div className="px-4 pb-4">
-            {renderSectionLabel('COMING SOON')}
+            {renderSectionLabel('YOUTUBE')}
             <nav className="space-y-2">
-              {futureModules.map((item) => (
-                <div
-                  key={item.label}
-                  title={collapsed ? item.label : undefined}
-                  className={cn(
-                    "flex items-center gap-3 px-3 py-2 rounded-lg",
-                    collapsed && "justify-center px-0",
-                    "text-muted-foreground cursor-not-allowed opacity-50"
-                  )}
-                >
-                  {item.icon}
-                  {!collapsed && <span>{item.label}</span>}
-                </div>
-              ))}
+              {renderNavLink({ icon: <Youtube className="h-5 w-5" />, label: 'YouTube', href: '/youtube' }, location.pathname.startsWith('/youtube'))}
+            </nav>
+          </div>
+
+          <Separator className="my-2" />
+
+          {/* Sleeper Cells */}
+          <div className="px-4 pb-4">
+            {renderSectionLabel('SLEEPER CELLS')}
+            <nav className="space-y-2">
+              {sleeperModuleItems.map((item) => renderNavLink(item, location.pathname === item.href))}
             </nav>
           </div>
         </ScrollArea>
 
         {/* Bottom Section: Settings & Connection Status */}
         <div className="border-t">
-          {/* Theme quick-toggle */}
-          <button
-            type="button"
-            onClick={toggleTheme}
-            title={collapsed
-              ? `Switch to ${resolvedTheme === 'dark' ? 'light' : 'dark'} mode`
-              : undefined}
-            aria-label={`Switch to ${resolvedTheme === 'dark' ? 'light' : 'dark'} mode`}
-            className={cn(
-              "flex w-full items-center gap-3 py-3 transition-colors hover:bg-accent text-foreground",
-              collapsed ? "justify-center px-0" : "px-7"
-            )}
-          >
-            {resolvedTheme === 'dark'
-              ? <Sun className="h-5 w-5 shrink-0" />
-              : <Moon className="h-5 w-5 shrink-0" />}
-            {!collapsed && (
-              <span>{resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
-            )}
-          </button>
-
-          {/* Storage — housekeeping across every module, so it lives with Settings */}
-          <Link
-            to="/storage"
-            title={collapsed ? 'Storage' : undefined}
-            className={cn(
-              "flex items-center gap-3 py-3 transition-colors",
-              collapsed ? "justify-center px-0" : "px-7",
-              location.pathname === '/storage'
-                ? "bg-primary text-primary-foreground"
-                : "hover:bg-accent text-foreground"
-            )}
-          >
-            <HardDrive className="h-5 w-5" />
-            {!collapsed && <span>Storage</span>}
-          </Link>
-
           {/* Universal Settings */}
           <Link
             to="/settings"
@@ -414,6 +339,7 @@ export default function Layout({ children }: LayoutProps) {
 
       {/* Main Content */}
       <main className="flex-1 overflow-auto">
+        <ManagerNotifications />
         <div className="h-full">
           {children}
         </div>

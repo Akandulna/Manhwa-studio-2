@@ -1,0 +1,599 @@
+{
+  "checkedAt": "2026-10-20T05:32:35.958331+00:00",
+  "reports": [
+    {
+      "source": {
+        "id": "304527cb8fc1440a/website_ui",
+        "deviceId": "304527cb8fc1440a",
+        "manager": "website_ui",
+        "sequence": 2
+      },
+      "observedAt": "2026-10-18T20:21:21.226548Z",
+      "receivedAt": "2026-10-18T20:21:22.727Z",
+      "workState": "uncertain",
+      "websiteUi": {
+        "schema": "website-ui/1",
+        "provider": "chatgpt",
+        "workflow": "composer_empty",
+        "variant": {
+          "viewport": "400x640",
+          "locale": "en-US",
+          "theme": "light",
+          "profileVariant": "unknown"
+        },
+        "baselineVersion": null,
+        "changeId": null,
+        "classification": "unchecked",
+        "expected": [],
+        "observed": [
+          {
+            "id": "composer",
+            "count": 0,
+            "label": "absent",
+            "signature": "0836ef18",
+            "icon": "811c9dc5",
+            "style": "811c9dc5",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "id": "model",
+            "count": 0,
+            "label": "absent",
+            "signature": "0836ef18",
+            "icon": "811c9dc5",
+            "style": "811c9dc5",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "id": "navigation",
+            "count": 0,
+            "label": "absent",
+            "signature": "0836ef18",
+            "icon": "811c9dc5",
+            "style": "811c9dc5",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "id": "response_actions",
+            "count": 0,
+            "label": "absent",
+            "signature": "0836ef18",
+            "icon": "811c9dc5",
+            "style": "811c9dc5",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "id": "send",
+            "count": 0,
+            "label": "absent",
+            "signature": "0836ef18",
+            "icon": "811c9dc5",
+            "style": "811c9dc5",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "id": "upload",
+            "count": 0,
+            "label": "absent",
+            "signature": "0836ef18",
+            "icon": "811c9dc5",
+            "style": "811c9dc5",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        ],
+        "lastMatchingAt": null,
+        "firstChangedAt": null,
+        "baselineAcceptedAt": null,
+        "compatibilityVerifiedAt": null,
+        "reason": "unsupported",
+        "impact": "none",
+        "audit": {
+          "state": "due",
+          "dueAt": "2026-10-18T20:21:21.226548Z"
+        },
+        "route": {
+          "monitorObservedAt": "2026-10-18T20:21:21.226548Z",
+          "clipperReceivedAt": null,
+          "issuesReceivedAt": null
+        }
+      }
+    },
+    {
+      "source": {
+        "id": "304527cb8fc1440a/website_ui",
+        "deviceId": "304527cb8fc1440a",
+        "manager": "website_ui",
+        "sequence": 324
+      },
+      "observedAt": "2026-10-20T05:31:32.726656Z",
+      "receivedAt": "2026-10-20T05:31:34.464Z",
+      "workState": "uncertain",
+      "websiteUi": {
+        "schema": "website-ui/1",
+        "provider": "chatgpt",
+        "workflow": "composer_empty",
+        "variant": {
+          "viewport": "400x640",
+          "locale": "en-US",
+          "theme": "light",
+          "profileVariant": "unknown"
+        },
+        "baselineVersion": "1398cfee66bb34a293bfb849a3a8e9dc6e4607fbd43cf323ce4342ff073206bd",
+        "changeId": null,
+        "classification": "unchanged",
+        "expected": [
+          {
+            "id": "composer",
+            "count": 1,
+            "label": "prompt",
+            "signature": "dfe6493b",
+            "icon": "811c9dc5",
+            "style": "75fe4d4f",
+            "location": [
+              1,
+              7,
+              7,
+              1
+            ]
+          },
+          {
+            "id": "model",
+            "count": 0,
+            "label": "absent",
+            "signature": "0836ef18",
+            "icon": "811c9dc5",
+            "style": "811c9dc5",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "id": "navigation",
+            "count": 0,
+            "label": "absent",
+            "signature": "0836ef18",
+            "icon": "811c9dc5",
+            "style": "811c9dc5",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "id": "response_actions",
+            "count": 0,
+            "label": "absent",
+            "signature": "0836ef18",
+            "icon": "811c9dc5",
+            "style": "811c9dc5",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "id": "send",
+            "count": 0,
+            "label": "absent",
+            "signature": "0836ef18",
+            "icon": "811c9dc5",
+            "style": "811c9dc5",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "id": "upload",
+            "count": 1,
+            "label": "attach",
+            "signature": "4295b444",
+            "icon": "3026cc03",
+            "style": "20604594",
+            "location": [
+              1,
+              7,
+              1,
+              0
+            ]
+          }
+        ],
+        "observed": [
+          {
+            "id": "composer",
+            "count": 1,
+            "label": "prompt",
+            "signature": "dfe6493b",
+            "icon": "811c9dc5",
+            "style": "75fe4d4f",
+            "location": [
+              1,
+              7,
+              7,
+              1
+            ]
+          },
+          {
+            "id": "model",
+            "count": 0,
+            "label": "absent",
+            "signature": "0836ef18",
+            "icon": "811c9dc5",
+            "style": "811c9dc5",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "id": "navigation",
+            "count": 0,
+            "label": "absent",
+            "signature": "0836ef18",
+            "icon": "811c9dc5",
+            "style": "811c9dc5",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "id": "response_actions",
+            "count": 0,
+            "label": "absent",
+            "signature": "0836ef18",
+            "icon": "811c9dc5",
+            "style": "811c9dc5",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "id": "send",
+            "count": 0,
+            "label": "absent",
+            "signature": "0836ef18",
+            "icon": "811c9dc5",
+            "style": "811c9dc5",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "id": "upload",
+            "count": 1,
+            "label": "attach",
+            "signature": "4295b444",
+            "icon": "3026cc03",
+            "style": "20604594",
+            "location": [
+              1,
+              7,
+              1,
+              0
+            ]
+          }
+        ],
+        "lastMatchingAt": "2026-10-18T20:39:57.394202Z",
+        "firstChangedAt": null,
+        "baselineAcceptedAt": "2026-10-18T20:34:38.287687Z",
+        "compatibilityVerifiedAt": "2026-10-18T20:36:26.746975Z",
+        "reason": "stable",
+        "impact": "none",
+        "audit": {
+          "state": "due",
+          "dueAt": "2026-10-19T20:39:57.394202Z"
+        },
+        "route": {
+          "monitorObservedAt": "2026-10-18T20:39:57.394202Z",
+          "clipperReceivedAt": null,
+          "issuesReceivedAt": null
+        }
+      }
+    },
+    {
+      "source": {
+        "id": "304527cb8fc1440a/website_ui",
+        "deviceId": "304527cb8fc1440a",
+        "manager": "website_ui",
+        "sequence": 323
+      },
+      "observedAt": "2026-10-20T05:31:32.726656Z",
+      "receivedAt": "2026-10-20T05:31:34.167Z",
+      "workState": "uncertain",
+      "websiteUi": {
+        "schema": "website-ui/1",
+        "provider": "chatgpt",
+        "workflow": "composer_empty",
+        "variant": {
+          "viewport": "400x400",
+          "locale": "en-US",
+          "theme": "light",
+          "profileVariant": "unknown"
+        },
+        "baselineVersion": null,
+        "changeId": null,
+        "classification": "baseline_missing",
+        "expected": [],
+        "observed": [
+          {
+            "id": "composer",
+            "count": 1,
+            "label": "prompt",
+            "signature": "dfe6493b",
+            "icon": "811c9dc5",
+            "style": "75fe4d4f",
+            "location": [
+              1,
+              7,
+              7,
+              1
+            ]
+          },
+          {
+            "id": "model",
+            "count": 0,
+            "label": "absent",
+            "signature": "0836ef18",
+            "icon": "811c9dc5",
+            "style": "811c9dc5",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "id": "navigation",
+            "count": 0,
+            "label": "absent",
+            "signature": "0836ef18",
+            "icon": "811c9dc5",
+            "style": "811c9dc5",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "id": "response_actions",
+            "count": 0,
+            "label": "absent",
+            "signature": "0836ef18",
+            "icon": "811c9dc5",
+            "style": "811c9dc5",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "id": "send",
+            "count": 0,
+            "label": "absent",
+            "signature": "0836ef18",
+            "icon": "811c9dc5",
+            "style": "811c9dc5",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "id": "upload",
+            "count": 1,
+            "label": "attach",
+            "signature": "4295b444",
+            "icon": "3026cc03",
+            "style": "20604594",
+            "location": [
+              1,
+              8,
+              1,
+              1
+            ]
+          }
+        ],
+        "lastMatchingAt": null,
+        "firstChangedAt": null,
+        "baselineAcceptedAt": null,
+        "compatibilityVerifiedAt": null,
+        "reason": "stable",
+        "impact": "none",
+        "audit": {
+          "state": "due",
+          "dueAt": "2026-10-20T04:22:20.757887Z"
+        },
+        "route": {
+          "monitorObservedAt": "2026-10-19T04:22:20.757887Z",
+          "clipperReceivedAt": null,
+          "issuesReceivedAt": null
+        }
+      }
+    },
+    {
+      "source": {
+        "id": "304527cb8fc1440a/website_ui",
+        "deviceId": "304527cb8fc1440a",
+        "manager": "website_ui",
+        "sequence": 280
+      },
+      "observedAt": "2026-10-19T18:38:03.499895Z",
+      "receivedAt": "2026-10-19T18:38:04.535Z",
+      "workState": "uncertain",
+      "websiteUi": {
+        "schema": "website-ui/1",
+        "provider": "aistudio",
+        "workflow": "composer_empty",
+        "variant": {
+          "viewport": "80x80",
+          "locale": "en",
+          "theme": "light",
+          "profileVariant": "unknown"
+        },
+        "baselineVersion": null,
+        "changeId": null,
+        "classification": "baseline_missing",
+        "expected": [],
+        "observed": [
+          {
+            "id": "composer",
+            "count": 0,
+            "label": "absent",
+            "signature": "0836ef18",
+            "icon": "811c9dc5",
+            "style": "811c9dc5",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "id": "model",
+            "count": 0,
+            "label": "absent",
+            "signature": "0836ef18",
+            "icon": "811c9dc5",
+            "style": "811c9dc5",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "id": "navigation",
+            "count": 1,
+            "label": "navigation",
+            "signature": "2cd52ea3",
+            "icon": "811c9dc5",
+            "style": "a1143d33",
+            "location": [
+              8,
+              8,
+              8,
+              8
+            ]
+          },
+          {
+            "id": "response_actions",
+            "count": 0,
+            "label": "absent",
+            "signature": "0836ef18",
+            "icon": "811c9dc5",
+            "style": "811c9dc5",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "id": "send",
+            "count": 0,
+            "label": "absent",
+            "signature": "0836ef18",
+            "icon": "811c9dc5",
+            "style": "811c9dc5",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "id": "upload",
+            "count": 1,
+            "label": "attach",
+            "signature": "4295b444",
+            "icon": "811c9dc5",
+            "style": "42e466fe",
+            "location": [
+              8,
+              8,
+              8,
+              8
+            ]
+          }
+        ],
+        "lastMatchingAt": null,
+        "firstChangedAt": null,
+        "baselineAcceptedAt": null,
+        "compatibilityVerifiedAt": null,
+        "reason": "stable",
+        "impact": "active_workflow",
+        "audit": {
+          "state": "checked",
+          "dueAt": "2026-10-20T18:38:03.499895Z"
+        },
+        "route": {
+          "monitorObservedAt": "2026-10-19T18:38:03.499895Z",
+          "clipperReceivedAt": null,
+          "issuesReceivedAt": null
+        }
+      }
+    }
+  ],
+  "scope": "Existing native Website UI Monitor observations, not a live DOM inspection or proof of the current composer contents."
+}

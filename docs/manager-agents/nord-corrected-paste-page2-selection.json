@@ -1,0 +1,23 @@
+{
+  "checkedAt": "2026-10-20T05:27:34.654Z",
+  "series": "Sandmancer of the Scorched Desert",
+  "chapter": 1,
+  "chapterId": "01fef395-d351-41bc-911a-9b4e7e035cd8",
+  "page": {
+    "id": "1c029b7e-b8c1-4009-b792-956ed63a4d8c",
+    "index": 2,
+    "filename": "page_002.jpg",
+    "bytes": 923206,
+    "sha256": "fe02ea0d537d7962433d42fa69465a60fba564f179a0ed8f9e56310953c3a621",
+    "width": 800,
+    "height": 10602
+  },
+  "legacyPointsExist": false,
+  "legacyMetadataExist": false,
+  "managedBindingExists": false,
+  "deviceId": "304527cb8fc1440a",
+  "profileId": "profile-1",
+  "model": "provider-default",
+  "phoneSourceHashMatches": true,
+  "scope": "Owner-authorized next pending-page test. Prepared page 2 is unprocessed and byte-identical on Nord/Studio. Prior page-1 task remains paused/stop_confirmed/unsent. Fresh native handshake and explicit start remain required; no assignment or prompt yet."
+}

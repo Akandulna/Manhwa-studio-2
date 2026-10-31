@@ -1,0 +1,189 @@
+{
+  "recordedAt": "2026-10-20T05:42:29.122327+00:00",
+  "ownerStatement": "Abhishek - Go; Neostopzone and Mi Max - Plus; others Free.",
+  "planByProfileName": {
+    "Abhishek": "Go",
+    "Neostopzone": "Plus",
+    "Mi Max": "Plus",
+    "other profiles": "Free"
+  },
+  "currentInventory": [
+    {
+      "deviceId": "304527cb8fc1440a",
+      "deviceName": "Nord",
+      "profileId": "Default",
+      "profileName": "Abhishek",
+      "ownerDeclaredPlan": "Go",
+      "verification": "Owner-declared by profile display name; login/account/plan not independently inspected."
+    },
+    {
+      "deviceId": "304527cb8fc1440a",
+      "deviceName": "Nord",
+      "profileId": "profile-1",
+      "profileName": "Saran",
+      "ownerDeclaredPlan": "Free",
+      "verification": "Owner-declared by profile display name; login/account/plan not independently inspected."
+    },
+    {
+      "deviceId": "304527cb8fc1440a",
+      "deviceName": "Nord",
+      "profileId": "profile-2",
+      "profileName": "Neostopzone",
+      "ownerDeclaredPlan": "Plus",
+      "verification": "Owner-declared by profile display name; login/account/plan not independently inspected."
+    },
+    {
+      "deviceId": "304527cb8fc1440a",
+      "deviceName": "Nord",
+      "profileId": "profile-3",
+      "profileName": "Mi Max",
+      "ownerDeclaredPlan": "Plus",
+      "verification": "Owner-declared by profile display name; login/account/plan not independently inspected."
+    },
+    {
+      "deviceId": "304527cb8fc1440a",
+      "deviceName": "Nord",
+      "profileId": "profile-4",
+      "profileName": "2 NSZ",
+      "ownerDeclaredPlan": "Free",
+      "verification": "Owner-declared by profile display name; login/account/plan not independently inspected."
+    },
+    {
+      "deviceId": "304527cb8fc1440a",
+      "deviceName": "Nord",
+      "profileId": "profile-5",
+      "profileName": "India NSZ",
+      "ownerDeclaredPlan": "Free",
+      "verification": "Owner-declared by profile display name; login/account/plan not independently inspected."
+    },
+    {
+      "deviceId": "304527cb8fc1440a",
+      "deviceName": "Nord",
+      "profileId": "profile-6",
+      "profileName": "Mi4i",
+      "ownerDeclaredPlan": "Free",
+      "verification": "Owner-declared by profile display name; login/account/plan not independently inspected."
+    },
+    {
+      "deviceId": "304527cb8fc1440a",
+      "deviceName": "Nord",
+      "profileId": "profile-7",
+      "profileName": "Akan",
+      "ownerDeclaredPlan": "Free",
+      "verification": "Owner-declared by profile display name; login/account/plan not independently inspected."
+    },
+    {
+      "deviceId": "304527cb8fc1440a",
+      "deviceName": "Nord",
+      "profileId": "profile-8",
+      "profileName": "STUV",
+      "ownerDeclaredPlan": "Free",
+      "verification": "Owner-declared by profile display name; login/account/plan not independently inspected."
+    },
+    {
+      "deviceId": "304527cb8fc1440a",
+      "deviceName": "Nord",
+      "profileId": "profile-9",
+      "profileName": "Beta",
+      "ownerDeclaredPlan": "Free",
+      "verification": "Owner-declared by profile display name; login/account/plan not independently inspected."
+    },
+    {
+      "deviceId": "304527cb8fc1440a",
+      "deviceName": "Nord",
+      "profileId": "profile-10",
+      "profileName": "Kennect",
+      "ownerDeclaredPlan": "Free",
+      "verification": "Owner-declared by profile display name; login/account/plan not independently inspected."
+    },
+    {
+      "deviceId": "6d659cf619a94099",
+      "deviceName": "Note 10 Pro",
+      "profileId": "Default",
+      "profileName": "Abhishek",
+      "ownerDeclaredPlan": "Go",
+      "verification": "Owner-declared by profile display name; login/account/plan not independently inspected."
+    },
+    {
+      "deviceId": "6d659cf619a94099",
+      "deviceName": "Note 10 Pro",
+      "profileId": "chatgpt-1",
+      "profileName": "Saran",
+      "ownerDeclaredPlan": "Free",
+      "verification": "Owner-declared by profile display name; login/account/plan not independently inspected."
+    },
+    {
+      "deviceId": "6d659cf619a94099",
+      "deviceName": "Note 10 Pro",
+      "profileId": "profile-2",
+      "profileName": "Neostopzone",
+      "ownerDeclaredPlan": "Plus",
+      "verification": "Owner-declared by profile display name; login/account/plan not independently inspected."
+    },
+    {
+      "deviceId": "6d659cf619a94099",
+      "deviceName": "Note 10 Pro",
+      "profileId": "profile-5",
+      "profileName": "Mi Max",
+      "ownerDeclaredPlan": "Plus",
+      "verification": "Owner-declared by profile display name; login/account/plan not independently inspected."
+    },
+    {
+      "deviceId": "6d659cf619a94099",
+      "deviceName": "Note 10 Pro",
+      "profileId": "profile-6",
+      "profileName": "2 NSZ",
+      "ownerDeclaredPlan": "Free",
+      "verification": "Owner-declared by profile display name; login/account/plan not independently inspected."
+    },
+    {
+      "deviceId": "6d659cf619a94099",
+      "deviceName": "Note 10 Pro",
+      "profileId": "profile-7",
+      "profileName": "India NSZ",
+      "ownerDeclaredPlan": "Free",
+      "verification": "Owner-declared by profile display name; login/account/plan not independently inspected."
+    },
+    {
+      "deviceId": "6d659cf619a94099",
+      "deviceName": "Note 10 Pro",
+      "profileId": "profile-8",
+      "profileName": "Mi4i",
+      "ownerDeclaredPlan": "Free",
+      "verification": "Owner-declared by profile display name; login/account/plan not independently inspected."
+    },
+    {
+      "deviceId": "6d659cf619a94099",
+      "deviceName": "Note 10 Pro",
+      "profileId": "profile-9",
+      "profileName": "Akan",
+      "ownerDeclaredPlan": "Free",
+      "verification": "Owner-declared by profile display name; login/account/plan not independently inspected."
+    },
+    {
+      "deviceId": "6d659cf619a94099",
+      "deviceName": "Note 10 Pro",
+      "profileId": "profile-10",
+      "profileName": "Stuv",
+      "ownerDeclaredPlan": "Free",
+      "verification": "Owner-declared by profile display name; login/account/plan not independently inspected."
+    },
+    {
+      "deviceId": "6d659cf619a94099",
+      "deviceName": "Note 10 Pro",
+      "profileId": "profile-11",
+      "profileName": "Beta",
+      "ownerDeclaredPlan": "Free",
+      "verification": "Owner-declared by profile display name; login/account/plan not independently inspected."
+    },
+    {
+      "deviceId": "6d659cf619a94099",
+      "deviceName": "Note 10 Pro",
+      "profileId": "profile-14",
+      "profileName": "Kennect",
+      "ownerDeclaredPlan": "Free",
+      "verification": "Owner-declared by profile display name; login/account/plan not independently inspected."
+    }
+  ],
+  "scope": "Read-only inventory plus owner-declared name-to-plan mapping. Device-specific account identity remains unverified; repeated profile names across phones do not prove a shared account or quota pool. No profile changes, pairing, tasks or prompts."
+}

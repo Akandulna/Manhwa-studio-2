@@ -1,4 +1,28 @@
+import type {ManagedRunBundle} from '../../../server/src/services/managedProductionAdoption'
+import type {ProductionReconciliation} from '../../../server/src/services/managedProductionReconciliation'
+export type {ProductionReconciliation}
+import type { NarrationLanguage } from './narrationLanguage'
+
 const API_BASE = '/api'
+import type { ProcessSnapshot } from '../../../server/src/services/seriesProcessModel'
+export type { ProcessSnapshot, ProcessSeries, ProcessPart, ProcessStage, StageCount } from '../../../server/src/services/seriesProcessModel'
+export const libraryProgressApi = { get: () => fetchApi<ProcessSnapshot>('/library/progress') }
+import type { ProductionConfig, ProductionJob, ProductionStep } from '../../../server/src/services/productionAutomationModel'
+export type { ProductionConfig, ProductionJob, ProductionStep }
+export const productionApi = {
+  list: () => fetchApi<ProductionJob[]>('/library/automation'),
+  get: (seriesId: string) => fetchApi<{ job: ProductionJob | null; nextStep: ProductionStep }>(`/series/${seriesId}/automation`),
+  start: (seriesId: string, config: ProductionConfig) => fetchApi<ProductionJob>(`/series/${seriesId}/automation`, { method: 'POST', body: JSON.stringify(config) }),
+  pauseHandoff:(seriesId:string,request:{jobId:string;revision:number;taskId:string})=>fetchApi<ProductionJob>(`/series/${seriesId}/automation/pause-handoff`,{method:'POST',body:JSON.stringify(request)}),
+  recoveryDisposition:(seriesId:string,request:Record<string,unknown>)=>fetchApi<{job:ProductionJob;snapshot:any|null}>(`/series/${seriesId}/automation/recovery-disposition`,{method:'POST',body:JSON.stringify(request)}),
+  accountHandoff:(seriesId:string,request:Record<string,unknown>)=>fetchApi<ProductionJob>(`/series/${seriesId}/automation/account-handoff`,{method:'POST',body:JSON.stringify(request)}),
+  handoff:(seriesId:string,request:Record<string,unknown>)=>fetchApi<ProductionJob>(`/series/${seriesId}/automation/handoff`,{method:'POST',body:JSON.stringify(request)}),
+  exportRun:(seriesId:string,expected:{jobId:string;revision:number})=>fetchApi<ManagedRunBundle>(`/series/${seriesId}/automation/export-run`,{method:'POST',body:JSON.stringify(expected)}),
+  adoptRun:(seriesId:string,bundle:unknown)=>fetchApi<ProductionJob>(`/series/${seriesId}/automation/adopt-run`,{method:'POST',body:JSON.stringify(bundle)}),
+  resume: (seriesId:string,expected:{jobId:string;revision:number;scopeDigest:string}) => fetchApi<ProductionJob>(`/series/${seriesId}/automation/resume`,{method:'POST',body:JSON.stringify(expected)}),
+  reconcile: (seriesId:string,expected:{jobId:string;revision:number}) => fetchApi<ProductionReconciliation>(`/series/${seriesId}/automation/reconcile`,{method:'POST',body:JSON.stringify(expected)}),
+  stop: (seriesId: string) => fetchApi<ProductionJob>(`/series/${seriesId}/automation/stop`, { method: 'POST' })
+}
 
 async function fetchApi<T>(
   endpoint: string, 
@@ -31,6 +55,7 @@ async function fetchApi<T>(
 
 // Series API
 export interface Series {
+  lastActivityAt?: string
   id: string
   title: string
   sourceSite: string
@@ -62,6 +87,8 @@ export interface Chapter {
   downloadedCount: number
   error?: string
   createdAt: string
+  /** Page files listed as downloaded but deleted from disk (series detail only). */
+  missingPages?: number
 }
 
 export interface PatternResult {
@@ -91,6 +118,8 @@ export interface QuickValidationResult {
 }
 
 export const seriesApi = {
+  deleteEverywhere: (id: string) => fetchApi<{ deleting: boolean }>(`/series/${id}/delete-everywhere`, { method: 'POST' }),
+  markPart: (id: string, part: number, done: boolean) => fetchApi(`/series/${id}/parts/${part}/completion`, { method: 'PUT', body: JSON.stringify({ done }) }),
   getAll: () => fetchApi<Series[]>('/series'),
   
   getById: (id: string) => fetchApi<Series>(`/series/${id}`),
@@ -224,14 +253,17 @@ export const downloadsApi = {
       body: JSON.stringify({ seriesId })
     }),
   
-  openFolder: (path: string) =>
-    fetchApi<{ message: string }>('/downloads/open-folder', {
-      method: 'POST',
-      body: JSON.stringify({ path })
-    }),
+  openFolder: (path: string) => openFolder(path),
   
   getStats: () => fetchApi<DownloadStats>('/downloads/stats')
 }
+
+/** Opens a folder under the library root in Finder. */
+export const openFolder = (path: string) =>
+  fetchApi<{ message: string }>('/settings/open-folder', {
+    method: 'POST',
+    body: JSON.stringify({ path })
+  })
 
 // Settings API
 export interface Settings {
@@ -264,1520 +296,183 @@ export const settingsApi = {
     })
 }
 
-// ============ Narration Studio API (Module 2) ============
+// ============ Narration API (Module 2) ============
+//
+// The Sleeper-Cell phones write the scripts and voice them; Narration fetches
+// both from R2 and aligns them. Every call takes the narration language:
+// English and Hindi are separate scripts and voiceovers on the server.
 
 export interface NarrationSeries {
+  lastActivityAt?: string
   id: string
   title: string
   sourceSite: string
-  coverPath?: string
   rootFolder: string
-  aboutSummary?: string
-  createdAt: string
-  downloadedChapterCount: number
-  scriptedChapterCount: number
+  chapterCount: number
+  scriptedCount: number
+  /** Chapters where every section has audio. */
+  voicedCount: number
+  /** Chapters where every section has a timeline. */
+  alignedCount: number
 }
 
-export interface NarrationChapterSummary {
+export interface NarrationChapter {
   id: string
   number: number
-  title?: string
+  title?: string | null
   folderPath: string
-  pageCount?: number
-  voiceover: {
-    status: 'none' | 'partial' | 'done'
-    totalSections: number
-    withAudio: number
-  }
-  script: {
-    id: string
-    status: 'none' | 'generating' | 'done' | 'failed' | 'edited' | 'stale'
-    mode: 'api' | 'manual'
-    isPartEnd: boolean
-    hasOutro: boolean
-    error?: string
-    updatedAt: string
-  } | null
-  partNumber: number
+  hasScript: boolean
+  /** Voiceover sections (the phone's splits). */
+  sections: number
+  withAudio: number
+  aligned: number
+  /** Sections queued or aligning right now. */
+  aligning: boolean
+  /** script-timeline.md (script-timeline.hi.md) is in the chapter folder. */
+  documentWritten: boolean
+  /** When its voiceover was last fetched from the phone. */
+  fetchedAt: string | null
+}
+
+/** A "Fetch from phone" run, from `narration:fetch` (and the series detail while it runs). */
+export interface NarrationPhoneFetch {
+  seriesId: string
+  language: NarrationLanguage
+  stage: 'scripts' | 'voiceover' | 'done' | 'failed'
+  chapterNumber?: number
+  current?: number
+  total?: number
+  scripts?: { imported: number; aboutUpdated: boolean } | null
+  voiceovers?: PhoneVoiceoverFetch | null
+  error?: string
 }
 
 export interface NarrationSeriesDetail {
   id: string
   title: string
-  sourceSite: string
-  coverPath?: string
   rootFolder: string
-  aboutSummary?: string
-  createdAt: string
-  chapters: NarrationChapterSummary[]
+  language: NarrationLanguage
+  chapters: NarrationChapter[]
+  phoneFetch: NarrationPhoneFetch | null
 }
 
-export interface ChapterScriptDetail {
-  id: string
+/** One chapter zip the phone uploaded to R2, before anything is downloaded. */
+export interface PhoneVoiceoverPreviewChapter {
+  chapterId: string
   number: number
-  title?: string
-  seriesId: string
-  seriesTitle: string
-  folderPath: string
-  imageCount: number
-  imagesValid: boolean
-  imageError?: string
-  aboutSummary?: string
-  script: {
-    id: string
-    status: string
-    mode: string
-    rollingSummary?: string
-    closingParagraph?: string
-    isPartEnd: boolean
-    outroText?: string
-    content?: string
-    outroContent?: string
-    error?: string
-    tokensUsed?: number
-    updatedAt: string
-  } | null
-  previousContext: {
-    chapterNumber: number
-    rollingSummary?: string
-    closingParagraph?: string
-  } | null
-  prevChapterId: string | null
-  prevChapterNumber: number | null
-  nextChapterId: string | null
-  nextChapterNumber: number | null
+  folder: string
+  /** new: never attached · changed: re-uploaded since · same: already attached from this zip */
+  state: 'new' | 'changed' | 'same'
+  bytes: number
+  uploadedAt: string | null
 }
 
-export interface ManualPromptResponse {
-  prompt: string
-  folderPath: string
-  imageFiles: string[]
-  chapterNumber: number
-  seriesTitle: string
-}
-
-export interface AIStatus {
+/** What "Fetch from phone" would bring (see routes/narration.ts). */
+export interface NarrationPhonePreview {
   configured: boolean
-  defaultProvider: string | null
-  model: string | null
-  availableProviders: string[]
-  hasApiKey: boolean
-  connectionTest: {
-    success: boolean
-    error?: string
-  } | null
+  /** Null when the phone hasn't uploaded a script zip (or it couldn't be read: see scriptsError). */
+  scripts: PhoneImportPreview | null
+  scriptsError: string | null
+  voiceovers: { chapters: PhoneVoiceoverPreviewChapter[]; unmatched: string[] } | null
+}
+
+/** One chapter attached by a voiceover fetch. */
+export interface PhoneVoiceoverChapter {
+  chapterId: string
+  chapterNumber: number
+  folder: string
+  sections: number
+  /** The phone's splits differed from the chapter's sections, so they were replaced. */
+  resplit: boolean
+  /** Whether this chapter's script is the one the phone split; null when unknown. */
+  scriptMatches: boolean | null
+}
+
+/** What fetching the phone's voiceovers from R2 did (see phoneVoiceoverImport.ts). */
+export interface PhoneVoiceoverFetch {
+  configured: boolean
+  found: number
+  fetched: PhoneVoiceoverChapter[]
+  upToDate: number
+  unmatched: string[]
+  failed: { folder: string; reason: string }[]
 }
 
 export const narrationApi = {
-  // Series listing
-  getSeries: () => fetchApi<NarrationSeries[]>('/narration/series'),
-  
-  getSeriesDetail: (id: string) => 
-    fetchApi<NarrationSeriesDetail>(`/narration/series/${id}`),
-  
-  // Chapter operations
-  getChapterDetail: (id: string) =>
-    fetchApi<ChapterScriptDetail>(`/narration/chapters/${id}`),
-  
-  generateScript: (chapterId: string, config?: Record<string, number>) =>
-    fetchApi<{ success: boolean }>(`/narration/chapters/${chapterId}/generate`, {
-      method: 'POST',
-      body: JSON.stringify({ config })
-    }),
-  
-  getManualPrompt: (chapterId: string) =>
-    fetchApi<ManualPromptResponse>(`/narration/chapters/${chapterId}/manual-prompt`),
-  
-  submitManualResult: (chapterId: string, response: string) =>
-    fetchApi<{ 
-      success: boolean
-      parsed: { hasScript: boolean; hasSummary: boolean; hasClosing: boolean; hasAbout: boolean }
-      needsSummaryRegeneration: boolean
-    }>(`/narration/chapters/${chapterId}/manual-submit`, {
-      method: 'POST',
-      body: JSON.stringify({ response })
-    }),
-  
-  saveScript: (chapterId: string, content: string) =>
-    fetchApi<{ success: boolean }>(`/narration/chapters/${chapterId}/script`, {
-      method: 'PUT',
-      body: JSON.stringify({ content })
-    }),
-  
-  regenerateSummary: (chapterId: string) =>
-    fetchApi<{ success: boolean }>(`/narration/chapters/${chapterId}/regenerate-summary`, {
-      method: 'POST'
-    }),
-  
-  togglePartEnd: (chapterId: string) =>
-    fetchApi<{ success: boolean; isPartEnd: boolean }>(`/narration/chapters/${chapterId}/toggle-part-end`, {
-      method: 'POST'
-    }),
-  
-  generateOutro: (chapterId: string) =>
-    fetchApi<{ success: boolean; outroText?: string }>(`/narration/chapters/${chapterId}/generate-outro`, {
-      method: 'POST'
-    }),
-  
-  // Range generation
-  generateRange: (seriesId: string, fromChapter: number, toChapter: number, config?: Record<string, number>) =>
-    fetchApi<{ started: boolean }>(`/narration/series/${seriesId}/generate-range`, {
-      method: 'POST',
-      body: JSON.stringify({ fromChapter, toChapter, config })
-    }),
-  
-  // Part export
-  exportPart: (seriesId: string, partNumber: number) =>
-    fetchApi<{ success: boolean; path?: string }>(`/narration/series/${seriesId}/export-part`, {
-      method: 'POST',
-      body: JSON.stringify({ partNumber })
-    }),
-  
-  // AI status
-  getAIStatus: () => fetchApi<AIStatus>('/narration/ai/status'),
-  
-  // Save API key
-  saveApiKey: (apiKey: string) => 
-    fetchApi<{ success: boolean; configured: boolean; connectionTest: { success: boolean; error?: string } | null }>('/narration/ai/api-key', {
-      method: 'POST',
-      body: JSON.stringify({ apiKey })
-    }),
-  
-  // Save AI model settings
-  saveAIModels: (scriptModel: string, summaryModel: string) =>
-    fetchApi<{ success: boolean }>('/narration/ai/models', {
-      method: 'POST',
-      body: JSON.stringify({ scriptModel, summaryModel })
-    }),
-  
-  // Open folder (reuse downloads API)
-  openFolder: (path: string) => downloadsApi.openFolder(path)
-}
+  getAlignmentSections: (chapterId: string, lang: NarrationLanguage) =>
+    fetchApi<{ id: string; number: number; audioReady: boolean; durationSec: number; aligned: boolean }[]>(
+      `/narration/chapters/${chapterId}/alignment-sections?lang=${lang}`),
 
-// ============ Voiceover API (Module 2 Part 2) ============
+  resetSectionAlignment: (chapterId: string, sectionId: string, lang: NarrationLanguage) =>
+    fetchApi<{ started: boolean }>(`/narration/chapters/${chapterId}/alignment-sections/${sectionId}/reset?lang=${lang}`, { method: 'POST' }),
 
-export interface VoiceoverSeries {
-  id: string
-  title: string
-  sourceSite: string
-  coverPath?: string
-  rootFolder: string
-  downloadedChapterCount: number
-  scriptedChapterCount: number
-  audioGeneratedCount: number
-  audioJoinedCount: number
-}
+  getScript: (chapterId: string, lang: NarrationLanguage) =>
+    fetchApi<{ text: string; sha256: string | null; phoneConfigured: boolean }>(`/narration/chapters/${chapterId}/script?lang=${lang}`),
 
-export interface AudioSection {
-  id: string
-  index: number
-  text: string
-  status: 'pending' | 'generating' | 'done' | 'error' | 'uploaded'
-  error?: string
-  timelineScript?: string | null
-}
+  replaceScript: (chapterId: string, lang: NarrationLanguage, body: { text: string; expectedSha256: string | null; sendToPhones: boolean }) =>
+    fetchApi<{ sha256: string; unchanged: boolean; backupPath: string; phoneSent: boolean; phoneNotified: boolean; phoneError?: string }>(
+      `/narration/chapters/${chapterId}/script/replace?lang=${lang}`, { method: 'POST', body: JSON.stringify(body) }),
 
-export interface AudioFile {
-  id: string
-  kind: 'generated' | 'uploaded' | 'joined'
-  sectionId?: string
-  provider?: string
-  model?: string
-  voice?: string
-  durationMs?: number
-  format: string
-  filePath: string
-  originalName?: string | null
-  createdAt: string
-}
+  getSeries: (lang: NarrationLanguage) => fetchApi<NarrationSeries[]>(`/narration/series?lang=${lang}`),
 
-export interface VoiceAnalysisResult {
-  verdict: 'consistent' | 'mismatch' | 'inconclusive'
-  metadataConsistent: boolean
-  acousticAnalysisAvailable: boolean
-  perFileResults: Array<{
-    fileId: string
-    kind: string
-    voice?: string
-    metadataMatch: boolean
-    acousticSimilarity?: number
-    isOutlier: boolean
-    warning?: string
-  }>
-  warnings: string[]
-}
-
-export interface VoiceoverChapterDetail {
-  id: string
-  number: number
-  title?: string
-  folderPath: string
-  series: {
-    id: string
-    title: string
-  }
-  script: {
-    id: string
-    status: string
-    content?: string
-  } | null
-  sections: AudioSection[]
-  audioFiles: AudioFile[]
-  analysis: {
-    verdict: string
-    updatedAt: string
-  } | null
-  status: {
-    totalSections: number
-    generatedSections: number
-    hasJoinedAudio: boolean
-  }
-  prevChapterId: string | null
-  nextChapterId: string | null
-}
-
-export interface VoiceInfo {
-  id: string
-  name: string
-  description?: string
-  provider: string
-}
-
-export const voiceoverApi = {
-  // Series listing
-  getSeries: () => fetchApi<VoiceoverSeries[]>('/voiceover/series'),
-  
-  // Chapter operations
-  getChapterDetail: (id: string) =>
-    fetchApi<VoiceoverChapterDetail>(`/voiceover/chapters/${id}`),
-  
-  // Section operations
-  initializeSections: (chapterId: string, targetLength?: number) =>
-    fetchApi<{
-      count: number
-      replacedSections: number
-      discardedAudio: number
-      sections: AudioSection[]
-    }>(`/voiceover/chapters/${chapterId}/init-sections`, {
-      method: 'POST',
-      body: JSON.stringify({ targetLength })
-    }),
-  
-  // One-click: split script -> generate all audio -> align every section.
-  // Returns as soon as the run starts; progress arrives on `voiceover:pipeline`.
-  runPipeline: (chapterId: string, opts?: { voice?: string; targetLength?: number }) =>
-    fetchApi<{ message: string; chapterId: string }>(`/voiceover/chapters/${chapterId}/pipeline`, {
-      method: 'POST',
-      body: JSON.stringify(opts ?? {})
-    }),
-
-  updateSection: (sectionId: string, text: string) =>
-    fetchApi<AudioSection>(`/voiceover/sections/${sectionId}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ text })
-    }),
-
-  updateTimelineScript: (sectionId: string, timelineScript: string) =>
-    fetchApi<AudioSection>(`/voiceover/sections/${sectionId}/timeline-script`, {
-      method: 'PATCH',
-      body: JSON.stringify({ timelineScript })
-    }),
-
-  // Forced alignment: builds "Script with Timeline" from a section's existing
-  // audio, using the section's own script text as the source of the wording.
-  alignSection: (sectionId: string) =>
-    fetchApi<{ sectionId: string; timelineScript: string; beatCount: number; durationSec: number }>(
-      `/voiceover/sections/${sectionId}/align`,
-      { method: 'POST' }
-    ),
-
-  alignChapter: (chapterId: string) =>
-    fetchApi<{ aligned: number; failed: number; errors: string[] }>(
-      `/voiceover/chapters/${chapterId}/align`,
-      { method: 'POST' }
-    ),
+  getSeriesDetail: (id: string, lang: NarrationLanguage) =>
+    fetchApi<NarrationSeriesDetail>(`/narration/series/${id}?lang=${lang}`),
 
   getAlignmentStatus: () =>
-    fetchApi<{ available: boolean; error?: string }>('/voiceover/alignment/status'),
+    fetchApi<{ available: boolean; error?: string }>('/narration/alignment/status'),
 
-  deleteSection: (sectionId: string) =>
-    fetchApi<{ message: string }>(`/voiceover/sections/${sectionId}`, {
-      method: 'DELETE'
-    }),
-  
-  addSection: (chapterId: string, text: string, index?: number) =>
-    fetchApi<AudioSection>(`/voiceover/chapters/${chapterId}/sections`, {
+  /** Reads R2 (the script zip and the voiceover listing) — only on a click. */
+  previewPhone: (seriesId: string, lang: NarrationLanguage) =>
+    fetchApi<NarrationPhonePreview>(`/narration/series/${seriesId}/phone/preview?lang=${lang}`, { method: 'POST' }),
+
+  /** Starts the fetch; progress and the outcome arrive on `narration:fetch`. */
+  fetchFromPhone: (
+    seriesId: string,
+    lang: NarrationLanguage,
+    body: { scriptsEtag?: string; scriptChapterIds: string[]; voiceoverChapterIds: string[] }
+  ) =>
+    fetchApi<{ started: true }>(`/narration/series/${seriesId}/phone/fetch?lang=${lang}`, {
       method: 'POST',
-      body: JSON.stringify({ text, index })
-    }),
-  
-  // TTS Generation
-  generateSectionAudio: (sectionId: string, voice?: string, stylePrompt?: string) =>
-    fetchApi<AudioFile>(`/voiceover/sections/${sectionId}/generate`, {
-      method: 'POST',
-      body: JSON.stringify({ voice, stylePrompt })
-    }),
-  
-  generateAllSections: (chapterId: string, voice?: string, stylePrompt?: string, concurrency?: number) =>
-    fetchApi<{ results: Array<{ sectionId: string; success: boolean; error?: string }> }>(`/voiceover/chapters/${chapterId}/generate-all`, {
-      method: 'POST',
-      body: JSON.stringify({ voice, stylePrompt, concurrency })
-    }),
-  
-  // Audio file operations
-  uploadSectionAudio: (sectionId: string, file: File) => {
-    const formData = new FormData()
-    formData.append('audio', file)
-    return fetch(`${API_BASE}/voiceover/sections/${sectionId}/upload`, {
-      method: 'POST',
-      body: formData
-    }).then(res => {
-      if (!res.ok) throw new Error('Upload failed')
-      return res.json() as Promise<AudioFile>
-    })
-  },
-  
-  uploadChapterAudio: (chapterId: string, file: File) => {
-    const formData = new FormData()
-    formData.append('audio', file)
-    return fetch(`${API_BASE}/voiceover/chapters/${chapterId}/upload`, {
-      method: 'POST',
-      body: formData
-    }).then(res => {
-      if (!res.ok) throw new Error('Upload failed')
-      return res.json() as Promise<AudioFile>
-    })
-  },
-  
-  deleteAudioFile: (audioFileId: string) =>
-    fetchApi<{ message: string }>(`/voiceover/audio/${audioFileId}`, {
-      method: 'DELETE'
-    }),
-  
-  // Join audio
-  joinChapterAudio: (chapterId: string, normalize?: boolean, outputFormat?: string) =>
-    fetchApi<AudioFile>(`/voiceover/chapters/${chapterId}/join`, {
-      method: 'POST',
-      body: JSON.stringify({ normalize, outputFormat })
-    }),
-  
-  // Analysis
-  analyzeVoices: (chapterId: string, threshold?: number, includeAcoustic?: boolean) =>
-    fetchApi<VoiceAnalysisResult>(`/voiceover/chapters/${chapterId}/analyze`, {
-      method: 'POST',
-      body: JSON.stringify({ threshold, includeAcoustic })
-    }),
-  
-  getAnalysis: (chapterId: string) =>
-    fetchApi<VoiceAnalysisResult>(`/voiceover/chapters/${chapterId}/analysis`),
-  
-  checkAnalysisAvailable: () =>
-    fetchApi<{ available: boolean; error?: string }>('/voiceover/analysis/status'),
-  
-  // Check voice consistency - returns mismatch info without deleting
-  checkVoiceConsistency: (chapterId: string, targetVoice?: string) =>
-    fetchApi<{
-      consistent: boolean
-      message: string
-      expectedVoice: string | null
-      mismatchedSections: Array<{ sectionId: string; sectionIndex?: number; currentVoice?: string; expectedVoice?: string }>
-    }>(`/voiceover/chapters/${chapterId}/check-voices`, {
-      method: 'POST',
-      body: JSON.stringify({ targetVoice })
-    }),
-  
-  // Voices
-  getVoices: (provider?: string) =>
-    fetchApi<{ provider: string; requested?: string; voices: VoiceInfo[] }>(
-      provider ? `/voiceover/voices?provider=${encodeURIComponent(provider)}` : '/voiceover/voices'
-    ),
-
-  // Local Kokoro Gradio app availability
-  getKokoroStatus: () =>
-    fetchApi<{ available: boolean; error?: string; url?: string }>('/voiceover/kokoro/status'),
-  
-  // Audio streaming URL
-  getAudioStreamUrl: (audioFileId: string) =>
-    `${API_BASE}/voiceover/audio/${audioFileId}/stream`,
-  
-  getAudioDownloadUrl: (audioFileId: string) =>
-    `${API_BASE}/voiceover/audio/${audioFileId}/download`
-}
-
-// ============ Image Clipper API (Module 3) ============
-
-export interface ClipperSeries {
-  id: string
-  title: string
-  sourceSite: string
-  coverPath?: string
-  rootFolder: string
-  createdAt: string
-  eligibleChapterCount: number
-  croppedChapterCount: number
-}
-
-export interface ClipperChapterSummary {
-  id: string
-  number: number
-  title?: string
-  folderPath: string
-  pageCount?: number
-  hasSession: boolean
-  sessionId: string | null
-  sessionStatus: string | null
-  cropCount: number
-}
-
-export interface ClipperSeriesDetail {
-  id: string
-  title: string
-  sourceSite: string
-  coverPath?: string
-  rootFolder: string
-  createdAt: string
-  chapters: ClipperChapterSummary[]
-}
-
-/**
- * One source slice in both spaces. Webtoon chapters mix slice widths, so the canvas
- * scales every page up to the widest one; source pixels and canvas pixels are then
- * different units for any page with `scale !== 1`.
- *
- * Viewers must lay pages out with `manifest.canvasWidth` and `canvasHeight` — the
- * canvas extents — and never with `width`/`height`, which are the source file's own
- * pixels and would leave narrower pages as short, ragged columns.
- */
-export interface ManifestImage {
-  filename: string
-  /** Source pixel width. */
-  width: number
-  /** Source pixel height. */
-  height: number
-  /** Top offset on the canvas, in canvas pixels. */
-  canvasY: number
-  /** This slice's canvas-space height (`height * scale`). */
-  canvasHeight: number
-  /** `manifest.canvasWidth / width` — always >= 1. */
-  scale: number
-}
-
-export interface ImageManifest {
-  canvasWidth: number
-  canvasHeight: number
-  images: ManifestImage[]
-}
-
-export interface CropData {
-  id: string
-  sessionId: string
-  sequence: number
-  canvasX: number
-  canvasY: number
-  canvasW: number
-  canvasH: number
-  normX: number
-  normY: number
-  normW: number
-  normH: number
-  sourceFiles: string
-  aspectRatio?: string
-  exportPath?: string
-  createdAt: string
-  updatedAt: string
-}
-
-export interface CropSession {
-  id: string
-  chapterId: string
-  status: string
-  cropCount: number
-  crops: CropData[]
-  chapter?: {
-    id: string
-    number: number
-    folderPath: string
-    seriesId: string
-  }
-  navigation?: {
-    seriesId: string
-    prevChapterId: string | null
-    prevChapterNumber: number | null
-    nextChapterId: string | null
-    nextChapterNumber: number | null
-  }
-}
-
-export const clipperApi = {
-  // Series listing
-  getSeries: () => fetchApi<ClipperSeries[]>('/clipper/series'),
-
-  getSeriesDetail: (id: string) =>
-    fetchApi<ClipperSeriesDetail>(`/clipper/series/${id}`),
-
-  // Chapter operations
-  getManifest: (chapterId: string) =>
-    fetchApi<ImageManifest>(`/clipper/chapters/${chapterId}/manifest`),
-
-  getImageUrl: (chapterId: string, filename: string) =>
-    `${API_BASE}/clipper/chapters/${chapterId}/image/${encodeURIComponent(filename)}`,
-
-  // Session operations
-  createSession: (chapterId: string) =>
-    fetchApi<CropSession>(`/clipper/chapters/${chapterId}/session`, {
-      method: 'POST'
+      body: JSON.stringify(body)
     }),
 
-  getSession: (sessionId: string) =>
-    fetchApi<CropSession>(`/clipper/sessions/${sessionId}`),
-
-  // Crop operations
-  createCrop: (sessionId: string, data: {
-    canvasX: number
-    canvasY: number
-    canvasW: number
-    canvasH: number
-    aspectRatio?: string
-  }) =>
-    fetchApi<CropData>(`/clipper/sessions/${sessionId}/crops`, {
-      method: 'POST',
-      body: JSON.stringify(data)
-    }),
-
-  updateCrop: (cropId: string, data: {
-    canvasX?: number
-    canvasY?: number
-    canvasW?: number
-    canvasH?: number
-    aspectRatio?: string
-  }) =>
-    fetchApi<CropData>(`/clipper/crops/${cropId}`, {
-      method: 'PATCH',
-      body: JSON.stringify(data)
-    }),
-
-  deleteCrop: (cropId: string) =>
-    fetchApi<{ message: string }>(`/clipper/crops/${cropId}`, {
-      method: 'DELETE'
-    }),
-
-  previewCrop: (cropId: string) =>
-    fetchApi<{ preview: string }>(`/clipper/crops/${cropId}/preview`, {
-      method: 'POST'
-    }),
-
-  reorderCrops: (sessionId: string, cropIds: string[]) =>
-    fetchApi<{ message: string }>(`/clipper/sessions/${sessionId}/reorder`, {
-      method: 'PUT',
-      body: JSON.stringify({ cropIds })
-    }),
-
-  finalize: (sessionId: string) =>
-    fetchApi<{ started: boolean; message: string }>(`/clipper/sessions/${sessionId}/finalize`, {
-      method: 'POST'
-    })
-}
-
-// ============ Module 3: Watermark white-fill ============
-
-export interface WatermarkTemplate {
-  id: string
-  seriesId: string
-  label: string
-  width: number
-  height: number
-  threshold: number
-  enabled: boolean
-  createdAt: string
-}
-
-export interface WatermarkDetectResult {
-  rects: { canvasX: number; canvasY: number; canvasW: number; canvasH: number }[]
-  manifest: ImageManifest
-}
-
-export const watermarkApi = {
-  getStatus: () => fetchApi<{ available: boolean; error?: string }>('/watermark/status'),
-
-  listTemplates: (seriesId: string) =>
-    fetchApi<WatermarkTemplate[]>(`/watermark/series/${seriesId}/templates`),
-
-  createTemplate: (seriesId: string, data: {
-    chapterId: string
-    canvasX: number
-    canvasY: number
-    canvasW: number
-    canvasH: number
-    label?: string
-  }) =>
-    fetchApi<WatermarkTemplate>(`/watermark/series/${seriesId}/templates`, {
-      method: 'POST',
-      body: JSON.stringify(data)
-    }),
-
-  updateTemplate: (id: string, data: { label?: string; threshold?: number; enabled?: boolean }) =>
-    fetchApi<{ id: string; label: string; threshold: number; enabled: boolean }>(`/watermark/templates/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify(data)
-    }),
-
-  deleteTemplate: (id: string) =>
-    fetchApi<{ deleted: boolean }>(`/watermark/templates/${id}`, { method: 'DELETE' }),
-
-  templateFileUrl: (id: string) => `${API_BASE}/watermark/templates/${id}/file`,
-
-  detect: (chapterId: string) =>
-    fetchApi<WatermarkDetectResult>(`/watermark/chapters/${chapterId}/detect`, { method: 'POST' })
-}
-
-// ============ Module 3 AI: Auto-Crop ============
-
-export type CropEngine = 'guidelines' | 'trained'
-
-export interface AiCropStatus {
-  sidecarAvailable: boolean
-  sidecarError?: string
-  sampleCount: number
-  minSamples: number
-  canTrain: boolean
-  activeModelVersion: number | null
-  modelCount: number
-  backboneAvailable: boolean
-  engine: CropEngine
-  geminiAvailable: boolean
-  guidelinesPresent: boolean
-  guidelinesUpdatedAt: string | null
-}
-
-export interface CropGuidelines {
-  content: string
-  updatedAt: string | null
-  readOnly: boolean
-  present: boolean
-}
-
-export interface AiSuggestion {
-  id: string
-  modelId?: string | null
-  cropSessionId: string
-  chapterId: string
-  canvasX: number
-  canvasY: number
-  canvasW: number
-  canvasH: number
-  aspectPreset: string
-  confidence: number
-  status: 'pending' | 'accepted' | 'adjusted' | 'rejected'
-  rating?: 'up' | 'down' | null
-}
-
-export const aiCropApi = {
-  getStatus: () => fetchApi<AiCropStatus>('/ai-crop/status'),
-
-  suggest: (cropSessionId: string) =>
-    fetchApi<{ started: boolean }>('/ai-crop/suggest', {
-      method: 'POST',
-      body: JSON.stringify({ cropSessionId })
-    }),
-
-  cancel: (cropSessionId: string) =>
-    fetchApi<{ cancelled: number }>('/ai-crop/cancel', {
-      method: 'POST',
-      body: JSON.stringify({ cropSessionId })
-    }),
-
-  getSuggestions: (cropSessionId: string, status: string = 'pending') =>
-    fetchApi<AiSuggestion[]>(`/ai-crop/suggestions?cropSessionId=${cropSessionId}&status=${status}`),
-
-  clearSuggestions: (cropSessionId: string) =>
-    fetchApi<{ cleared: boolean }>('/ai-crop/suggestions/clear', {
-      method: 'POST',
-      body: JSON.stringify({ cropSessionId })
-    }),
-
-  updateSuggestion: (id: string, data: {
-    status?: 'pending' | 'accepted' | 'adjusted' | 'rejected'
-    finalRect?: { canvasX: number; canvasY: number; canvasW: number; canvasH: number }
-    rating?: 'up' | 'down' | null
-  }) =>
-    fetchApi<{ id: string; status: string; rating?: string | null }>(`/ai-crop/suggestions/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify(data)
-    }),
-
-  train: () =>
-    fetchApi<{ started: boolean }>('/ai-crop/train', { method: 'POST' }),
-
-  cancelTraining: () =>
-    fetchApi<{ cancelled: number }>('/ai-crop/cancel', {
-      method: 'POST',
-      body: JSON.stringify({ scope: 'train' })
-    }),
-
-  getModels: () => fetchApi<AiModelInfo[]>('/ai-crop/models'),
-
-  setActiveModel: (version: number) =>
-    fetchApi<{ engine: CropEngine; activeModelVersion: number | null }>('/ai-crop/model/active', {
-      method: 'POST',
-      body: JSON.stringify({ version })
-    }),
-
-  getGuidelines: () => fetchApi<CropGuidelines>('/ai-crop/guidelines'),
-
-  updateGuidelines: (content: string) =>
-    fetchApi<{ updatedAt: string | null; readOnly: boolean; present: boolean }>('/ai-crop/guidelines', {
-      method: 'PUT',
-      body: JSON.stringify({ content })
-    }),
-
-  getEvalChapters: () => fetchApi<EvalChapters>('/ai-crop/eval-chapters'),
-
-  getEvaluations: () => fetchApi<EvaluationRunInfo[]>('/ai-crop/evaluations'),
-
-  evaluate: (chapterIds: string[]) =>
-    fetchApi<{ started: boolean }>('/ai-crop/evaluate', {
-      method: 'POST',
-      body: JSON.stringify({ chapterIds })
-    }),
-
-  cancelEvaluation: () =>
-    fetchApi<{ cancelled: number }>('/ai-crop/cancel', {
-      method: 'POST',
-      body: JSON.stringify({ scope: 'evaluate' })
-    })
-}
-
-export interface AiCropMetrics {
-  meanIoU: number | null
-  precision?: number | null
-  recall?: number | null
-  f1?: number | null
-  countAccuracy?: number | null
-  presetAccuracy: number | null
-  [k: string]: number | null | undefined
-}
-
-export interface AiModelInfo {
-  id: string
-  /** 0 = the built-in guideline (Gemini) cropper; ≥1 = a trained model. */
-  version: number
-  kind?: 'guidelines' | 'trained'
-  label?: string
-  status: 'training' | 'ready' | 'failed'
-  trainingSampleCount: number
-  metrics: AiCropMetrics | null
-  hyperparams: Record<string, unknown> | null
-  notes?: string | null
-  createdAt: string
-  active: boolean
-}
-
-export interface EvalChapterSummary {
-  id: string
-  number: number
-  title?: string | null
-  seriesTitle: string
-  cropCount: number
-}
-
-export interface EvalChapters {
-  holdout: EvalChapterSummary[]
-  blind: EvalChapterSummary[]
-}
-
-export interface EvalRect {
-  canvasX: number
-  canvasY: number
-  canvasW: number
-  canvasH: number
-  aspectPreset?: string
-  confidence?: number
-}
-
-export interface EvalPerChapter {
-  chapterId: string
-  metrics: {
-    meanIoU: number | null
-    precision: number
-    recall: number
-    f1: number
-    countAccuracy: number
-    presetAccuracy: number | null
-    userCount: number
-    aiCount: number
-    matched: number
-  }
-  aiCrops: EvalRect[]
-}
-
-export interface EvaluationRunInfo {
-  id: string
-  modelId?: string | null
-  mode: string
-  chapterIds: string[]
-  metrics: {
-    aggregate: AiCropMetrics & { chapterCount: number }
-    perChapter: EvalPerChapter[]
-  }
-  createdAt: string
-}
-
-// ============ Module 3 v2: Image Clipper 2.0 ============
-
-// Mirrors server/src/services/clipper2/fourPointTypes.ts. Point order is fixed:
-// P1 top-left, P2 top-right, P3 bottom-right, P4 bottom-left.
-export interface Clipper2Point {
-  id: 'P1' | 'P2' | 'P3' | 'P4'
-  x: number
-  y: number
-}
-
-export interface Clipper2CropEntry {
-  id: string
-  reason: string
-  crop: {
-    mode: 'rectangle'
-    points: Clipper2Point[]
-  }
-}
-
-// The canonical on-disk artifact — the contract between detect and apply.
-export interface Clipper2PointFile {
-  format: string
-  version: string
-  image: {
-    filename: string
-    width: number
-    height: number
-  }
-  coordinateSystem: string
-  crops: Clipper2CropEntry[]
-}
-
-export interface Clipper2Issue {
-  code: string
-  /** The guidelines rule this enforces, e.g. 'OUT-08'. Empty for structural JSON errors. */
-  rule: string
-  message: string
-  cropId?: string
-  severity: 'error' | 'warning'
-}
-
-export interface Clipper2Validation {
-  valid: boolean
-  errors: Clipper2Issue[]
-  warnings: Clipper2Issue[]
-}
-
-export interface Clipper2Segment {
-  filename: string
-  width: number
-  height: number
-  canvasY: number
-}
-
-// Non-canonical provenance file (crop_points.meta.json), kept outside the artifact.
-export interface Clipper2Sidecar {
-  source: string
-  model: string | null
-  guidelinesSha: string | null
-  detectedAt: string
-  segments: Clipper2Segment[]
-  warnings: Clipper2Issue[]
-}
-
-/**
- * Which Stage 1 engine to run. `gemini` uploads downscaled pages to a vision
- * model; `offline` runs classical CV locally against the source pixels — no key,
- * no quota, no upload. Both write the same artifact.
- */
-export type Clipper2Engine = 'gemini' | 'offline'
-
-/** Body of a detect request. Every tunable applies to the offline engine only. */
-export interface Clipper2DetectOptions {
-  engine?: Clipper2Engine
-  /** 'auto' reads each page's own margins; the others force the polarity. */
-  gutterMode?: 'auto' | 'dark' | 'light'
-  /** Smallest region that can be a section, in canvas px². */
-  minPanelArea?: number
-  /** Breathing room added to every edge so line art is never clipped, in px. */
-  breakoutMargin?: number
-  /** Exclude speech bubbles, narration boxes and watermarks. */
-  filterOverlays?: boolean
-}
-
-export interface Clipper2Status {
-  /** Whether GEMINI_API_KEY is configured — detection calls Gemini, no local model. */
-  geminiAvailable: boolean
-  geminiError: string | null
-  /** Whether the Python venv backing the offline detector is installed. */
-  offlineAvailable: boolean
-  offlineError: string | null
-  offlineModel: string
-  guidelinesPresent: boolean
-  guidelinesUpdatedAt: string | null
-  guidelinesIsDefault: boolean
-  model: string
-  format: string
-  formatVersion: string
-}
-
-export interface Clipper2Guidelines {
-  content: string
-  updatedAt: string | null
-  readOnly: boolean
-  present: boolean
-  isDefault: boolean
-}
-
-export interface Clipper2ChapterSummary {
-  id: string
-  number: number
-  title: string | null
-  seriesId: string
-  seriesTitle: string
-  pageCount: number
-  hasPoints: boolean
-  cropCount: number
-  /** 'detecting' | 'detected' | 'edited' | 'applied' | 'failed', or null when untouched. */
-  status: string | null
-  detectedAt: string | null
-  appliedAt: string | null
-  exportedCount: number
-}
-
-export interface Clipper2PointSet {
-  chapterId: string
-  /** Raw JSON text so the editor can round-trip hand edits; '' when no artifact exists. */
-  content: string
-  file: Clipper2PointFile | null
-  sidecar: Clipper2Sidecar | null
-  validation: Clipper2Validation
-  status: string | null
-  appliedAt: string | null
-  exportDir: string | null
-  jsonPath: string | null
-  confidenceById: Record<string, number>
-}
-
-export interface Clipper2Output {
-  filename: string
-  bytes: number
-  url: string
-}
-
-/** The text to paste into an external AI, composed server-side from the guidelines. */
-export interface Clipper2Prompt {
-  prompt: string
-  guidelinesPresent: boolean
-  guidelinesUpdatedAt: string | null
-  guidelinesIsDefault: boolean
-}
-
-/**
- * The result of importing an external AI's JSON.
- *
- * Not a plain throw-on-error call: a rejected import is the interesting case, and
- * its 400 carries the full validation report that the UI renders rule-by-rule.
- * `repairs` on a success is equally load-bearing — the import deliberately fixes
- * what a model gets wrong (near-equal edges, id order, reason casing), and the user
- * is told exactly what changed rather than being handed a silently rewritten file.
- */
-export type Clipper2ImportResult =
-  | { ok: true; set: Clipper2PointSet; repairs: Clipper2Issue[] }
-  | { ok: false; message: string; validation: Clipper2Validation | null }
-
-export const clipper2Api = {
-  getStatus: () => fetchApi<Clipper2Status>('/clipper2/status'),
-
-  // Guidelines are user-upgradable from Settings; reset restores the shipped default.
-  getGuidelines: () => fetchApi<Clipper2Guidelines>('/clipper2/guidelines'),
-
-  updateGuidelines: (content: string) =>
-    fetchApi<Clipper2Guidelines>('/clipper2/guidelines', {
-      method: 'PUT',
-      body: JSON.stringify({ content })
-    }),
-
-  resetGuidelines: () =>
-    fetchApi<Clipper2Guidelines>('/clipper2/guidelines/reset', {
-      method: 'POST'
-    }),
-
-  // The manual loop: copy this into an external chat that already holds the
-  // chapter's pages, then bring the JSON back through importPoints().
-  getPrompt: () => fetchApi<Clipper2Prompt>('/clipper2/prompt'),
-
-  /**
-   * Import an external AI's JSON, replacing the chapter's pointer file.
-   *
-   * Goes through a bare fetch rather than fetchApi because both outcomes carry a
-   * body worth reading: a 400's `validation` report, and a success's `repairs`.
-   * fetchApi would collapse the former to a message string and drop the latter.
-   */
-  importPoints: async (chapterId: string, content: string): Promise<Clipper2ImportResult> => {
-    const response = await fetch(`${API_BASE}/clipper2/chapters/${chapterId}/points/import`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content })
-    })
-
-    const payload = (await response.json().catch(() => null)) as
-      | (Partial<Clipper2PointSet> & {
-          error?: string
-          validation?: Clipper2Validation
-          repairs?: Clipper2Issue[]
-        })
-      | null
-
-    if (response.ok) {
-      if (!payload || typeof payload.content !== 'string') {
-        return { ok: false, message: 'The server accepted the import but returned no artifact', validation: null }
-      }
-      return { ok: true, set: payload as Clipper2PointSet, repairs: payload.repairs ?? [] }
-    }
-
-    return {
-      ok: false,
-      message: payload?.error || `Import failed (HTTP ${response.status})`,
-      validation: payload?.validation ?? null
-    }
-  },
-
-  // Chapter listing
-  getChapters: () => fetchApi<Clipper2ChapterSummary[]>('/clipper2/chapters'),
-
-  // Stage 1 (detect) runs in the background; progress arrives over
-  // 'clipper2:detect-progress' / 'clipper2:detect-complete'.
-  // Omitting `opts` runs the Gemini engine, as it always has.
-  detect: (chapterId: string, opts?: Clipper2DetectOptions) =>
-    fetchApi<{ started: boolean; engine: Clipper2Engine }>(
-      `/clipper2/chapters/${chapterId}/detect`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(opts ?? {})
-      }
-    ),
-
-  cancel: (chapterId: string) =>
-    fetchApi<{ cancelled: number }>(`/clipper2/chapters/${chapterId}/cancel`, {
-      method: 'POST'
-    }),
-
-  // Point artifact operations
-  getPoints: (chapterId: string) =>
-    fetchApi<Clipper2PointSet>(`/clipper2/chapters/${chapterId}/points`),
-
-  // A 400 from PUT /points carries a 'validation' payload describing why the edited
-  // JSON was rejected; fetchApi surfaces its 'error' message as the thrown Error.
-  savePoints: (chapterId: string, content: string) =>
-    fetchApi<Clipper2PointSet>(`/clipper2/chapters/${chapterId}/points`, {
-      method: 'PUT',
-      body: JSON.stringify({ content })
-    }),
-
-  deletePoints: (chapterId: string) =>
-    fetchApi<{ deleted: boolean }>(`/clipper2/chapters/${chapterId}/points`, {
-      method: 'DELETE'
-    }),
-
-  // Stage 2 (apply) also runs in the background; see 'clipper2:apply-*' events.
-  apply: (chapterId: string, opts?: { register?: boolean; replaceExisting?: boolean }) =>
-    fetchApi<{ started: boolean }>(`/clipper2/chapters/${chapterId}/apply`, {
-      method: 'POST',
-      body: JSON.stringify(opts ?? {})
-    }),
-
-  previewCrop: (chapterId: string, cropId: string) =>
-    fetchApi<{ preview: string }>(
-      `/clipper2/chapters/${chapterId}/preview/${encodeURIComponent(cropId)}`,
+  /** Aligns the unaligned sections again, or only writes a missing alignment document. */
+  alignChapter: (chapterId: string, lang: NarrationLanguage) =>
+    fetchApi<{ started: boolean; sections: number; documentWritten?: boolean }>(
+      `/narration/chapters/${chapterId}/align?lang=${lang}`,
       { method: 'POST' }
-    ),
-
-  getOutputs: (chapterId: string) =>
-    fetchApi<{ exportDir: string | null; files: Clipper2Output[] }>(
-      `/clipper2/chapters/${chapterId}/outputs`
-    ),
-
-  getPointsDownloadUrl: (chapterId: string) =>
-    `${API_BASE}/clipper2/chapters/${chapterId}/points/download`,
-
-  getOutputUrl: (chapterId: string, filename: string) =>
-    `${API_BASE}/clipper2/chapters/${chapterId}/output/${encodeURIComponent(filename)}`
-}
-
-// ============ Image Clipper 2.0 Training (manual crop -> real PNG export, ============
-// ============ no effect on crop_points.json / crops2 / CropSession / Module 4) ====
-
-export interface TrainingChapterSummary {
-  id: string
-  number: number
-  title: string | null
-  seriesId: string
-  seriesTitle: string
-  pageCount: number
-  exportedCount: number
-}
-
-export interface TrainingCropRect {
-  canvasX: number
-  canvasY: number
-  canvasW: number
-  canvasH: number
-}
-
-export interface TrainingExportedFile {
-  filename: string
-  bytes: number
-  url: string
-  width?: number
-  height?: number
-}
-
-export interface TrainingExportResult {
-  exported: number
-  failed: number
-  exportDir: string
-  files: TrainingExportedFile[]
-}
-
-export const pointerTrainingApi = {
-  getChapters: () => fetchApi<TrainingChapterSummary[]>('/clipper2/training/chapters'),
-
-  export: (chapterId: string, crops: TrainingCropRect[]) =>
-    fetchApi<TrainingExportResult>(`/clipper2/training/chapters/${chapterId}/export`, {
-      method: 'POST',
-      body: JSON.stringify({ crops })
-    }),
-
-  getOutputs: (chapterId: string) =>
-    fetchApi<{ exportDir: string | null; files: TrainingExportedFile[] }>(
-      `/clipper2/training/chapters/${chapterId}/outputs`
-    ),
-
-  clear: (chapterId: string) =>
-    fetchApi<{ deleted: boolean }>(`/clipper2/training/chapters/${chapterId}`, {
-      method: 'DELETE'
-    })
-}
-
-// ============ Image Clipper 2.0 Training — manual image uploads ============
-// A sandbox to test the crop tool on images that were never downloaded as a
-// chapter: no Series/Chapter row is created, the upload lives purely as a
-// folder on disk keyed by uploadId. Export/outputs/clear mirror pointerTrainingApi
-// exactly, just addressed by uploadId instead of chapterId.
-
-export interface TrainingUploadResult {
-  uploadId: string
-  manifest: ImageManifest
-  pageCount: number
-}
-
-export const pointerTrainingUploadApi = {
-  /**
-   * Bare fetch: a FormData body must not get fetchApi's forced JSON
-   * Content-Type header, or the browser never adds the multipart boundary.
-   * `files` order is preserved end to end — the server names pages by
-   * arrival order, not original filename.
-   */
-  upload: async (files: File[]): Promise<TrainingUploadResult> => {
-    const form = new FormData()
-    files.forEach(f => form.append('images', f))
-    const response = await fetch(`${API_BASE}/clipper2/training/uploads`, { method: 'POST', body: form })
-    const payload = await response.json().catch(() => null)
-    if (!response.ok) {
-      throw new Error(payload?.error || `Upload failed (HTTP ${response.status})`)
-    }
-    return payload as TrainingUploadResult
-  },
-
-  getImageUrl: (uploadId: string, filename: string) =>
-    `${API_BASE}/clipper2/training/uploads/${uploadId}/image/${encodeURIComponent(filename)}`,
-
-  export: (uploadId: string, crops: TrainingCropRect[]) =>
-    fetchApi<TrainingExportResult>(`/clipper2/training/uploads/${uploadId}/export`, {
-      method: 'POST',
-      body: JSON.stringify({ crops })
-    }),
-
-  getOutputs: (uploadId: string) =>
-    fetchApi<{ exportDir: string | null; files: TrainingExportedFile[] }>(
-      `/clipper2/training/uploads/${uploadId}/outputs`
-    ),
-
-  /** Clears exported PNGs only — the uploaded source images stay put. */
-  clearOutputs: (uploadId: string) =>
-    fetchApi<{ deleted: boolean }>(`/clipper2/training/uploads/${uploadId}/outputs`, {
-      method: 'DELETE'
-    }),
-
-  /** Deletes the whole sandbox session (source images + exports) — "start over". */
-  remove: (uploadId: string) =>
-    fetchApi<{ deleted: boolean }>(`/clipper2/training/uploads/${uploadId}`, {
-      method: 'DELETE'
-    })
-}
-
-// ============ Video Editor API (Module 4) ============
-
-export interface VideoCapabilities {
-  ffmpegAvailable: boolean
-  ffmpegVersion?: string
-  hasZoompan: boolean
-  hasDrawtext: boolean
-  blurFilter: 'gblur' | 'boxblur' | null
-  error?: string
-  resolutions: string[]
-  aiAssist?: boolean
-}
-
-export interface EditableChapter {
-  id: string
-  number: number
-  title: string | null
-  ready: boolean
-  reason: string | null
-  hasFinalizedCrops: boolean
-  cropCount: number
-  hasSectionAudio: boolean
-  sectionCount: number
-  isPartEnd: boolean
-}
-
-export interface ChapterCrop {
-  id: string
-  sequence: number
-  imagePath: string
-  aspectRatio: string | null
-}
-
-export interface VideoPartImage {
-  id: string
-  partEditId: string
-  cropId: string | null
-  imagePath: string | null
-  isFiller: boolean
-  slotIndex: number
-  duration: number
-  motionMode: string
-  motionEffect: string
-  motionIntensity: number
-  anchorX: number | null
-  anchorY: number | null
-  scale: number | null
-  offsetX: number | null
-  offsetY: number | null
-  source: string
-}
-
-export interface VideoPart {
-  id: string
-  chapterId: string
-  audioSectionId: string | null
-  orderIndex: number
-  isOutro: boolean
-  audioDuration: number
-  scriptText: string | null
-  images: VideoPartImage[]
-}
-
-export interface MusicTrack {
-  id: string
-  filename: string
-  filePath: string
-  createdAt: string
-}
-
-export interface VideoProject {
-  id: string
-  seriesId: string
-  seriesTitle: string
-  name: string
-  status: string
-  chapterIds: string[]
-  musicTrackId: string | null
-  musicTrack: MusicTrack | null
-  masterVolume: number
-  musicVolume: number
-  titleCardText: string | null
-  titleCardDuration: number
-  createdAt: string
-  updatedAt: string
-  parts: VideoPart[]
-}
-
-export interface VideoExport {
-  id: string
-  projectId: string
-  outputPath: string
-  resolution: string
-  preset: string
-  fileSizeMb: number | null
-  durationSec: number | null
-  status: string
-  errorMsg: string | null
-  createdAt: string
-}
-
-export interface SeriesProjectChapter {
-  chapterId: string
-  number: number | null
-  totalParts: number
-  editedParts: number
-}
-
-export interface SeriesProjectSummary {
-  id: string
-  name: string
-  status: string
-  chapterIds: string[]
-  totalParts: number
-  editedParts: number
-  progress: number // 0–100
-  hasExport: boolean
-  updatedAt: string
-  chapters: SeriesProjectChapter[]
-}
-
-export interface IncomingPartImage {
-  cropId?: string | null
-  isFiller?: boolean
-  duration?: number
-  motionMode?: string
-  motionEffect?: string
-  motionIntensity?: number
-  anchorX?: number | null
-  anchorY?: number | null
-  scale?: number | null
-  offsetX?: number | null
-  offsetY?: number | null
-  source?: string
-}
-
-export const videoApi = {
-  getCapabilities: () => fetchApi<VideoCapabilities>('/video/capabilities'),
-
-  // Per-series status map for library badges ('draft' | 'exported').
-  getSeriesStatus: () => fetchApi<Record<string, 'draft' | 'exported'>>('/video/series-status'),
-
-  // Projects
-  initProject: (data: { seriesId: string; chapterIds: string[]; name?: string }) =>
-    fetchApi<VideoProject>('/video/projects/init', { method: 'POST', body: JSON.stringify(data) }),
-
-  getProject: (id: string) => fetchApi<VideoProject>(`/video/projects/${id}`),
-
-  // Existing projects ("parts") for a series, with editing-progress summaries.
-  listSeriesProjects: (seriesId: string) =>
-    fetchApi<SeriesProjectSummary[]>(`/video/series/${seriesId}/projects`),
-
-  deleteProject: (id: string) =>
-    fetchApi<{ deleted: boolean }>(`/video/projects/${id}`, { method: 'DELETE' }),
-
-  updateProject: (id: string, patch: Partial<{
-    name: string
-    chapterIds: string[]
-    musicTrackId: string | null
-    masterVolume: number
-    musicVolume: number
-    titleCardText: string | null
-    titleCardDuration: number
-  }>) => fetchApi<VideoProject>(`/video/projects/${id}`, { method: 'PUT', body: JSON.stringify(patch) }),
-
-  // Editable chapters + crop pool
-  getEditableChapters: (seriesId: string) =>
-    fetchApi<EditableChapter[]>(`/video/series/${seriesId}/editable-chapters`),
-
-  getChapterCrops: (chapterId: string) =>
-    fetchApi<ChapterCrop[]>(`/video/chapters/${chapterId}/crops`),
-
-  // Part image editing
-  setPartImages: (partId: string, images: IncomingPartImage[], event?: { eventType: string; payload?: unknown }) =>
-    fetchApi<VideoPart>(`/video/parts/${partId}/images`, {
-      method: 'PUT',
-      body: JSON.stringify({ images, event })
-    }),
-
-  // Render / export
-  render: (id: string, opts: { resolution: string; preset: string; fps?: number }) =>
-    fetchApi<{ exportId: string }>(`/video/projects/${id}/render`, { method: 'POST', body: JSON.stringify(opts) }),
-
-  cancelRender: (exportId: string) =>
-    fetchApi<{ cancelled: boolean }>(`/video/exports/${exportId}/cancel`, { method: 'POST' }),
-
-  getExport: (exportId: string) => fetchApi<VideoExport>(`/video/exports/${exportId}`),
-
-  openExport: (exportId: string) =>
-    fetchApi<{ success: boolean; path: string }>(`/video/exports/${exportId}/open`),
-
-  // Proxy preview (pixel-accurate draft)
-  renderPreview: (id: string, scope: 'project' | { partId?: string; chapterId?: string }) =>
-    fetchApi<{ started: boolean }>(`/video/projects/${id}/preview`, {
-      method: 'POST',
-      body: JSON.stringify({ scope })
-    }),
-
-  exportFileUrl: (exportId: string) => `${API_BASE}/video/exports/${exportId}/file`,
-  previewFileUrl: (projectId: string) => `${API_BASE}/video/projects/${projectId}/preview/file`,
-  partAudioUrl: (partId: string) => `${API_BASE}/video/parts/${partId}/audio`,
-  cropImageUrl: (cropId: string) => `${API_BASE}/video/crops/${cropId}/image`,
-
-  // Music library
-  listMusic: () => fetchApi<MusicTrack[]>('/video/music'),
-
-  uploadMusic: (file: File) => {
-    const formData = new FormData()
-    formData.append('track', file)
-    return fetch(`${API_BASE}/video/music`, { method: 'POST', body: formData }).then(res => {
-      if (!res.ok) throw new Error('Upload failed')
-      return res.json() as Promise<MusicTrack>
-    })
-  },
-
-  deleteMusic: (id: string) =>
-    fetchApi<{ message: string }>(`/video/music/${id}`, { method: 'DELETE' }),
-
-  musicFileUrl: (id: string) => `${API_BASE}/video/music/${id}/file`,
-
-  // AI assist (Part 6)
-  suggestImages: (partId: string, minSequence = 0) =>
-    fetchApi<{ suggested: ChapterCrop[]; range: { start: number; end: number } | null }>(
-      `/video/parts/${partId}/suggest-images`,
-      { method: 'POST', body: JSON.stringify({ minSequence }) }
-    ),
-
-  suggestDurations: (partId: string) =>
-    fetchApi<{ durations: number[] }>(`/video/parts/${partId}/suggest-durations`, { method: 'POST' }),
-
-  suggestAnchor: (imageId: string) =>
-    fetchApi<{ anchorX: number; anchorY: number }>(`/video/images/${imageId}/suggest-anchor`, { method: 'POST' }),
-
-  logPartEvent: (partId: string, eventType: string, payload?: unknown) =>
-    fetchApi<{ logged: boolean }>(`/video/parts/${partId}/event`, {
-      method: 'POST',
-      body: JSON.stringify({ eventType, payload })
-    })
+    )
 }
 
 // ============ Module 4 v2: Editor 2.0 ============
 //
-// Phase 1 only: series → chapter readiness. Gates on 4 conditions instead of
-// the v1 editor's 2 — script generated, section audio generated, Image
-// Clipper 3.0 crops done, and a "script with timeline" on every section.
+// Series → chapters, each with a four-item readiness checklist: voiceover
+// audio on disk, the alignment document, a stored timeline JSON, and Image
+// Clipper 3.0's crops cut and matching. Preview and Export wait for all four.
+
+export type Editor2ChecklistKey = 'audio' | 'alignment' | 'timeline' | 'crops'
+
+export interface Editor2ChecklistItem {
+  ok: boolean
+  /** What was found — why the item passes or what is missing. */
+  detail: string
+}
 
 export interface Editable2Chapter {
   id: string
   number: number
   title: string | null
+  checklist: Record<Editor2ChecklistKey, Editor2ChecklistItem>
+  /** All four items pass (as the server saw it). */
   ready: boolean
-  reason: string | null
-  hasScript: boolean
-  hasSectionAudio: boolean
+  /** Labels of the items that don't pass, in checklist order. */
+  missing: string[]
+  /** Everything but the timeline JSON is there — what Send to phone waits for. */
+  inputsReady: boolean
+  /** Copy All has alignment text and crop metadata to copy. */
+  canCopy: boolean
+  copyBlockedReason: string | null
   sectionCount: number
-  hasCropsClipper3: boolean
-  cropImageCount: number
-  cropDoneCount: number
-  hasTimelineScript: boolean
   isPartEnd: boolean
 }
 
@@ -1853,22 +548,63 @@ export interface CropRepairResult {
   chaptersChecked: number
 }
 
+/** A chapter's Editor 2.0 paste as the server stores it. json "" = cleared. */
+export interface StoredTimeline2 {
+  model?: string | null
+  chapterId: string
+  language: NarrationLanguage
+  json: string
+  processedJson: string | null
+  /** Epoch ms of the write; the newest write wins. */
+  updatedAt: number
+}
+
+export interface Editor2Completion {
+  done: boolean
+  /** Saved video paths relative to the series folder, in the selected language. */
+  compressedVideos: string[]
+}
+
+export interface Editor2SeriesReadiness extends Editor2Completion {
+  chapters: { id: string; ready: boolean }[]
+}
+
 export const videoApi2 = {
-  getEditableChapters: (seriesId: string) =>
-    fetchApi<Editable2Chapter[]>(`/video2/series/${seriesId}/editable-chapters`),
+  /** Every stored Editor 2.0 paste for a series (see timelineHandoff). */
+  getStoredTimelines: (seriesId: string, lang: NarrationLanguage) =>
+    fetchApi<StoredTimeline2[]>(`/video2/series/${seriesId}/timelines?lang=${lang}`),
 
-  /** Which chapters of this series have already been rendered to MP4. */
-  getExportedChapters: (seriesId: string) =>
-    fetchApi<Exported2Chapter[]>(`/video2/series/${seriesId}/exports`),
+  getStoredTimeline: (chapterId: string, lang: NarrationLanguage) =>
+    fetchApi<StoredTimeline2 | null>(`/video2/chapters/${chapterId}/timeline?lang=${lang}`),
 
-  getTimelineBundle: (chapterId: string) =>
-    fetchApi<ChapterTimelineBundle>(`/video2/chapters/${chapterId}/timeline-bundle`),
+  saveStoredTimeline: (chapterId: string, lang: NarrationLanguage, body: Omit<StoredTimeline2, 'chapterId' | 'language'>) =>
+    fetchApi<StoredTimeline2>(`/video2/chapters/${chapterId}/timeline?lang=${lang}`, {
+      method: 'PUT',
+      body: JSON.stringify(body)
+    }),
+
+  getEditableChapters: (seriesId: string, lang: NarrationLanguage) =>
+    fetchApi<Editable2Chapter[]>(`/video2/series/${seriesId}/editable-chapters?lang=${lang}`),
+
+  /** Which chapters of a series have a complete checklist (the library's "N/M ready"). */
+  getSeriesReadiness: (seriesId: string, lang: NarrationLanguage) =>
+    fetchApi<Editor2SeriesReadiness>(`/video2/series/${seriesId}/readiness?lang=${lang}`),
+
+  getSeriesCompletion: (seriesId: string, lang: NarrationLanguage) =>
+    fetchApi<Editor2Completion>(`/video2/series/${seriesId}/completion?lang=${lang}`),
+
+  /** Which chapters of this series have already been rendered to MP4 in this language. */
+  getExportedChapters: (seriesId: string, lang: NarrationLanguage) =>
+    fetchApi<Exported2Chapter[]>(`/video2/series/${seriesId}/exports?lang=${lang}`),
+
+  getTimelineBundle: (chapterId: string, lang: NarrationLanguage) =>
+    fetchApi<ChapterTimelineBundle>(`/video2/chapters/${chapterId}/timeline-bundle?lang=${lang}`),
 
   getCropMetadataBundle: (chapterId: string) =>
     fetchApi<ChapterCropMetadataBundle>(`/video2/chapters/${chapterId}/crop-metadata-bundle`),
 
-  processTimeline: (chapterId: string, json: string) =>
-    fetchApi<TimelinePlan>(`/video2/chapters/${chapterId}/process-timeline`, {
+  processTimeline: (chapterId: string, lang: NarrationLanguage, json: string) =>
+    fetchApi<TimelinePlan>(`/video2/chapters/${chapterId}/process-timeline?lang=${lang}`, {
       method: 'POST',
       body: JSON.stringify({ json })
     }),
@@ -1883,10 +619,11 @@ export const videoApi2 = {
    */
   exportAll: (
     seriesId: string,
+    lang: NarrationLanguage,
     chapters: { chapterId: string; json: string }[],
     options?: { resolution?: string; preset?: string; fps?: number; force?: boolean }
   ) =>
-    fetchApi<{ jobId: string }>(`/video2/series/${seriesId}/export-all`, {
+    fetchApi<{ jobId: string }>(`/video2/series/${seriesId}/export-all?lang=${lang}`, {
       method: 'POST',
       body: JSON.stringify({ chapters, ...options })
     }),
@@ -1986,6 +723,7 @@ export interface PlanSection {
 
 export interface TimelinePlan {
   chapterId: string
+  language: NarrationLanguage
   chapterNumber: number
   chapterTitle: string | null
   seriesTitle: string
@@ -2005,6 +743,8 @@ export interface TimelinePlan {
 
 export interface Clipper3Image {
   filename: string
+  /** Immutable managed pages use their revision-bound review/cut controls. */
+  managed?: {pageId:string|null;taskId:string}|null
   /** The image's own pixel size — the space its JSON is normalized against. */
   width: number
   height: number
@@ -2026,6 +766,51 @@ export interface Clipper3ChapterImages {
   seriesId: string
   seriesTitle: string
   images: Clipper3Image[]
+  /** How crops3/ compares with what the done pages should cut to. */
+  cropOutputs: {
+    /** Every page is done and crops3/ holds exactly the files those pages cut to. */
+    complete: boolean
+    files: number
+    /** Expected files not on disk — cut again to add them. */
+    missing: number
+    /** Files no done page accounts for — the next cut removes them. */
+    extra: number
+    /** Done pages whose crop boxes changed after they were cut (same names, old pixels). */
+    changed: number
+  }
+  /** Whether the whole chapter is reviewed — Crop Sections waits for it. */
+  review: Clipper3ChapterReview
+  neighbours: ChapterNeighbours
+}
+
+/**
+ * A whole chapter's review (server services/clipper3/chapterReview.ts):
+ * marked on the Master phone (arrives with Sync json) or in Preview — or
+ * implied by the chapter being cut already (`by: 'cropped'`), unless new
+ * unreviewed phone crops arrived after the cut.
+ */
+export interface Clipper3ChapterReview {
+  reviewed: boolean
+  reviewedAt: string | null
+  by: 'phone' | 'desktop' | 'cropped' | null
+  /** crops3/ holds output for this chapter. */
+  cropped: boolean
+  /** When the newest file in crops3/ was cut. */
+  croppedAt: string | null
+  /** The phone's name, for phone reviews. */
+  device?: string
+  etag?: string
+  editedPages?: string[]
+  movedCrops?: number
+  deletedCrops?: number
+}
+
+/** Crop Sections refused because the chapter isn't reviewed yet (409 CHAPTER_NOT_REVIEWED). */
+export class Clipper3NotReviewedError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'Clipper3NotReviewedError'
+  }
 }
 
 export interface Clipper3Point {
@@ -2083,24 +868,6 @@ export interface Clipper3Output {
   url: string
 }
 
-export interface Clipper3SliceFile {
-  /** 1-based, in top-to-bottom order. */
-  index: number
-  filename: string
-  width: number
-  height: number
-  bytes: number
-}
-
-export interface Clipper3SliceResult {
-  imageFilename: string
-  /** Absolute path of the folder holding the slices. */
-  directory: string
-  sourceWidth: number
-  sourceHeight: number
-  files: Clipper3SliceFile[]
-}
-
 /**
  * What Sync json did with one `Processed/page_###` folder — or, from the
  * preview, what it would do: 'ready' is the preview's form of 'imported'.
@@ -2110,8 +877,12 @@ export interface Clipper3SyncedPage {
   folder: string
   /** The source image it resolved to, when it resolved to one. */
   filename: string | null
-  status: 'imported' | 'ready' | 'skipped' | 'failed'
-  /** Why, for 'skipped' and 'failed'. Empty for 'imported'/'ready'. */
+  /**
+   * 'replaced': an attached page overwritten by the Master phone's review of
+   * it — or, from the preview, about to be.
+   */
+  status: 'imported' | 'ready' | 'replaced' | 'skipped' | 'failed'
+  /** Why, for 'replaced', 'skipped' and 'failed'. Empty for 'imported'/'ready'. */
   reason: string
   cropCount: number
 }
@@ -2122,15 +893,47 @@ export interface Clipper3ChapterSyncResult {
   imported: number
   /** Attachable, on a preview. Always 0 once the sync has actually run. */
   ready: number
+  /** Attached pages replaced by a phone review (or to be, on a preview). */
+  replaced: number
   skipped: number
   failed: number
   pages: Clipper3SyncedPage[]
+}
+
+/**
+ * What Sync json's first step pulled from R2: the chapter zips the phone
+ * uploads once every page of a chapter is done, unpacked into Processed/.
+ */
+export interface Clipper3PhoneCropsFetch {
+  /** False when R2 is not set up; nothing was looked at. */
+  configured: boolean
+  /** Chapter zips in R2 for this series. */
+  found: number
+  /** Chapters unpacked by this run: new, or re-uploaded by the phone. */
+  fetched: { chapterId: string; chapterNumber: number; folder: string; pages: number; reviewed: boolean }[]
+  /** Chapters already unpacked from the same zip before. */
+  upToDate: number
+  /** Zips with no desktop chapter folder of that name. */
+  unmatched: string[]
+  failed: { folder: string; reason: string }[]
+  /** Cropped markers written to R2 for chapters cut before they existed. */
+  cropped: { published: string[]; failed: { folder: string; reason: string }[] }
+}
+
+/** What "Publish cropped chapters" wrote to R2 (Clipper3Library). */
+export interface Clipper3CroppedPublishAll {
+  configured: boolean
+  /** Series with at least one cut chapter. */
+  series: number
+  published: { series: string; chapter: string }[]
+  failed: { series: string; folder: string; reason: string }[]
 }
 
 /** The confirmation dialog's contents: what a sync would attach, before it runs. */
 export interface Clipper3SyncPreview {
   chapters: number
   ready: number
+  replaced: number
   skipped: number
   failed: number
   results: Clipper3ChapterSyncResult[]
@@ -2176,11 +979,54 @@ export interface Clipper3ChapterSummary {
   fullyAttached: boolean
   /** The chapter has been cut — crops3/ has at least one output file. */
   chopped: boolean
+  /** Every page is done and crops3/ holds exactly the files they cut to. */
+  cropComplete: boolean
+  /** A cut is running right now (Crop Sections, or the auto crop after Sync json). */
+  cropping: boolean
+  review: Clipper3ChapterReview
+}
+
+export interface Clipper3Series {
+  rootFolder?: string
+  lastActivityAt?: string
+  id: string
+  title: string
+  sourceSite: string
+  coverPath: string | null
+  chapterCount: number
+}
+
+export interface Clipper3Chapter {
+  id: string
+  number: number
+  title: string | null
+  seriesId: string
+  seriesTitle: string
+  pageCount: number
 }
 
 export const clipper3Api = {
+  getSeries: () => fetchApi<Clipper3Series[]>('/clipper3/series'),
+
+  getChapters: () => fetchApi<Clipper3Chapter[]>('/clipper3/chapters'),
+
+  /** One source page image, served from the chapter folder. */
+  getImageUrl: (chapterId: string, filename: string) =>
+    `${API_BASE}/clipper3/chapters/${chapterId}/image/${encodeURIComponent(filename)}`,
+
   getImages: (chapterId: string) =>
     fetchApi<Clipper3ChapterImages>(`/clipper3/chapters/${chapterId}/images`),
+
+  // The whole chapter's reviewed flag (Master phone or Preview).
+  getChapterReview: (chapterId: string) =>
+    fetchApi<Clipper3ChapterReview>(`/clipper3/chapters/${chapterId}/review`),
+
+  // The desktop's Mark reviewed / Unmark (Preview); Crop Sections needs it.
+  setChapterReview: (chapterId: string, reviewed: boolean) =>
+    fetchApi<Clipper3ChapterReview>(`/clipper3/chapters/${chapterId}/review`, {
+      method: 'PUT',
+      body: JSON.stringify({ reviewed })
+    }),
 
   getSeriesSummary: (seriesId: string) =>
     fetchApi<{ chapters: Clipper3ChapterSummary[] }>(`/clipper3/series/${seriesId}/summary`),
@@ -2196,12 +1042,6 @@ export const clipper3Api = {
       { method: 'PUT', body: JSON.stringify({ content }) }
     ),
 
-  deleteImagePoints: (chapterId: string, filename: string) =>
-    fetchApi<{ deleted: boolean }>(
-      `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/points`,
-      { method: 'DELETE' }
-    ),
-
   // The metadata document is stored verbatim and never parsed.
   getImageMetadata: (chapterId: string, filename: string) =>
     fetchApi<Clipper3ImageMetadata>(
@@ -2214,30 +1054,19 @@ export const clipper3Api = {
       { method: 'PUT', body: JSON.stringify({ content }) }
     ),
 
-  deleteImageMetadata: (chapterId: string, filename: string) =>
-    fetchApi<{ deleted: boolean }>(
-      `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/metadata`,
-      { method: 'DELETE' }
+  // Downloads the phone's finished-chapter zips from R2 and unpacks them into
+  // Processed/ so the preview below finds them. Only new or re-uploaded zips
+  // are downloaded; nothing is attached.
+  fetchPhoneCrops: (seriesId: string, chapterIds?: string[]) =>
+    fetchApi<Clipper3PhoneCropsFetch>(
+      `/clipper3/series/${seriesId}/fetch-phone-crops`,
+      { method: 'POST', body: JSON.stringify({ chapterIds }) }
     ),
 
-  // Slices are written to disk rather than handed back as blobs: the clipboard
-  // holds one image at a time, so selecting them all in the file explorer is
-  // the only way to copy the whole set at once.
-  sliceImage: (chapterId: string, filename: string) =>
-    fetchApi<Clipper3SliceResult>(
-      `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/slices`,
-      { method: 'POST' }
-    ),
-
-  openSliceFolder: (chapterId: string, filename: string) =>
-    fetchApi<{ success: boolean; path: string }>(
-      `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/slices/open`,
-      { method: 'POST' }
-    ),
-
-  getSliceUrl: (chapterId: string, filename: string, sliceName: string) =>
-    `${API_BASE}/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}` +
-    `/slices/${encodeURIComponent(sliceName)}`,
+  // Tells the phones about every chapter already cut: writes the missing
+  // `<Chapter>.cropped.json` markers beside the phone zips in R2.
+  publishCroppedMarkers: () =>
+    fetchApi<Clipper3CroppedPublishAll>('/clipper3/cropped-markers/publish', { method: 'POST' }),
 
   // What syncProcessed would attach, without writing anything — the same pass
   // with the write suppressed, so the preview cannot promise more than the
@@ -2248,9 +1077,11 @@ export const clipper3Api = {
       { method: 'POST', body: JSON.stringify({ chapterIds }) }
     ),
 
-  // Imports hand-made crop JSON sitting in each chapter's `Processed/` folder
-  // and attaches it to the pages it names. Background job — the outcome
-  // arrives over `clipper3:sync-*`. Omitting chapterIds syncs the whole series.
+  // Attaches the crop JSON sitting in each chapter's `Processed/` folder to the
+  // pages it names, then queues every chapter reviewed on the Master phone for
+  // cutting. Background job — the outcome arrives over `clipper3:sync-*` (its
+  // `autoCrop` lists the chapters sent to crop), the cuts over `clipper3:crop-*`.
+  // Omitting chapterIds syncs the whole series.
   syncProcessed: (seriesId: string, chapterIds?: string[]) =>
     fetchApi<{ started: boolean; chapters: number }>(
       `/clipper3/series/${seriesId}/sync-processed`,
@@ -2284,11 +1115,24 @@ export const clipper3Api = {
       { method: 'POST', body: JSON.stringify({ chapterIds }) }
     ),
 
-  // Cuts every image that has its own artifact; progress over 'clipper3:crop-*'.
-  crop: (chapterId: string) =>
-    fetchApi<{ started: boolean; images: number }>(`/clipper3/chapters/${chapterId}/crop`, {
-      method: 'POST'
-    }),
+  // Cuts every Done image; progress over 'clipper3:crop-*'.
+  // Not fetchApi: an unreviewed chapter answers 409 with a code in `error` and
+  // the sentence in `message`, and the caller needs to tell that case apart.
+  crop: async (chapterId: string): Promise<{ started: boolean; images: number }> => {
+    const response = await fetch(`${API_BASE}/clipper3/chapters/${chapterId}/crop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    })
+    const payload = await response.json().catch(() => null) as
+      ({ started: boolean; images: number } & { error?: string; message?: string }) | null
+    if (response.status === 409 && payload?.error === 'CHAPTER_NOT_REVIEWED') {
+      throw new Clipper3NotReviewedError(payload.message || 'Mark this chapter reviewed before cropping.')
+    }
+    if (!response.ok || !payload) {
+      throw new Error(payload?.error || payload?.message || `Request failed (${response.status} ${response.statusText})`)
+    }
+    return payload
+  },
 
   getOutputs: (chapterId: string) =>
     fetchApi<{ exportDir: string | null; files: Clipper3Output[] }>(
@@ -2297,117 +1141,6 @@ export const clipper3Api = {
 
   getOutputUrl: (chapterId: string, filename: string) =>
     `${API_BASE}/clipper3/chapters/${chapterId}/output/${encodeURIComponent(filename)}`
-}
-
-// ---- Vision providers (Qwen local, Gemini, OpenAI, Claude) ----
-
-export type VisionProviderName = 'qwen' | 'gemini' | 'openai' | 'anthropic'
-
-export interface VisionProviderInfo {
-  name: VisionProviderName
-  label: string
-  model: string | null
-  /** Local backends need no API key but can be switched off. */
-  isLocal: boolean
-  /** Has what it needs to attempt a call — not proof it is reachable. */
-  configured: boolean
-}
-
-export const visionApi = {
-  getProviders: () =>
-    fetchApi<{ selected: string; providers: VisionProviderInfo[] }>('/vision/providers'),
-
-  selectProvider: (provider: VisionProviderName) =>
-    fetchApi<{ selected: string }>('/vision/providers/selected', {
-      method: 'PUT',
-      body: JSON.stringify({ provider })
-    }),
-
-  // Costs a round trip (and a token or two for cloud providers), so it is a
-  // deliberate action rather than part of the listing.
-  testProvider: (provider: VisionProviderName) =>
-    fetchApi<{ success: boolean; error?: string; models?: string[]; model: string }>(
-      `/vision/providers/${provider}/test`,
-      { method: 'POST' }
-    )
-}
-
-// Murgaa API — the reference popup in the narration Script/Voiceover headers.
-// One global config per page scope, shared across every series and chapter.
-export type MurgaaScope = 'script' | 'voice' | 'clipper3'
-
-export interface MurgaaApp {
-  id: string
-  name: string
-  /** Config still points at this application's file, but it's gone from disk. */
-  missing: boolean
-}
-
-export interface MurgaaConfig {
-  scope: MurgaaScope
-  description: string
-  imageName: string | null
-  hasImage: boolean
-  apps: MurgaaApp[]
-  updatedAt: string | null
-}
-
-export const murgaaApi = {
-  get: (scope: MurgaaScope) =>
-    fetchApi<MurgaaConfig>(`/murgaa/${scope}`),
-
-  updateDescription: (scope: MurgaaScope, description: string) =>
-    fetchApi<MurgaaConfig>(`/murgaa/${scope}`, {
-      method: 'PUT',
-      body: JSON.stringify({ description })
-    }),
-
-  // Cache-busted so a freshly uploaded image replaces the old one in-place.
-  imageUrl: (scope: MurgaaScope, version?: string | null) =>
-    `${API_BASE}/murgaa/${scope}/image${version ? `?v=${encodeURIComponent(version)}` : ''}`,
-
-  uploadImage: (scope: MurgaaScope, file: File) => {
-    const formData = new FormData()
-    formData.append('file', file)
-    return fetch(`${API_BASE}/murgaa/${scope}/image`, {
-      method: 'POST',
-      body: formData
-    }).then(async res => {
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'Image upload failed' }))
-        throw new Error(err.error || 'Image upload failed')
-      }
-      return res.json() as Promise<MurgaaConfig>
-    })
-  },
-
-  // Adds a new application to the list — never replaces an existing one.
-  addApp: (scope: MurgaaScope, file: File) => {
-    const formData = new FormData()
-    formData.append('file', file)
-    return fetch(`${API_BASE}/murgaa/${scope}/apps`, {
-      method: 'POST',
-      body: formData
-    }).then(async res => {
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'Application upload failed' }))
-        throw new Error(err.error || 'Application upload failed')
-      }
-      return res.json() as Promise<MurgaaConfig>
-    })
-  },
-
-  renameApp: (scope: MurgaaScope, appId: string, name: string) =>
-    fetchApi<MurgaaConfig>(`/murgaa/${scope}/apps/${appId}`, {
-      method: 'PUT',
-      body: JSON.stringify({ name })
-    }),
-
-  removeApp: (scope: MurgaaScope, appId: string) =>
-    fetchApi<MurgaaConfig>(`/murgaa/${scope}/apps/${appId}`, { method: 'DELETE' }),
-
-  launchApp: (scope: MurgaaScope, appId: string) =>
-    fetchApi<{ message: string }>(`/murgaa/${scope}/apps/${appId}/launch`, { method: 'POST' })
 }
 
 // ============ Storage: local disk usage + reclaiming it ============
@@ -2437,10 +1170,13 @@ export interface ChapterStorage {
   reclaimableBytes: number
   fileCount: number
   exported: boolean
-  exportedVia: 'editor2' | 'editor1' | null
+  exportedVia: 'editor2' | null
+  /** The Part this chapter was completed with (files deleted), or null. */
+  completedPart: number | null
 }
 
 export interface SeriesStorage {
+  lastActivityAt?: string
   id: string
   title: string
   rootFolder: string
@@ -2454,6 +1190,7 @@ export interface SeriesStorage {
   safeToDeleteBytes: number
   videoBytes: number
   videoFileCount: number
+  videoCleanupFolders: StorageVideoCleanupFolder[]
   chapters: ChapterStorage[]
 }
 
@@ -2476,9 +1213,16 @@ export interface StorageDeleteResult {
   skipped?: string
 }
 
+export interface StorageVideoCleanupFolder {
+  dir: '_video' | '_video2' | '_video2_hi'
+  compressedVideos: string[]
+  renderedFileCount: number
+  renderedBytes: number
+}
+
 export interface StorageVideoFile {
   seriesId: string
-  dir: '_video' | '_video2'
+  dir: '_video' | '_video2' | '_video2_hi'
   fileName: string
   bytes: number
   modifiedAt: string
@@ -2488,17 +1232,89 @@ export interface StorageVideoFile {
 export interface PublishedMap {
   chapters: Record<string, boolean>
   series: Record<string, { published: number; total: number }>
+  /** Chapter id → the Part it was completed with. */
+  completed?: Record<string, number>
+  /** Series id → its completed Part numbers. */
+  completedParts?: Record<string, number[]>
   scannedAt: string
+}
+
+export interface PartChapter {
+  id: string
+  number: number
+  title: string | null
+  folderPath: string
+  exportedEn: boolean
+  exportedHi: boolean
+  completed: boolean
+}
+
+export interface SeriesPart {
+  number: number
+  firstChapter: number
+  lastChapter: number
+  closed: boolean
+  /** Ends at a "Part end" marked in Narration, rather than at the last exported chapter. */
+  endMarked: boolean
+  completed: boolean
+  completedAt: string | null
+  chapters: PartChapter[]
+  exportedEn: number
+  exportedHi: number
+  ready: boolean
+  blocker: string | null
+  workingBytes: number
+  localBytes: number
+}
+
+export interface SeriesParts {
+  seriesId: string
+  title: string
+  compressedVideos: string[]
+  r2Configured: boolean
+  parts: SeriesPart[]
+}
+
+export interface CompletePartResult {
+  partNumber: number
+  chapters: number
+  continuityKey: string | null
+  r2Deleted: string[]
+  r2FreedBytes: number
+  r2Kept: string[]
+  localFreedBytes: number
+  videosDeleted: number
+  warnings: string[]
 }
 
 export const storageApi = {
   getOverview: () => fetchApi<StorageOverview>('/storage/overview'),
 
   // Cheap per-chapter "has a rendered video" lookup for the module pages.
-  getPublished: (seriesId?: string) =>
-    fetchApi<PublishedMap>(`/storage/published${seriesId ? `?seriesId=${seriesId}` : ''}`),
+  /** `lang` limits "published" to that narration language's renders; omit it for any render. */
+  getPublished: (seriesId?: string, lang?: NarrationLanguage) => {
+    const params = new URLSearchParams()
+    if (seriesId) params.set('seriesId', seriesId)
+    if (lang) params.set('lang', lang)
+    const query = params.toString()
+    return fetchApi<PublishedMap>(`/storage/published${query ? `?${query}` : ''}`)
+  },
 
   getCategories: () => fetchApi<StorageCategoryMeta[]>('/storage/categories'),
+
+  cleanPartWorkingFiles: (seriesId: string, part: number, confirm: string) =>
+    fetchApi<{ freedBytes: number; chapters: number }>(`/storage/series/${seriesId}/parts/${part}/working-files`, {
+      method: 'POST', body: JSON.stringify({ confirm })
+    }),
+
+  getParts: (seriesId: string) => fetchApi<SeriesParts>(`/storage/series/${seriesId}/parts`),
+
+  /** Irreversible: deletes the Part locally and in R2, keeping only its continuity. */
+  completePart: (seriesId: string, part: number, confirm: string) =>
+    fetchApi<CompletePartResult>(`/storage/series/${seriesId}/parts/${part}/complete`, {
+      method: 'POST',
+      body: JSON.stringify({ confirm })
+    }),
 
   getSeriesVideos: (seriesId: string) =>
     fetchApi<StorageVideoFile[]>(`/storage/series/${seriesId}/videos`),
@@ -2523,9 +1339,1149 @@ export const storageApi = {
       { method: 'POST', body: JSON.stringify({ categories, allowUnexported }) }
     ),
 
+  deleteCompressedRenders: (seriesId: string, dir: string) =>
+    fetchApi<{ freedBytes: number; deletedFiles: number }>(
+      `/storage/series/${seriesId}/videos/${dir}`,
+      { method: 'DELETE' }
+    ),
+
   deleteVideo: (seriesId: string, dir: string, fileName: string) =>
     fetchApi<{ freedBytes: number }>(
       `/storage/series/${seriesId}/videos/${dir}/${encodeURIComponent(fileName)}`,
       { method: 'DELETE' }
     )
+}
+
+// ============ Cloudflare R2: sending chapters to the phone ============
+
+/**
+ * new:         never sent
+ * changed:     sent, but its pages changed since (e.g. stitched)
+ * sent:        in R2, the phone hasn't got it yet
+ * downloading: the phone is downloading it
+ * on_phone:    the phone has this copy
+ * cleared:     the phone cleared it; not sent again unless picked
+ */
+export type PhoneChapterState = 'new' | 'changed' | 'sent' | 'downloading' | 'on_phone' | 'cleared'
+
+export interface PhoneSendChapter {
+  chapterId: string
+  number: number
+  folder: string
+  pages: number
+  bytes: number
+  state: PhoneChapterState
+  sentAt: string | null
+  clearedAt: string | null
+  /** When the phone unpacked this copy. */
+  phoneAt: string | null
+  /** Over the page limit: stitch it before sending (auto-send skips it). */
+  needsStitch: boolean
+  /** What the phone's "Clear done chapters" ticks: published, or crops and script. */
+  desktop: { crops: boolean; script: boolean; scriptHi: boolean; published: boolean; done: boolean }
+}
+
+export interface PhoneSendSeries {
+  seriesId: string
+  title: string
+  folder: string
+  autoSend: boolean
+  chapters: PhoneSendChapter[]
+  /** New or changed: what a send picks by default. */
+  toSend: number
+  onPhone: number
+  /** Sent, not on the phone yet. */
+  waiting: number
+  cleared: number
+  /** The phone's chapter index is behind the desktop (chapters finished since). */
+  indexStale: boolean
+}
+
+export interface PhoneSendPlan {
+  configured: boolean
+  missing: string[]
+  device: string | null
+  reportedAt: string | null
+  series: PhoneSendSeries[]
+}
+
+export type PhoneSendSeriesState = 'queued' | 'sending' | 'done' | 'skipped' | 'failed' | 'cancelled'
+
+export interface PhoneSendSeriesProgress {
+  seriesId: string
+  title: string
+  state: PhoneSendSeriesState
+  chaptersTotal: number
+  chaptersSent: number
+  current?: { folder: string; phase: 'zipping' | 'uploading' }
+  bytesTotal: number
+  bytesDone: number
+  /** The series' folder in R2, once known. */
+  folder?: string
+  note?: string
+  error?: string
+}
+
+export interface PhoneSendJob {
+  id: string
+  state: 'running' | 'done' | 'cancelled'
+  bucket: string
+  /** Started by auto-send after downloads. */
+  auto: boolean
+  startedAt: string
+  finishedAt?: string
+  /** How the phone was asked to fetch the new chapters. */
+  phone: PhoneUpdateRequest | null
+  phoneError?: string
+  series: PhoneSendSeriesProgress[]
+}
+
+export interface R2Status {
+  configured: boolean
+  missing: string[]
+  bucket: string | null
+  prefix: string
+  job: PhoneSendJob | null
+}
+
+export interface R2Config {
+  configured: boolean
+  missing: string[]
+  accountId: string
+  bucket: string
+  prefix: string
+  concurrency: number
+  hasAccessKey: boolean
+  accessKeyHint: string | null
+  hasSecret: boolean
+  /** An Account Analytics token is saved, so request counts are Cloudflare's own. */
+  hasAnalyticsToken: boolean
+}
+
+export interface R2ConfigUpdate {
+  accountId?: string
+  bucket?: string
+  prefix?: string
+  concurrency?: number
+  accessKeyId?: string
+  secretAccessKey?: string
+  clearKeys?: boolean
+  analyticsToken?: string
+  clearAnalyticsToken?: boolean
+}
+
+export interface R2Usage {
+  bucket: string
+  /** "2026-09" — calendar month, UTC. */
+  month: string
+  resetsAt: string
+  limits: { storageBytes: number; classA: number; classB: number }
+  storage: {
+    bytes: number
+    objectCount: number
+    measuredAt: string
+    /** Largest first. */
+    objects: { key: string; size: number; lastModified: string | null }[]
+  }
+  /**
+   * cloudflare: Cloudflare's own count for the whole account this month (every client, a few minutes behind).
+   * local: only the requests Manhwa Studio sent, used when no analytics token is saved or it failed.
+   */
+  ops: { classA: number; classB: number; free: number; ops: Record<string, number>; since: string; source: 'cloudflare' | 'local' }
+  /** Why Cloudflare's count couldn't be read, when a token is saved. */
+  analyticsError: string | null
+}
+
+export interface PhoneSeriesSync {
+  /**
+   * downloaded:  the phone has every chapter sent (and not cleared)
+   * downloading: it is downloading some
+   * outdated:    some chapters sent aren't on the phone yet
+   * missing:     it has none of them
+   */
+  state: 'downloaded' | 'downloading' | 'outdated' | 'missing'
+  /** When the phone last unpacked a chapter. */
+  phoneAt: string | null
+  /** When a chapter was last sent. */
+  uploadedAt: string | null
+  sent: number
+  onPhone: number
+  downloading: number
+  /** Chapters the phone cleared once done. */
+  cleared: number
+}
+
+/** What the Sleeper-Cell phone app has of the chapters sent to it, from its receipt. */
+export interface PhoneSyncStatus {
+  configured: boolean
+  /** When the phone last reported; null if it never has. */
+  reportedAt: string | null
+  device: string | null
+  /** By series id; only series with chapters sent. */
+  series: Record<string, PhoneSeriesSync>
+}
+
+/**
+ * A chapter's narration script on the Sleeper-Cell phone:
+ *   done:          script, summary and closing saved, so the next chapter can follow
+ *   needs_summary: a script was saved without its summary or closing paragraph
+ *   stale:         an earlier chapter was saved again after this one
+ */
+export interface PhoneChapterScript {
+  status: 'done' | 'needs_summary' | 'stale'
+  /** When the phone saved the reply. */
+  savedAt: string | null
+}
+
+/** Scripts written on the Sleeper-Cell phone, from the receipt it writes to R2 after each save. */
+export interface PhoneScriptsStatus {
+  configured: boolean
+  /** When the phone last reported; null if it never has. */
+  reportedAt: string | null
+  device: string | null
+  /** The id of the "Refresh from phone" request the phone last answered. */
+  answers: string | null
+  /** By series id: chapters done on the phone out of those it has. */
+  series: Record<string, { done: number; total: number }>
+  /** By chapter id, for the series asked for; chapters with no script are left out. */
+  chapters: Record<string, PhoneChapterScript>
+  /** The same for the phone's Hinglish scripts (Hindi tab). */
+  hi: {
+    /** By series id: chapters converted (done or needing review) out of those on the phone. */
+    series: Record<string, { done: number; total: number; uploadedAt: string | null }>
+    chapters: Record<string, PhoneChapterHinglish>
+  }
+  /** Runs going now in the phone's Narration and Voiceover libraries (series and chapters by folder name). */
+  runs: PhoneScriptRun[]
+}
+
+/**
+ * A run going on the phone: Auto-run writing a series' scripts in AI Studio
+ * (narration), or voicing its splits (voiceover). `done` of `total` counts
+ * chapters for narration and the run's splits for voiceover.
+ */
+export interface PhoneScriptRun {
+  kind: 'narration' | 'editor' | 'voiceover'
+  series: string
+  done: number
+  total: number
+  paused: boolean
+  /** Ends once the chapter or splits it's on are saved. */
+  stopping: boolean
+  /** The browser profile the tabs are on, when the phone has more than one. */
+  account: string | null
+  since: string | null
+  /** When the run last changed. */
+  at: string | null
+  /** What each AI Studio tab is on; a tab between splits is left out. */
+  tabs: PhoneScriptRunTab[]
+  /** The phone it's on: its id ("" for the old app, or the one phone R2 carries) and name; null when not known. */
+  device: string | null
+  phone: string | null
+}
+
+export interface PhoneScriptRunTab {
+  chapter: string
+  language: NarrationLanguage
+  /** 1-based, voiceover only. */
+  split: number | null
+  splits: number | null
+  since: string | null
+  step?: string
+}
+
+/**
+ * A chapter's Hinglish script on the phone:
+ *   done:   converted and passed the check
+ *   review: saved despite failing the check
+ *   stale:  converted from an English script the phone has since changed
+ */
+export interface PhoneChapterHinglish {
+  status: 'done' | 'review' | 'stale'
+  savedAt: string | null
+}
+
+/** One language's view of the phone's scripts receipt. */
+export interface PhoneScriptsView {
+  reportedAt: string | null
+  device: string | null
+  series: Record<string, { done: number; total: number }>
+  chapters: Record<string, { status: PhoneChapterScript['status'] | PhoneChapterHinglish['status']; savedAt: string | null }>
+}
+
+export function phoneScriptsIn(status: PhoneScriptsStatus | null, lang: NarrationLanguage): PhoneScriptsView | null {
+  if (!status) return null
+  const { reportedAt, device } = status
+  if (lang === 'en') return { reportedAt, device, series: status.series, chapters: status.chapters }
+  // Older servers and phones send no Hinglish block.
+  return { reportedAt, device, series: status.hi?.series ?? {}, chapters: status.hi?.chapters ?? {} }
+}
+
+/**
+ * A page's crop JSON on the Sleeper-Cell phone (Image Clipper's Auto-run):
+ *   done:        crop pointers and metadata generated
+ *   in_progress: sections made, the ChatGPT rounds not finished
+ *   changed:     the page file was replaced since it was started, so it starts over
+ */
+export type PhonePageState = 'done' | 'in_progress' | 'changed'
+
+/** A page the phone's Auto-run is on right now. */
+export interface PhoneCropsWorking {
+  chapterId: string
+  /** The page file, the same name as the image in the chapter folder. */
+  page: string
+  /** When Auto-run started this page. */
+  since: string | null
+  paused: boolean
+  /** The phone it's on: its id ("" for the old app, or the one phone R2 carries) and name; null when not known. */
+  device: string | null
+  phone: string | null
+}
+
+/** Crop pointers made on the Sleeper-Cell phone, from the receipt it writes to R2 as pages start and finish. */
+export interface PhoneCropsStatus {
+  configured: boolean
+  /** When the phone last reported; null if it never has. */
+  reportedAt: string | null
+  device: string | null
+  /** The id of the "Refresh from phone" request the phone last answered. */
+  answers: string | null
+  /** By series id: pages done on the phone out of those it has. */
+  series: Record<string, { done: number; total: number }>
+  /** By chapter id, for the series asked for; chapters with no page started are left out. */
+  chapters: Record<string, { done: number; total: number }>
+  /** The page Auto-run is on in the series asked for, or null when it isn't running there. The first of `workingPages`. */
+  working: PhoneCropsWorking | null
+  /** Every page Auto-run is on in the series asked for: one per ChatGPT tab, possibly across chapters. */
+  workingPages: PhoneCropsWorking[]
+  /** By image filename, for the chapter asked for; pages not started are left out. */
+  pages: Record<string, PhonePageState>
+  /** By image filename, for the chapter asked for: how each done page was finished on the phone. */
+  finished: Record<string, PhonePageFinish>
+  /** Every browser profile on the phone (one ChatGPT account each), with its uploads to ChatGPT; empty from older phone builds. */
+  profiles: PhoneUploadProfile[]
+}
+
+/** A limit ChatGPT put on a phone profile. */
+export interface PhoneUploadLimit {
+  at: string
+  /** When ChatGPT said it would lift (an hour when it said nothing). */
+  until: string
+  /** Images the profile uploaded from `countedSince` up to the limit. */
+  used: number
+  countedSince: string
+  /** False for the first limit after tracking began: its count may have started mid-window. */
+  complete: boolean
+  /** A flag for suspicious activity, not the upload limit. */
+  flagged: boolean
+  reason: string
+}
+
+/** One of the phone's browser profiles and the images it uploaded to ChatGPT. */
+export interface PhoneUploadProfile {
+  id: string
+  name: string
+  /** The profile the phone's browser is on, which the next run starts in. */
+  selected: boolean
+  /** While ChatGPT's limit on it is noted as running; null otherwise. */
+  limitedUntil: string | null
+  trackingSince: string | null
+  /** Images uploaded towards the next limit: since the last one, or since tracking began. */
+  counting: { since: string; images: number } | null
+  /** Images uploaded in the last day, by 5-minute slot, oldest first. */
+  uploads: { at: string; images: number }[]
+  /** Oldest first. */
+  limits: PhoneUploadLimit[]
+  /** The phone it's on (see PhoneScriptRun). With several phones, `id` is "<device>:<profile id>". */
+  device: string | null
+  phone: string | null
+  /** The phone's own id for it, which profile requests name it by. */
+  profileId: string
+  /** What its ChatGPT account offered when last read, for Run automation's choices; null from older builds. */
+  chatGpt: PhoneChatGptProfile | null
+  /** Sleeper-Cell's Tools → Profiles → Check of it, as last done there: sign-ins and plans; null when never checked. */
+  check: PhoneProfileCheck | null
+  /** Its plan limits (5-hour and weekly), read in the check and during runs; null when never read or from older builds. */
+  usage: PhoneChatGptUsage | null
+}
+
+/** One plan-limit window of a ChatGPT account (Codex, Work and the like share it; chats don't count). */
+export interface PhoneUsageWindow {
+  /** Its length: 18000 is the 5-hour limit, 604800 the weekly one. */
+  seconds: number
+  /** 0–100. */
+  usedPercent: number
+  /** When it's back to 0; null when ChatGPT didn't say. */
+  resetAt: string | null
+}
+
+/** A ChatGPT account's plan limits as the phone last read them (ChatGptUsage.kt). */
+export interface PhoneChatGptUsage {
+  checkedAt: string
+  limitReached: boolean
+  /** Why the last read failed, when nothing better was kept (`windows` then empty). */
+  error: string | null
+  windows: PhoneUsageWindow[]
+}
+
+/** One site's part of a profile check on the phone. */
+export interface PhoneSiteCheck {
+  signedIn: boolean
+  email: string | null
+  /** ChatGPT's planType ("free", "go", "plus"…); Gemini's "free", "paid" or "Google AI Pro" and the like. */
+  plan: string | null
+  error: string | null
+}
+
+/** Passive phone evidence only. Candidate keys do not authorize account merging or routing. */
+export interface PhoneAccountFact {
+  value: string | null
+  evidence: 'observed' | 'unknown'
+  observedAt: string
+}
+export interface PhoneAccountFacts {
+  login: PhoneAccountFact
+  identity: PhoneAccountFact
+  plan: PhoneAccountFact
+  candidateAccountKey: string | null
+  confirmedAccountId: null
+}
+export interface PhoneAccountSite {
+  provider: 'openai' | 'google'
+  product: 'chatgpt' | 'gemini_apps'
+  current: PhoneAccountFacts
+  lastSuccessfulCheck: { checkedAt: number; facts: PhoneAccountFacts } | null
+  auditDueAt: number | null
+  quotaEvidence: never[]
+}
+export interface PhoneAccountInventory {
+  schema: 'sleeper-cell-account-inventory/1'
+  profileId: string
+  checkedAt: number
+  auditCadenceHours: 24
+  sites: { chatGpt: PhoneAccountSite; gemini: PhoneAccountSite }
+}
+
+export interface PhoneProfileCheck {
+  checkedAt: string
+  chatGpt: PhoneSiteCheck | null
+  gemini: PhoneSiteCheck | null
+  /** Validated passive evidence; absent on older or malformed receipts. */
+  accountInventory?: PhoneAccountInventory
+}
+
+/** A mode's choices, as the phone read them off the ChatGPT account. */
+export interface PhoneChatGptMode {
+  /** "Chat" or "Work"; null for an account with no switch. */
+  name: string | null
+  models: { name: string; picked: boolean }[]
+  /** The Power slider's steps, lowest first; a locked step's name isn't known. */
+  efforts: { name: string | null; locked: boolean; picked: boolean }[]
+}
+
+/** Image Clipper's ChatGPT choices in Run automation; each null leaves it as the account has it. */
+export interface PhoneChatGptSettings {
+  mode: 'Chat' | 'Work' | null
+  model: string | null
+  effort: string | null
+}
+
+export interface PhoneChatGptProfile {
+  /** Null until read. Free and Go list no modes: they have neither the switch nor the model picker. */
+  options: { readAt: string | null; current: string | null; modes: PhoneChatGptMode[] } | null
+  reading: boolean
+  error: string | null
+}
+
+/** One phone profile's Gemini requests in AI Studio today, for one kind of run. */
+export interface PhoneGeminiProfile {
+  id: string
+  name: string
+  selected: boolean
+  /** Requests since the last daily reset. */
+  today: number
+  /** How many requests it got to before its last limit; null until it has hit one. */
+  limit: number | null
+  /** While its speech limit is noted as used up; null otherwise. */
+  limitedUntil: string | null
+  /** The phone it's on: its id ("" for the old app, or the one phone R2 carries) and name; null when not known. */
+  device: string | null
+  phone: string | null
+}
+
+/** Gemini's limit for one kind of run on the phone's profiles. */
+export interface PhoneGeminiUsage {
+  /** Gemini's next daily reset, midnight Pacific. */
+  resetsAt: string
+  profiles: PhoneGeminiProfile[]
+}
+
+/** How a done page was finished on the phone. */
+export interface PhonePageFinish {
+  /** When its JSON files were exported. */
+  at: string
+  /** Seconds from making the page's sections to exporting its JSON files, wall clock (pauses count); null if unknown. */
+  took: number | null
+  /** auto: Sleeper-Cell's Auto-run; manual: pasted by hand. null for exports from before this was kept. */
+  run: 'auto' | 'manual' | null
+  /** The browser profile of the ChatGPT account Auto-run used, and that account's name in Sleeper-Cell. */
+  profile: string | null
+  account: string | null
+  /** The ChatGPT models that answered, in order (a fix round can be answered by another). */
+  models: string[]
+  /** The phone that finished it; null when not known. */
+  phone: string | null
+}
+
+/** Where a page is: the series and chapter in the library when they match, else the phone's folder names. */
+interface PhoneOverviewPlace {
+  seriesId: string | null
+  series: string
+  chapterId: string | null
+  /** The chapter folder name, as on the phone. */
+  chapter: string
+  chapterNumber: number | null
+}
+
+/** A page the phone's Auto-run is on, in any series. */
+export interface PhoneOverviewWorking extends PhoneOverviewPlace {
+  page: string
+  since: string | null
+  paused: boolean
+  /** The phone it's on: its id ("" for the old app, or the one phone R2 carries) and name; null when not known. */
+  device: string | null
+  phone: string | null
+}
+
+export interface PhoneOverviewFinish extends PhoneOverviewPlace, PhonePageFinish {
+  page: string
+}
+
+/** A chapter the phone zipped with its JSON files and uploaded to R2. */
+export interface PhoneOverviewChapterZip extends PhoneOverviewPlace {
+  uploadedAt: string | null
+  pages: number
+}
+
+export interface PhoneOverviewSeries {
+  rootFolder?: string
+  lastActivityAt?: string
+  id: string
+  title: string
+  /** Has the phone downloaded this series' zip; null when there's no zip in R2. */
+  sync: PhoneSeriesSync | null
+  /** Chapters with a narration script on the phone; null when it has none. */
+  scripts: { done: number; total: number } | null
+  /** Pages with crop JSON on the phone; null when it has started none. */
+  crops: { done: number; total: number } | null
+  /** Chapters the phone has uploaded with their JSON files. */
+  chaptersUploaded: number
+  /** Pages Auto-run is on in this series right now. */
+  working: number
+  /** Narration and voiceover runs going in this series right now. */
+  runs: PhoneScriptRun['kind'][]
+}
+
+export interface PhoneOverviewRunTab extends PhoneOverviewPlace, Omit<PhoneScriptRunTab, 'chapter'> {}
+
+/** A narration or voiceover run on the phone, placed in the library. */
+export interface PhoneOverviewRun extends Omit<PhoneScriptRun, 'series' | 'tabs'> {
+  seriesId: string | null
+  series: string
+  tabs: PhoneOverviewRunTab[]
+}
+
+/** Sleeper-Cell's automation settings (Tools → Settings → Automation), and the run it will start by itself. */
+export interface PhoneAutomation {
+  youtube?: import('../../../server/src/services/youtubePhoneStatus').YouTubePhoneActivity
+  /** personal: shows over the lock screen, PIN kept. dedicated: dismisses the lock screen, locks after. */
+  wakeMode: 'personal' | 'dedicated'
+  resumeAfterLimit: boolean
+  /** "Start from Manhwa Studio" is on: Run automation and Stop reach it. */
+  remoteStart: boolean
+  /** The run waiting for a ChatGPT limit to lift, or for the phone to come online; null when none is. */
+  resume: { seriesId: string | null; series: string; tabs: number; at: string } | null
+  /** The runs it can start from here; builds before the others start only Image Clipper (older servers leave it out). */
+  runs?: PhoneRunKind[]
+  /** How Image Clipper last ran there; null from builds before it was sent. */
+  clipper?: { ai: PhoneClipperAi; flow: PhoneClipperFlow; tabs: number; chatGpt?: PhoneChatGptSettings | null } | null
+  /** Editor 2.0's tabs last used there; null from builds whose Editor 2.0 run takes neither tabs nor a share of a split. */
+  editor?: { tabs: number; staged?: boolean; ai?: 'chatgpt' | 'aistudio'; providers?: string[]; smallBatches?: boolean; chatGpt?: PhoneChatGptSettings } | null
+  /** The runs that take a share of a split (a `chapters` list); empty or left out from builds before. */
+  chapterRuns?: PhoneRunKind[]
+  /** A run going there takes a split's start of it as its new scope, keeping what it's on; builds before would start over. */
+  rescope?: boolean
+  /** It can stop a run once what it's on is done; builds before can only stop now. */
+  stopAfter?: boolean
+  /** Image Clipper ends once the pages it's on are done. */
+  clipperStopping?: boolean
+}
+
+/** The automation runs Sleeper-Cell can start from here (PhoneRunKind in r2Service.ts). */
+export type PhoneRunKind = 'clipper' | 'narration' | 'editor' | 'voiceover'
+/** Image Clipper's AI: ChatGPT, AI Studio, or Gemini on the web. */
+export type PhoneClipperAi = 'chatgpt' | 'aistudio' | 'gemini'
+/** Image Clipper's prompting: one prompt then review rounds (classic), or four steps. */
+export type PhoneClipperFlow = 'classic' | 'steps'
+
+/** What to start: the run, its series, and how (the options that run takes). */
+export interface PhoneAutomationOptions {
+  kind?: PhoneRunKind
+  seriesId?: string
+  tabs?: number
+  ai?: PhoneClipperAi
+  /** Editor: match one audio section per request and resume accepted checkpoints. */
+  smallBatches?: boolean
+  flow?: PhoneClipperFlow
+  /** Image Clipper on ChatGPT: mode, model and effort; the phone keeps them for its later runs. */
+  chatGpt?: PhoneChatGptSettings
+  language?: NarrationLanguage
+  device?: string
+  split?: boolean
+  /** A split as confirmed from its plan (planPhoneSplit): each phone's whole share, by device id, sent as it is. */
+  assignments?: Record<string, string[]>
+  /** A stop once the pages, chapter or splits the run is on are done ("Finish …, then stop" on the phone). */
+  after?: boolean
+}
+
+/** One phone in a split's plan (server: phoneSplit.ts). */
+export interface PhoneSplitTarget {
+  device: string
+  name: string
+  /** Its whole share, in reading order: what it's on and what it's given. */
+  chapters: string[]
+  /** The chapters it's on now. */
+  inProgress: string[]
+  /** start: a free phone starts. rescope: already on this run, takes its share as its new scope. finish: already on it, nothing left: finishes what it's on. skip: left alone. */
+  action: 'start' | 'rescope' | 'finish' | 'skip'
+  reason?: string
+}
+
+/** Split across the phones, step 1: who takes what, before anything is sent. */
+export interface PhoneSplitPlan {
+  kind: PhoneRunKind
+  seriesId: string
+  series: string
+  language: NarrationLanguage
+  targets: PhoneSplitTarget[]
+  /** Chapter numbers by folder. */
+  numbers: Record<string, number>
+}
+
+/** One phone running Sleeper-Cell. */
+export interface PhoneOverviewPhone {
+  /** Its id; "" for a build from before phones had one, which can't be started on its own. */
+  id: string
+  name: string
+  /** Sleeper-Cell's socket to the relay is open (the app is open, or listening for starts); null without the relay. */
+  connected: boolean | null
+  /**
+   * When the relay last heard from it, and, when it isn't connected, how it went: "closed" (Sleeper-Cell closed
+   * its link), "shutdown" (the phone switched off) or "lost" (the link broke or its pings stopped). Null from
+   * relays and servers before they kept this.
+   */
+  seenAt?: string | null
+  left?: PhoneLeft | null
+  /** Its newest receipt. */
+  reportedAt: string | null
+  automation: PhoneAutomation | null
+  /** Pages Auto-run is on there. */
+  working: number
+  /** Narration and voiceover runs going there. */
+  runs: number
+}
+
+export type PhoneLeft = 'closed' | 'shutdown' | 'lost'
+
+/** A phone's battery, sent with its screen state. */
+export interface PhoneBattery {
+  /** 0–100. */
+  level: number
+  /** Charging, or full on the charger. */
+  charging: boolean
+  plugged: 'ac' | 'usb' | 'wireless' | 'dock' | null
+}
+
+/** What a phone last said of its screen (it answers every screen command with this). */
+export interface PhoneScreenState {
+  at: string
+  /** The request it answers, or null when the phone reported by itself (the screen went on or off). */
+  answers: string | null
+  on: boolean
+  locked: boolean
+  /** Sleeper-Cell is on screen. */
+  appOpen: boolean
+  /** Woken from here and kept on until Screen off. */
+  keptOn: boolean
+  /** Screen off locks at once (Sleeper-Cell is a device admin); otherwise the screen times out by itself. */
+  canLock: boolean
+  remoteStart: boolean
+  last: { action: string; ok: boolean; note: string; at: string } | null
+  /** As of `at`; null (or missing, from older servers) from Sleeper-Cell builds before they sent it. */
+  battery?: PhoneBattery | null
+}
+
+/**
+ * A phone's screen state, and the screenshot of its browser tabs waiting to be
+ * seen: the server holds it in memory only, until its viewer closes (then
+ * dropPhoneScreenshot) or for 10 minutes.
+ */
+export interface PhoneScreen {
+  device: string
+  screen: PhoneScreenState | null
+  screenshot: {
+    takenAt: string
+    /** The Screenshot or Wake request it follows. */
+    answers: string | null
+    shots: { label: string; width: number; height: number; url: string }[]
+  } | null
+}
+
+/** Everything Sleeper-Cell has reported, across every series and phone (the Sleeper Cells page). */
+export interface PhoneOverview {
+  configured: boolean
+  /** Every phone's name, joined. */
+  device: string | null
+  /** Each phone (older servers leave it out). One without the relay: R2 carries one phone's receipts. */
+  phones?: PhoneOverviewPhone[]
+  /** The latest of the three receipts. */
+  reportedAt: string | null
+  /** When each receipt was last written; null if never. */
+  reported: { sync: string | null; scripts: string | null; crops: string | null }
+  /** The id of the "Refresh from phone" request the crops receipt last answered. */
+  answers: string | null
+  working: PhoneOverviewWorking[]
+  /** Narration and voiceover runs going now. */
+  runs: PhoneOverviewRun[]
+  series: PhoneOverviewSeries[]
+  /** Done pages, newest first (the latest few hundred). */
+  recent: PhoneOverviewFinish[]
+  /** True when there were more done pages than `recent` holds. */
+  recentCapped: boolean
+  /** Chapter zips the phone uploaded, newest first. */
+  uploads: PhoneOverviewChapterZip[]
+  profiles: PhoneUploadProfile[]
+  /** Gemini requests per profile today: the voiceover run's speech and the narration run's scripts; null from builds before each was sent. */
+  gemini: { speech: PhoneGeminiUsage | null; narration: PhoneGeminiUsage | null }
+  /** The first phone's that can be started from here, else the first phone's; null from Sleeper-Cell builds before automation. */
+  automation: PhoneAutomation | null
+}
+
+/** "Refresh from phone": how the ask went out. */
+export interface PhoneUpdateRequest {
+  id: string
+  requestedAt: string
+  /** relay: through the phone relay, answered the moment Sleeper-Cell is open. r2: left in the bucket. */
+  via: 'relay' | 'r2'
+  /** Through the relay: Sleeper-Cell sockets open when it was sent (0 = it answers once opened). */
+  phones: number | null
+}
+
+/** The phone relay (a Cloudflare Worker) that carries Sleeper-Cell's status live, without R2. */
+export interface RelayStatus {
+  configured: boolean
+  url: string
+  hasToken: boolean
+  connected: boolean
+  /**
+   * Sleeper-Cell sockets open right now: the app is open on the phone, or its
+   * "Start from Manhwa Studio" setting keeps the socket open in the background.
+   */
+  phones: number
+  /** The phones connected, and those the relay keeps receipts from (older servers leave it out). */
+  devices?: { id: string; name: string; connected: boolean; seenAt?: string | null; left?: PhoneLeft | null }[]
+  lastError: string | null
+  lastReceiptAt: string | null
+}
+
+/** A run's start or stop, as sent: to each phone, or to every phone (device "*"). */
+export interface PhoneAutomationSent extends PhoneUpdateRequest {
+  targets?: { device: string; name: string; chapters: string[] | null; reached: boolean; action?: 'start' | 'rescope' | 'finish' }[]
+  /** A split's chapter numbers by folder (when planned and sent at once). */
+  numbers?: Record<string, number>
+}
+
+/** Run automation's checklist (server: phoneReadiness.ts): what a run needs of a series on the phone. */
+export type PhoneReadinessState = 'ready' | 'waiting' | 'missing' | 'blocked' | 'note'
+export type PhoneReadinessFixAction = 'send_pages' | 'ask_download' | 'send_editor' | 'send_prompt' | 'run_narration'
+
+export interface PhoneReadinessItem {
+  id: string
+  label: string
+  state: PhoneReadinessState
+  detail: string
+  fix?: { action: PhoneReadinessFixAction; label: string; chapterIds?: string[] }
+  link?: { to: string; label: string }
+}
+
+export interface PhoneRunReadiness {
+  seriesId: string
+  kind: PhoneRunKind
+  language: 'en' | 'hi'
+  /** Nothing missing, waiting or blocked. */
+  ready: boolean
+  /** The run has something to work on now, even if not everything is there. */
+  canWork: boolean
+  items: PhoneReadinessItem[]
+  /** A send to the phones is going; progress comes as `phone-send:progress`. */
+  sending: boolean
+}
+
+/** The script zip the phone uploads once every chapter of a series is done ("Zip and upload to R2"). */
+export interface PhoneScriptsZip {
+  key: string
+  etag: string
+  size: number
+  uploadedAt: string | null
+}
+
+/**
+ * What importing does to one chapter:
+ *   new:     the desktop has no script yet
+ *   replace: the desktop has a different script
+ *   same:    the desktop already has exactly this script, summary and closing
+ */
+export interface PhoneImportChapter {
+  chapterId: string
+  number: number
+  folder: string
+  action: 'new' | 'replace' | 'same'
+  desktopStatus: string | null
+  hasSummary: boolean
+  hasClosing: boolean
+  savedAt: string | null
+  /** The chapter already has voiceover sections in this language. */
+  hasVoiceover: boolean
+  published: boolean
+  /** Hinglish only: the phone saved it despite failing the check, with these issues. */
+  review: string[] | null
+  /** Hinglish only: converted from the English script this desktop has now (false: imports as stale). */
+  sourceMatches: boolean | null
+}
+
+export interface PhoneImportPreview {
+  zip: PhoneScriptsZip
+  chapters: PhoneImportChapter[]
+  /** Chapter folders in the zip with no matching chapter here. */
+  unmatched: string[]
+  /** set: series has none · replace: phone has chapter 1 · keep: desktop's is kept · same · none: zip has no about */
+  about: 'set' | 'replace' | 'keep' | 'same' | 'none'
+}
+
+export const r2Api = {
+  getStatus: () => fetchApi<R2Status>('/r2/status'),
+
+  /** From the server's copy of the phone's receipt; `fresh` re-reads it from R2 when there is no relay. */
+  getPhoneSync: (fresh = false) =>
+    fetchApi<PhoneSyncStatus>(`/r2/phone${fresh ? '?fresh=1' : ''}`),
+
+  /**
+   * With `seriesId`, also that series' chapters. The server answers from its
+   * last copy of the phone's receipt; `fresh` re-reads it from R2.
+   */
+  getPhoneScripts: (seriesId?: string, fresh = false) => {
+    const params = new URLSearchParams()
+    if (seriesId) params.set('seriesId', seriesId)
+    if (fresh) params.set('fresh', '1')
+    const query = params.toString()
+    return fetchApi<PhoneScriptsStatus>(`/r2/phone/scripts${query ? `?${query}` : ''}`)
+  },
+
+  /**
+   * With `seriesId`, also that series' chapters and the page Auto-run is on;
+   * with `chapterId`, that chapter's pages. `fresh` as for getPhoneScripts.
+   */
+  getPhoneCrops: (seriesId?: string, chapterId?: string, fresh = false) => {
+    const params = new URLSearchParams()
+    if (seriesId) params.set('seriesId', seriesId)
+    if (chapterId) params.set('chapterId', chapterId)
+    if (fresh) params.set('fresh', '1')
+    const query = params.toString()
+    return fetchApi<PhoneCropsStatus>(`/r2/phone/crops${query ? `?${query}` : ''}`)
+  },
+
+  /** Asks Sleeper-Cell to send its scripts and crops receipts again; they carry `id` in `answers`. */
+  /** All three receipts across every series; `fresh` as for getPhoneScripts. */
+  getPhoneOverview: (fresh = false) =>
+    fetchApi<PhoneOverview>(`/r2/phone/overview${fresh ? '?fresh=1' : ''}`),
+
+  requestPhoneUpdate: () =>
+    fetchApi<PhoneUpdateRequest>('/r2/phone/request', { method: 'POST' }),
+
+  /**
+   * Starts a run on the phone, through the relay: `kind` (Image Clipper when
+   * left out) on `seriesId`, with the options that run takes; Image Clipper
+   * without a series goes on with the phone's last run. Or stops whichever run
+   * is going. `device` sends it to that phone only; `split` with `assignments`
+   * sends each phone its share of the series, as planPhoneSplit planned it.
+   */
+  sendPhoneAutomation: (command: 'start' | 'stop', options: PhoneAutomationOptions = {}) =>
+    fetchApi<PhoneAutomationSent>('/r2/phone/automation', { method: 'POST', body: JSON.stringify({ command, ...options }) }),
+
+  /** Split across the phones, step 1: which phone would take which chapters, sending nothing. */
+  planPhoneSplit: (kind: PhoneRunKind, seriesId: string, language: NarrationLanguage = 'en') =>
+    fetchApi<PhoneSplitPlan>('/r2/phone/automation/plan', { method: 'POST', body: JSON.stringify({ kind, seriesId, language }) }),
+
+  /** What `kind` needs of the series on the phone, and the fixes. Editor 2.0's costs one R2 LIST: ask on demand only. */
+  getRunReadiness: (kind: PhoneRunKind, seriesId: string, language: 'en' | 'hi' = 'en') =>
+    fetchApi<PhoneRunReadiness>(`/r2/phone/readiness?${new URLSearchParams({ kind, seriesId, language })}`),
+
+  /** One fix from that checklist; `prompt` (the Editor 2.0 prompt, kept in this browser) for send_prompt. */
+  fixRunReadiness: (fix: { action: Exclude<PhoneReadinessFixAction, 'run_narration'>; seriesId: string; chapterIds?: string[]; prompt?: string }) =>
+    fetchApi<{ message: string }>('/r2/phone/readiness/fix', { method: 'POST', body: JSON.stringify(fix) }),
+
+  /** Each phone's screen state and last screenshot, from the relay. */
+  getPhoneScreens: () => fetchApi<{ phones: PhoneScreen[] }>('/r2/phone/screens'),
+
+  /**
+   * On one phone: select a browser profile (the next run starts in it), or
+   * read what one profile's ChatGPT account offers (modes, models, efforts).
+   * `profile` is the phone's own id for it (PhoneUploadProfile.profileId).
+   */
+  sendPhoneProfile: (command: 'select' | 'options', device: string, profile: string) =>
+    fetchApi<{ id: string; reached: boolean }>('/r2/phone/profile', {
+      method: 'POST',
+      body: JSON.stringify({ command, device, profile })
+    }),
+
+  /** Forgets a phone's screenshot on the server, once its viewer closes. */
+  dropPhoneScreenshot: (device: string) =>
+    fetchApi<{ ok: true; dropped: boolean }>(`/r2/phone/screens/${encodeURIComponent(device)}/screenshot`, { method: 'DELETE' }),
+
+  /** Wake (`on`, kept on until `off`), Screen off, or Screenshot (`shot`) on one phone. */
+  sendPhoneScreen: (command: 'on' | 'off' | 'shot', device: string) =>
+    fetchApi<{ id: string; reached: boolean }>('/r2/phone/screen', { method: 'POST', body: JSON.stringify({ command, device }) }),
+
+  /** Drops a phone's receipts from the relay: one no longer used, or the old app's copies. */
+  forgetPhone: (device: string) =>
+    fetchApi<{ ok: true }>('/r2/phone/forget', { method: 'POST', body: JSON.stringify({ device }) }),
+
+  getRelay: () => fetchApi<RelayStatus>('/r2/relay'),
+
+  /** A blank or missing token keeps the saved one. */
+  saveRelay: (update: { url?: string; token?: string; clearToken?: boolean }) =>
+    fetchApi<RelayStatus>('/r2/relay', { method: 'PUT', body: JSON.stringify(update) }),
+
+  testRelay: () =>
+    fetchApi<{ ok: true; receipts: { kind: string; at: number; size: number }[]; phones: number }>('/r2/relay/test', { method: 'POST' }),
+
+  getUsage: () => fetchApi<R2Usage>('/r2/usage'),
+
+  deleteObject: (key: string) =>
+    fetchApi<{ ok: true }>(`/r2/objects?key=${encodeURIComponent(key)}`, { method: 'DELETE' }),
+
+  getConfig: () => fetchApi<R2Config>('/r2/config'),
+
+  saveConfig: (update: R2ConfigUpdate) =>
+    fetchApi<R2Config>('/r2/config', { method: 'PUT', body: JSON.stringify(update) }),
+
+  test: () => fetchApi<{ ok: true; bucket: string }>('/r2/test', { method: 'POST' }),
+
+  /** Per series: chapters to send, on the phone, cleared there. Reads disk only, plus the phone's receipt. */
+  getSendPlan: (fresh = false) =>
+    fetchApi<PhoneSendPlan>(`/r2/phone-send/plan${fresh ? '?fresh=1' : ''}`),
+
+  /** Sends each series' new and changed chapters, or exactly `chapterIds`. Progress comes as `phone-send:progress`. */
+  sendToPhone: (series: { seriesId: string; chapterIds?: string[]; resetClipping?: boolean }[]) =>
+    fetchApi<PhoneSendJob>('/r2/phone-send', {
+      method: 'POST',
+      body: JSON.stringify({ series })
+    }),
+
+  setAutoSend: (seriesId: string, enabled: boolean) =>
+    fetchApi<{ ok: true }>('/r2/phone-send/auto', { method: 'PUT', body: JSON.stringify({ seriesId, enabled }) }),
+
+  /** Writes the phone's chapter index where it is behind, so its clear dialog ticks newly finished chapters. */
+  updatePhoneIndex: (seriesId?: string) =>
+    fetchApi<{ written: number }>('/r2/phone-send/index', { method: 'POST', body: JSON.stringify({ seriesId }) }),
+
+  cancel: () => fetchApi<{ job: PhoneSendJob | null }>('/r2/cancel', { method: 'POST' }),
+
+  /** Chapters the Master phone downloaded and sent that this library doesn't have. One bucket list + a GET per series index. */
+  getPhonePull: () => fetchApi<PhonePullOffer>('/r2/phone-pull'),
+
+  /** Brings the picked chapters into the library (Get chapters from phones). */
+  pullFromPhones: (series: { folder: string; chapters: string[] }[]) =>
+    fetchApi<PhonePullResult>('/r2/phone-pull', { method: 'POST', body: JSON.stringify({ series }) })
+}
+
+/** A chapter the Master phone sent (server/src/services/phonePull.ts). */
+export interface PhonePullChapter {
+  name: string
+  number: number
+  key: string
+  etag: string | null
+  sentAt: string
+  files: number
+  bytes: number
+  fingerprint: string | null
+  /** new: not here (or no pages here); changed: here, with other pages. */
+  state: 'new' | 'changed'
+}
+
+export interface PhonePullOffer {
+  configured: boolean
+  series: { folder: string; seriesId: string | null; title: string; chapters: PhonePullChapter[] }[]
+}
+
+export interface PhonePullResult {
+  pulled: { folder: string; chapter: string; pages: number }[]
+  failed: { folder: string; chapter: string; reason: string }[]
+}
+
+// ============ Page Stitcher ============
+
+/** A chapter with more pages than this is flagged for stitching; normal chapters run 14–20. */
+export const LARGE_CHAPTER_PAGES = 40
+
+export interface StitchChapterRow {
+  rootFolder?: string
+  lastActivityAt?: string
+  id: string
+  number: number
+  title: string | null
+  seriesId: string
+  seriesTitle: string
+  pageCount: number
+  /** Set while the originals are still backed up, so the stitch can be undone. */
+  stitched: { originalPages: number; stitchedAt: string } | null
+}
+
+export interface StitchPage {
+  filename: string
+  width: number
+  height: number
+  format: string
+  bytes: number
+}
+
+export interface StitchRecord {
+  stitchedAt: string
+  originals: string[]
+  excluded: string[]
+  outputs: { filename: string; sources: string[]; width: number; height: number; bytes: number }[]
+}
+
+/** One page's rows for Auto stitch: base64, one byte per row, 0 = blank. */
+export interface StitchProfile {
+  filename: string
+  rows: number
+  ink: string
+}
+
+/** Repeated intro ends / outro starts at `row` of `file`; seen in chapter `referenceNumber` too. */
+export interface StitchEdges {
+  intro: { file: string; row: number; referenceNumber: number } | null
+  outro: { file: string; row: number; referenceNumber: number } | null
+}
+
+/** A band of one page's source rows, [top, bottom). */
+export interface StitchPieceSpec {
+  file: string
+  top: number
+  bottom: number
+}
+
+/** The downloaded chapters either side of this one in its series. */
+export interface ChapterNeighbours {
+  prev: { id: string; number: number } | null
+  next: { id: string; number: number } | null
+}
+
+export interface StitchChapterState {
+  chapterId: string
+  number: number
+  title: string | null
+  seriesId: string
+  seriesTitle: string
+  /** Tallest page a multi-page group may produce. */
+  maxHeight: number
+  pages: StitchPage[]
+  record: StitchRecord | null
+  backupBytes: number
+  blockers: string[]
+  neighbours: ChapterNeighbours
+}
+
+export const stitchApi = {
+  getChapters: () => fetchApi<StitchChapterRow[]>('/stitch/chapters'),
+
+  getChapter: (id: string) => fetchApi<StitchChapterState>(`/stitch/chapters/${id}`),
+
+  /** `version` busts the cache: file names are reused across a stitch and its undo. */
+  thumbUrl: (id: string, filename: string, version: string) =>
+    `${API_BASE}/stitch/chapters/${id}/thumb/${encodeURIComponent(filename)}?v=${encodeURIComponent(version)}`,
+
+  imageUrl: (id: string, filename: string, version: string) =>
+    `${API_BASE}/stitch/chapters/${id}/image/${encodeURIComponent(filename)}?v=${encodeURIComponent(version)}`,
+
+  /** Row profiles, plus where art repeated from nearby chapters (intro / outro) ends and starts. */
+  profiles: (id: string) =>
+    fetchApi<{ profileWidth: number; profiles: StitchProfile[]; edges: StitchEdges }>(
+      `/stitch/chapters/${id}/profiles`
+    ),
+
+  /** Each group is one output page: whole pages by name, cut pages as row pieces. */
+  stitch: (id: string, groups: (string | StitchPieceSpec)[][]) =>
+    fetchApi<{ originalPages: number; stitchedPages: number; excluded: number }>(`/stitch/chapters/${id}`, {
+      method: 'POST',
+      body: JSON.stringify({ groups })
+    }),
+
+  undo: (id: string) => fetchApi<{ ok: true }>(`/stitch/chapters/${id}/undo`, { method: 'POST' }),
+
+  discardBackup: (id: string) =>
+    fetchApi<{ ok: true }>(`/stitch/chapters/${id}/backup`, { method: 'DELETE' })
+}
+
+// ============ Chapter page preview ============
+
+export interface DeletedPage {
+  filename: string
+  deletedAt: string
+  width: number
+  height: number
+  bytes: number
+}
+
+export interface ChapterPagesState {
+  chapterId: string
+  number: number
+  title: string | null
+  seriesId: string
+  seriesTitle: string
+  pages: StitchPage[]
+  /** Pages in the chapter's bin, restorable until the bin is emptied. */
+  deleted: DeletedPage[]
+  blockers: string[]
+  neighbours: ChapterNeighbours
+}
+
+export const pagePreviewApi = {
+  getChapter: (id: string) => fetchApi<ChapterPagesState>(`/page-preview/chapters/${id}`),
+
+  deletePages: (id: string, filenames: string[]) =>
+    fetchApi<{ deleted: number }>(`/page-preview/chapters/${id}/delete`, {
+      method: 'POST',
+      body: JSON.stringify({ filenames })
+    }),
+
+  restorePages: (id: string, filenames: string[]) =>
+    fetchApi<{ restored: number }>(`/page-preview/chapters/${id}/restore`, {
+      method: 'POST',
+      body: JSON.stringify({ filenames })
+    }),
+
+  emptyBin: (id: string) => fetchApi<{ removed: number }>(`/page-preview/chapters/${id}/bin`, { method: 'DELETE' }),
+
+  /** Live pages use the stitcher's thumb/image endpoints; this one reads the bin. */
+  binThumbUrl: (id: string, filename: string) =>
+    `${API_BASE}/page-preview/chapters/${id}/bin/${encodeURIComponent(filename)}/thumb`
+}
+
+import type { ManagerOverview } from '../../../server/src/services/managerProtocol'
+export type { ManagerOverview }
+export const managersApi = {
+  get: () => fetchApi<ManagerOverview>('/managers'),
+  acknowledge: (incidentId: string, notificationId: string) => fetchApi('/managers/acknowledge', { method: 'POST', body: JSON.stringify({ incidentId, notificationId }) })
 }

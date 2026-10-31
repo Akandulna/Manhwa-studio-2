@@ -1,0 +1,96 @@
+{
+  "checkedAt": "2026-10-19T18:45:27.783Z",
+  "status": 200,
+  "selection": {
+    "checkedAt": "2026-10-19T18:45:00.460Z",
+    "selectedByOwner": "anything pending",
+    "series": {
+      "id": "979f30e7-110a-433e-9150-680c6e1fb3b7",
+      "title": "Sandmancer of the Scorched Desert"
+    },
+    "chapter": {
+      "id": "01fef395-d351-41bc-911a-9b4e7e035cd8",
+      "number": 1
+    },
+    "page": {
+      "id": "4e3e6a40-b81a-4347-ba49-abce0df2c5d1",
+      "index": 1,
+      "ordinal": 1,
+      "filename": "page_001.jpg",
+      "bytes": 317920,
+      "sha256": "9966acd8c0fae11c398594fac034b8b1ca0e3d16c5ca615a66a1f67d89e520c2",
+      "width": 800,
+      "height": 8070
+    },
+    "folder": "Sandmancer of the Scorched Desert/Chapter 001",
+    "legacyPointsExist": false,
+    "legacyMetadataExist": false,
+    "managedBindingExists": false,
+    "phoneSourceHashMatches": true,
+    "provider": "chatgpt",
+    "deviceId": "304527cb8fc1440a",
+    "profileId": "profile-1",
+    "model": "provider-default",
+    "scope": "Read-only pending candidate selection; no enrollment, binding, claim or provider action."
+  },
+  "response": {
+    "schema": "managed-task/1",
+    "task": {
+      "workspaceId": "studio_01df7f214f87472e802b2bc43b8d9165",
+      "seriesId": "7c5ac077-2b43-478c-aadd-8116190d0a96",
+      "chapterId": "d5fd1a64-2eef-472d-aeea-8813307af423",
+      "pageId": "page_bcc6a095f68d5cd3b6c4b8875029a7374c8cbed3f66baa28f64f209b72b7545b",
+      "id": "task:sha256:cee56902b889bc86272711d485ac7ad3de3af7b4bdc908a3ba6744a31e9ff7ba",
+      "fingerprint": "ef480191274e08875d691483e480016815e9f1acbdeec71646f767e6735e869b",
+      "spec": {
+        "version": "crop-page/1",
+        "provider": "chatgpt",
+        "product": "chatgpt-web",
+        "model": "provider-default",
+        "settings": {
+          "mode": null,
+          "effort": null
+        },
+        "pageRevision": "sha256:9966acd8c0fae11c398594fac034b8b1ca0e3d16c5ca615a66a1f67d89e520c2",
+        "promptVersion": "managed-chatgpt-default-crop/1",
+        "validatorVersion": "managed-crop-validator/1",
+        "dependencies": [
+          {
+            "id": "page_bcc6a095f68d5cd3b6c4b8875029a7374c8cbed3f66baa28f64f209b72b7545b",
+            "revision": "sha256:9966acd8c0fae11c398594fac034b8b1ca0e3d16c5ca615a66a1f67d89e520c2",
+            "sha256": "9966acd8c0fae11c398594fac034b8b1ca0e3d16c5ca615a66a1f67d89e520c2"
+          }
+        ]
+      },
+      "state": "assigned",
+      "generation": 1,
+      "attemptId": "ef0dcaed-6a75-4423-9276-e65ec9f44c80",
+      "canonical": null
+    },
+    "attempt": {
+      "id": "ef0dcaed-6a75-4423-9276-e65ec9f44c80",
+      "activeCommandId": "e6e4e723-62c6-4fa4-8497-4554e6a868be",
+      "taskId": "task:sha256:cee56902b889bc86272711d485ac7ad3de3af7b4bdc908a3ba6744a31e9ff7ba",
+      "generation": 1,
+      "deviceId": "304527cb8fc1440a",
+      "profileId": "profile-1",
+      "accountId": null,
+      "leaseExpiresAt": "2026-10-19T18:50:27.512Z",
+      "phase": "assigned",
+      "submission": "unsent",
+      "checkpointRef": null
+    },
+    "commands": [
+      {
+        "id": "e6e4e723-62c6-4fa4-8497-4554e6a868be",
+        "taskId": "task:sha256:cee56902b889bc86272711d485ac7ad3de3af7b4bdc908a3ba6744a31e9ff7ba",
+        "attemptId": "ef0dcaed-6a75-4423-9276-e65ec9f44c80",
+        "generation": 1,
+        "fingerprint": "ef480191274e08875d691483e480016815e9f1acbdeec71646f767e6735e869b",
+        "action": "start",
+        "phase": "queued"
+      }
+    ]
+  },
+  "scope": "Owner requested a different genuinely pending page. Prior attempt stopped/unsent and capacity released. Current installed APK 1.0.135; startup hardening is source-only. No manual or automatic prompt retry."
+}

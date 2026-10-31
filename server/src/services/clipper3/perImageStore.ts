@@ -1,3 +1,4 @@
+import {readManagedChapterAssets} from '../managedChapterAssets.js'
 /**
  * Image Clipper 3.0 — per-image crop artifacts on disk.
  *
@@ -12,17 +13,17 @@
  *  - An image is "done" if and only if its own JSON exists. Nothing is inferred
  *    from geometry, and one image's crops can never imply another's state.
  *
- * That last property is the whole reason this module exists separately from
- * clipper2/pointerStore: sharing the chapter-wide artifact made one page's
- * paste leak into every other page's status.
+ * That last property is the reason artifacts are per image: a chapter-wide
+ * artifact would let one page's paste leak into every other page's status.
  *
  * Paths and bytes only — no express, no image decoding.
  */
 
 import fs from 'fs/promises'
 import path from 'path'
+import { readManagedCrop, managedCropStems, managedCropBindingCount, withUnmanagedCropWrite } from '../managedCropProjection.js'
 
-/** Mirrors clipperService.getFullFolderPath / clipper2's pointerStore. */
+/** Resolve a stored (possibly relative) chapter path against DOWNLOAD_ROOT. */
 function getFullFolderPath(relativePath: string): string {
   const downloadRoot = process.env.DOWNLOAD_ROOT || './downloads'
   return path.join(downloadRoot, relativePath)
@@ -138,6 +139,11 @@ export function extractCrops(file: Clipper3ImageCropFile | null): Clipper3CropEn
       entry.crop.points.length === 4 &&
       entry.crop.points.every(p => Number.isFinite(p?.x) && Number.isFinite(p?.y))
   )
+}
+
+/** An explicit empty crop list is a finished page that needs no cuts. */
+export function hasNoCrops(file: Clipper3ImageCropFile | null): boolean {
+  return file != null && Array.isArray(file.crops) && file.crops.length === 0
 }
 
 // ============ Metadata validation ============
@@ -417,6 +423,8 @@ export async function readImagePoints(
   folderPath: string,
   imageFilename: string
 ): Promise<{ text: string; file: Clipper3ImageCropFile | null } | null> {
+  const managed = await readManagedCrop(folderPath, imageFilename)
+  if (managed !== undefined) return managed ? { text: managed.pointers, file: JSON.parse(managed.pointers) as Clipper3ImageCropFile } : null
   let text: string
   try {
     text = await fs.readFile(getPointsFilePathFor(folderPath, imageFilename), 'utf-8')
@@ -438,19 +446,23 @@ export async function writeImagePoints(
   imageFilename: string,
   file: Clipper3ImageCropFile
 ): Promise<string> {
-  await ensurePointsDir(folderPath)
-  const target = getPointsFilePathFor(folderPath, imageFilename)
-  await fs.writeFile(target, JSON.stringify(file, null, 2), 'utf-8')
-  return path.resolve(target)
+  return withUnmanagedCropWrite(folderPath, imageFilename, async () => {
+    await ensurePointsDir(folderPath)
+    const target = getPointsFilePathFor(folderPath, imageFilename)
+    await fs.writeFile(target, JSON.stringify(file, null, 2), 'utf-8')
+    return path.resolve(target)
+  })
 }
 
 export async function deleteImagePoints(folderPath: string, imageFilename: string): Promise<boolean> {
-  try {
-    await fs.unlink(getPointsFilePathFor(folderPath, imageFilename))
-    return true
-  } catch {
-    return false
-  }
+  return withUnmanagedCropWrite(folderPath, imageFilename, async () => {
+    try {
+      await fs.unlink(getPointsFilePathFor(folderPath, imageFilename))
+      return true
+    } catch {
+      return false
+    }
+  })
 }
 
 // ============ Metadata ============
@@ -460,6 +472,8 @@ export async function readImageMetadata(
   folderPath: string,
   imageFilename: string
 ): Promise<string | null> {
+  const managed = await readManagedCrop(folderPath, imageFilename)
+  if (managed !== undefined) return managed?.metadata ?? null
   try {
     return await fs.readFile(getMetadataFilePathFor(folderPath, imageFilename), 'utf-8')
   } catch {
@@ -472,10 +486,12 @@ export async function writeImageMetadata(
   imageFilename: string,
   content: string
 ): Promise<string> {
-  await fs.mkdir(getMetadataDir(folderPath), { recursive: true })
-  const target = getMetadataFilePathFor(folderPath, imageFilename)
-  await fs.writeFile(target, content, 'utf-8')
-  return path.resolve(target)
+  return withUnmanagedCropWrite(folderPath, imageFilename, async () => {
+    await fs.mkdir(getMetadataDir(folderPath), { recursive: true })
+    const target = getMetadataFilePathFor(folderPath, imageFilename)
+    await fs.writeFile(target, content, 'utf-8')
+    return path.resolve(target)
+  })
 }
 
 /** One page whose metadata names a file that is not in crops3/. */
@@ -548,28 +564,32 @@ export async function findUnresolvedMetadataNames(folderPath: string): Promise<U
 }
 
 export async function deleteImageMetadata(folderPath: string, imageFilename: string): Promise<boolean> {
-  try {
-    await fs.unlink(getMetadataFilePathFor(folderPath, imageFilename))
-    return true
-  } catch {
-    return false
-  }
+  return withUnmanagedCropWrite(folderPath, imageFilename, async () => {
+    try {
+      await fs.unlink(getMetadataFilePathFor(folderPath, imageFilename))
+      return true
+    } catch {
+      return false
+    }
+  })
 }
 
 /** Every image stem that currently has a metadata document on disk. */
 export async function listMetadataImageStems(folderPath: string): Promise<Set<string>> {
+  const managed = await managedCropStems(folderPath)
+  const merge = (values: Set<string>) => new Set([...values].filter(v => !managed.bound.has(v)).concat([...managed.verified]))
   const dir = getMetadataDir(folderPath)
   let entries: string[]
   try {
     entries = await fs.readdir(dir)
   } catch {
-    return new Set()
+    return merge(new Set())
   }
-  return new Set(
+  return merge(new Set(
     entries
       .filter(name => name.toLowerCase().endsWith('.txt'))
       .map(name => name.replace(/\.txt$/i, ''))
-  )
+  ))
 }
 
 /**
@@ -580,18 +600,20 @@ export async function listMetadataImageStems(folderPath: string): Promise<Set<st
  * answers for `page_003.webp` just as well as `page_003.png`.
  */
 export async function listPointedImageStems(folderPath: string): Promise<Set<string>> {
+  const managed = await managedCropStems(folderPath)
+  const merge = (values: Set<string>) => new Set([...values].filter(v => !managed.bound.has(v)).concat([...managed.verified]))
   const dir = getPointsDir(folderPath)
   let entries: string[]
   try {
     entries = await fs.readdir(dir)
   } catch {
-    return new Set()
+    return merge(new Set())
   }
-  return new Set(
+  return merge(new Set(
     entries
       .filter(name => name.toLowerCase().endsWith('.json'))
       .map(name => name.replace(/\.json$/i, ''))
-  )
+  ))
 }
 
 /** The stem used to match an image against a stored artifact. */
@@ -621,4 +643,131 @@ export async function listOutputs(folderPath: string): Promise<{ filename: strin
     }
   }
   return files
+}
+
+/**
+ * When the chapter was last cut: the newest modification time in crops3/, or
+ * null when nothing has been cut. Only the cutter writes there.
+ */
+export async function latestOutputTime(folderPath: string): Promise<number | null> {
+  const dir = getOutputDir(folderPath)
+  let latest: number | null = null
+  for (const { filename } of await listOutputs(folderPath)) {
+    try {
+      const time = (await fs.stat(path.join(dir, filename))).mtimeMs
+      if (latest == null || time > latest) latest = time
+    } catch {
+      // Vanished since the listing — not part of the cut any more.
+    }
+  }
+  return latest
+}
+
+/** How the chapter's crops3/ compares with what its pages say should be cut. */
+export interface ChapterCropOutputs {
+  /** Every page is done and crops3/ holds exactly the files those pages cut to. */
+  complete: boolean
+  files: number
+  /** Expected files not on disk — a page done after the last cut, or a failed crop. */
+  missing: number
+  /** Files no done page accounts for — left over from older pointers. */
+  extra: number
+  /**
+   * Done pages whose pointers were rewritten after their files were cut.
+   * Names alone can't show this: moving or resizing a crop keeps its
+   * exportedFilename, so the old PNG still "matches" while showing the wrong
+   * part of the page.
+   */
+  changed: number
+}
+
+/** A file's modification time, or null when it can't be read. */
+async function mtimeOf(file: string): Promise<number | null> {
+  try {
+    return (await fs.stat(file)).mtimeMs
+  } catch {
+    return null
+  }
+}
+
+/**
+ * `expected` is every exported name of the chapter's done pages. Read from disk
+ * each time rather than remembered from the last run, so re-pasting a page
+ * after cropping shows the chapter as needing another cut.
+ *
+ * `donePages` (the done images' filenames, and the series slug the cutter
+ * prefixes them with) adds the `changed` check: a page whose crop_points3 file
+ * is newer than the oldest of its cut files was edited — by hand, by an
+ * export, or by Sync json applying a phone review — since it was cut. Only
+ * the cutter writes crops3/, so the two times are directly comparable.
+ */
+export async function chapterCropOutputs(
+  folderPath: string,
+  expected: string[],
+  allPagesDone: boolean,
+  donePages?: { slug: string; filenames: string[] }
+): Promise<ChapterCropOutputs> {
+  if(await managedCropBindingCount(folderPath)) {
+    try {const managed=await readManagedChapterAssets(folderPath);return {complete:!!managed,files:managed?.assets.length??0,missing:0,extra:0,changed:0}}
+    catch {return {complete:false,files:0,missing:0,extra:0,changed:1}}
+  }
+  const onDisk = new Set((await listOutputs(folderPath)).map(f => f.filename))
+  const wanted = new Set(expected)
+  const missing = [...wanted].filter(name => !onDisk.has(name)).length
+  const extra = [...onDisk].filter(name => !wanted.has(name)).length
+
+  // Managed cut output needs its own publication fence; legacy PNGs cannot complete it.
+  let changed = await managedCropBindingCount(folderPath)
+  if (donePages) {
+    const dir = getOutputDir(folderPath)
+    for (const filename of donePages.filenames) {
+      if(await readManagedCrop(folderPath,filename)!==undefined)continue
+      // The cutter's own naming (perImageCrop.ts): `<slug>_<stem>_NN…png`.
+      const prefix = `${donePages.slug}_${stemOf(filename)}_`
+      const cut = [...onDisk].filter(name => name.startsWith(prefix) && wanted.has(name))
+      if (cut.length === 0) continue // not cut yet: `missing` already says so
+      const pointsTime = await mtimeOf(getPointsFilePathFor(folderPath, filename))
+      if (pointsTime == null) continue
+      const cutTimes = (await Promise.all(cut.map(name => mtimeOf(path.join(dir, name)))))
+        .filter((t): t is number => t != null)
+      if (cutTimes.length > 0 && pointsTime > Math.min(...cutTimes)) changed++
+    }
+  }
+
+  return {
+    complete: allPagesDone && missing === 0 && extra === 0 && changed === 0,
+    files: onDisk.size,
+    missing,
+    extra,
+    changed
+  }
+}
+
+/**
+ * After a cut: delete every output the run did not write, so cropping again
+ * replaces the chapter's crops instead of piling new names beside old ones
+ * (a renamed reason or a dropped crop changes the filename). `keepStems` are
+ * pages whose cut failed outright — their previous files stay rather than
+ * leaving the page with nothing.
+ */
+export async function removeStaleOutputs(
+  folderPath: string,
+  written: Set<string>,
+  slug: string,
+  keepStems: string[]
+): Promise<string[]> {
+  const dir = getOutputDir(folderPath)
+  const keepPrefixes = keepStems.map(stem => `${slug}_${stem}_`)
+  const removed: string[] = []
+  for (const { filename } of await listOutputs(folderPath)) {
+    if (written.has(filename)) continue
+    if (keepPrefixes.some(prefix => filename.startsWith(prefix))) continue
+    try {
+      await fs.unlink(path.join(dir, filename))
+      removed.push(filename)
+    } catch {
+      // Already gone — nothing to replace.
+    }
+  }
+  return removed
 }

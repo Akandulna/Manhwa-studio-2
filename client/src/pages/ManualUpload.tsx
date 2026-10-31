@@ -12,7 +12,6 @@ import {
   Upload, 
   Loader2, 
   Check, 
-  X, 
   FolderPlus,
   Image,
   Trash2,
@@ -584,7 +583,7 @@ export default function ManualUpload() {
                       <Label className="text-sm">Uploaded Files</Label>
                       <ScrollArea className="h-48 border rounded-lg">
                         <div className="p-2 space-y-1">
-                          {chapterFiles.files.map((filename, idx) => (
+                          {chapterFiles.files.map((filename) => (
                             <div 
                               key={filename}
                               className="flex items-center justify-between p-2 rounded hover:bg-accent group"

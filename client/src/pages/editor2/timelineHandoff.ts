@@ -15,12 +15,34 @@
  * paste. That state is what turns Start Processing into Preview, and it is
  * cleared the moment a different JSON is pasted, so a new paste always has to
  * be processed before it can be previewed.
+ *
+ * localStorage is per browser, though — Chrome and the desktop app each have
+ * their own — so it is only a synchronous cache. Every change is also pushed
+ * to the server (one row per chapter), and syncSeriesTimelines /
+ * syncChapterTimeline reconcile the two before a screen reads the cache.
+ * Each chapter carries the time of its last local change; whichever side
+ * changed last wins, in both directions.
+ *
+ * English and Hindi are separate videos of the same chapter, so everything
+ * here is keyed by chapter AND language. English keeps the bare chapter-id
+ * keys it always had (existing caches stay valid); Hindi adds an `@hi` suffix.
  */
+
+import { videoApi2, type StoredTimeline2 } from '@/lib/api'
+import type { NarrationLanguage } from '@/lib/narrationLanguage'
+
+const MODEL_PREFIX = 'editor2:model:'
+
+export function getTimelineModel(chapterId: string, lang: NarrationLanguage): string | null {
+  return read(`${MODEL_PREFIX}${keyOf(chapterId, lang)}`)
+}
 
 const JSON_PREFIX = 'editor2:timeline-json:'
 const PROCESSED_PREFIX = 'editor2:processed:'
 const SCROLL_PREFIX = 'editor2:scroll:'
 const EXPANDED_PREFIX = 'editor2:expanded:'
+/** Epoch ms of a chapter's last local change, compared against the server's. */
+const UPDATED_PREFIX = 'editor2:updated:'
 
 /** Read a value, treating unavailable storage as simply "nothing stored". */
 function read(key: string): string | null {
@@ -71,9 +93,14 @@ function remove(key: string): void {
   }
 })()
 
+/** Cache key for one chapter in one language. */
+function keyOf(chapterId: string, lang: NarrationLanguage): string {
+  return lang === 'en' ? chapterId : `${chapterId}@${lang}`
+}
+
 /** The JSON handed to the preview screen for one chapter. */
-export function getTimelineJson(chapterId: string): string | null {
-  return read(`${JSON_PREFIX}${chapterId}`)
+export function getTimelineJson(chapterId: string, lang: NarrationLanguage): string | null {
+  return read(`${JSON_PREFIX}${keyOf(chapterId, lang)}`)
 }
 
 /**
@@ -83,29 +110,54 @@ export function getTimelineJson(chapterId: string): string | null {
  * processed marker: the new paste has not been through the processor yet, so
  * the card must ask for processing rather than offering a stale preview.
  */
-export function setTimelineJson(chapterId: string, json: string): boolean {
-  if (getProcessedJson(chapterId) !== json) clearProcessed(chapterId)
-  return write(`${JSON_PREFIX}${chapterId}`, json)
+export function setTimelineJson(chapterId: string, lang: NarrationLanguage, json: string): boolean {
+  if (getTimelineJson(chapterId, lang)?.trim() !== json.trim()) remove(`${MODEL_PREFIX}${keyOf(chapterId, lang)}`)
+  if (getProcessedJson(chapterId, lang) !== json) clearProcessed(chapterId, lang)
+  const ok = write(`${JSON_PREFIX}${keyOf(chapterId, lang)}`, json)
+  if (ok) touch(chapterId, lang)
+  return ok
 }
 
 /** The exact JSON that last processed successfully, if any. */
-export function getProcessedJson(chapterId: string): string | null {
-  return read(`${PROCESSED_PREFIX}${chapterId}`)
+export function getProcessedJson(chapterId: string, lang: NarrationLanguage): string | null {
+  return read(`${PROCESSED_PREFIX}${keyOf(chapterId, lang)}`)
 }
 
 /** Record that this JSON processed successfully for this chapter. */
-export function markProcessed(chapterId: string, json: string): void {
-  write(`${PROCESSED_PREFIX}${chapterId}`, json)
+export function markProcessed(chapterId: string, lang: NarrationLanguage, json: string): void {
+  write(`${PROCESSED_PREFIX}${keyOf(chapterId, lang)}`, json)
+  touch(chapterId, lang)
 }
 
-export function clearProcessed(chapterId: string): void {
-  remove(`${PROCESSED_PREFIX}${chapterId}`)
+export function clearProcessed(chapterId: string, lang: NarrationLanguage): void {
+  if (getProcessedJson(chapterId, lang) === null) return
+  remove(`${PROCESSED_PREFIX}${keyOf(chapterId, lang)}`)
+  touch(chapterId, lang)
 }
 
 /** Forget a chapter's paste entirely (used by the card's Clear button). */
-export function clearTimeline(chapterId: string): void {
-  remove(`${JSON_PREFIX}${chapterId}`)
-  clearProcessed(chapterId)
+export function clearTimeline(chapterId: string, lang: NarrationLanguage): void {
+  remove(`${MODEL_PREFIX}${keyOf(chapterId, lang)}`)
+  remove(`${JSON_PREFIX}${keyOf(chapterId, lang)}`)
+  clearProcessed(chapterId, lang)
+  // Pushed as an empty paste rather than deleted, so another browser still
+  // holding the old one drops it instead of uploading it back.
+  touch(chapterId, lang)
+}
+
+/** Persist a reset before allowing another phone send/fetch. Keep the empty
+ * row as a tombstone so stale browser and phone results cannot restore it. */
+export async function resetTimeline(chapterId: string, lang: NarrationLanguage): Promise<void> {
+  clearTimeline(chapterId, lang)
+  const key = keyOf(chapterId, lang)
+  const pending = pushTimers.get(key)
+  if (pending) clearTimeout(pending)
+  pushTimers.delete(key)
+  const row = await videoApi2.saveStoredTimeline(chapterId, lang, {
+    json: '', processedJson: null, updatedAt: localUpdatedAt(key)
+  })
+  applyStored(row, lang)
+  if (row.json || row.processedJson) throw new Error('The timeline changed elsewhere. Please reset it again.')
 }
 
 /**
@@ -114,9 +166,15 @@ export function clearTimeline(chapterId: string): void {
  * Compared by content, not by a flag, so editing the pasted text in the box
  * correctly sends it back to needing processing.
  */
-export function isProcessed(chapterId: string, content: string): boolean {
-  const processed = getProcessedJson(chapterId)
+export function isProcessed(chapterId: string, lang: NarrationLanguage, content: string): boolean {
+  const processed = getProcessedJson(chapterId, lang)
   return processed !== null && processed === content
+}
+
+/** A saved video predating the current processed state needs a fresh render. */
+export function isProcessedAfter(chapterId: string, lang: NarrationLanguage, exportedAt: number): boolean {
+  const content = getTimelineJson(chapterId, lang)
+  return !!content && isProcessed(chapterId, lang, content) && localUpdatedAt(keyOf(chapterId, lang)) > exportedAt
 }
 
 /**
@@ -126,13 +184,128 @@ export function isProcessed(chapterId: string, content: string): boolean {
  * what last processed successfully — so the export can only ever be offered
  * the exact content the user has already previewed.
  */
-export function collectProcessed(chapterIds: string[]): { chapterId: string; json: string }[] {
+export function collectProcessed(chapterIds: string[], lang: NarrationLanguage): { chapterId: string; json: string }[] {
   const out: { chapterId: string; json: string }[] = []
   for (const chapterId of chapterIds) {
-    const json = getTimelineJson(chapterId)
-    if (json && isProcessed(chapterId, json)) out.push({ chapterId, json })
+    const json = getTimelineJson(chapterId, lang)
+    if (json && isProcessed(chapterId, lang, json)) out.push({ chapterId, json })
   }
   return out
+}
+
+// ============ Server sync ============
+
+const PUSH_DELAY_MS = 800
+const pushTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+function localUpdatedAt(key: string): number {
+  const n = Number(read(`${UPDATED_PREFIX}${key}`))
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+
+/** Whether this browser holds anything for the chapter, cleared state included. */
+function hasLocalState(key: string): boolean {
+  return (
+    read(`${UPDATED_PREFIX}${key}`) !== null ||
+    read(`${JSON_PREFIX}${key}`) !== null ||
+    read(`${PROCESSED_PREFIX}${key}`) !== null
+  )
+}
+
+/** Stamp a local change and schedule pushing it (debounced: the box autosaves per keystroke). */
+function touch(chapterId: string, lang: NarrationLanguage): void {
+  const key = keyOf(chapterId, lang)
+  write(`${UPDATED_PREFIX}${key}`, String(Date.now()))
+  const pending = pushTimers.get(key)
+  if (pending) clearTimeout(pending)
+  pushTimers.set(key, setTimeout(() => {
+    pushTimers.delete(key)
+    void pushLocal(chapterId, lang)
+  }, PUSH_DELAY_MS))
+}
+
+/**
+ * Send this browser's copy of a chapter to the server. A failure is left
+ * alone: the local stamp stays newer, so the next sync pushes it again.
+ */
+async function pushLocal(chapterId: string, lang: NarrationLanguage): Promise<void> {
+  const key = keyOf(chapterId, lang)
+  let updatedAt = localUpdatedAt(key)
+  if (updatedAt === 0) {
+    // Written before the server copy existed — stamp it now so it uploads.
+    updatedAt = Date.now()
+    write(`${UPDATED_PREFIX}${key}`, String(updatedAt))
+  }
+  try {
+    await videoApi2.saveStoredTimeline(chapterId, lang, {
+      json: getTimelineJson(chapterId, lang) ?? '',
+      processedJson: getProcessedJson(chapterId, lang),
+      updatedAt
+    })
+  } catch (err) {
+    console.warn('[editor2] could not save the timeline to the server:', err)
+  }
+}
+
+/** Overwrite this browser's copy with the server's. */
+function applyStored(row: StoredTimeline2, lang: NarrationLanguage): void {
+  const key = keyOf(row.chapterId, lang)
+  if (row.model && row.json) write(`${MODEL_PREFIX}${key}`, row.model)
+  else remove(`${MODEL_PREFIX}${key}`)
+  if (row.json) write(`${JSON_PREFIX}${key}`, row.json)
+  else remove(`${JSON_PREFIX}${key}`)
+  if (row.processedJson !== null) write(`${PROCESSED_PREFIX}${key}`, row.processedJson)
+  else remove(`${PROCESSED_PREFIX}${key}`)
+  write(`${UPDATED_PREFIX}${key}`, String(row.updatedAt))
+}
+
+/** Settle one chapter between the cache and the server row, newest winning. */
+function reconcile(
+  chapterId: string,
+  lang: NarrationLanguage,
+  row: StoredTimeline2 | undefined
+): Promise<void> | void {
+  const key = keyOf(chapterId, lang)
+  // A push still waiting on its debounce is newer than anything stored.
+  if (pushTimers.has(key)) return
+  const local = localUpdatedAt(key)
+  if (row && row.updatedAt >= local) return applyStored(row, lang)
+  if (hasLocalState(key) && (!row || local > row.updatedAt)) return pushLocal(chapterId, lang)
+}
+
+/**
+ * Bring the cache in line with the server for these chapters — call before
+ * reading any of them. Downloads what another browser processed, and uploads
+ * what only this browser has (including pastes from before the server copy
+ * existed). If the server cannot be reached the cache is used as it is.
+ */
+export async function syncSeriesTimelines(
+  seriesId: string,
+  lang: NarrationLanguage,
+  chapterIds: string[]
+): Promise<void> {
+  let rows: StoredTimeline2[]
+  try {
+    rows = await videoApi2.getStoredTimelines(seriesId, lang)
+  } catch (err) {
+    console.warn('[editor2] could not load stored timelines:', err)
+    return
+  }
+  const byChapter = new Map(rows.map(r => [r.chapterId, r]))
+  // Uploads don't hold up the screen: the cache already has what they send.
+  for (const chapterId of chapterIds) void reconcile(chapterId, lang, byChapter.get(chapterId))
+}
+
+/** syncSeriesTimelines for a single chapter (the preview opened directly). */
+export async function syncChapterTimeline(chapterId: string, lang: NarrationLanguage): Promise<void> {
+  let row: StoredTimeline2 | null
+  try {
+    row = await videoApi2.getStoredTimeline(chapterId, lang)
+  } catch (err) {
+    console.warn('[editor2] could not load the stored timeline:', err)
+    return
+  }
+  void reconcile(chapterId, lang, row ?? undefined)
 }
 
 // ============ View state: where the user was on the list ============

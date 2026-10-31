@@ -1,19 +1,27 @@
+import {TaskConflict} from '../services/managedTaskProtocol.js'
+import {managedChapterImage} from '../services/managedChapterAssets.js'
 /**
  * Video Editor 2.0 routes — Module 4v2
  *
- * Phase 1: series → chapter readiness only. The compile/timeline/render
- * workspace lands in a later phase.
+ * Series → chapters with a four-item readiness checklist (voiceover audio,
+ * alignment, timeline JSON, cropped images; videoEditor2Service.ts), the two
+ * ways a chapter's timeline JSON arrives (Copy All → ChatGPT → paste, or the
+ * phone through R2), Check Images, Preview and Export. Preview and Export
+ * refuse a chapter whose checklist isn't complete.
  */
 
 import { Router, Request, Response } from 'express'
+import { reconcileQuietly } from '../services/diskReconcile.js'
 import { createReadStream, existsSync, statSync } from 'fs'
 import path from 'path'
 import { Server } from 'socket.io'
 import { prisma } from '../index.js'
 import {
+  getChapterBlockers,
   getChapterCropMetadataBundle,
   getChapterTimelineBundle,
-  getEditableChapters2
+  getEditableChapters2,
+  getSeriesCompletion2
 } from '../services/videoEditor2Service.js'
 import { processTimelineJson } from '../services/editor2Timeline.js'
 import {
@@ -27,18 +35,77 @@ import {
   startBatchExport,
   type Export2Input
 } from '../services/editor2Export.js'
+import { NarrationLanguage, requestLanguage } from '../services/narrationLanguage.js'
+import { fetchPhoneTimelines, getEditorPrompt, saveEditorPrompt, sendEditorPackages } from '../services/phoneEditor.js'
+import { queueEditorPublish } from '../services/editorAutoPublish.js'
+import { editorWorkflowSession } from '../services/editorWorkflowStore.js'
+import { WorkflowReplyError } from '../services/editorWorkflow.js'
 
 export function initVideoEditor2Routes(io: Server): Router {
   const router = Router()
+  router.get('/chapters/:id/managed-image/:filename',async(req,res)=>{
+    try {
+      if(typeof req.query.revision!=='string'||!/^[a-f0-9]{64}$/.test(req.query.revision))throw new Error('Exact managed chapter revision required')
+      const chapter=await prisma.chapter.findUnique({where:{id:req.params.id},select:{folderPath:true}})
+      if(!chapter)return res.status(404).json({error:'Chapter not found'})
+      const bytes=await managedChapterImage(chapter.folderPath,req.query.revision,req.params.filename)
+      res.set('Cache-Control','no-store').type('png').send(bytes)
+    }catch(error){res.status(409).json({error:(error as Error).message})}
+  })
+
+  // GET is read-only; POST accepts only the current task and writes a resumable checkpoint.
+  router.get('/chapters/:id/staged-timeline', async (req, res) => {
+    try { res.json(await editorWorkflowSession(req.params.id, requestLanguage(req))) }
+    catch (e) { res.status(400).json({ error: (e as Error).message }) }
+  })
+  router.post('/chapters/:id/staged-timeline', async (req, res) => {
+    try {
+      const { taskId, fingerprint, reply, reset } = req.body ?? {}
+      if (typeof reset === 'string') return res.json(await editorWorkflowSession(req.params.id, requestLanguage(req), { reset }))
+      if (![taskId, fingerprint, reply].every(v => typeof v === 'string') || reply.length > 20000) return res.status(400).json({ error: 'taskId, fingerprint and a JSON reply of up to 20,000 characters are required' })
+      res.json(await editorWorkflowSession(req.params.id, requestLanguage(req), { taskId, fingerprint, reply }))
+    } catch (e) { res.status(400).json({ error: (e as Error).message, ...(e instanceof WorkflowReplyError ? { repairPrompt: e.repairPrompt } : {}) }) }
+  })
 
   /** GET /series/:seriesId/editable-chapters */
   router.get('/series/:seriesId/editable-chapters', async (req: Request, res: Response) => {
     try {
-      const chapters = await getEditableChapters2(req.params.seriesId)
+      await reconcileQuietly()
+      const chapters = await getEditableChapters2(req.params.seriesId, requestLanguage(req))
       res.json(chapters)
     } catch (error) {
       console.error('[videoEditor2] listing editable chapters failed:', error)
       res.status(500).json({ error: 'Failed to list editable chapters' })
+    }
+  })
+
+  /**
+   * GET /series/:seriesId/readiness
+   *
+   * Just which chapters have a complete checklist, for the library's
+   * "4/12 ready" count. Same scan as editable-chapters, smaller answer.
+   */
+  router.get('/series/:seriesId/readiness', async (req: Request, res: Response) => {
+    try {
+      const language = requestLanguage(req)
+      const [chapters, completion] = await Promise.all([
+        getEditableChapters2(req.params.seriesId, language),
+        getSeriesCompletion2(req.params.seriesId, language)
+      ])
+      res.json({ chapters: chapters.map(ch => ({ id: ch.id, ready: ch.ready })), ...completion })
+    } catch (error) {
+      console.error('[videoEditor2] series readiness failed:', error)
+      res.status(500).json({ error: 'Failed to check series readiness' })
+    }
+  })
+
+  /** GET /series/:seriesId/completion — saved compressed videos in this language. */
+  router.get('/series/:seriesId/completion', async (req: Request, res: Response) => {
+    try {
+      res.json(await getSeriesCompletion2(req.params.seriesId, requestLanguage(req)))
+    } catch (error) {
+      console.error('[videoEditor2] series completion failed:', error)
+      res.status(500).json({ error: 'Failed to check series completion' })
     }
   })
 
@@ -50,7 +117,7 @@ export function initVideoEditor2Routes(io: Server): Router {
    */
   router.get('/chapters/:id/timeline-bundle', async (req: Request, res: Response) => {
     try {
-      const bundle = await getChapterTimelineBundle(req.params.id)
+      const bundle = await getChapterTimelineBundle(req.params.id, requestLanguage(req))
       if (!bundle) return res.status(404).json({ error: 'Chapter not found' })
       res.json(bundle)
     } catch (error) {
@@ -71,6 +138,7 @@ export function initVideoEditor2Routes(io: Server): Router {
       if (!bundle) return res.status(404).json({ error: 'Chapter not found' })
       res.json(bundle)
     } catch (error) {
+      if(error instanceof TaskConflict)return res.status(409).json({error:error.message})
       console.error('[videoEditor2] building crop metadata bundle failed:', error)
       res.status(500).json({ error: 'Failed to collect the crop metadata' })
     }
@@ -89,7 +157,13 @@ export function initVideoEditor2Routes(io: Server): Router {
       if (typeof json !== 'string' || json.trim().length === 0) {
         return res.status(400).json({ error: 'json (non-empty string) is required' })
       }
-      const plan = await processTimelineJson(req.params.id, json)
+      // The JSON is in hand; the other three checklist items have to be too.
+      const blockers = await getChapterBlockers(req.params.id, requestLanguage(req))
+      if (!blockers) return res.status(404).json({ error: 'Chapter not found' })
+      if (blockers.length > 0) {
+        return res.status(409).json({ error: `This chapter isn't ready to preview — missing: ${blockers.join(', ')}.` })
+      }
+      const plan = await processTimelineJson(req.params.id, json, requestLanguage(req))
       res.json(plan)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to process the timeline'
@@ -98,6 +172,93 @@ export function initVideoEditor2Routes(io: Server): Router {
       // reason rather than an opaque server error.
       const status = /not found/i.test(message) ? 404 : 400
       res.status(status).json({ error: message })
+    }
+  })
+
+  /**
+   * Stored pastes — the server copy of each chapter's timeline JSON and its
+   * "processed" marker, so every browser and the desktop app agree on which
+   * chapters offer Preview. The client keeps a local cache and reconciles it
+   * against these rows; updatedAt (epoch ms) decides which side is newer.
+   * English and Hindi are separate rows: the same chapter is edited twice.
+   */
+  const toStored = (row: { chapterId: string; language: string; json: string; processedJson: string | null; model: string | null; updatedAt: Date }) => ({
+    chapterId: row.chapterId,
+    language: row.language as NarrationLanguage,
+    json: row.json,
+    processedJson: row.processedJson,
+    model: row.model,
+    updatedAt: row.updatedAt.getTime()
+  })
+
+  /** GET /series/:seriesId/timelines — every stored paste for the series. */
+  router.get('/series/:seriesId/timelines', async (req: Request, res: Response) => {
+    try {
+      const chapters = await prisma.chapter.findMany({
+        where: { seriesId: req.params.seriesId },
+        select: { id: true }
+      })
+      const rows = await prisma.editor2Timeline.findMany({
+        where: { chapterId: { in: chapters.map(c => c.id) }, language: requestLanguage(req) }
+      })
+      res.json(rows.map(toStored))
+    } catch (error) {
+      console.error('[videoEditor2] listing stored timelines failed:', error)
+      res.status(500).json({ error: 'Failed to list stored timelines' })
+    }
+  })
+
+  /** GET /chapters/:id/timeline — one chapter's stored paste, or null. */
+  router.get('/chapters/:id/timeline', async (req: Request, res: Response) => {
+    try {
+      const row = await prisma.editor2Timeline.findUnique({
+        where: { chapterId_language: { chapterId: req.params.id, language: requestLanguage(req) } }
+      })
+      res.json(row ? toStored(row) : null)
+    } catch (error) {
+      console.error('[videoEditor2] reading stored timeline failed:', error)
+      res.status(500).json({ error: 'Failed to read the stored timeline' })
+    }
+  })
+
+  /**
+   * PUT /chapters/:id/timeline { json, processedJson, updatedAt }
+   *
+   * Newest write wins: a write older than the stored row is ignored, so a
+   * browser with a stale copy can never roll back a newer one. Answers with
+   * whatever is stored afterwards.
+   */
+  router.put('/chapters/:id/timeline', async (req: Request, res: Response) => {
+    try {
+      const { json, processedJson, updatedAt } = req.body
+      if (typeof json !== 'string') {
+        return res.status(400).json({ error: 'json (string) is required' })
+      }
+      if (processedJson !== null && typeof processedJson !== 'string') {
+        return res.status(400).json({ error: 'processedJson must be a string or null' })
+      }
+      if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt)) {
+        return res.status(400).json({ error: 'updatedAt (epoch ms) is required' })
+      }
+      const chapterId = req.params.id
+      const language = requestLanguage(req)
+      const key = { chapterId_language: { chapterId, language } }
+      const existing = await prisma.editor2Timeline.findUnique({ where: key })
+      if (existing && existing.updatedAt.getTime() >= updatedAt) {
+        return res.json(toStored(existing))
+      }
+      const data = { json, processedJson, model: existing?.json.trim() === json.trim() && json.trim() ? existing.model : null, updatedAt: new Date(updatedAt) }
+      const row = await prisma.editor2Timeline.upsert({
+        where: key,
+        create: { chapterId, language, ...data },
+        update: data
+      })
+      // A cleared paste needs a timeline JSON again, which the phone can make.
+      if (!json.trim()) queueEditorPublish(chapterId)
+      res.json(toStored(row))
+    } catch (error) {
+      console.error('[videoEditor2] saving stored timeline failed:', error)
+      res.status(500).json({ error: 'Failed to save the timeline' })
     }
   })
 
@@ -194,6 +355,75 @@ export function initVideoEditor2Routes(io: Server): Router {
     }
   })
 
+  // ============ The phone (see phoneEditor.ts) ============
+
+  router.get('/prompt', async (_req: Request, res: Response) => {
+    try { res.json(await getEditorPrompt()) }
+    catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : 'Could not read the saved Editor prompt' }) }
+  })
+
+  /**
+   * PUT /prompt { content }
+   *
+   * Puts the Editor 2.0 prompt in R2 for the phone, which pastes it with every
+   * chapter. Settings calls it on each save; the prompt is also retained in
+   * the desktop database so another browser can recover it.
+   */
+  router.put('/prompt', async (req: Request, res: Response) => {
+    try {
+      const { content } = req.body ?? {}
+      if (typeof content !== 'string' || !content.trim()) {
+        return res.status(400).json({ error: 'content (non-empty string) is required' })
+      }
+      res.json(await saveEditorPrompt(content))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to save the prompt to R2'
+      console.error('[videoEditor2] saving the prompt to R2 failed:', message)
+      res.status(500).json({ error: message })
+    }
+  })
+
+  /**
+   * POST /series/:seriesId/send-to-phone { chapterIds, prompt }
+   *
+   * Sends each chapter's Copy All text to the Sleeper-Cell phone, whose
+   * Editor 2.0 run makes the timeline JSON in ChatGPT. The prompt comes from
+   * the client because Editor 2.0 keeps it in the browser.
+   */
+  router.post('/series/:seriesId/send-to-phone', async (req: Request, res: Response) => {
+    try {
+      const { chapterIds, prompt, workflow = 'legacy' } = req.body ?? {}
+      if (workflow !== 'legacy' && workflow !== 'staged') return res.status(400).json({ error: 'workflow must be legacy or staged' })
+      if (!Array.isArray(chapterIds) || chapterIds.length === 0 || !chapterIds.every(id => typeof id === 'string')) {
+        return res.status(400).json({ error: 'chapterIds (non-empty array of ids) is required' })
+      }
+      if (typeof prompt !== 'string') {
+        return res.status(400).json({ error: 'prompt (string) is required' })
+      }
+      res.json(await sendEditorPackages(req.params.seriesId, requestLanguage(req), chapterIds, prompt, workflow))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to send to the phone'
+      console.error('[videoEditor2] sending to the phone failed:', message)
+      res.status(/not found/i.test(message) ? 404 : 500).json({ error: message })
+    }
+  })
+
+  /**
+   * POST /series/:seriesId/fetch-phone-timelines
+   *
+   * Stores the timelines the phone made as each chapter's paste, unprocessed;
+   * the client then syncs them into its cache (syncSeriesTimelines).
+   */
+  router.post('/series/:seriesId/fetch-phone-timelines', async (req: Request, res: Response) => {
+    try {
+      res.json(await fetchPhoneTimelines(req.params.seriesId, requestLanguage(req)))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to fetch from the phone'
+      console.error('[videoEditor2] fetching phone timelines failed:', message)
+      res.status(/not found/i.test(message) ? 404 : 500).json({ error: message })
+    }
+  })
+
   // ============ Batch export ============
 
   /**
@@ -206,7 +436,7 @@ export function initVideoEditor2Routes(io: Server): Router {
    */
   router.get('/series/:seriesId/exports', async (req: Request, res: Response) => {
     try {
-      const exported = await getExportedChapterIds(req.params.seriesId)
+      const exported = await getExportedChapterIds(req.params.seriesId, requestLanguage(req))
       res.json(exported)
     } catch (error) {
       console.error('[videoEditor2] listing exports failed:', error)
@@ -245,10 +475,28 @@ export function initVideoEditor2Routes(io: Server): Router {
         inputs.push({ chapterId, json })
       }
 
+      // Same gate as Preview: the request carries the JSON, so the other
+      // three checklist items decide.
+      const notReady: string[] = []
+      for (const input of inputs) {
+        const blockers = await getChapterBlockers(input.chapterId, requestLanguage(req))
+        if (!blockers) notReady.push(`${input.chapterId} (not found)`)
+        else if (blockers.length > 0) notReady.push(`${input.chapterId} (missing: ${blockers.join(', ')})`)
+      }
+      if (notReady.length > 0) {
+        return res.status(409).json({ error: `Not ready to export: ${notReady.join('; ')}` })
+      }
+
       const jobId = await startBatchExport(
         req.params.seriesId,
         inputs,
-        { resolution, preset, fps: Number(fps) || undefined, force: force === true },
+        {
+          resolution,
+          preset,
+          fps: Number(fps) || undefined,
+          force: force === true,
+          language: requestLanguage(req)
+        },
         io
       )
       res.json({ jobId })

@@ -1,0 +1,87 @@
+{
+  "checkedAt": "2026-10-20T06:06:44.171900+00:00",
+  "ownerComposerState": "Signed in; prompt box empty; keyboard closed",
+  "httpStatus": 200,
+  "selection": {
+    "checkedAt": "2026-10-20T05:47:37.214Z",
+    "series": "Sandmancer of the Scorched Desert",
+    "chapter": 1,
+    "chapterId": "01fef395-d351-41bc-911a-9b4e7e035cd8",
+    "page": {
+      "id": "bf3df14a-5d08-4d49-94fa-4e21ffd7cf6b",
+      "index": 4,
+      "filename": "page_004.jpg",
+      "bytes": 1098524,
+      "sha256": "00c40a1a3952a3a22302bb72c3ae2f0bf917edbbae1e8215c10e58eae6f35588",
+      "width": 800,
+      "height": 11561
+    },
+    "deviceId": "304527cb8fc1440a",
+    "profileId": "Default",
+    "profileName": "Abhishek",
+    "ownerDeclaredPlan": "Go",
+    "model": "provider-default",
+    "legacyOrManagedOutputPresent": false,
+    "scope": "Read-only pending source selection for explicitly requested Go verification. No assignment or prompt yet.",
+    "phoneSourceHashMatches": true
+  },
+  "result": {
+    "schema": "managed-task/1",
+    "task": {
+      "workspaceId": "studio_01df7f214f87472e802b2bc43b8d9165",
+      "seriesId": "7c5ac077-2b43-478c-aadd-8116190d0a96",
+      "chapterId": "d5fd1a64-2eef-472d-aeea-8813307af423",
+      "pageId": "page_3351d2fe1141be5f8888f9108c4a326cc936acfa13baeb625c1aad36d27ee97c",
+      "id": "task:sha256:21b1e1d9c371b242bb9a6498ef3e61ed4b19516ec31cb80f16bdfb2f3dd8e38b",
+      "fingerprint": "94b33a187e397bdd93271a3f2d59fe31c1e79fe335e186501f5408dd5de12a44",
+      "spec": {
+        "version": "crop-page/1",
+        "provider": "chatgpt",
+        "product": "chatgpt-web",
+        "model": "provider-default",
+        "settings": {
+          "mode": null,
+          "effort": null
+        },
+        "pageRevision": "sha256:00c40a1a3952a3a22302bb72c3ae2f0bf917edbbae1e8215c10e58eae6f35588",
+        "promptVersion": "managed-chatgpt-default-crop/1",
+        "validatorVersion": "managed-crop-validator/1",
+        "dependencies": [
+          {
+            "id": "page_3351d2fe1141be5f8888f9108c4a326cc936acfa13baeb625c1aad36d27ee97c",
+            "revision": "sha256:00c40a1a3952a3a22302bb72c3ae2f0bf917edbbae1e8215c10e58eae6f35588",
+            "sha256": "00c40a1a3952a3a22302bb72c3ae2f0bf917edbbae1e8215c10e58eae6f35588"
+          }
+        ]
+      },
+      "state": "assigned",
+      "generation": 1,
+      "attemptId": "a0a79e02-f5d3-4f2d-bc8b-fe31097df7dc",
+      "canonical": null
+    },
+    "attempt": {
+      "id": "a0a79e02-f5d3-4f2d-bc8b-fe31097df7dc",
+      "activeCommandId": "029dcad4-ff40-4493-9cbb-e121f4e60819",
+      "taskId": "task:sha256:21b1e1d9c371b242bb9a6498ef3e61ed4b19516ec31cb80f16bdfb2f3dd8e38b",
+      "generation": 1,
+      "deviceId": "304527cb8fc1440a",
+      "profileId": "Default",
+      "accountId": null,
+      "leaseExpiresAt": "2026-10-20T06:11:44.031Z",
+      "phase": "assigned",
+      "submission": "unsent",
+      "checkpointRef": null
+    },
+    "commands": [
+      {
+        "id": "029dcad4-ff40-4493-9cbb-e121f4e60819",
+        "taskId": "task:sha256:21b1e1d9c371b242bb9a6498ef3e61ed4b19516ec31cb80f16bdfb2f3dd8e38b",
+        "attemptId": "a0a79e02-f5d3-4f2d-bc8b-fe31097df7dc",
+        "generation": 1,
+        "fingerprint": "94b33a187e397bdd93271a3f2d59fe31c1e79fe335e186501f5408dd5de12a44",
+        "action": "start",
+        "phase": "queued"
+      }
+    ]
+  }
+}

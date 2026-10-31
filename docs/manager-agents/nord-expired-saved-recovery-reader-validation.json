@@ -1,0 +1,13 @@
+{
+  "filename": "page_006.jpg",
+  "cropCount": 5,
+  "hasMetadata": true,
+  "metadataValid": true,
+  "status": "done",
+  "checkedAt": "2026-10-20T08:11:28.304451+00:00",
+  "metadataValidFromMetadataEndpoint": true,
+  "metadataErrors": [],
+  "pointsSha256": "83b4559dad5b7b830760c222d2b446f2c6fad7a1555f272c66b5525de54a3083",
+  "metadataSha256": "9ebd9861911ce69e709c5d01d0658e046eaf39a2e4d495a70f4c2a96c13b8a4e",
+  "scope": "Existing crop-reader validation after actual expired saved-only recovery and trusted publication. No visual crop approval or cutting."
+}

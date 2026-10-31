@@ -1,0 +1,67 @@
+{
+  "checkedAt": "2026-10-20T07:44:55.917462+00:00",
+  "scope": "Explicit saved-only recovery after expiry; source and deployment validation, not live checkpoint recovery acceptance.",
+  "android": {
+    "tests": 342,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "command": "./gradlew testDebugUnitTest --offline",
+    "apkPackagedOrInstalledLocally": false
+  },
+  "studioAndRelay": {
+    "targetedFiles": 7,
+    "tests": 82,
+    "failures": 0,
+    "serverBuild": "passed",
+    "clientBuild": "passed; existing chunk-size advisory",
+    "relayTypecheck": "passed",
+    "diffCheck": "passed in both repositories",
+    "browserVisualReview": "Unavailable: CUA reported no browser available"
+  },
+  "protocol": {
+    "phoneOperation": "recover_saved",
+    "studioOperation": "publish_recovered",
+    "originalAttemptAndCheckpointRequired": true,
+    "originalLeaseUnchanged": true,
+    "browserRenewalRemainsDenied": true,
+    "normalExpiredPublicationRemainsDenied": true,
+    "pauseCancelSupersededAndSourceGuards": "preserved; tested",
+    "phoneAction": "Upload retained saved result only",
+    "studioAction": "Validate and publish recovered result"
+  },
+  "production": {
+    "workerVersion": "22204621-0e30-46b2-84a3-0b698e41d85b",
+    "readinessCapability": "expired-saved-recovery/1",
+    "sameAttemptAndLeasePreserved": true,
+    "taskState": "uncertain",
+    "phase": "submitted",
+    "nativeRecoveryTriggered": false,
+    "canonical": null
+  },
+  "installedApk": {
+    "version": "1.0.141",
+    "releaseCertificateMatches": true,
+    "savedRecoveryPrerequisitesPackaged": false,
+    "preflightExitCode": 2
+  },
+  "next": "Saved-only expired-result recovery verification completed. Remaining Phase 3 work includes unknown-submission/cancellation acceptance, full ProductionRunner integration, revised-input rebinding and downstream managed review/cut/Editor acceptance.",
+  "installedPhoneAcceptance": {
+    "completedAt": "2026-10-20T08:14:47.322354+00:00",
+    "apkVersion": "1.0.142",
+    "agentOperatedUsbAtOwnerRequest": true,
+    "nativeMessage": "Retained saved output uploaded without regenerating.",
+    "originalCheckpointRef": "checkpoint/5d23f0e8-d0ba-4b79-bbd2-7088412a4e17",
+    "importHttpStatus": 200,
+    "cropCount": 5,
+    "metadataValid": true,
+    "finalState": "verified_complete/published/saved",
+    "originalAttemptCommandGenerationAndLeaseUnchanged": true,
+    "nativeReconciliation": "Verified publication retained; this phone is reconciled.",
+    "actualForceStopAndNewProcessConfirmed": true,
+    "postRestartMessage": "No managed page assigned. Start the single-page pilot in Studio first.",
+    "reservationReleased": true,
+    "providerRegenerated": false,
+    "limits": "Controlled pre-ack save pause followed by process exit and expired-result recovery; does not certify power loss during SQLite commit, every crash boundary, visual crop quality or full Phase 3."
+  }
+}

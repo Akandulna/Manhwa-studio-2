@@ -1,0 +1,22 @@
+{
+  "checkedAt": "2026-10-19T18:53:10.338Z",
+  "ownerReportedError": "Sync the exact shared chapter to this phone before running",
+  "originDeviceId": "304527cb8fc1440a",
+  "originSeriesId": "7c5ac077-2b43-478c-aadd-8116190d0a96",
+  "originChapterId": "d5fd1a64-2eef-472d-aeea-8813307af423",
+  "assignedIdsMatchRealOriginCatalog": true,
+  "rootCause": "ManagedCropRun searched replica manager-identities preferences only. Origin-owned chapters use the local Library catalog and do not require a received-replica cache entry.",
+  "fix": "Match origin-owned local catalog IDs and replica origin mappings separately; ignore cache entries for owned series, require one available matching chapter, and retain exact page identity/hash checks.",
+  "tests": {
+    "command": "./gradlew testDebugUnitTest --offline",
+    "tests": 321,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "installedApk": "1.0.135",
+  "fixesInstalled": false,
+  "apkBuiltOrInstalled": false,
+  "phase3Complete": false,
+  "scope": "Real owner-reported failure and authenticated replay of real origin catalogs, followed by source fix and JVM regression checks. Does not prove successful installed-phone execution or publication."
+}

@@ -1,0 +1,297 @@
+{
+  "schema": "website-ui-fixtures/1",
+  "kind": "constructed, redacted control fixtures; not accepted live website baselines",
+  "providers": [
+    {
+      "provider": "chatgpt",
+      "workflow": "composer_empty",
+      "variant": {
+        "viewport": "480x800",
+        "locale": "en",
+        "theme": "light",
+        "profileVariant": "unknown"
+      },
+      "reason": "stable",
+      "controls": [
+        {
+          "id": "composer",
+          "count": 1,
+          "label": "prompt",
+          "signature": "11111111",
+          "icon": "22222222",
+          "style": "33333333",
+          "location": [
+            1,
+            6,
+            6,
+            1
+          ]
+        },
+        {
+          "id": "send",
+          "count": 0,
+          "label": "absent",
+          "signature": "11111111",
+          "icon": "22222222",
+          "style": "33333333",
+          "location": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "upload",
+          "count": 1,
+          "label": "attach",
+          "signature": "11111111",
+          "icon": "22222222",
+          "style": "33333333",
+          "location": [
+            1,
+            6,
+            6,
+            1
+          ]
+        },
+        {
+          "id": "model",
+          "count": 1,
+          "label": "model",
+          "signature": "11111111",
+          "icon": "22222222",
+          "style": "33333333",
+          "location": [
+            1,
+            6,
+            6,
+            1
+          ]
+        },
+        {
+          "id": "navigation",
+          "count": 1,
+          "label": "navigation",
+          "signature": "11111111",
+          "icon": "22222222",
+          "style": "33333333",
+          "location": [
+            1,
+            6,
+            6,
+            1
+          ]
+        },
+        {
+          "id": "response_actions",
+          "count": 0,
+          "label": "absent",
+          "signature": "11111111",
+          "icon": "22222222",
+          "style": "33333333",
+          "location": [
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "provider": "gemini",
+      "workflow": "composer_empty",
+      "variant": {
+        "viewport": "480x800",
+        "locale": "en",
+        "theme": "light",
+        "profileVariant": "unknown"
+      },
+      "reason": "stable",
+      "controls": [
+        {
+          "id": "composer",
+          "count": 1,
+          "label": "prompt",
+          "signature": "11111111",
+          "icon": "22222222",
+          "style": "33333333",
+          "location": [
+            1,
+            6,
+            6,
+            1
+          ]
+        },
+        {
+          "id": "send",
+          "count": 0,
+          "label": "absent",
+          "signature": "11111111",
+          "icon": "22222222",
+          "style": "33333333",
+          "location": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "upload",
+          "count": 1,
+          "label": "attach",
+          "signature": "11111111",
+          "icon": "22222222",
+          "style": "33333333",
+          "location": [
+            1,
+            6,
+            6,
+            1
+          ]
+        },
+        {
+          "id": "model",
+          "count": 1,
+          "label": "model",
+          "signature": "11111111",
+          "icon": "22222222",
+          "style": "33333333",
+          "location": [
+            1,
+            6,
+            6,
+            1
+          ]
+        },
+        {
+          "id": "navigation",
+          "count": 1,
+          "label": "navigation",
+          "signature": "11111111",
+          "icon": "22222222",
+          "style": "33333333",
+          "location": [
+            1,
+            6,
+            6,
+            1
+          ]
+        },
+        {
+          "id": "response_actions",
+          "count": 0,
+          "label": "absent",
+          "signature": "11111111",
+          "icon": "22222222",
+          "style": "33333333",
+          "location": [
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "provider": "aistudio",
+      "workflow": "composer_empty",
+      "variant": {
+        "viewport": "480x800",
+        "locale": "en",
+        "theme": "light",
+        "profileVariant": "unknown"
+      },
+      "reason": "stable",
+      "controls": [
+        {
+          "id": "composer",
+          "count": 1,
+          "label": "prompt",
+          "signature": "11111111",
+          "icon": "22222222",
+          "style": "33333333",
+          "location": [
+            1,
+            6,
+            6,
+            1
+          ]
+        },
+        {
+          "id": "send",
+          "count": 0,
+          "label": "absent",
+          "signature": "11111111",
+          "icon": "22222222",
+          "style": "33333333",
+          "location": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "upload",
+          "count": 1,
+          "label": "attach",
+          "signature": "11111111",
+          "icon": "22222222",
+          "style": "33333333",
+          "location": [
+            1,
+            6,
+            6,
+            1
+          ]
+        },
+        {
+          "id": "model",
+          "count": 1,
+          "label": "model",
+          "signature": "11111111",
+          "icon": "22222222",
+          "style": "33333333",
+          "location": [
+            1,
+            6,
+            6,
+            1
+          ]
+        },
+        {
+          "id": "navigation",
+          "count": 1,
+          "label": "navigation",
+          "signature": "11111111",
+          "icon": "22222222",
+          "style": "33333333",
+          "location": [
+            1,
+            6,
+            6,
+            1
+          ]
+        },
+        {
+          "id": "response_actions",
+          "count": 0,
+          "label": "absent",
+          "signature": "11111111",
+          "icon": "22222222",
+          "style": "33333333",
+          "location": [
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    }
+  ]
+}

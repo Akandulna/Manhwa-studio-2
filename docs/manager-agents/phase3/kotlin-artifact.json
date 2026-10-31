@@ -1,0 +1,16 @@
+{
+  "document": "{\"attemptId\":\"fixture-attempt\",\"checkpointRef\":\"checkpoint/crop-output\",\"fingerprint\":\"5be68a92c208d02ad003c2b91576da0365f702741dc45bc1af82e0e1c65caeb4\",\"generation\":1,\"metadata\":\"{\\\"crops\\\":[]}\",\"pageRevision\":\"page-r1\",\"pointers\":\"{\\\"format\\\":\\\"four-point-crop\\\",\\\"version\\\":\\\"1.0\\\",\\\"coordinateSystem\\\":\\\"normalized\\\",\\\"image\\\":{\\\"filename\\\":\\\"page.png\\\",\\\"width\\\":100,\\\"height\\\":200},\\\"crops\\\":[]}\",\"schema\":\"managed-crop-page/1\",\"taskId\":\"task:sha256:27d302736ae9f90776a8b2c0ef60aba23208399215fc812b733c24e0e90b43b5\",\"validatorVersion\":\"managed-crop-validator/1\"}",
+  "operation": {
+    "schema": "managed-task/1",
+    "generation": 1,
+    "eventId": "stage_674681236b82cb08dc7908b1917ffe83bef2e932479672d28f44b5952aef269c",
+    "ref": "managed/fixture-workspace/27d302736ae9f90776a8b2c0ef60aba23208399215fc812b733c24e0e90b43b5/fixture-attempt/crop_6634541e47c6656a64d804192907126b6b10495dc1ca1542f1437265801ff918",
+    "fingerprint": "5be68a92c208d02ad003c2b91576da0365f702741dc45bc1af82e0e1c65caeb4",
+    "action": "stage",
+    "artifactId": "crop_6634541e47c6656a64d804192907126b6b10495dc1ca1542f1437265801ff918",
+    "taskId": "task:sha256:27d302736ae9f90776a8b2c0ef60aba23208399215fc812b733c24e0e90b43b5",
+    "workspaceId": "fixture-workspace",
+    "attemptId": "fixture-attempt",
+    "contentHash": "674681236b82cb08dc7908b1917ffe83bef2e932479672d28f44b5952aef269c"
+  }
+}

@@ -1,9 +1,16 @@
 /**
  * EditorChapterList2 — Module 4v2: Editor 2.0
  *
- * Phase 1: a series' chapters with their 4-gate readiness (script, section
- * audio, Image Clipper 3.0 crops, script with timeline). Ready chapters are
- * not yet clickable — the compile/timeline workspace is a later phase.
+ * A series' chapters, each with its four-item readiness checklist: voiceover
+ * audio, alignment, timeline JSON and cropped images. The timeline JSON is
+ * made here — Copy All → ChatGPT → Paste, or Send to phone / Fetch from phone
+ * through R2 — and Check Images repairs its crop names. Preview and Export
+ * stay disabled until all four items pass; Copy All and Paste never wait for
+ * the JSON, since they are how it arrives.
+ *
+ * English and Hindi tabs: each chapter is edited and exported independently per
+ * narration language — its own script, voice, timeline paste and MP4 — over
+ * the same crops.
  */
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
@@ -12,7 +19,10 @@ import {
   seriesApi,
   videoApi2,
   type CropRepairResult,
+  type Editor2Completion,
   type Editable2Chapter,
+  type Editor2ChecklistItem,
+  type Editor2ChecklistKey,
   type Export2Job,
   type Exported2Chapter
 } from '@/lib/api'
@@ -36,9 +46,10 @@ import {
   AlertTriangle,
   Scissors,
   Mic,
-  ScrollText,
   Clock,
+  FileJson,
   CheckCircle2,
+  XCircle,
   Copy,
   Check,
   ClipboardPaste,
@@ -52,43 +63,37 @@ import {
   Moon,
   ImageOff,
   Wrench,
-  FileCheck2
+  FileCheck2,
+  Smartphone,
+  Download,
+  RotateCcw
 } from 'lucide-react'
 
 import { useWakeLock } from '@/hooks/useWakeLock'
+import { usePublishedChapters } from '@/hooks/usePublishedChapters'
+import { CompletedBadge, completedRowClass } from '@/components/PublishedBadge'
+import { SeriesDoneBadge } from './SeriesDoneBadge'
+import { chapterList, phoneEditorApi, loadSavedEditorPrompt as readSavedPrompt } from './phoneEditor'
+import { LanguageTabs } from '@/components/LanguageTabs'
+import { TimelineModelBadge } from './TimelineModelBadge'
+import { StagedTimelineDialog } from './StagedTimelineDialog'
+import { LANGUAGE_LABEL, useNarrationLanguage, withLang, type NarrationLanguage } from '@/lib/narrationLanguage'
 import {
   clearTimeline,
+  resetTimeline,
   collectProcessed,
   getExpanded,
   getScrollTop,
   getTimelineJson,
   isProcessed,
+  isProcessedAfter,
+  markProcessed,
   saveExpanded,
   saveScrollTop,
-  setTimelineJson
+  setTimelineJson,
+  syncChapterTimeline,
+  syncSeriesTimelines
 } from './timelineHandoff'
-
-/**
- * Where the Editor 2.0 prompt lives (Settings → Editor 2.0 → Prompt).
- *
- * localStorage, not the server settings table: that Settings card saves the
- * prompt to this browser only, the same way the Crop 3.0 documents do, so
- * this is the only place a saved prompt can actually be found.
- */
-const CHAPTER_PROMPT_KEY = 'editor2.prompt'
-
-/** The saved Editor 2.0 prompt, or '' when nothing has been saved here. */
-function readSavedPrompt(): string {
-  try {
-    const raw = localStorage.getItem(CHAPTER_PROMPT_KEY)
-    if (!raw) return ''
-    const parsed = JSON.parse(raw) as { content?: unknown }
-    return typeof parsed.content === 'string' ? parsed.content.trim() : ''
-  } catch {
-    // Unavailable or corrupt storage just means there is no prompt to add.
-    return ''
-  }
-}
 
 /** An export's size, for the Exported tooltip. */
 function formatSize(bytes: number): string {
@@ -107,31 +112,86 @@ function formatWhen(ms: number): string {
   return new Date(ms).toLocaleDateString()
 }
 
+/** The checklist, in order: its label, row icon and where a missing item is fixed. */
+const CHECKLIST: {
+  key: Editor2ChecklistKey
+  label: string
+  icon: typeof Mic
+  fix: (chapter: { id: string; seriesId: string }, lang: NarrationLanguage) => { to: string; label: string } | null
+}[] = [
+  {
+    key: 'audio',
+    label: 'Voiceover audio',
+    icon: Mic,
+    fix: (ch, lang) => ({ to: withLang(`/narration/series/${ch.seriesId}`, lang), label: 'Open Narration' })
+  },
+  {
+    key: 'alignment',
+    label: 'Alignment',
+    icon: Clock,
+    fix: (ch, lang) => ({ to: withLang(`/narration/series/${ch.seriesId}`, lang), label: 'Open Narration' })
+  },
+  // Made on this screen, so there is nowhere else to send the user.
+  { key: 'timeline', label: 'Timeline JSON', icon: FileJson, fix: () => null },
+  {
+    key: 'crops',
+    label: 'Cropped images',
+    icon: Scissors,
+    fix: ch => ({ to: `/clipper3/chapter/${ch.id}`, label: 'Open Image Clipper' })
+  }
+]
+
 /**
- * One of the four readiness gates, as a single icon.
+ * A chapter's checklist with the timeline item read from this browser.
+ *
+ * The server answered from its Editor2Timeline row, but a paste reaches that
+ * row on a short debounce, and a Clear or a Paste here has to unlock or lock
+ * Preview at once — so the local paste decides the timeline item.
+ */
+function liveChecklist(ch: Editable2Chapter, pastedJson: string): {
+  checklist: Record<Editor2ChecklistKey, Editor2ChecklistItem>
+  missing: string[]
+  ready: boolean
+} {
+  const checklist = {
+    ...ch.checklist,
+    timeline: pastedJson.trim()
+      ? { ok: true, detail: `Timeline JSON stored — ${pastedJson.length.toLocaleString()} characters` }
+      : { ok: false, detail: 'No timeline JSON yet — Copy All → ChatGPT → Paste, or Fetch from phone' }
+  }
+  const missing = CHECKLIST.filter(item => !checklist[item.key].ok).map(item => item.label)
+  return { checklist, missing, ready: missing.length === 0 }
+}
+
+/**
+ * One checklist item, as a single icon.
  *
  * The list shows four of these per row, so they carry their meaning in the
  * tooltip rather than a visible label — a row has to stay one line tall.
  */
-function GateDot({ ok, icon, label }: { ok: boolean; icon: React.ReactNode; label: string }) {
+function ChecklistDot({ ok, icon: Icon, label, detail }: { ok: boolean; icon: typeof Mic; label: string; detail: string }) {
   return (
     <span
       className={ok ? 'text-green-600' : 'text-muted-foreground/30'}
-      title={`${label}: ${ok ? 'ready' : 'missing'}`}
+      title={`${label}: ${ok ? '✓' : 'missing'} — ${detail}`}
     >
-      {icon}
+      <Icon className="h-3 w-3" />
     </span>
   )
 }
 
 export default function EditorChapterList2() {
   const { seriesId } = useParams<{ seriesId: string }>()
+  // Chapters of a completed Part: files deleted on the Storage page, nothing to edit.
+  const { completedPart } = usePublishedChapters(seriesId)
   const navigate = useNavigate()
   const { toast } = useToast()
+  const [language, setLanguage] = useNarrationLanguage('editor2')
 
   const [seriesTitle, setSeriesTitle] = useState('')
   const [chapters, setChapters] = useState<Editable2Chapter[]>([])
   const [loading, setLoading] = useState(true)
+  const [completion, setCompletion] = useState<Editor2Completion | null>(null)
 
   // Keyed by chapter id so each card's button tracks its own state and two
   // chapters' buttons never share a spinner.
@@ -151,6 +211,10 @@ export default function EditorChapterList2() {
   const [exportJob, setExportJob] = useState<Export2Job | null>(null)
   const [starting, setStarting] = useState(false)
 
+  // Process All — how many chapters are left and which one is in flight right
+  // now, while the run is going. Null overall means no run is in progress.
+  const [processingAll, setProcessingAll] = useState<{ total: number; done: number; chapterNumber: number } | null>(null)
+
   // Chapters that already have an MP4 on disk, keyed by chapter id. Server
   // truth rather than a local flag: the record is the series' _video2 folder,
   // so this survives a cleared browser and is right on a second machine.
@@ -161,6 +225,11 @@ export default function EditorChapterList2() {
   const [cropScan, setCropScan] = useState<CropRepairResult | null>(null)
   const [scanningNames, setScanningNames] = useState(false)
   const [repairingNames, setRepairingNames] = useState(false)
+
+  // Send to phone / Fetch from phone, while one is in flight.
+  const [phoneBusy, setPhoneBusy] = useState<'send' | 'fetch' | 'reset' | null>(null)
+  const [stagedChapter, setStagedChapter] = useState<Editable2Chapter | null>(null)
+  const [phoneWorkflow, setPhoneWorkflow] = useState<'legacy' | 'staged'>(() => localStorage.getItem('editor2.phoneWorkflow') === 'staged' ? 'staged' : 'legacy')
 
   // Which chapter's detail is open. Only one at a time: the list is the view,
   // and the detail is what you drop into for the chapter you are working on.
@@ -198,13 +267,15 @@ export default function EditorChapterList2() {
    * button by button.
    */
   async function copyAll(ch: Editable2Chapter) {
+    if (!ch.canCopy) return
     setCopying(ch.id)
     try {
-      const [timeline, metadata] = await Promise.all([
-        videoApi2.getTimelineBundle(ch.id),
-        videoApi2.getCropMetadataBundle(ch.id)
+      const [timeline, metadata, prompt] = await Promise.all([
+        videoApi2.getTimelineBundle(ch.id, language),
+        videoApi2.getCropMetadataBundle(ch.id),
+        readSavedPrompt()
       ])
-      const prompt = readSavedPrompt()
+      if (!prompt) throw new Error('No Editor 2.0 instructions are saved. Save the prompt in Settings → Editor 2.0, then use Copy All again.')
 
       const sections: string[] = []
       if (prompt) sections.push(`# Prompt\n\n${prompt}`)
@@ -266,7 +337,7 @@ export default function EditorChapterList2() {
       setPasted(prev => ({ ...prev, [ch.id]: text }))
       // A fresh paste has not been processed yet, so this drops any previous
       // result and sends the button back to Start Processing.
-      setTimelineJson(ch.id, text)
+      setTimelineJson(ch.id, language, text)
       setProcessedTick(t => t + 1)
       toast({
         title: 'Pasted',
@@ -283,6 +354,141 @@ export default function EditorChapterList2() {
     }
   }
 
+  /**
+   * Send to phone — hands the Copy All text of every chapter that has all but
+   * its timeline JSON (audio, alignment, crops) to the Sleeper-Cell phone, whose Editor 2.0 run makes
+   * the timeline JSON in ChatGPT (GPT-6 Astra). Fetch from phone brings the
+   * results back as pastes.
+   */
+  async function sendToPhone() {
+    if (!seriesId) return
+    let prompt = ''
+    try { if (phoneWorkflow === 'legacy') prompt = await readSavedPrompt() }
+    catch (error) {
+      toast({ title: 'Could not load the Editor prompt', description: error instanceof Error ? error.message : 'Check Settings → Editor 2.0.', variant: 'destructive' })
+      return
+    }
+    if (!prompt && phoneWorkflow === 'legacy') {
+      toast({
+        title: 'No Editor 2.0 prompt',
+        description: 'Save the prompt in Settings → Editor 2.0 first: the phone pastes it with each chapter.',
+        variant: 'destructive'
+      })
+      return
+    }
+    const ids = chapters
+      .filter(ch => ch.inputsReady && completedPart(ch.id) === null && !getTimelineJson(ch.id, language)?.trim())
+      .map(ch => ch.id)
+    if (ids.length === 0) {
+      toast({
+        title: 'Nothing to send',
+        description: 'Every chapter with voiceover audio, alignment and cropped images already has a timeline JSON.'
+      })
+      return
+    }
+    setPhoneBusy('send')
+    try {
+      const result = await phoneEditorApi.send(seriesId, language, ids, prompt, phoneWorkflow)
+      const skipped = result.skipped.length > 0
+        ? ` Skipped ${result.skipped.map(s => `${s.number} (${s.reason})`).join(', ')}.`
+        : ''
+      toast({
+        title: result.sent.length > 0 ? `Sent ${result.sent.length} chapter${result.sent.length === 1 ? '' : 's'} to the phone` : 'Nothing sent',
+        description:
+          (result.sent.length > 0
+            ? `${chapterList(result.sent.map(s => s.number))} — ` +
+              (result.phoneNotified ? 'the phone picks them up now if it is open' : 'tap Check for new uploads on the phone') +
+              ', then run Auto-run in its Editor 2.0.'
+            : '') + skipped,
+        variant: result.sent.length === 0 ? 'destructive' : undefined
+      })
+    } catch (err) {
+      toast({
+        title: 'Could not send to the phone',
+        description: err instanceof Error ? err.message : 'The send failed',
+        variant: 'destructive'
+      })
+    } finally {
+      setPhoneBusy(null)
+    }
+  }
+
+  /** Fetch from phone — stores the phone's timelines as pastes, then pulls them into this list. */
+  async function fetchFromPhone() {
+    if (!seriesId) return
+    setPhoneBusy('fetch')
+    try {
+      const result = await phoneEditorApi.fetch(seriesId, language)
+      if (!result.configured) {
+        toast({ title: 'Cloudflare R2 is not set up', variant: 'destructive' })
+        return
+      }
+      await syncSeriesTimelines(seriesId, language, chapters.map(ch => ch.id))
+      const restored: Record<string, string> = {}
+      for (const ch of chapters) {
+        const json = getTimelineJson(ch.id, language)
+        if (json) restored[ch.id] = json
+      }
+      setPasted(restored)
+      setProcessedTick(t => t + 1)
+
+      const parts: string[] = []
+      if (result.imported.length > 0) {
+        const review = result.imported.filter(i => i.review > 0)
+        parts.push(`${chapterList(result.imported.map(i => i.number))} pasted — Start Processing to preview.`)
+        if (review.length > 0) parts.push(`${chapterList(review.map(i => i.number))} still had issues on the phone; check the preview.`)
+      }
+      if (result.upToDate > 0) parts.push(`${result.upToDate} already up to date.`)
+      if (result.kept.length > 0) parts.push(`${chapterList(result.kept.map(k => k.number))} kept: pasted here after the phone made it.`)
+      if (result.unmatched.length > 0) parts.push(`No chapter here for ${result.unmatched.join(', ')}.`)
+      if (result.failed.length > 0) parts.push(`${result.failed.length} could not be read: ${result.failed[0].error}.`)
+      toast({
+        title: result.found === 0
+          ? 'No timelines from the phone yet'
+          : `Fetched ${result.imported.length} timeline${result.imported.length === 1 ? '' : 's'}`,
+        description: parts.join(' ') || 'Send chapters to the phone and run Editor 2.0 there first.',
+        variant: result.failed.length > 0 ? 'destructive' : undefined
+      })
+    } catch (err) {
+      toast({
+        title: 'Could not fetch from the phone',
+        description: err instanceof Error ? err.message : 'The fetch failed',
+        variant: 'destructive'
+      })
+    } finally {
+      setPhoneBusy(null)
+    }
+  }
+
+  async function resetChapters(chapterIds: string[]) {
+    if (phoneBusy || starting || exporting || processingAll) return
+    setPhoneBusy('reset')
+    let count = 0
+    try {
+      for (const id of chapterIds) {
+        await resetTimeline(id, language)
+        count++
+      }
+      setExportJob(null)
+      setCropScan(null)
+      toast({
+        title: `Reset ${count} chapter${count === 1 ? '' : 's'}`,
+        description: 'Send to phone, generate a new timeline there, then Fetch from phone and Process again. Source assets and existing videos are kept.'
+      })
+    } catch (error) {
+      toast({ title: 'Reset could not finish', description: `${count} chapters reset. ${error instanceof Error ? error.message : 'Please retry.'}`, variant: 'destructive' })
+    } finally {
+      const restored: Record<string, string> = {}
+      for (const ch of chapters) {
+        const json = getTimelineJson(ch.id, language)
+        if (json) restored[ch.id] = json
+      }
+      setPasted(restored)
+      setProcessedTick(t => t + 1)
+      setPhoneBusy(null)
+    }
+  }
+
   /** Drop this chapter's pasted content, disabling Start Processing again. */
   function clearPasted(chapterId: string) {
     setPasted(prev => {
@@ -290,7 +496,7 @@ export default function EditorChapterList2() {
       delete next[chapterId]
       return next
     })
-    clearTimeline(chapterId)
+    clearTimeline(chapterId, language)
     setProcessedTick(t => t + 1)
   }
 
@@ -304,8 +510,8 @@ export default function EditorChapterList2() {
    */
   function startProcessing(ch: Editable2Chapter) {
     const content = pasted[ch.id]?.trim()
-    if (!content) return
-    if (!setTimelineJson(ch.id, content)) {
+    if (!content || !liveChecklist(ch, content).ready) return
+    if (!setTimelineJson(ch.id, language, content)) {
       toast({
         title: 'Could not start',
         description: 'Browser storage is unavailable, so the timeline could not be handed over.',
@@ -316,33 +522,86 @@ export default function EditorChapterList2() {
     // Remember where the list was before leaving, so coming back from the
     // preview lands on this row rather than at the top.
     rememberPosition()
-    navigate(`/editor2/chapter/${ch.id}/preview`)
+    navigate(withLang(`/editor2/chapter/${ch.id}/preview`, language))
+  }
+
+  /**
+   * Process All — run every ready-but-unprocessed chapter's pasted JSON
+   * through the same build the preview screen does, without opening it for
+   * each one. The preview's own effect is just sync → read the paste → POST
+   * process-timeline → markProcessed; none of that depends on being mounted,
+   * so this repeats it here chapter by chapter and leaves the browsing
+   * screen in front the whole time.
+   *
+   * One at a time, not in parallel: these hit the same render-adjacent
+   * server work the single preview does, and a failure on one chapter should
+   * not race ahead into the next five before the user sees it.
+   */
+  async function processAll() {
+    const targets = chapters.filter(ch => {
+      if (completedPart(ch.id) !== null) return false
+      const content = pasted[ch.id]?.trim() ?? ''
+      if (!content || !liveChecklist(ch, content).ready) return false
+      return !isProcessed(ch.id, language, content)
+    })
+    if (targets.length === 0) return
+
+    setProcessingAll({ total: targets.length, done: 0, chapterNumber: targets[0].number })
+    let failed = 0
+    let lastError = ''
+    try {
+      for (let i = 0; i < targets.length; i++) {
+        const ch = targets[i]
+        setProcessingAll({ total: targets.length, done: i, chapterNumber: ch.number })
+        const content = pasted[ch.id]?.trim() ?? ''
+        try {
+          await syncChapterTimeline(ch.id, language)
+          const json = getTimelineJson(ch.id, language) ?? content
+          await videoApi2.processTimeline(ch.id, language, json)
+          markProcessed(ch.id, language, json)
+          setProcessedTick(t => t + 1)
+        } catch (err) {
+          failed++
+          lastError = err instanceof Error ? err.message : 'Processing failed'
+        }
+      }
+    } finally {
+      setProcessingAll(null)
+    }
+
+    const okCount = targets.length - failed
+    toast({
+      title: failed === 0
+        ? `Processed ${okCount} chapter${okCount === 1 ? '' : 's'}`
+        : `Processed ${okCount} of ${targets.length} chapters`,
+      description: failed > 0 ? `${failed} failed — ${lastError}` : 'All ready, pasted chapters are now previewable.',
+      variant: failed > 0 ? 'destructive' : undefined
+    })
   }
 
   /**
    * Export All — render every not-yet-exported chapter to its own MP4 in one
    * background job.
    *
-   * Chapters that already have an MP4 in the series' _video2 folder are left
-   * out: pressing Export again means "finish the rest", not "re-encode hours
-   * of finished video". The server enforces the same rule, so a chapter
-   * exported by another session is skipped there even if this list has not
-   * re-scanned yet. `force` re-renders everything, for when the crops, audio
-   * or timeline have genuinely changed.
+   * Existing videos are left out unless their chapter was processed again.
+   * `force` explicitly re-renders the selected chapters even without edits.
    *
    * Each chapter's pasted JSON goes with the request: Editor 2.0 keeps it in
    * the browser, and re-processing it server-side is what makes the exported
    * video match the preview.
    */
-  async function exportAll(force = false) {
+  async function exportAll(force = false, chapterIds?: string[]) {
     if (!seriesId) return
-    const all = collectProcessed(chapters.filter(ch => ch.ready).map(ch => ch.id))
-    const inputs = force ? all : all.filter(i => !exported[i.chapterId])
+    const all = collectProcessed(readyIds(), language).filter(i => !chapterIds || chapterIds.includes(i.chapterId))
+    const inputs = force ? all : all.filter(i => needsExport(i.chapterId))
     if (inputs.length === 0) return
 
     setStarting(true)
     try {
-      const { jobId } = await videoApi2.exportAll(seriesId, inputs, force ? { force: true } : undefined)
+      // The server skips existing MP4s unless forced. Only selected/newly
+      // processed inputs reach this request, so other finished chapters stay out.
+      const rerender = force || inputs.some(i => !!exported[i.chapterId])
+      const { jobId } = await videoApi2.exportAll(seriesId, language, inputs, rerender ? { force: true } : undefined)
       setExportJob({
         id: jobId,
         seriesId,
@@ -370,6 +629,18 @@ export default function EditorChapterList2() {
     } finally {
       setStarting(false)
     }
+  }
+
+  function needsExport(chapterId: string): boolean {
+    const video = exported[chapterId]
+    return !video || isProcessedAfter(chapterId, language, video.modifiedAt)
+  }
+
+  /** Chapters whose checklist is complete right now — the only ones Preview and Export take. */
+  function readyIds(): string[] {
+    return chapters
+      .filter(ch => completedPart(ch.id) === null && liveChecklist(ch, pasted[ch.id] ?? '').ready)
+      .map(ch => ch.id)
   }
 
   async function cancelExport() {
@@ -404,7 +675,7 @@ export default function EditorChapterList2() {
   async function checkImageRefs() {
     if (!seriesId) return
     const inputs = chapters
-      .map(ch => ({ chapterId: ch.id, json: getTimelineJson(ch.id) ?? '' }))
+      .map(ch => ({ chapterId: ch.id, json: getTimelineJson(ch.id, language) ?? '' }))
       .filter(i => i.json.trim().length > 0)
 
     if (inputs.length === 0) {
@@ -459,7 +730,7 @@ export default function EditorChapterList2() {
       let saved = 0
       for (const chapter of cropScan.chapters) {
         if (!chapter.correctedJson) continue
-        setTimelineJson(chapter.chapterId, chapter.correctedJson)
+        setTimelineJson(chapter.chapterId, language, chapter.correctedJson)
         setPasted(prev =>
           // Only chapters whose box is actually open hold an entry here; the
           // rest read their paste back from storage when they are opened.
@@ -521,7 +792,7 @@ export default function EditorChapterList2() {
             toast({
               title: 'Export complete',
               description: done > 0
-                ? `${done} chapter${done === 1 ? '' : 's'} rendered to the series _video2 folder.${skipNote}`
+                ? `${done} chapter${done === 1 ? '' : 's'} rendered to the series ${language === 'hi' ? '_video2_hi' : '_video2'} folder.${skipNote}`
                 : 'Every chapter was already exported — nothing to render.'
             })
           }
@@ -586,7 +857,7 @@ export default function EditorChapterList2() {
    */
   async function refreshExported(id: string) {
     try {
-      const rows = await videoApi2.getExportedChapters(id)
+      const rows = await videoApi2.getExportedChapters(id, language)
       setExported(Object.fromEntries(rows.map(r => [r.chapterId, r])))
     } catch {
       // A failed scan just means the badges stay as they are; nothing here is
@@ -597,12 +868,18 @@ export default function EditorChapterList2() {
   useEffect(() => {
     if (!seriesId) return
     setLoading(true)
+    // The scan dialog and any finished job describe the other tab's videos.
+    setCropScan(null)
+    setExportJob(null)
     Promise.all([
       seriesApi.getById(seriesId),
-      videoApi2.getEditableChapters(seriesId),
-      videoApi2.getExportedChapters(seriesId).catch(() => [] as Exported2Chapter[])
+      videoApi2.getEditableChapters(seriesId, language),
+      videoApi2.getExportedChapters(seriesId, language).catch(() => [] as Exported2Chapter[])
     ])
-      .then(([s, chs, exportedRows]) => {
+      .then(async ([s, chs, exportedRows]) => {
+        // Pull in what was pasted or processed in another browser (or the
+        // desktop app) before reading the local cache below.
+        await syncSeriesTimelines(seriesId, language, chs.map(ch => ch.id))
         setSeriesTitle(s.title)
         setChapters(chs)
         setExported(Object.fromEntries(exportedRows.map(r => [r.chapterId, r])))
@@ -610,14 +887,35 @@ export default function EditorChapterList2() {
         // returning from the preview does not look like the paste was lost.
         const restored: Record<string, string> = {}
         for (const ch of chs) {
-          const json = getTimelineJson(ch.id)
+          const json = getTimelineJson(ch.id, language)
           if (json) restored[ch.id] = json
         }
         setPasted(restored)
       })
       .catch(err => console.error(err))
       .finally(() => setLoading(false))
-  }, [seriesId])
+  }, [seriesId, language])
+
+  // Recheck compressed videos when returning from saving or cleaning up files.
+  useEffect(() => {
+    if (!seriesId) return
+    let cancelled = false
+    setCompletion(null)
+    const refresh = () => {
+      if (document.hidden) return
+      void videoApi2.getSeriesCompletion(seriesId, language)
+        .then(result => { if (!cancelled) setCompletion(result) })
+        .catch(() => { if (!cancelled) setCompletion(null) })
+    }
+    refresh()
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      cancelled = true
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [seriesId, language])
 
   // The preview screen records "processed" while this list is still mounted
   // behind it, so re-read those markers whenever this view is shown again.
@@ -651,20 +949,27 @@ export default function EditorChapterList2() {
   // this recomputes after a paste, a clear, or a return from the preview —
   // the markers live in localStorage, which React cannot subscribe to.
   void processedTick
-  // Only chapters that cleared the four gates can ever be processed, so they
-  // are the pool Export All draws from. Whatever is processed right now is
+  // Only chapters with a complete checklist can be previewed, so they are the
+  // pool Export All draws from. Whatever is processed (previewed) right now is
   // exportable — the rest of the series is allowed to lag behind, and a
   // chapter that has not been through the pipeline yet simply waits its turn.
-  const readyChapters = chapters.filter(ch => ch.ready)
-  const processedInputs = collectProcessed(readyChapters.map(ch => ch.id))
+  const readySet = new Set(readyIds())
+  const readyChapters = chapters.filter(ch => readySet.has(ch.id))
+  const processedInputs = collectProcessed(readyChapters.map(ch => ch.id), language)
   const processedCount = processedInputs.length
   const allProcessed = readyChapters.length > 0 && processedCount === readyChapters.length
+
+  // Ready, pasted, and not yet processed — exactly what Process All would do.
+  const pendingProcessCount = readyChapters.filter(ch => {
+    const content = pasted[ch.id]?.trim() ?? ''
+    return content.length > 0 && !isProcessed(ch.id, language, content)
+  }).length
 
   // Of the processed chapters, how many still need rendering. This — not the
   // processed count — is what Export All would actually do, so it is what the
   // button counts and what decides whether it has anything to do at all.
-  const pendingExport = processedInputs.filter(i => !exported[i.chapterId]).length
-  const exportedCount = readyChapters.filter(ch => exported[ch.id]).length
+  const pendingExport = processedInputs.filter(i => needsExport(i.chapterId)).length
+  const exportedCount = readyChapters.filter(ch => exported[ch.id] && !needsExport(ch.id)).length
   // Nothing left to render: every chapter processed so far is already out.
   // Pressing the button then means re-render those, not wait for the others.
   const everythingExported = processedCount > 0 && pendingExport === 0
@@ -673,17 +978,67 @@ export default function EditorChapterList2() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="p-4 border-b flex items-center gap-3">
-        <Button variant="ghost" size="icon" onClick={() => navigate('/editor2')}>
+      <div className="p-4 border-b flex flex-wrap items-center gap-3">
+        <Button variant="ghost" size="icon" onClick={() => navigate(withLang('/editor2', language))}>
           <ArrowLeft className="h-5 w-5" />
         </Button>
         <Clapperboard className="h-5 w-5 text-primary" />
-        <div className="flex-1 min-w-0">
-          <h1 className="text-lg font-bold truncate">{seriesTitle}</h1>
+        <div className="flex-1 min-w-[240px]">
+          <div className="flex items-center gap-2">
+            <h1 className="text-lg font-bold truncate">{seriesTitle}</h1>
+            <SeriesDoneBadge completion={completion} />
+          </div>
           <p className="text-xs text-muted-foreground">
-            Editor 2.0 — script, audio, crops and timeline readiness
+            Editor 2.0 — {LANGUAGE_LABEL[language]} · {readyChapters.length}/{chapters.filter(ch => completedPart(ch.id) === null).length} ready to edit
           </p>
         </div>
+
+        {/* Locked while rendering: the job and its badges belong to this tab */}
+        <LanguageTabs
+          value={language}
+          onChange={setLanguage}
+          disabled={exporting || starting}
+          className="flex-shrink-0"
+        />
+
+        {/* The phone makes timelines in ChatGPT: send it the chapters still
+            without one, then fetch what it made. */}
+        <select aria-label="Phone timeline workflow" className="h-8 rounded border bg-background px-2 text-xs" value={phoneWorkflow} onChange={e => {
+          const value = e.target.value as 'legacy' | 'staged'; setPhoneWorkflow(value); localStorage.setItem('editor2.phoneWorkflow', value)
+        }}>
+          <option value="legacy">One-shot (existing)</option>
+          <option value="staged">Small batches (updated phone)</option>
+        </select>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 flex-shrink-0"
+          onClick={sendToPhone}
+          disabled={phoneBusy !== null}
+          title="Send every chapter with voiceover audio, alignment and cropped images but no timeline JSON to the Sleeper-Cell phone, which makes the JSON in ChatGPT"
+        >
+          {phoneBusy === 'send' ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Smartphone className="h-3 w-3 mr-1" />}
+          Send to phone
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 flex-shrink-0"
+          onClick={fetchFromPhone}
+          disabled={phoneBusy !== null}
+          title="Import the timeline JSON the phone made (from R2) into its chapters"
+        >
+          {phoneBusy === 'fetch' ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Download className="h-3 w-3 mr-1" />}
+          Fetch from phone
+        </Button>
+
+        <Button variant="outline" size="sm" className="h-8 flex-shrink-0"
+          disabled={phoneBusy !== null || starting || exporting || processingAll !== null || scanningNames || repairingNames || chapters.every(ch => completedPart(ch.id) !== null)}
+          onClick={() => void resetChapters(chapters.filter(ch => completedPart(ch.id) === null).map(ch => ch.id))}
+          title={`Clear timelines and processing state for unpublished ${LANGUAGE_LABEL[language]} chapters so you can generate them again`}>
+          {phoneBusy === 'reset' ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RotateCcw className="h-3 w-3 mr-1" />}
+          Reset timelines
+        </Button>
 
         {/* Export All — every processed chapter in one action. It does not
             wait for the whole series: whatever is ready now gets rendered,
@@ -739,6 +1094,35 @@ export default function EditorChapterList2() {
               </span>
             )}
 
+            {/* Process All — every pasted, ready chapter still showing
+                Process rather than Preview, run one by one without opening
+                each. Sits before Check Images: processing is what turns a
+                paste into something Export All can pick up at all. */}
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8"
+              onClick={processAll}
+              disabled={processingAll !== null || pendingProcessCount === 0}
+              title={
+                pendingProcessCount === 0
+                  ? 'Nothing to process — every ready, pasted chapter has already been processed'
+                  : `Process the ${pendingProcessCount} ready chapter${pendingProcessCount === 1 ? '' : 's'} with a paste still waiting on Process`
+              }
+            >
+              {processingAll ? (
+                <>
+                  <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                  Processing {processingAll.done + 1}/{processingAll.total} · Ch {processingAll.chapterNumber}
+                </>
+              ) : (
+                <>
+                  <Play className="h-3 w-3 mr-1" />
+                  Process All{pendingProcessCount > 0 ? ` (${pendingProcessCount})` : ''}
+                </>
+              )}
+            </Button>
+
             {/* Check Images — sits beside Export because a broken reference is
                 only ever noticed here, as a missing image in the preview or a
                 gap in a finished render. Before the export is the cheap moment
@@ -764,15 +1148,15 @@ export default function EditorChapterList2() {
               variant={everythingExported ? 'outline' : 'default'}
               className="h-8"
               onClick={() => exportAll(everythingExported)}
-              disabled={processedCount === 0 || starting}
+              disabled={processedCount === 0 || starting || processingAll !== null}
               title={
                 readyChapters.length === 0
-                  ? 'No chapter is ready yet — finish a script, voiceover, crops and timeline first'
+                  ? 'No chapter is ready yet — every checklist item (voiceover audio, alignment, timeline JSON, cropped images) has to pass first'
                   : processedCount === 0
-                    ? 'No chapter has been processed yet — paste a timeline and process one to export it'
+                    ? 'No ready chapter has been previewed yet — preview one to export it'
                     : everythingExported
                       ? `Every processed chapter is already exported — re-render all ${processedCount} from scratch`
-                      : `Render the ${pendingExport} processed chapter${pendingExport === 1 ? '' : 's'} that have not been exported yet` +
+                      : `Render the ${pendingExport} processed chapter${pendingExport === 1 ? '' : 's'} with a missing or older video` +
                         (allProcessed
                           ? ''
                           : ` — ${readyChapters.length - processedCount} ready chapter${
@@ -815,11 +1199,34 @@ export default function EditorChapterList2() {
           )}
 
           {chapters.map(ch => {
+            const completed = completedPart(ch.id)
+            if (completed !== null) {
+              return (
+                <div
+                  key={ch.id}
+                  data-chapter-row={ch.id}
+                  className={`flex items-center gap-3 px-4 py-2 ${completedRowClass}`}
+                >
+                  <span className="w-4 flex-shrink-0" />
+                  <span className="font-semibold text-sm tabular-nums w-14 flex-shrink-0">
+                    Ch {ch.number}
+                  </span>
+                  <span className="text-xs text-muted-foreground truncate flex-1 min-w-0">
+                    {ch.title || <span className="opacity-50">Untitled</span>}
+                  </span>
+                  {getTimelineJson(ch.id, language) && <TimelineModelBadge chapterId={ch.id} language={language} />}
+                  <CompletedBadge part={completed} label={`Part ${completed} done`} />
+                </div>
+              )
+            }
             const content = pasted[ch.id]?.trim() ?? ''
-            const done = content.length > 0 && isProcessed(ch.id, content)
+            const done = content.length > 0 && isProcessed(ch.id, language, content)
             const isOpen = expanded === ch.id
             const rowExport = exportJob?.chapters.find(c => c.chapterId === ch.id)
             const exportedRow = exported[ch.id]
+            const live = liveChecklist(ch, content)
+            const reexportReady = done && live.ready && !!exportedRow && needsExport(ch.id)
+            const missingText = `Missing: ${live.missing.join(', ')}`
 
             return (
               <div key={ch.id} data-chapter-row={ch.id}>
@@ -845,28 +1252,26 @@ export default function EditorChapterList2() {
                     {ch.title || <span className="opacity-50">Untitled</span>}
                   </span>
 
-                  {/* Gate dots — the four-gate readiness compressed to a row
-                      of icons, so the state reads at a glance without opening
-                      anything. */}
+                  {content && <TimelineModelBadge chapterId={ch.id} language={language} />}
+
+                  {/* The checklist compressed to a row of icons, so the
+                      state reads at a glance without opening anything. */}
                   <div className="flex items-center gap-1.5 flex-shrink-0">
-                    <GateDot ok={ch.hasScript} icon={<ScrollText className="h-3 w-3" />} label="Script" />
-                    <GateDot
-                      ok={ch.hasSectionAudio}
-                      icon={<Mic className="h-3 w-3" />}
-                      label={`Audio${ch.sectionCount > 0 ? ` (${ch.sectionCount} sections)` : ''}`}
-                    />
-                    <GateDot
-                      ok={ch.hasCropsClipper3}
-                      icon={<Scissors className="h-3 w-3" />}
-                      label={`Crops${ch.cropImageCount > 0 ? ` (${ch.cropDoneCount}/${ch.cropImageCount})` : ''}`}
-                    />
-                    <GateDot ok={ch.hasTimelineScript} icon={<Clock className="h-3 w-3" />} label="Timeline" />
+                    {CHECKLIST.map(item => (
+                      <ChecklistDot
+                        key={item.key}
+                        ok={live.checklist[item.key].ok}
+                        icon={item.icon}
+                        label={item.label}
+                        detail={live.checklist[item.key].detail}
+                      />
+                    ))}
                   </div>
 
                   {/* Status: where this chapter stands in the paste → process
                       → export run, which is what the user is actually tracking. */}
                   <div className="w-28 flex-shrink-0 flex justify-end">
-                    {rowExport && rowExport.status !== 'pending' ? (
+                    {rowExport && rowExport.status !== 'pending' && !(reexportReady && ['done', 'skipped'].includes(rowExport.status)) ? (
                       <span className="text-xs flex items-center gap-1">
                         {rowExport.status === 'rendering' && (
                           <>
@@ -897,7 +1302,7 @@ export default function EditorChapterList2() {
                           <span className="text-muted-foreground">Cancelled</span>
                         )}
                       </span>
-                    ) : exportedRow ? (
+                    ) : done && exportedRow && !reexportReady ? (
                       /* No job running — the standing state from the folder
                          scan, which is what makes "Exported" survive a reload
                          rather than living only inside a finished job. */
@@ -909,16 +1314,18 @@ export default function EditorChapterList2() {
                       </span>
                     ) : done ? (
                       <span className="text-xs text-green-600 flex items-center gap-1">
-                        <CheckCircle2 className="h-3 w-3" /> Processed
+                        <CheckCircle2 className="h-3 w-3" /> {reexportReady ? 'Re-export ready' : 'Processed'}
                       </span>
                     ) : content ? (
                       <span className="text-xs text-blue-500 flex items-center gap-1">
                         <ClipboardPaste className="h-3 w-3" /> Pasted
                       </span>
-                    ) : ch.ready ? (
-                      <span className="text-xs text-muted-foreground">Ready</span>
+                    ) : ch.inputsReady ? (
+                      <span className="text-xs text-muted-foreground" title="Everything but the timeline JSON is there">
+                        Needs JSON
+                      </span>
                     ) : (
-                      <span className="text-xs text-yellow-600 flex items-center gap-1" title={ch.reason ?? undefined}>
+                      <span className="text-xs text-yellow-600 flex items-center gap-1" title={missingText}>
                         <AlertTriangle className="h-3 w-3" /> Incomplete
                       </span>
                     )}
@@ -931,6 +1338,13 @@ export default function EditorChapterList2() {
                       processed row has finished with them and shows only
                       Preview, which keeps the common case quiet. */}
                   <div className="flex items-center gap-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
+                    <Button variant="outline" size="sm" className="h-7 text-xs" disabled={!ch.inputsReady} onClick={() => setStagedChapter(ch)} title="Build or resume a timeline with small AI prompts">Small batches</Button>
+                    <Button variant="outline" size="sm" className="h-7 text-xs"
+                      disabled={phoneBusy !== null || starting || exporting || processingAll !== null || scanningNames || repairingNames || pasting !== null}
+                      onClick={() => void resetChapters([ch.id])}
+                      title="Clear this timeline and processing state, then send to phone to generate it again">
+                      <RotateCcw className="h-3 w-3 mr-1" /> Reset
+                    </Button>
                     {!done && (
                       <>
                         <Button
@@ -938,8 +1352,8 @@ export default function EditorChapterList2() {
                           size="icon"
                           className="h-7 w-7"
                           onClick={() => copyAll(ch)}
-                          disabled={copying === ch.id}
-                          title="Copy All — prompt, script with timeline and crop metadata"
+                          disabled={copying === ch.id || !ch.canCopy}
+                          title={ch.copyBlockedReason ?? 'Copy All — prompt, script with timeline and crop metadata'}
                         >
                           {copying === ch.id ? (
                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -966,13 +1380,20 @@ export default function EditorChapterList2() {
                       </>
                     )}
 
+                    {/* Disabled until the whole checklist passes, and says why. */}
                     <Button
                       size="sm"
                       variant={done ? 'outline' : 'default'}
                       className="h-7 w-28"
                       onClick={() => startProcessing(ch)}
-                      disabled={!content}
-                      title={content ? undefined : 'Paste content from the clipboard first'}
+                      disabled={!live.ready}
+                      title={
+                        !live.ready
+                          ? missingText
+                          : done
+                            ? 'Play the processed timeline back'
+                            : 'Process the timeline JSON and play it back'
+                      }
                     >
                       {done ? (
                         <><Eye className="h-3 w-3 mr-1" /> Preview</>
@@ -980,6 +1401,14 @@ export default function EditorChapterList2() {
                         <><Play className="h-3 w-3 mr-1" /> Process</>
                       )}
                     </Button>
+                    {done && (
+                      <Button size="sm" variant={reexportReady || !exportedRow ? 'default' : 'outline'} className="h-7"
+                        disabled={!live.ready || starting || exporting || processingAll !== null}
+                        title={!live.ready ? missingText : `${exportedRow ? 'Re-render' : 'Export'} only chapter ${ch.number} from its processed timeline`}
+                        onClick={() => void exportAll(!!exportedRow, [ch.id])}>
+                        <Film className="h-3 w-3 mr-1" />{exportedRow ? 'Re-export' : 'Export'}
+                      </Button>
+                    )}
                   </div>
                 </div>
 
@@ -987,37 +1416,30 @@ export default function EditorChapterList2() {
                     only for the chapter being worked on. */}
                 {isOpen && (
                   <div className="px-4 pb-3 pl-11 space-y-2 bg-muted/20">
-                    {!ch.ready && ch.reason && (
-                      <p className="flex items-center gap-1 text-xs text-yellow-600">
-                        <AlertTriangle className="h-3 w-3 flex-shrink-0" />
-                        {ch.reason}
-                      </p>
-                    )}
-
-                    {!ch.ready && (
-                      <div className="flex items-center gap-3 flex-wrap">
-                        {!ch.hasScript && (
-                          <Link to="/narration" className="text-xs text-primary hover:underline flex items-center gap-1">
-                            <ScrollText className="h-3 w-3" /> Script
-                          </Link>
-                        )}
-                        {!ch.hasSectionAudio && (
-                          <Link to={`/narration/voiceover/${ch.id}`} className="text-xs text-primary hover:underline flex items-center gap-1">
-                            <Mic className="h-3 w-3" /> Voice
-                          </Link>
-                        )}
-                        {!ch.hasCropsClipper3 && (
-                          <Link to={`/clipper3/chapter/${ch.id}`} className="text-xs text-primary hover:underline flex items-center gap-1">
-                            <Scissors className="h-3 w-3" /> Clip
-                          </Link>
-                        )}
-                        {!ch.hasTimelineScript && (
-                          <Link to={`/narration/voiceover/${ch.id}`} className="text-xs text-primary hover:underline flex items-center gap-1">
-                            <Clock className="h-3 w-3" /> Timeline
-                          </Link>
-                        )}
-                      </div>
-                    )}
+                    {/* The checklist in full: what each item found, and where
+                        a missing one is fixed. */}
+                    <ul className="space-y-1 pt-2">
+                      {CHECKLIST.map(item => {
+                        const state = live.checklist[item.key]
+                        const fix = state.ok || !seriesId ? null : item.fix({ id: ch.id, seriesId }, language)
+                        return (
+                          <li key={item.key} className="flex items-start gap-2 text-xs">
+                            {state.ok ? (
+                              <CheckCircle2 className="h-3.5 w-3.5 mt-px flex-shrink-0 text-green-600" />
+                            ) : (
+                              <XCircle className="h-3.5 w-3.5 mt-px flex-shrink-0 text-destructive" />
+                            )}
+                            <span className="font-medium w-28 flex-shrink-0">{item.label}</span>
+                            <span className="text-muted-foreground min-w-0">{state.detail}</span>
+                            {fix && (
+                              <Link to={fix.to} className="text-primary hover:underline flex-shrink-0">
+                                {fix.label}
+                              </Link>
+                            )}
+                          </li>
+                        )
+                      })}
+                    </ul>
 
                     {/* An unprocessed row carries Copy and Paste inline, so
                         the detail repeats them only for a processed chapter —
@@ -1030,7 +1452,8 @@ export default function EditorChapterList2() {
                           size="sm"
                           className="h-7"
                           onClick={() => copyAll(ch)}
-                          disabled={copying === ch.id}
+                          disabled={copying === ch.id || !ch.canCopy}
+                          title={ch.copyBlockedReason ?? undefined}
                         >
                           {copying === ch.id ? (
                             <Loader2 className="h-3 w-3 mr-1 animate-spin" />
@@ -1098,7 +1521,7 @@ export default function EditorChapterList2() {
                             setPasted(prev => ({ ...prev, [ch.id]: value }))
                             // Editing the JSON by hand also counts as a new
                             // paste, so the result has to be rebuilt.
-                            setTimelineJson(ch.id, value)
+                            setTimelineJson(ch.id, language, value)
                             setProcessedTick(t => t + 1)
                           }}
                           rows={6}
@@ -1229,6 +1652,11 @@ export default function EditorChapterList2() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {stagedChapter && <StagedTimelineDialog key={`${stagedChapter.id}-${language}`} chapter={stagedChapter} language={language} close={() => setStagedChapter(null)} onUse={json => {
+        setPasted(prev => ({ ...prev, [stagedChapter.id]: json })); setTimelineJson(stagedChapter.id, language, json); setProcessedTick(t => t + 1)
+        toast({ title: 'Timeline JSON ready', description: 'Use Start Processing, then Preview and Export.' })
+      }} />}
     </div>
   )
 }

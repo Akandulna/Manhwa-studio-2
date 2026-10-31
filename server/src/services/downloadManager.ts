@@ -6,12 +6,14 @@
 import { Server } from 'socket.io';
 import PQueue from 'p-queue';
 import { prisma } from '../index.js';
-import { getChapterImages, DetectedImage } from './scraper.js';
+import { getChapterImages } from './scraper.js';
 import { zeroPad, sanitizeTitle } from '../utils/urlPattern.js';
+import { storePageImage } from './pageImageStore.js';
+import { flushAutoSend, noteChapterDownloaded } from './phoneSend.js';
+import { notifySeriesProcessChanged } from './seriesProcess.js';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as https from 'https';
-import * as http from 'http';
+import { downloadImage } from './imageDownload.js';
 
 interface DownloadTask {
   chapterId: string;
@@ -31,8 +33,6 @@ interface QueueStatus {
   currentChapter?: string;
 }
 
-const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
-
 export class DownloadManager {
   private io: Server;
   private queue: PQueue;
@@ -40,6 +40,21 @@ export class DownloadManager {
   private completedCount: number = 0;
   private failedCount: number = 0;
   private currentChapterId?: string;
+  private scheduled = new Set<string>();
+  private cancelledSeries = new Set<string>();
+  private activeSeries = new Map<string, number>();
+  private downloadControllers = new Map<string, Set<AbortController>>();
+
+  async cancelSeries(seriesId: string): Promise<void> {
+    this.cancelledSeries.add(seriesId);
+    for (const controller of this.downloadControllers.get(seriesId) ?? []) controller.abort();
+    await prisma.chapter.updateMany({ where: { seriesId, status: 'queued' }, data: { status: 'skipped' } });
+    const deadline = Date.now() + 60_000;
+    while (this.activeSeries.get(seriesId)) {
+      if (Date.now() > deadline) throw new Error('Waiting for the current page download to finish; deletion will retry');
+      await this.delay(100);
+    }
+  }
   
   constructor(io: Server) {
     this.io = io;
@@ -54,6 +69,8 @@ export class DownloadManager {
     
     this.queue.on('idle', () => {
       this.emitStatus();
+      // Series set to auto-send get their new chapters sent to the phone now the downloads are done.
+      flushAutoSend(this.io);
     });
   }
   
@@ -76,6 +93,7 @@ export class DownloadManager {
    */
   private emitStatus(): void {
     this.io.emit('queue:status', this.getQueueStatus());
+    notifySeriesProcessChanged();
   }
   
   /**
@@ -83,12 +101,16 @@ export class DownloadManager {
    */
   async queueChapters(chapterIds: string[]): Promise<void> {
     for (const chapterId of chapterIds) {
+      if (this.scheduled.has(chapterId)) continue;
       const chapter = await prisma.chapter.findUnique({
         where: { id: chapterId },
         include: { series: true }
       });
       
-      if (!chapter) continue;
+      // A completed Part's chapters were deleted on purpose (partArchive.ts).
+      if (!chapter || chapter.completedAt) continue;
+      // Chapters pulled from the phones (phonePull.ts) have no source page to download from.
+      if (!chapter.sourceUrl) continue;
       
       // Mark as queued
       await prisma.chapter.update({
@@ -106,7 +128,8 @@ export class DownloadManager {
       };
       
       // Add to queue
-      this.queue.add(() => this.downloadChapter(task));
+      this.scheduled.add(chapterId);
+      void this.queue.add(() => this.downloadChapter(task)).finally(() => this.scheduled.delete(chapterId));
     }
     
     this.emitStatus();
@@ -117,6 +140,7 @@ export class DownloadManager {
    * Download a single chapter
    */
   private async downloadChapter(task: DownloadTask): Promise<void> {
+    if (this.cancelledSeries.has(task.seriesId)) return;
     if (this.isPaused) {
       // Re-queue if paused
       await prisma.chapter.update({
@@ -126,7 +150,12 @@ export class DownloadManager {
       return;
     }
     
+    const controller = new AbortController();
+    const controllers = this.downloadControllers.get(task.seriesId) ?? new Set<AbortController>();
+    controllers.add(controller);
+    this.downloadControllers.set(task.seriesId, controllers);
     this.currentChapterId = task.chapterId;
+    this.activeSeries.set(task.seriesId, (this.activeSeries.get(task.seriesId) ?? 0) + 1);
     
     try {
       // Update status to downloading
@@ -135,6 +164,7 @@ export class DownloadManager {
         data: { status: 'downloading', error: null }
       });
       
+      if (controller.signal.aborted || this.cancelledSeries.has(task.seriesId)) return;
       this.io.emit('chapter:status', {
         chapterId: task.chapterId,
         status: 'downloading'
@@ -142,6 +172,7 @@ export class DownloadManager {
       
       // Get images from chapter page
       const { images, error } = await getChapterImages(task.sourceUrl);
+      if (controller.signal.aborted || this.cancelledSeries.has(task.seriesId)) return;
       
       if (error) {
         throw new Error(error);
@@ -164,6 +195,7 @@ export class DownloadManager {
       
       // Create/update page records
       for (let i = 0; i < images.length; i++) {
+        if (controller.signal.aborted || this.cancelledSeries.has(task.seriesId)) return;
         await prisma.page.upsert({
           where: {
             chapterId_index: {
@@ -188,12 +220,12 @@ export class DownloadManager {
       const requestDelay = parseInt(process.env.REQUEST_DELAY_MS || '500', 10);
       
       for (let i = 0; i < images.length; i++) {
+        if (controller.signal.aborted || this.cancelledSeries.has(task.seriesId)) return;
         const image = images[i];
         const pageNum = zeroPad(i + 1);
-        const ext = this.getImageExtension(image.src);
-        const filename = `page_${pageNum}${ext}`;
-        const localPath = path.join(task.folderPath, filename);
-        const fullPath = path.join(fullFolderPath, filename);
+        const destBase = path.join(fullFolderPath, `page_${pageNum}`);
+        // Raw bytes land here first; storePageImage moves/converts them into place
+        const partPath = `${destBase}${this.getImageExtension(image.src)}.part`;
         
         try {
           // Check if already downloaded
@@ -214,9 +246,19 @@ export class DownloadManager {
             }
           }
           
-          // Download the image
-          const bytes = await this.downloadImage(image.src, fullPath, task.sourceUrl);
+          // Download the image, then store it in its smallest lossless form
+          await downloadImage(image.src, partPath, task.sourceUrl, { signal: controller.signal });
+          if (controller.signal.aborted || this.cancelledSeries.has(task.seriesId)) { await fs.promises.unlink(partPath).catch(() => {}); return; }
+          const result = await storePageImage(partPath, destBase);
+          if (controller.signal.aborted || this.cancelledSeries.has(task.seriesId)) return;
+          const localPath = path.join(task.folderPath, path.basename(result.path));
           
+          // A stale file from an earlier attempt would show up as a duplicate page
+          if (existingPage?.localPath && existingPage.localPath !== localPath) {
+            await fs.promises.unlink(path.join(downloadRoot, existingPage.localPath)).catch(() => {});
+          }
+          
+          if (controller.signal.aborted || this.cancelledSeries.has(task.seriesId)) return;
           // Update page record
           await prisma.page.update({
             where: {
@@ -228,10 +270,11 @@ export class DownloadManager {
             data: {
               localPath,
               status: 'done',
-              bytes
+              bytes: result.bytes
             }
           });
           
+          if (controller.signal.aborted || this.cancelledSeries.has(task.seriesId)) return;
           downloadedCount++;
           
           // Update chapter progress
@@ -240,6 +283,7 @@ export class DownloadManager {
             data: { downloadedCount }
           });
           
+          if (controller.signal.aborted || this.cancelledSeries.has(task.seriesId)) return;
           // Emit progress
           this.io.emit('chapter:progress', {
             chapterId: task.chapterId,
@@ -254,6 +298,9 @@ export class DownloadManager {
           }
           
         } catch (pageError) {
+          await fs.promises.unlink(partPath).catch(() => {});
+          if (controller.signal.aborted || this.cancelledSeries.has(task.seriesId)) return;
+          
           // Mark page as failed but continue
           await prisma.page.update({
             where: {
@@ -269,6 +316,7 @@ export class DownloadManager {
         }
       }
       
+      if (controller.signal.aborted || this.cancelledSeries.has(task.seriesId)) return;
       // Check if all pages downloaded
       const failedPages = await prisma.page.count({
         where: {
@@ -277,6 +325,7 @@ export class DownloadManager {
         }
       });
       
+      if (controller.signal.aborted || this.cancelledSeries.has(task.seriesId)) return;
       const finalStatus = failedPages > 0 ? 'failed' : 'done';
       
       await prisma.chapter.update({
@@ -288,8 +337,10 @@ export class DownloadManager {
         }
       });
       
+      if (controller.signal.aborted || this.cancelledSeries.has(task.seriesId)) return;
       if (finalStatus === 'done') {
         this.completedCount++;
+        await noteChapterDownloaded(task.seriesId);
       } else {
         this.failedCount++;
       }
@@ -300,6 +351,7 @@ export class DownloadManager {
       });
       
     } catch (error) {
+      if (controller.signal.aborted || this.cancelledSeries.has(task.seriesId)) return;
       const message = error instanceof Error ? error.message : 'Unknown error';
       
       await prisma.chapter.update({
@@ -319,117 +371,13 @@ export class DownloadManager {
       });
       
     } finally {
+      controllers.delete(controller);
+      if (controllers.size === 0) this.downloadControllers.delete(task.seriesId);
+      this.activeSeries.set(task.seriesId, Math.max(0, (this.activeSeries.get(task.seriesId) ?? 1) - 1));
+      if (this.cancelledSeries.has(task.seriesId)) await prisma.chapter.updateMany({ where: { id: task.chapterId }, data: { status: 'skipped' } });
       this.currentChapterId = undefined;
       this.emitStatus();
     }
-  }
-  
-  /**
-   * Download an image with proper headers
-   */
-  private downloadImage(url: string, destPath: string, referer: string): Promise<number> {
-    return new Promise((resolve, reject) => {
-      const userAgent = DEFAULT_USER_AGENT;
-      
-      const parsedUrl = new URL(url);
-      const client = parsedUrl.protocol === 'https:' ? https : http;
-      
-      const options = {
-        hostname: parsedUrl.hostname,
-        port: parsedUrl.port,
-        path: parsedUrl.pathname + parsedUrl.search,
-        method: 'GET',
-        headers: {
-          'User-Agent': userAgent,
-          'Referer': referer,
-          'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Cache-Control': 'no-cache'
-        }
-      };
-      
-      const makeRequest = (url: string, retries: number = 3): void => {
-        const parsedUrl = new URL(url);
-        const client = parsedUrl.protocol === 'https:' ? https : http;
-        
-        const reqOptions = {
-          ...options,
-          hostname: parsedUrl.hostname,
-          port: parsedUrl.port,
-          path: parsedUrl.pathname + parsedUrl.search
-        };
-        
-        const req = client.request(reqOptions, (res) => {
-          // Handle redirects
-          if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-            makeRequest(res.headers.location, retries);
-            return;
-          }
-          
-          if (res.statusCode === 403) {
-            reject(new Error('403 Forbidden - CDN may be blocking requests. Check Referer/User-Agent settings.'));
-            return;
-          }
-          
-          if (res.statusCode === 429 && retries > 0) {
-            // Rate limited, retry after delay
-            setTimeout(() => makeRequest(url, retries - 1), 2000);
-            return;
-          }
-          
-          if (res.statusCode && res.statusCode >= 500 && retries > 0) {
-            // Server error, retry
-            setTimeout(() => makeRequest(url, retries - 1), 1000);
-            return;
-          }
-          
-          if (res.statusCode !== 200) {
-            reject(new Error(`HTTP ${res.statusCode}`));
-            return;
-          }
-          
-          const fileStream = fs.createWriteStream(destPath);
-          let bytes = 0;
-          
-          res.on('data', (chunk) => {
-            bytes += chunk.length;
-          });
-          
-          res.pipe(fileStream);
-          
-          fileStream.on('finish', () => {
-            fileStream.close();
-            resolve(bytes);
-          });
-          
-          fileStream.on('error', (err) => {
-            fs.unlink(destPath, () => {});
-            reject(err);
-          });
-        });
-        
-        req.on('error', (err) => {
-          if (retries > 0) {
-            setTimeout(() => makeRequest(url, retries - 1), 1000);
-          } else {
-            reject(err);
-          }
-        });
-        
-        req.setTimeout(30000, () => {
-          req.destroy();
-          if (retries > 0) {
-            setTimeout(() => makeRequest(url, retries - 1), 1000);
-          } else {
-            reject(new Error('Request timeout'));
-          }
-        });
-        
-        req.end();
-      };
-      
-      makeRequest(url);
-    });
   }
   
   /**
@@ -522,6 +470,7 @@ export class DownloadManager {
    * Shutdown the download manager
    */
   async shutdown(): Promise<void> {
+    for (const controllers of this.downloadControllers.values()) for (const controller of controllers) controller.abort();
     this.queue.pause();
     this.queue.clear();
     

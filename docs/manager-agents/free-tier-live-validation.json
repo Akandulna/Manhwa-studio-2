@@ -1,0 +1,21 @@
+{
+  "workerVersion": "2b02e41b-d1ee-4d9c-b7a9-6c191168ebac",
+  "usage": {
+    "day": "2026-10-19",
+    "operations": 617,
+    "rowsRead": 432439,
+    "rowsWritten": 4014,
+    "limits": {
+      "operations": 20000,
+      "rowsRead": 3000000,
+      "rowsWritten": 60000
+    },
+    "scope": "Relay-local counters since protection was deployed; not Cloudflare account-wide billing.",
+    "resetsAt": "2026-10-20T00:00:00.000Z"
+  },
+  "relayConnected": true,
+  "phones": 2,
+  "pendingReports": 0,
+  "deliveryError": null,
+  "scope": "Partial-day relay-local protection counters after deployment, migration and smoke checks; not Cloudflare account-wide analytics or a full-day operating measurement."
+}

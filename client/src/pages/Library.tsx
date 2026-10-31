@@ -1,12 +1,16 @@
-import { useEffect, useState } from 'react'
-import { usePublishedChapters } from '@/hooks/usePublishedChapters'
-import { publishedRowClass } from '@/components/PublishedBadge'
-import { Link } from 'react-router-dom'
-import { seriesApi, videoApi, Series } from '@/lib/api'
-import { Card, CardContent } from '@/components/ui/card'
+import { useSeriesOrder } from '@/hooks/useSeriesOrder'
+import { useCallback, useEffect, useState } from 'react'
+import { useSeriesProcess } from '@/hooks/useSeriesProcess'
+import { SeriesProcessTracker } from '@/components/SeriesProcessTracker'
+import { Link, useNavigate } from 'react-router-dom'
+import { seriesApi, r2Api, stitchApi, Series, PhoneSendJob, PhoneSyncStatus, LARGE_CHAPTER_PAGES } from '@/lib/api'
+import { useSocket } from '@/lib/socket'
+import { PhoneSendStatusBar } from '@/components/PhoneSendStatusBar'
+import { PhoneSendDialog } from '@/components/PhoneSendDialog'
+import { PhonePullDialog } from '@/components/PhonePullDialog'
+import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Progress } from '@/components/ui/progress'
 import { 
   Dialog,
   DialogContent,
@@ -17,7 +21,7 @@ import {
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Plus, BookOpen, Globe, CheckCircle, XCircle, Clock, Loader2, FolderInput, RefreshCw } from 'lucide-react'
+import { Plus, BookOpen, Loader2, FolderInput, RefreshCw, Smartphone, Layers, Download } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 
 const API_BASE = 'http://localhost:3002/api'
@@ -31,12 +35,10 @@ interface ScannedSeries {
 
 export default function Library() {
   const [series, setSeries] = useState<Series[]>([])
-  const [videoStatus, setVideoStatus] = useState<Record<string, 'draft' | 'exported'>>({})
-
-  // How many chapters of each series are actually rendered to video. This is
-  // the disk's answer, not a project row's: Editor 2.0 creates no VideoProject,
-  // so `videoStatus` alone reported nothing for a fully published series.
-  const { seriesPublished } = usePublishedChapters()
+  const orderedSeries = useSeriesOrder(series)
+  const [deleteTarget, setDeleteTarget] = useState<Series | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const { progress, error: progressError, reload: reloadProgress } = useSeriesProcess()
   const [loading, setLoading] = useState(true)
   const [importDialogOpen, setImportDialogOpen] = useState(false)
   const [scanning, setScanning] = useState(false)
@@ -45,15 +47,135 @@ export default function Library() {
   const [selectedForImport, setSelectedForImport] = useState<Set<string>>(new Set())
   const { toast } = useToast()
 
+  // Chapters too long for the pipeline (normal ones are 14–20 pages), for the Stitch button's count.
+  const [largeChapters, setLargeChapters] = useState(0)
+
+  // Sending chapters to the Sleeper-Cell phone app through Cloudflare R2.
+  const { socket } = useSocket()
+  const navigate = useNavigate()
+  const [sendOpen, setSendOpen] = useState(false)
+  // Chapters the Master phone downloaded and sent, to bring in.
+  const [pullOpen, setPullOpen] = useState(false)
+  const [sendJob, setSendJob] = useState<PhoneSendJob | null>(null)
+  const [dismissedJobId, setDismissedJobId] = useState<string | null>(null)
+
+  // What the phone has of the chapters sent to it.
+  const [phoneSync, setPhoneSync] = useState<PhoneSyncStatus | null>(null)
+  const loadPhoneSync = useCallback(() => {
+    r2Api.getPhoneSync().then(setPhoneSync).catch(() => {})
+  }, [])
+
   useEffect(() => {
     loadSeries()
-  }, [])
+    // Pick up a send that is running, or finished while this page was closed (auto-send runs on its own).
+    r2Api.getStatus().then(status => setSendJob(status.job)).catch(() => {})
+    // From the server's copy of the phone's receipt. Nothing on window focus:
+    // R2 operations must stay in the free tier.
+    loadPhoneSync()
+    stitchApi
+      .getChapters()
+      .then(rows => setLargeChapters(rows.filter(r => r.pageCount > LARGE_CHAPTER_PAGES && !r.stitched).length))
+      .catch(() => {})
+  }, [loadPhoneSync])
+
+  // A finished send adds chapters the phone doesn't have yet.
+  const sendFinished = sendJob !== null && sendJob.state !== 'running'
+  useEffect(() => {
+    if (sendFinished) loadPhoneSync()
+  }, [sendFinished, sendJob?.id, loadPhoneSync])
+
+  // Through the phone relay the phone reports each chapter it unpacks or clears.
+  useEffect(() => {
+    if (!socket) return
+    const onReceipt = (event: { kind: string }) => {
+      if (event.kind === 'sync') loadPhoneSync()
+    }
+    socket.on('phone:receipt', onReceipt)
+    socket.on('library:updated', loadSeries)
+    return () => {
+      socket.off('phone:receipt', onReceipt)
+      socket.off('library:updated', loadSeries)
+    }
+  }, [socket, loadPhoneSync])
+
+  useEffect(() => {
+    if (!socket) return
+    const handleProgress = (job: PhoneSendJob) => setSendJob(job)
+    socket.on('phone-send:progress', handleProgress)
+    return () => {
+      socket.off('phone-send:progress', handleProgress)
+    }
+  }, [socket])
+
+  const handleOpenSend = async () => {
+    try {
+      const status = await r2Api.getStatus()
+      if (!status.configured) {
+        toast({
+          title: 'Connect Cloudflare R2 first',
+          description: 'Add your R2 credentials here, then come back to the Library to send chapters.'
+        })
+        navigate('/settings?tab=cloudflare')
+        return
+      }
+      setSendJob(status.job)
+      setSendOpen(true)
+    } catch {
+      toast({
+        title: 'Error',
+        description: 'Could not reach the server to check R2 settings',
+        variant: 'destructive'
+      })
+    }
+  }
+
+  const markPart = async (item: Series, part: number, done: boolean) => {
+    try {
+      await seriesApi.markPart(item.id, part, done)
+      reloadProgress()
+      toast({ title: done ? `Part ${part} marked done` : `Part ${part} manual completion removed`, description: item.title })
+    } catch (error) { toast({ title: 'Could not update part', description: error instanceof Error ? error.message : 'Please try again', variant: 'destructive' }) }
+  }
+  const deleteEverywhere = async () => {
+    if (!deleteTarget) return
+    setDeleting(true)
+    try {
+      await seriesApi.deleteEverywhere(deleteTarget.id)
+      setDeleteTarget(null); await loadSeries(); reloadProgress()
+      toast({ title: 'Deletion queued', description: 'The series will be removed from all synced devices and cloud storage.' })
+    } catch (error) { toast({ title: 'Could not delete series', description: error instanceof Error ? error.message : 'Please try again', variant: 'destructive' }) }
+    finally { setDeleting(false) }
+  }
+
+  const handleSend = async (picked: { seriesId: string; chapterIds: string[]; resetClipping?: boolean }[]) => {
+    try {
+      setSendJob(await r2Api.sendToPhone(picked))
+    } catch (error) {
+      toast({
+        title: 'Sending failed to start',
+        description: error instanceof Error ? error.message : 'Unknown error',
+        variant: 'destructive'
+      })
+      throw error
+    }
+  }
+
+  const handleCancelSend = async () => {
+    try {
+      const { job } = await r2Api.cancel()
+      if (job) setSendJob(job)
+    } catch {
+      // The socket will still report the job's real state.
+    }
+  }
+
+  const sendRunning = sendJob?.state === 'running'
+  const showSendStatus = sendJob !== null && (sendRunning || sendJob.id !== dismissedJobId)
 
   const loadSeries = async () => {
     try {
       const data = await seriesApi.getAll()
       setSeries(data)
-      videoApi.getSeriesStatus().then(setVideoStatus).catch(() => {})
     } catch (error) {
       toast({
         title: 'Error',
@@ -163,45 +285,6 @@ export default function Library() {
     }
   }
 
-  const getStatusInfo = (statusCounts: Series['statusCounts']) => {
-    if (!statusCounts) return { label: 'Unknown', variant: 'outline' as const, progress: 0 }
-    
-    const total = Object.values(statusCounts).reduce((a, b) => a + b, 0)
-    const done = statusCounts.done
-    const failed = statusCounts.failed
-    const downloading = statusCounts.downloading + statusCounts.queued
-    
-    if (downloading > 0) {
-      return {
-        label: `Downloading (${downloading})`,
-        variant: 'default' as const,
-        progress: Math.round((done / total) * 100)
-      }
-    }
-    
-    if (failed > 0) {
-      return {
-        label: `${failed} Failed`,
-        variant: 'destructive' as const,
-        progress: Math.round((done / total) * 100)
-      }
-    }
-    
-    if (done === total) {
-      return {
-        label: 'Complete',
-        variant: 'success' as const,
-        progress: 100
-      }
-    }
-    
-    return {
-      label: `${done}/${total} Done`,
-      variant: 'secondary' as const,
-      progress: Math.round((done / total) * 100)
-    }
-  }
-
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -211,7 +294,8 @@ export default function Library() {
   }
 
   return (
-    <div className="p-6">
+    <div className="min-h-full flex flex-col">
+    <div className="p-6 flex-1">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold">Library</h1>
@@ -220,6 +304,25 @@ export default function Library() {
           </p>
         </div>
         <div className="flex gap-2">
+          <Button variant="outline" onClick={handleOpenSend} disabled={series.length === 0}>
+            <Smartphone className="h-4 w-4 mr-2" />
+            Send to phone
+          </Button>
+          <Button variant="outline" onClick={() => setPullOpen(true)} title="Chapters the Master phone downloaded and sent to R2">
+            <Download className="h-4 w-4 mr-2" />
+            Get from phones
+          </Button>
+          <Link to="/stitch">
+            <Button variant="outline" title={`Chapters with more than ${LARGE_CHAPTER_PAGES} pages need stitching`}>
+              <Layers className="h-4 w-4 mr-2" />
+              Stitch Pages
+              {largeChapters > 0 && (
+                <Badge className="ml-2 border-transparent bg-amber-500 text-white hover:bg-amber-500">
+                  {largeChapters}
+                </Badge>
+              )}
+            </Button>
+          </Link>
           <Button variant="outline" onClick={handleOpenImportDialog}>
             <FolderInput className="h-4 w-4 mr-2" />
             Import Existing
@@ -232,6 +335,22 @@ export default function Library() {
           </Link>
         </div>
       </div>
+
+      {progressError && <div role="status" className="mb-4 flex items-center justify-between rounded-lg border border-amber-500/30 p-3 text-sm"><span>{progressError} Showing the last known status.</span><Button variant="ghost" size="sm" onClick={reloadProgress}>Retry</Button></div>}
+
+      <PhonePullDialog open={pullOpen} onOpenChange={setPullOpen} onPulled={() => { loadSeries(); loadPhoneSync() }} />
+      <Dialog open={deleteTarget !== null} onOpenChange={open => { if (!open && !deleting) setDeleteTarget(null) }}>
+        <DialogContent><DialogHeader><DialogTitle>Delete “{deleteTarget?.title}” everywhere?</DialogTitle><DialogDescription>Permanently deletes this series, pages, scripts, audio, crops and exports from every synced device and cloud storage. Offline devices delete their copy when they reconnect with the updated app. This cannot be undone.</DialogDescription></DialogHeader>
+          <DialogFooter><Button variant="outline" disabled={deleting} onClick={() => setDeleteTarget(null)}>Cancel</Button><Button variant="destructive" disabled={deleting} onClick={deleteEverywhere}>{deleting ? 'Deleting…' : 'Delete everywhere'}</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <PhoneSendDialog
+        open={sendOpen}
+        onOpenChange={setSendOpen}
+        busy={sendRunning}
+        onSend={handleSend}
+      />
 
       {/* Import Dialog */}
       <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
@@ -342,76 +461,17 @@ export default function Library() {
           </Link>
         </Card>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {series.map((s) => {
-            const status = getStatusInfo(s.statusCounts)
-            // null until the lookup resolves, or when nothing is published yet.
-            const rollup = seriesPublished(s.id)
-            const published = rollup && rollup.published > 0 ? rollup : null
+        <SeriesProcessTracker series={orderedSeries} progress={progress} phoneSync={phoneSync} onDelete={setDeleteTarget} onMarkPart={markPart} />
+      )}
+    </div>
 
-            return (
-              <Link to={`/series/${s.id}`} key={s.id}>
-                <Card className={`h-full hover:shadow-lg transition-shadow cursor-pointer overflow-hidden ${
-                  published ? publishedRowClass : ''
-                }`}>
-                  {/* Cover image placeholder */}
-                  <div className="aspect-[3/4] bg-gradient-to-br from-primary/20 to-primary/5 relative">
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <BookOpen className="h-16 w-16 text-primary/30" />
-                    </div>
-                    <div className="absolute bottom-2 right-2">
-                      <Badge variant={status.variant}>
-                        {status.label}
-                      </Badge>
-                    </div>
-                    {/* Published state wins over a stale Editor 1.0 project row:
-                        a rendered MP4 on disk is a fact, "draft" is only an
-                        intention someone may have abandoned. */}
-                    {(published || videoStatus[s.id]) && (
-                      <div className="absolute top-2 left-2">
-                        {published ? (
-                          <Badge
-                            className={
-                              published.published === published.total
-                                ? 'border-transparent bg-fuchsia-600 text-white hover:bg-fuchsia-600/80'
-                                : 'border-transparent bg-fuchsia-600/80 text-white hover:bg-fuchsia-600/60'
-                            }
-                            title={`${published.published} of ${published.total} chapters rendered to video`}
-                          >
-                            🎬 {published.published === published.total
-                              ? 'Published'
-                              : `Published ${published.published}/${published.total}`}
-                          </Badge>
-                        ) : (
-                          <Badge variant={videoStatus[s.id] === 'exported' ? 'success' : 'secondary'}>
-                            {videoStatus[s.id] === 'exported' ? '🎬 Exported' : '🎬 Draft'}
-                          </Badge>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                  
-                  <CardContent className="p-4">
-                    <h3 className="font-semibold text-lg truncate mb-1">
-                      {s.title}
-                    </h3>
-                    
-                    <div className="flex items-center gap-1 text-sm text-muted-foreground mb-3">
-                      <Globe className="h-3 w-3" />
-                      <span className="truncate">{s.sourceSite}</span>
-                    </div>
-                    
-                    <div className="flex items-center justify-between text-sm mb-2">
-                      <span>{s.chapterCount} chapters</span>
-                      <span>{status.progress}%</span>
-                    </div>
-                    
-                    <Progress value={status.progress} className="h-1" />
-                  </CardContent>
-                </Card>
-              </Link>
-            )
-          })}
+      {showSendStatus && sendJob && (
+        <div className="sticky bottom-0 z-20">
+          <PhoneSendStatusBar
+            job={sendJob}
+            onCancel={handleCancelSend}
+            onDismiss={() => setDismissedJobId(sendJob.id)}
+          />
         </div>
       )}
     </div>

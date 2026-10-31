@@ -1,0 +1,166 @@
+/**
+ * The phones' screens, from Phone Status: Wake, Screen off and Screenshot go
+ * to Sleeper-Cell as relay requests (`screen_on`, `screen_off`, `screenshot`),
+ * only through the relay (R2 would be far too slow, and costs operations).
+ *
+ * Each phone answers with two receipts that phoneRelay.ts keeps apart from the
+ * status ones:
+ *   screen       { device, deviceId, updatedAt, answers?, on, locked, appOpen, keptOn, canLock, remoteStart,
+ *                  last?: { action, ok, note, at }, battery?: { level, charging, plugged } | null }
+ *   screenshot   { device, deviceId, takenAt, answers?, shots: [{ label, width, height, jpeg (base64) }] }
+ *   (`answers` on a screenshot is the Screenshot or Wake request it follows.)
+ * A screenshot is posted only when there is one; a failed one's note is in
+ * `screen.last`. Screenshots are kept nowhere: the relay only passes them on,
+ * and phoneRelay.ts holds the last one in memory until Phone Status has shown
+ * it and asks for it to be dropped (dropPhoneScreenshot), or for 10 minutes.
+ */
+
+import { dropScreenshot, relayConfigured, relayPhones, relayScreens, sendPhoneRequest, type PhoneAction } from './phoneRelay.js'
+
+export type ScreenCommand = 'on' | 'off' | 'shot'
+
+const ACTION: Record<ScreenCommand, PhoneAction> = { on: 'screen_on', off: 'screen_off', shot: 'screenshot' }
+
+interface ScreenReceipt {
+  updatedAt?: unknown
+  answers?: unknown
+  on?: unknown
+  locked?: unknown
+  appOpen?: unknown
+  keptOn?: unknown
+  canLock?: unknown
+  remoteStart?: unknown
+  last?: { action?: unknown; ok?: unknown; note?: unknown; at?: unknown } | null
+  battery?: { level?: unknown; charging?: unknown; plugged?: unknown } | null
+}
+
+interface ScreenshotReceipt {
+  takenAt?: unknown
+  answers?: unknown
+  shots?: { label?: unknown; width?: unknown; height?: unknown; jpeg?: unknown }[]
+}
+
+export interface PhoneScreenState {
+  /** When the phone sent it. */
+  at: string
+  /** The request it answers (sendScreenCommand's id), or null when it reported by itself. */
+  answers: string | null
+  on: boolean
+  locked: boolean
+  /** Sleeper-Cell is on screen (resumed). */
+  appOpen: boolean
+  /** Woken from here and kept on until Screen off. */
+  keptOn: boolean
+  /** Sleeper-Cell is a device admin, so Screen off locks at once; without it the screen times out by itself. */
+  canLock: boolean
+  remoteStart: boolean
+  /** The last command it handled. */
+  last: { action: string; ok: boolean; note: string; at: string } | null
+  /** Its battery as of `at`; null from builds before they sent it. */
+  battery: PhoneBattery | null
+}
+
+export interface PhoneBattery {
+  /** 0–100. */
+  level: number
+  /** Charging, or full on the charger. */
+  charging: boolean
+  /** What it's plugged into; null when it isn't. */
+  plugged: 'ac' | 'usb' | 'wireless' | 'dock' | null
+}
+
+const PLUGS = new Set(['ac', 'usb', 'wireless', 'dock'])
+
+function parseBattery(raw: ScreenReceipt['battery']): PhoneBattery | null {
+  if (!raw || typeof raw !== 'object') return null
+  const level = Number(raw.level)
+  if (raw.level === null || !Number.isFinite(level)) return null
+  return {
+    level: Math.max(0, Math.min(100, Math.round(level))),
+    charging: raw.charging === true,
+    plugged: typeof raw.plugged === 'string' && PLUGS.has(raw.plugged) ? (raw.plugged as PhoneBattery['plugged']) : null
+  }
+}
+
+export interface PhoneScreenshot {
+  takenAt: string
+  /** The Screenshot or Wake request it follows. */
+  answers: string | null
+  /** Where each image is served: GET /r2/phone/screens/:device/:index (with ?v= to bust the cache). */
+  shots: { label: string; width: number; height: number; url: string }[]
+}
+
+export interface PhoneScreen {
+  device: string
+  screen: PhoneScreenState | null
+  screenshot: PhoneScreenshot | null
+}
+
+const iso = (value: unknown, fallback: number): string =>
+  typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? value : new Date(fallback).toISOString()
+
+/** What every phone last said of its screen, and its last screenshot. */
+export function getPhoneScreens(): PhoneScreen[] {
+  const byDevice = new Map<string, PhoneScreen>()
+  const entry = (device: string) => {
+    let found = byDevice.get(device)
+    if (!found) byDevice.set(device, (found = { device, screen: null, screenshot: null }))
+    return found
+  }
+  for (const { device, at, body } of relayScreens<ScreenReceipt>('screen')) {
+    const last = body.last && typeof body.last === 'object' && typeof body.last.action === 'string'
+      ? { action: body.last.action, ok: body.last.ok === true, note: typeof body.last.note === 'string' ? body.last.note : '', at: iso(body.last.at, at) }
+      : null
+    entry(device).screen = {
+      at: iso(body.updatedAt, at),
+      answers: typeof body.answers === 'string' && body.answers ? body.answers : null,
+      on: body.on === true,
+      locked: body.locked === true,
+      appOpen: body.appOpen === true,
+      keptOn: body.keptOn === true,
+      canLock: body.canLock === true,
+      remoteStart: body.remoteStart === true,
+      last,
+      battery: parseBattery(body.battery)
+    }
+  }
+  for (const { device, at, body } of relayScreens<ScreenshotReceipt>('screenshot')) {
+    const takenAt = iso(body.takenAt, at)
+    const shots = (Array.isArray(body.shots) ? body.shots : [])
+      .map((shot, index) => ({ shot, index }))
+      .filter(({ shot }) => shot && typeof shot.jpeg === 'string' && shot.jpeg.length > 0)
+      .map(({ shot, index }) => ({
+        label: typeof shot.label === 'string' ? shot.label : `Tab ${index + 1}`,
+        width: Number(shot.width) || 0,
+        height: Number(shot.height) || 0,
+        url: `/api/r2/phone/screens/${encodeURIComponent(device)}/${index}?v=${Date.parse(takenAt) || at}`
+      }))
+    const answers = typeof body.answers === 'string' && body.answers ? body.answers : null
+    if (shots.length) entry(device).screenshot = { takenAt, answers, shots }
+  }
+  return [...byDevice.values()]
+}
+
+/** One screenshot image as JPEG bytes, or null when there's no such one. */
+export function phoneScreenshotImage(device: string, index: number): Buffer | null {
+  const receipt = relayScreens<ScreenshotReceipt>('screenshot').find(r => r.device === device)
+  const jpeg = receipt?.body.shots?.[index]?.jpeg
+  return typeof jpeg === 'string' && jpeg ? Buffer.from(jpeg, 'base64') : null
+}
+
+/** Forgets a phone's screenshot: Phone Status showed it and its viewer closed. */
+export function dropPhoneScreenshot(device: string): boolean {
+  return dropScreenshot(device)
+}
+
+/**
+ * Sends Wake, Screen off or Screenshot to one phone. `reached` is false when
+ * it isn't connected: the relay keeps the request, and the phone acts on it if
+ * it connects within 2 minutes.
+ */
+export async function sendScreenCommand(command: ScreenCommand, device: string): Promise<{ id: string; reached: boolean }> {
+  if (!relayConfigured()) throw new Error('The phone’s screen controls need the phone relay (Settings → Cloudflare)')
+  if (!device || !relayPhones().some(p => p.id === device)) throw new Error('That phone is not known to the relay')
+  const sent = await sendPhoneRequest(ACTION[command], { device })
+  return { id: sent.id, reached: sent.phones > 0 }
+}

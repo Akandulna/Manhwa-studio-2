@@ -1,0 +1,21 @@
+// Add Phase 0 contract fixtures to the existing JVM test suite without changing app sources.
+// Usage: ./gradlew testDebugUnitTest --offline --init-script <this-file> -PmanagerContractsDir=<protocol-directory>
+allprojects {
+    afterEvaluate { project ->
+        if (project.plugins.hasPlugin('com.android.application')) {
+            def contracts = project.findProperty('managerContractsDir')
+            if (contracts == null) throw new GradleException('Pass -PmanagerContractsDir=<manager-agents/protocol absolute path>')
+            def sourceDir = new File(contracts.toString())
+            if (!new File(sourceDir, 'fixtures.json').isFile()) throw new GradleException('Missing manager contract fixture corpus')
+            project.android.sourceSets.test.java.srcDir(sourceDir)
+            project.tasks.withType(Test).configureEach {
+                environment 'MANAGER_CONTRACT_FIXTURES_DIR', sourceDir.absolutePath
+                environment 'MANAGER_UI_FIXTURES_DIR', new File(sourceDir.parentFile, 'website-ui').absolutePath
+                def uiOutput = project.findProperty('managerPhase2FixtureOutput')
+                if (uiOutput != null) environment 'MANAGER_PHASE2_FIXTURE_OUTPUT', uiOutput.toString()
+                def output = project.findProperty('managerPhase1FixtureOutput')
+                if (output != null) environment 'MANAGER_PHASE1_FIXTURE_OUTPUT', output.toString()
+            }
+        }
+    }
+}

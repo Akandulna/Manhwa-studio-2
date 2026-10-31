@@ -10,8 +10,6 @@ interface ThemeContextValue {
   /** The theme actually painted right now — 'system' resolved against the OS. */
   resolvedTheme: 'light' | 'dark'
   setTheme: (theme: Theme) => void
-  /** Flip between light and dark, resolving 'system' first. */
-  toggleTheme: () => void
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null)
@@ -70,12 +68,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
-  const toggleTheme = useCallback(() => {
-    setTheme(resolve(theme) === 'dark' ? 'light' : 'dark')
-  }, [theme, setTheme])
-
   return (
-    <ThemeContext.Provider value={{ theme, resolvedTheme, setTheme, toggleTheme }}>
+    <ThemeContext.Provider value={{ theme, resolvedTheme, setTheme }}>
       {children}
     </ThemeContext.Provider>
   )

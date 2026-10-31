@@ -1,0 +1,137 @@
+{
+  "phoneReopenedByUser": true,
+  "sourceWatermarks": [
+    {
+      "manager": "device_accounts",
+      "sequence": 11,
+      "observedAt": "2026-10-12T06:43:50.991Z",
+      "receivedAt": "2026-10-18T18:57:21.568Z"
+    },
+    {
+      "manager": "device_library",
+      "sequence": 249,
+      "observedAt": "2026-10-19T11:32:20.757611Z",
+      "receivedAt": "2026-10-19T11:32:22.595Z"
+    },
+    {
+      "manager": "device_narration",
+      "sequence": 250,
+      "observedAt": "2026-10-19T11:32:20.757611Z",
+      "receivedAt": "2026-10-19T11:32:22.812Z"
+    },
+    {
+      "manager": "voiceover",
+      "sequence": 250,
+      "observedAt": "2026-10-19T11:32:20.757611Z",
+      "receivedAt": "2026-10-19T11:32:23.138Z"
+    },
+    {
+      "manager": "device_editor",
+      "sequence": 249,
+      "observedAt": "2026-10-19T11:32:20.757611Z",
+      "receivedAt": "2026-10-19T11:32:23.384Z"
+    },
+    {
+      "manager": "device_clipping",
+      "sequence": 249,
+      "observedAt": "2026-10-19T11:32:20.757611Z",
+      "receivedAt": "2026-10-19T11:32:23.646Z"
+    },
+    {
+      "manager": "website_ui",
+      "sequence": 208,
+      "observedAt": "2026-10-19T11:33:55.461317Z",
+      "receivedAt": "2026-10-19T11:33:56.401Z"
+    },
+    {
+      "manager": "device",
+      "sequence": 249,
+      "observedAt": "2026-10-19T11:32:20.757611Z",
+      "receivedAt": "2026-10-19T11:32:23.909Z"
+    },
+    {
+      "manager": "sync",
+      "sequence": 249,
+      "observedAt": "2026-10-19T11:32:20.757611Z",
+      "receivedAt": "2026-10-19T11:32:24.122Z"
+    }
+  ],
+  "oldestFactObservedAt": "2026-10-12T06:41:52.006Z",
+  "oldestFactAcceptedAt": "2026-10-18T18:57:20.424Z",
+  "verifiedAt": "2026-10-19T11:36:39.071Z",
+  "deviceId": "304527cb8fc1440a",
+  "nativeProtocol": "manager-report/1",
+  "nativeFactsInStudio": 498,
+  "allNativeFactsAuthorityAccepted": true,
+  "replayedFactReports": 33,
+  "replayedManagers": [
+    "device_accounts",
+    "device_clipping",
+    "device_editor",
+    "device_library",
+    "device_narration",
+    "voiceover",
+    "website_ui"
+  ],
+  "sourceTimesPreserved": true,
+  "authorityTimesPreserved": true,
+  "legacyReceiptCorrelation": true,
+  "activeRunsBefore": 0,
+  "activeRunsAfter": 0,
+  "pendingStudioReports": 0,
+  "deliveryError": null,
+  "incidentCount": 3,
+  "scope": "Installed Nord reporting across confirmed recent phone boot and fresh app process: retained source ordering, authority timestamps, reconnect replay and receipt correlation. No forced Retry-After, managed task or production run.",
+  "phoneRebootReportedByUser": true,
+  "androidRebootIndependentlyConfirmed": true,
+  "androidRebootEvidence": {
+    "checkedAt": "2026-10-19T11:36:53.361624+00:00",
+    "model": "CPH2467",
+    "wirelessEndpoint": "192.168.1.49:38497",
+    "uptimeSeconds": 355.18,
+    "bootCount": 3,
+    "bootId": "021f0b77-20ba-4013-8404-fe6348a38fab",
+    "appPackage": "com.sleepercell.browser",
+    "previousAppPid": 25449,
+    "currentAppPid": 6162,
+    "limitation": "No pre-reboot boot ID was captured. Recent Android uptime and a different app process corroborate the user-reported reboot."
+  },
+  "continuedSequences": {
+    "device_accounts": {
+      "before": 11,
+      "after": 11
+    },
+    "device_library": {
+      "before": 248,
+      "after": 249
+    },
+    "device_narration": {
+      "before": 249,
+      "after": 250
+    },
+    "voiceover": {
+      "before": 249,
+      "after": 250
+    },
+    "device_editor": {
+      "before": 248,
+      "after": 249
+    },
+    "device_clipping": {
+      "before": 248,
+      "after": 249
+    },
+    "website_ui": {
+      "before": 206,
+      "after": 208
+    },
+    "device": {
+      "before": 248,
+      "after": 249
+    },
+    "sync": {
+      "before": 248,
+      "after": 249
+    }
+  }
+}

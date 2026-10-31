@@ -1,0 +1,713 @@
+[
+  {
+    "schema": "manager-report/1",
+    "eventId": "ui-fixture-chatgpt",
+    "observedAt": "2026-10-19T00:01:03Z",
+    "source": {
+      "sequence": 1,
+      "manager": "device_clipping",
+      "id": "fixture-phone/device_clipping",
+      "deviceId": "fixture-phone"
+    },
+    "facts": [{
+      "inputRevision": null,
+      "availability": [],
+      "websiteUi": {
+        "schema": "website-ui/1",
+        "reason": "stable",
+        "workflow": "composer_empty",
+        "compatibilityVerifiedAt": null,
+        "expected": [
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "composer",
+            "label": "prompt"
+          },
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "model",
+            "label": "model"
+          },
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "navigation",
+            "label": "navigation"
+          },
+          {
+            "signature": "11111111",
+            "count": 0,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "id": "response_actions",
+            "label": "absent"
+          },
+          {
+            "signature": "11111111",
+            "count": 0,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "id": "send",
+            "label": "absent"
+          },
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "upload",
+            "label": "attach"
+          }
+        ],
+        "impact": "none",
+        "lastMatchingAt": null,
+        "changeId": "4c754ca2c2738104dd18e64e7f909e952b8699d0d8d5a7f554631475cb622d32",
+        "classification": "informational",
+        "observed": [
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "44444444",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "composer",
+            "label": "prompt"
+          },
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "model",
+            "label": "model"
+          },
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "navigation",
+            "label": "navigation"
+          },
+          {
+            "signature": "11111111",
+            "count": 0,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "id": "response_actions",
+            "label": "absent"
+          },
+          {
+            "signature": "11111111",
+            "count": 0,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "id": "send",
+            "label": "absent"
+          },
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "upload",
+            "label": "attach"
+          }
+        ],
+        "baselineVersion": "f5e909a2ba912c1f95227f80972a722e0ab1478ec51b7621bde82f33978e3705",
+        "route": {
+          "monitorObservedAt": "2026-10-19T00:01:03Z",
+          "issuesReceivedAt": null,
+          "clipperReceivedAt": "2026-10-19T00:01:03Z"
+        },
+        "provider": "chatgpt",
+        "audit": {
+          "dueAt": "2026-10-20T00:01:03Z",
+          "state": "checked"
+        },
+        "variant": {
+          "viewport": "480x800",
+          "theme": "light",
+          "locale": "en",
+          "profileVariant": "unknown"
+        },
+        "firstChangedAt": "2026-10-19T00:01:00Z",
+        "baselineAcceptedAt": "2026-10-19T00:00:00Z"
+      },
+      "done": null,
+      "total": null,
+      "condition": {
+        "severity": "info",
+        "summary": "chatgpt website UI: informational.",
+        "resource": "ui-change/4c754ca2c2738104dd18e64e7f909e952b8699d0d8d5a7f554631475cb622d32",
+        "cause": "website_ui",
+        "state": "action_required",
+        "nextAction": "Review Website UI status on the affected phone. Baseline acceptance and control verification are separate actions."
+      },
+      "stage": "website_ui",
+      "workState": "awaiting_review",
+      "identity": "mapped",
+      "scope": {
+        "chapterId": null,
+        "profileId": "fixture-profile",
+        "seriesId": null
+      },
+      "override": false,
+      "compatibility": "unknown",
+      "key": "ui/fixture-variant-chatgpt"
+    }]
+  },
+  {
+    "schema": "manager-report/1",
+    "eventId": "ui-fixture-gemini",
+    "observedAt": "2026-10-19T00:01:03Z",
+    "source": {
+      "sequence": 2,
+      "manager": "device_clipping",
+      "id": "fixture-phone/device_clipping",
+      "deviceId": "fixture-phone"
+    },
+    "facts": [{
+      "inputRevision": null,
+      "availability": [],
+      "websiteUi": {
+        "schema": "website-ui/1",
+        "reason": "stable",
+        "workflow": "composer_empty",
+        "compatibilityVerifiedAt": null,
+        "expected": [
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "composer",
+            "label": "prompt"
+          },
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "model",
+            "label": "model"
+          },
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "navigation",
+            "label": "navigation"
+          },
+          {
+            "signature": "11111111",
+            "count": 0,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "id": "response_actions",
+            "label": "absent"
+          },
+          {
+            "signature": "11111111",
+            "count": 0,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "id": "send",
+            "label": "absent"
+          },
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "upload",
+            "label": "attach"
+          }
+        ],
+        "impact": "none",
+        "lastMatchingAt": null,
+        "changeId": "dcef9ccd422daffa624d437dc6fade0d753890809302d10a960c2e59f5874279",
+        "classification": "informational",
+        "observed": [
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "44444444",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "composer",
+            "label": "prompt"
+          },
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "model",
+            "label": "model"
+          },
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "navigation",
+            "label": "navigation"
+          },
+          {
+            "signature": "11111111",
+            "count": 0,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "id": "response_actions",
+            "label": "absent"
+          },
+          {
+            "signature": "11111111",
+            "count": 0,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "id": "send",
+            "label": "absent"
+          },
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "upload",
+            "label": "attach"
+          }
+        ],
+        "baselineVersion": "6c63dc8c4bd278d252d275c89c3164dc45fe6bfee27a6f0951113ceef5a7be90",
+        "route": {
+          "monitorObservedAt": "2026-10-19T00:01:03Z",
+          "issuesReceivedAt": null,
+          "clipperReceivedAt": "2026-10-19T00:01:03Z"
+        },
+        "provider": "gemini",
+        "audit": {
+          "dueAt": "2026-10-20T00:01:03Z",
+          "state": "checked"
+        },
+        "variant": {
+          "viewport": "480x800",
+          "theme": "light",
+          "locale": "en",
+          "profileVariant": "unknown"
+        },
+        "firstChangedAt": "2026-10-19T00:01:00Z",
+        "baselineAcceptedAt": "2026-10-19T00:00:00Z"
+      },
+      "done": null,
+      "total": null,
+      "condition": {
+        "severity": "info",
+        "summary": "gemini website UI: informational.",
+        "resource": "ui-change/dcef9ccd422daffa624d437dc6fade0d753890809302d10a960c2e59f5874279",
+        "cause": "website_ui",
+        "state": "action_required",
+        "nextAction": "Review Website UI status on the affected phone. Baseline acceptance and control verification are separate actions."
+      },
+      "stage": "website_ui",
+      "workState": "awaiting_review",
+      "identity": "mapped",
+      "scope": {
+        "chapterId": null,
+        "profileId": "fixture-profile",
+        "seriesId": null
+      },
+      "override": false,
+      "compatibility": "unknown",
+      "key": "ui/fixture-variant-gemini"
+    }]
+  },
+  {
+    "schema": "manager-report/1",
+    "eventId": "ui-fixture-aistudio",
+    "observedAt": "2026-10-19T00:01:03Z",
+    "source": {
+      "sequence": 3,
+      "manager": "device_clipping",
+      "id": "fixture-phone/device_clipping",
+      "deviceId": "fixture-phone"
+    },
+    "facts": [{
+      "inputRevision": null,
+      "availability": [],
+      "websiteUi": {
+        "schema": "website-ui/1",
+        "reason": "stable",
+        "workflow": "composer_empty",
+        "compatibilityVerifiedAt": null,
+        "expected": [
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "composer",
+            "label": "prompt"
+          },
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "model",
+            "label": "model"
+          },
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "navigation",
+            "label": "navigation"
+          },
+          {
+            "signature": "11111111",
+            "count": 0,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "id": "response_actions",
+            "label": "absent"
+          },
+          {
+            "signature": "11111111",
+            "count": 0,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "id": "send",
+            "label": "absent"
+          },
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "upload",
+            "label": "attach"
+          }
+        ],
+        "impact": "none",
+        "lastMatchingAt": null,
+        "changeId": "86e528f8ded76a73993d4a7e892cbc347e70d53d18ea63ee34d9903e395341cb",
+        "classification": "informational",
+        "observed": [
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "44444444",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "composer",
+            "label": "prompt"
+          },
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "model",
+            "label": "model"
+          },
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "navigation",
+            "label": "navigation"
+          },
+          {
+            "signature": "11111111",
+            "count": 0,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "id": "response_actions",
+            "label": "absent"
+          },
+          {
+            "signature": "11111111",
+            "count": 0,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "id": "send",
+            "label": "absent"
+          },
+          {
+            "signature": "11111111",
+            "count": 1,
+            "icon": "22222222",
+            "style": "33333333",
+            "location": [
+              1,
+              6,
+              6,
+              1
+            ],
+            "id": "upload",
+            "label": "attach"
+          }
+        ],
+        "baselineVersion": "990a747e9f7abffef2145950e7742cbc19d8a7fd7de89b47d52259914d7a5ef9",
+        "route": {
+          "monitorObservedAt": "2026-10-19T00:01:03Z",
+          "issuesReceivedAt": null,
+          "clipperReceivedAt": "2026-10-19T00:01:03Z"
+        },
+        "provider": "aistudio",
+        "audit": {
+          "dueAt": "2026-10-20T00:01:03Z",
+          "state": "checked"
+        },
+        "variant": {
+          "viewport": "480x800",
+          "theme": "light",
+          "locale": "en",
+          "profileVariant": "unknown"
+        },
+        "firstChangedAt": "2026-10-19T00:01:00Z",
+        "baselineAcceptedAt": "2026-10-19T00:00:00Z"
+      },
+      "done": null,
+      "total": null,
+      "condition": {
+        "severity": "info",
+        "summary": "aistudio website UI: informational.",
+        "resource": "ui-change/86e528f8ded76a73993d4a7e892cbc347e70d53d18ea63ee34d9903e395341cb",
+        "cause": "website_ui",
+        "state": "action_required",
+        "nextAction": "Review Website UI status on the affected phone. Baseline acceptance and control verification are separate actions."
+      },
+      "stage": "website_ui",
+      "workState": "awaiting_review",
+      "identity": "mapped",
+      "scope": {
+        "chapterId": null,
+        "profileId": "fixture-profile",
+        "seriesId": null
+      },
+      "override": false,
+      "compatibility": "unknown",
+      "key": "ui/fixture-variant-aistudio"
+    }]
+  }
+]

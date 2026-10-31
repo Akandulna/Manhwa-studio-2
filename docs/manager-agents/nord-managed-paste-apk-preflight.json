@@ -1,0 +1,48 @@
+{
+  "checkedAt": "2026-10-20T04:57:07.240092+00:00",
+  "device": "54a03a76",
+  "versionName": "1.0.138",
+  "versionCode": 1000138,
+  "releaseCertificateMatches": true,
+  "websiteUiProbePackaged": true,
+  "probeSha256": "656542fdbb645f32e3928b1b3a11f9c818e9f3636e1d5f829d996a5437a98b2e",
+  "quotaBackoffMarkersPackaged": true,
+  "managedPilotPrerequisitesPackaged": true,
+  "managedPilotMarkers": {
+    "workflowCapability": true,
+    "defaultModelPrompt": true,
+    "immutableUpload": true,
+    "durableActionGuard": true,
+    "explicitPhoneEntry": true
+  },
+  "managedStartupPrerequisitesPackaged": true,
+  "managedStartupMarkers": {
+    "navigationGuard": true,
+    "visibleTimeout": true,
+    "composerStage": true,
+    "savedStatus": true
+  },
+  "managedPastePrerequisitesPackaged": false,
+  "managedPasteMarkers": {
+    "inlineVerificationStage": false,
+    "focusGuard": false,
+    "retainedComposerGuard": false,
+    "convertedPromptGuard": false
+  },
+  "preparationPrerequisitesPackaged": true,
+  "preparationMarkers": {
+    "durableQueue": true,
+    "libraryControls": true,
+    "verifiedReceipt": true,
+    "managedSourceGuard": true
+  },
+  "preparationReleasePrerequisitesPackaged": true,
+  "preparationReleaseMarkers": {
+    "chapterAction": true,
+    "cancelledAuthorityRequired": true,
+    "localStopReceiptRequired": true,
+    "releasedRevisionFence": true
+  },
+  "probeMatchesCurrentSource": true,
+  "scope": "Installed APK packaging only. Does not prove five-minute cadence, Retry-After persistence or managed execution behavior. No installation or app-data change."
+}

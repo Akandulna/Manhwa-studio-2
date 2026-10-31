@@ -1,548 +1,259 @@
 # Manhwa Studio
 
-A local full-stack desktop-style web app for managing and downloading manhwa series, with AI-powered narration script generation.
+A local desktop app that turns manhwa chapters into narrated videos. It
+downloads chapters itself; the **Sleeper-Cell** Android phones do the rest of
+the production work — writing narration scripts, recording voiceovers and
+marking crop boxes — and upload it to Cloudflare R2. Manhwa Studio brings that
+work onto the Mac, aligns the voiceover, cuts the crops and renders the video.
 
-![Manhwa Studio](https://img.shields.io/badge/Module%201-Library%20%26%20Downloader-purple)
-![Manhwa Studio](https://img.shields.io/badge/Module%202-Narration%20Studio-blue)
+## Modules
 
-## Features
+### Library & Downloader
+- **Shared library**: a newly added series is listed on the Mac and every Sleeper-Cell phone automatically.
+  The device that adds it owns the source downloads. Once its download batch finishes it detects repeated
+  intro/outro artwork, keeps the originals, and joins/splits the pages before sharing them through R2.
+  The other devices download those prepared chapters automatically; they do not fetch the original website.
+  Offline devices catch up when they reconnect. This requires the updated relay and Android app.
+- **Add Series**: paste 3 seed URLs to detect the chapter URL pattern and
+  discover chapters, or upload pages by hand (manual mode).
+- **Library / Series detail**: download chapters (Playwright headless browser,
+  concurrent queue, resume and retry), preview a chapter's pages and delete
+  unwanted ones into a restorable bin.
+- **Production process**: expand a series in the Library and use **Run Sleeper-Cell automation**
+  to choose a primary device, per-phone profiles and Image Clipping settings. Choose **Parallel devices**
+  to share unfinished voiceover and clipping chapters between selected phones without overlap. Narration
+  scripts stay on the primary phone in reading order. It resumes the first unfinished step,
+  then runs scripts → English and Hinglish voiceovers → Image Clipping in order. Preparation
+  must be complete first. Voiceovers are fetched and aligned on the Mac automatically.
+  The sequence continues after closing the dialog and stops for manual review before Editor 2.0.
+  The Library shows its running/review status; reopen it to stop a run or resume after an error.
+  After a server restart, runs are marked interrupted so a possibly delivered phone command is
+  never replayed automatically.
+- **Downloads**: the live queue — pause, resume, retry failed.
+- **Page Stitcher**: joins chapters of 200–300 short pages into tall pages;
+  auto-stitch cuts at blank rows and drops repeated intro/outro pages.
+- **Send to phone** zips chapters to R2 for the phones (optionally on its own
+  after downloads); **Get from phones** brings in what the Master phone
+  downloaded.
+- To resend updated page images, open **Send to phone**, enable **Replace pages & reset Image Clipper**,
+  expand the series and select the chapters, then use **Replace & reset**. Finished chapters can be selected.
+  The current page images replace their R2 ZIPs without running preparation again. After upload, old local
+  crop JSON, metadata, review, cut images, slices and Processed drop-offs move into the chapter's
+  `.page-replacements/<revision>/` backup. Scripts, voiceovers and alignment stay intact. Old cloud crop ZIPs,
+  Cropped markers and shared crop files are removed. Every phone needs the matching updated Sleeper Cell build;
+  it downloads the new revision, backs up its clipping state and starts Image Clipper fresh when idle.
+  Offline phones catch up on reconnect; crops from an older page revision cannot be imported over the reset.
 
-### Module 1: Library & Downloader
-- **URL Pattern Detection**: Paste 3 seed URLs and automatically detect the chapter numbering pattern
-- **Auto Chapter Discovery**: Automatically find all available chapters by validating URLs
-- **Concurrent Downloads**: Download multiple chapters simultaneously with configurable concurrency
-- **Image Detection**: Smart detection of manhwa page images using Playwright headless browser
-- **Progress Tracking**: Real-time progress updates via WebSocket
-- **Resume Support**: Skip already downloaded pages, retry failed downloads
-- **Organized Storage**: Clean folder structure with zero-padded chapter numbers
+### Narration Library
+Manhwa → English / Hindi → chapters.
+- **Fetch from phone** pulls the chapters' scripts and voiceover audio from R2
+  (new and re-uploaded chapters are ticked by default).
+- Alignment runs **automatically** after a fetch: WhisperX force-aligns each
+  voiceover section against its script, and once the whole chapter is aligned
+  the alignment document is written next to it (`script-timeline.md`, or
+  `script-timeline.hi.md` for Hindi).
+- **Align again** re-runs alignment for a chapter that failed or is incomplete.
+- **Reset alignment** opens a section picker, including for chapters already marked aligned. Choose the
+  section named by the phone's error and use **Reset & realign section**. Its previous timestamps and
+  this language's Editor timeline are backed up under `.alignment-resets/` before being cleared. Only
+  the selected section is realigned; scripts, audio and videos are kept. Once it finishes, resend the
+  chapter from Editor 2.0 and generate its timeline again. Repeated duration errors require checking
+  the audio for missing speech or excess silence.
+- **Replace** on a chapter opens its saved local script. Keep that text (including edits already made on disk),
+  choose a `.md`/`.txt` file, or paste a revision, then use **Replace & send**. This backs up the script and
+  that language's audio, alignment and Editor paste under the chapter's `.script-replacements/` folder,
+  clears the old results, and sends the revised script through the phones' shared-script sync. Updated
+  Sleeper-Cell builds apply it when idle and prepare fresh splits; use **Check for new uploads** after stopping
+  an active run. Generate the new voiceover, fetch it here for alignment, and continue in Editor 2.0.
+  A failed phone upload can be retried from Replace without resetting the saved revision again.
+- To revise a script on Sleeper-Cell, use **Workspace → Scripts → series → chapter → ⋮ → Replace**
+  on `script.md` or `script.hi.md`, then generate its new voiceover. Fetching replacement audio backs up and
+  clears that language's old Editor timeline, realigns the sections, and sends a fresh Editor package once ready.
+  Old phone timelines are not imported over the cleared paste. Run Editor again, fetch its new timeline,
+  process and export the revised chapter. Existing rendered videos are retained.
 
-### Module 2: Narration Studio
-- **AI Script Generation**: Generate YouTube-style recap narration scripts from manhwa images
-- **Story Continuity**: Automatic rolling summaries and chapter seams for seamless multi-chapter narratives
-- **Part Management**: Group chapters into "Parts" for video production, with auto-generated outros
-- **Dual Mode**: API mode (Gemini AI) or Manual mode (copy prompt, paste response)
-- **Smart Batching**: Handles large chapters (50-150 images) via map-reduce processing
-- **Script Editor**: Edit generated scripts with live continuity context
-- **Provider Abstraction**: Gemini implemented, easy to add OpenAI/Anthropic later
+### Image Clipper 3.0
+Manhwa → chapters → pages.
+- **Get from phones** brings in the pages the Master phone downloaded (also on the Library).
+- **Sync json** pulls the phones' crop JSON for each chapter.
+- **Preview** shows every page's crop boxes, lets you move/resize/delete them,
+  and marks the chapter reviewed.
+- **Crop Sections** cuts the images into `crops3/`. A chapter already reviewed
+  on the Master phone is cut automatically as soon as it syncs; any other
+  chapter waits until it has been reviewed in Preview.
+- Slice pages into parts and unsync chapters from the series view.
 
-### Module 3: Image Clipper
-- **Crop Workspace**: Draw, move, and resize crops on a virtualized vertical canvas of a chapter's pages
-- **Click-to-Add**: Click the page to drop a full-width crop; adjust height/width by dragging edges
-- **Story-Order Numbering**: Crops auto-number top-to-bottom; inserting/moving renumbers automatically
-- **AI Auto-Crop**: Optional locally-trained model (or rule-based fallback) suggests crops to accept/reject
-- **Finalize/Export**: Batch-exports crops to PNG on disk for downstream modules
+### Editor 2.0
 
-### Module 4: Video Editor
-- **Compile to MP4**: Stitch narration scripts + per-section voiceover audio + cropped images into a 16:9 video, across one or many chapters as a continuous "Part"
-- **Audio as Master Clock**: Each script part's audio is never trimmed; selected images subdivide its duration with draggable boundaries (sum always locked to the audio)
-- **Per-Image Motion**: Gentle drift (slow zoom/pan) by default, or manual focus mode with an anchor point; plus manual scale/offset overrides; blurred+darkened background behind each foreground image
-- **End Title Card**: Auto end card (series title + closing line, editable) over a fixed duration with music continuing underneath
-- **Background Music**: Global music library; looped under the narration with master + music volume controls
-- **Live + Rendered Preview**: Instant client-side approximate preview, plus a pixel-faithful low-res proxy render
-- **AI Assist**: Zero-shot image-range and focus-anchor suggestions (Gemini vision); every edit is logged for a future style model
-- **Export**: 1080/720/480p, quality presets, progress + cancel, open output folder
+- **Small batches** builds timelines through resumable visual indexing, narration routing, selection,
+  review and targeted repair. Each prompt is capped at 6,000 characters. It supports manual copy/paste
+  and updated Sleeper-Cell automation with selectable models; one-shot stays available.
+  See [the staged timeline guide](docs/editor-timeline-stages.md) for usage and the phone build requirement.
+Manhwa → chapters, per language.
+- A per-chapter checklist: **voiceover audio**, **alignment**, **timeline
+  JSON** and **cropped images**. Preview and Export stay locked until all four
+  are there.
+- The timeline JSON comes from **Copy All** (prompt + script with timeline +
+  crop metadata) → ChatGPT → **Paste**, or from the timelines the phone made
+  (**Fetch from phone**). **Send to phone** hands the phone's Editor run the
+  packages it needs; **Check Images** repairs missing image references.
+- **Copy All** recovers the saved Editor instructions from Manhwa Studio when the browser has no local
+  prompt. It refuses to copy a package without instructions. Settings retains prompt saves on the desktop
+  before trying to upload them to the phone, so an R2 failure does not lose the prompt.
+- Export renders one MP4 per chapter into the series' `_video2/` (or
+  `_video2_hi/`) folder.
+- Each processed chapter has its own **Export** or **Re-export** button. Processing a chapter again marks its
+  older video **Re-export ready** and includes that chapter in the next batch export. Other finished chapters
+  stay out of that batch. Re-export writes a new MP4 and retains the previous render.
+- Series show **Done** in Editor 2.0 when the selected language's video folder
+  has a nonempty video in `compressed` (also `Compressed` or `Compress`). This
+  remains visible after cleaning up original renders. Use **Rescan** on the
+  series list after adding or removing a compressed video.
 
-### Coming Soon (Disabled Placeholders)
-- Panel Splitter
+### Sleeper Cells
+- **Phone Status** — each phone's runs, with Run automation / Stop, Wake,
+  Screen off and Screenshot (live through the relay when configured).
+- **Accounts** — ChatGPT profiles, plans and upload limits.
+- **Live Progress** — what every phone is working on.
 
-### Module 2 Part 2: Voiceover
-- **TTS Generation**: Convert narration scripts to audio using Gemini TTS
-- **Section Management**: Auto-split scripts into voice sections for better control
-- **Voice Selection**: Choose from 8 Gemini voices (Aoede, Charon, Fenrir, Kore, Leda, Orus, Puck, Zephyr)
-- **Audio Processing**: FFmpeg-based audio normalization, format conversion, and concatenation
-- **Audio Upload**: Upload your own voice recordings for sections
-- **Voice Analysis**: Analyze voice consistency across sections (optional Python sidecar)
-- **Chapter Audio Export**: Join all sections into a single downloadable MP3
+### Settings
+Appearance (light / dark / system), Download & Performance (concurrency,
+request delay, user agent, image thresholds), the Editor 2.0 prompt (also synced to R2
+for the phone), Cloudflare R2 + phone relay, and **Storage** — disk usage per
+manhwa, cleanup of exported chapters, and "Complete & delete" per Part.
+Storage also offers **Delete renders** for each `_video`, `_video2`, or
+`_video2_hi` folder once its `compressed` subfolder contains a nonempty video
+(`Compressed` and `Compress` are also supported). Click **Rescan** after adding
+the compressed video. Confirming deletes only the original MP4s directly in
+that render folder and keeps the compressed folder and its contents.
+
+For a finished Part, use **Storage → Parts → Delete working files**. A nonempty
+video must exist in a `compressed`, `Compressed` or `Compress` subfolder of a
+video folder. Choose the Part by its displayed chapter range and confirm that
+the saved video covers that range. This local cleanup removes source pages,
+both languages' audio, crops, JSON and other working files while keeping
+scripts, timelines, saved script records and all videos. R2 is unchanged and
+is not required. This is separate from **Complete & delete**, which also
+removes scripts and cloud assets.
 
 ## Tech Stack
 
 - **Frontend**: React + Vite + TypeScript + Tailwind CSS + shadcn/ui
-- **Backend**: Node.js + Express + TypeScript
+- **Backend**: Node.js + Express + TypeScript, Socket.io for live progress
+- **Scraping**: Playwright (headless Chromium) + p-queue
 - **Database**: SQLite via Prisma
-- **Scraping**: Playwright (headless Chromium)
-- **Real-time**: Socket.io (WebSocket)
-- **Download Queue**: p-queue
-- **AI**: Google Gemini via @google/generative-ai
-- **Image Processing**: sharp
-- **TTS**: Gemini TTS (gemini-2.5-flash-preview-tts)
-- **Audio Processing**: FFmpeg
+- **Images**: sharp · **Audio / video**: FFmpeg
+- **Alignment**: WhisperX (wav2vec2) through a Python sidecar (`server/scripts/align.py`)
+- **Cloud**: Cloudflare R2 (S3 API) + a Worker relay (`relay/`) for live phone status
 
 ## Prerequisites
 
-- Node.js 18+ (LTS recommended)
-- npm or yarn
-- FFmpeg (required for Voiceover)
-  - macOS: `brew install ffmpeg`
-  - Ubuntu/Debian: `sudo apt install ffmpeg`
-  - Windows: Download from https://ffmpeg.org/download.html
+- Node.js 18+
+- FFmpeg on `PATH` (or `FFMPEG_PATH` / `FFPROBE_PATH`) — `brew install ffmpeg`
+- Python with WhisperX for alignment: a venv at `server/.venv-whisperx`, or set
+  `WHISPERX_PYTHON_PATH`
 
-## Setup Instructions
-
-### 1. Clone and Install Dependencies
+## Setup
 
 ```bash
-cd "Manhwa studio 2"
-
-# Install all dependencies (root, server, and client)
-npm install
+npm install               # root, server and client
+npx playwright install chromium   # for the downloader
+cp server/.env.example server/.env
+npm run db:push           # create / update the SQLite database
+npm run dev               # API on :3002 + client on http://localhost:5173
 ```
 
-### 2. Install Playwright Chromium
+Set up Cloudflare R2 in **Settings → Cloudflare** (it writes the `R2_*` lines in
+`server/.env`, no restart needed). The bucket is on the free plan, so the app
+never polls it: library changes arrive through the relay, with an R2 catch-up at startup.
+Other production files are read when you press Fetch / Sync / Get from phones.
 
-This is required for scraping JavaScript-rendered pages:
+Shared library catalogs are stored as `<prefix>library/<origin device id>.json` and relayed as `library`
+receipts to desktops and phones, including on reconnect. Catalogs list chapters immediately and include ZIP
+versions only after preparation/upload. The Mac automatically imports them into its database and download
+folder; phones automatically import their Master Library rows and use ManhwaSync to fetch the pages.
+Clearing a local shared-library copy retains its R2 ZIP for devices that are offline.
+
+Library production tracking uses fixed 20-chapter parts: 1–20, 21–40, and so on.
+Its accordion groups show how many consecutive parts have completed. Every chapter in
+a part must have Editor 2.0 exports in **both English and Hinglish**; missing chapters
+keep the part open. The expanded tracker shows preparation, scripts, voiceover splits
+and audio, alignment, crop JSON/review/cropping, and timeline/processed/export counters.
+Completion only updates the tracker; Storage's separate archival action remains manual.
+
+Saved phone facts travel as `process` relay receipts. The Mac combines them with local
+file and database evidence, pushes changes to its Library over Socket.IO, and publishes
+the combined snapshot to the relay and `<prefix>progress/<Mac device id>.json` in R2.
+Phones receive live updates and cached relay receipts on reconnect, with R2 catch-up
+when Library sync reconnects. Alignment, final cropping, processing and exports are
+desktop facts. A stage completed on several devices counts once.
+
+Existing desktop series are registered for sharing automatically; phone imports keep their original owner.
+Catalogs use the phones' chapter-download prefix even when the Mac's production files use another prefix.
+Sleeper-Cell's Library automatically indexes `Workspace/Manhwa/<Series>/<Chapter>/`, including folders
+downloaded before shared catalogs existed. Discovering a folder does not make that phone its download owner.
+Legacy registration preserves upload preferences and does not prepare or rewrite existing pages.
+
+Each Library series has an actions menu with **Mark Part 1 done** (and undo) and **Delete series everywhere**.
+Part marks sync between devices and change the tracker without fabricating exports or deleting files.
+Global deletion requires confirmation, removes the series' files from all workspace areas and R2, and keeps
+a shared deletion record so an offline device cannot restore it from an old catalog. Offline phones apply
+deletion after updating Sleeper-Cell and reconnecting; failed cleanup retries automatically.
+
+### Mac App (optional)
 
 ```bash
-npx playwright install chromium
+npm run app
 ```
 
-### 3. Configure Environment
+Builds the client, packages `desktop/` with Electron and installs **Manhwa Studio.app** into `/Applications`.
+The app is a shell around this repo, not a standalone bundle: it runs the server from `server/`
+(same `.env`, database and `downloads/`) using your system Node, and loads the built client
+the server serves on `PORT`. If a server is already running on that port (e.g. `npm run dev`) the app
+just attaches to it; otherwise it starts one and stops it on quit.
 
-Copy the example environment file:
+- **UI changes** need `cd client && npx vite build` (then **View → Reload**); server changes need **Server → Restart Server**. No app rebuild needed for either.
+- **Server log:** `~/Library/Logs/Manhwa Studio/server.log` (**Server → Open Server Log**).
+- The repo's path is baked in at build time — re-run `npm run app` if you move the repo.
+- `npm run dev` can't start while the app runs its own server (port in use); start dev first, or quit the app.
 
-```bash
-cp .env.example server/.env
-```
-
-Edit `server/.env` if needed:
-
-```env
-# Root folder for all downloaded manhwa
-DOWNLOAD_ROOT=./downloads
-
-# Maximum concurrent downloads (1-10)
-CONCURRENCY=3
-
-# Delay between requests in milliseconds
-REQUEST_DELAY_MS=500
-
-# Server port
-PORT=3001
-
-# Database URL (SQLite)
-DATABASE_URL="file:./dev.db"
-
-# === Module 2: Narration Studio (optional) ===
-# Get your API key from: https://aistudio.google.com/apikey
-AI_PROVIDER=gemini
-AI_MODEL=gemini-1.5-flash
-GEMINI_API_KEY=your_gemini_api_key_here
-```
-
-### 4. Initialize Database
-
-```bash
-npm run db:push
-```
-
-### 5. Start Development Server
-
-```bash
-npm run dev
-```
-
-This starts both the backend (http://localhost:3001) and frontend (http://localhost:5173).
-
-Open your browser to **http://localhost:5173**
-
-## Usage
-
-### Adding a Series
-
-1. Click **Add Series** in the sidebar
-2. Choose detection mode:
-   - **Auto-Detect Pattern**: Paste 3 consecutive chapter URLs (e.g., chapter 1, 2, 3)
-   - **Manual URL List**: Paste a list of chapter URLs (one per line)
-3. Review the detected URL pattern and edit if needed
-4. Click **Discover Chapters** to find all available chapters
-5. Select which chapters to add (use range selector for bulk selection)
-6. Enter a title and click **Create Series**
-
-### Downloading Chapters
-
-1. Go to a series detail page
-2. Select chapters to download:
-   - Check individual chapters
-   - Use "Select Pending" for all undownloaded
-   - Use range input for specific chapter range
-3. Click **Download**
-4. Monitor progress in the **Downloads** page
-
-### File Structure
-
-Downloaded files are organized as:
+## Disk Layout
 
 ```
 <DOWNLOAD_ROOT>/
 └── <Series Title>/
-    ├── about.md                    # AI-generated series overview (Module 2)
-    ├── Part 01 - full script.md    # Exported Part script (Module 2)
     ├── Chapter 001/
-    │   ├── page_001.webp
-    │   ├── page_002.webp
-    │   ├── script.md               # Narration script (Module 2)
-    │   ├── outro.md                # Part outro if this chapter ends a Part
-    │   └── ...
-    ├── Chapter 002/
-    └── ...
+    │   ├── page_001.jpg …             # pages (downloaded or Get from phones)
+    │   ├── script.md, script.hi.md    # narration scripts (Fetch from phone)
+    │   ├── audio/, audio_hi/          # voiceover sections
+    │   ├── script-timeline.md, script-timeline.hi.md   # alignment documents
+    │   └── crops3/                    # cut images (Crop Sections)
+    ├── _video2/, _video2_hi/          # rendered videos
+    └── …
 ```
 
-## Module 2: Narration Studio
-
-### Getting a Gemini API Key
-
-1. Go to [Google AI Studio](https://aistudio.google.com/apikey)
-2. Sign in with your Google account
-3. Create a new API key
-4. Add it to your `server/.env` file as `GEMINI_API_KEY=your_key`
-
-### Generating Scripts (API Mode)
-
-1. Ensure you have a valid `GEMINI_API_KEY` in your `.env`
-2. Go to **Narration Library** (sidebar)
-3. Click on a series with downloaded chapters
-4. Select a chapter or use **Generate Range** to generate multiple
-5. The AI will analyze the chapter images and create a narration script
-6. Edit the script as needed, then **Save**
-
-### Generating Scripts (Manual Mode)
-
-If you don't have an API key or prefer using another AI:
-
-1. Open a chapter in the Script Editor
-2. Switch to **Manual Mode** tab
-3. Click **Load Prompt** to get the formatted prompt
-4. **Copy** the prompt
-5. Open your preferred AI chat (ChatGPT, Claude, Gemini web, etc.)
-6. Paste the prompt and **attach the chapter images**
-7. Copy the AI's response
-8. **Paste** it back into the editor and **Submit**
-
-### Story Continuity
-
-The system maintains automatic continuity across chapters:
-
-- **Chapter 1**: Generates an "About this Manhwa" overview + chapter summary
-- **Chapters 2+**: Reads the previous chapter's summary and closing paragraph to continue seamlessly
-- **Rolling Summary**: Each chapter's summary incorporates all previous events
-
-**Important**: Generate chapters in order. If you skip chapters, the continuity will have gaps.
-
-### Parts (Video Grouping)
-
-Parts let you group consecutive chapters for video production:
-
-1. In the Script Editor, toggle **End of Part** for the last chapter of each Part
-2. Click **Generate Outro** to create closing lines for that Part
-3. Use **Export Part** to concatenate all chapter scripts + outro into one file
-
-### Editing Scripts
-
-- Edit the script text directly in the editor
-- After editing, click **Regenerate Summary** to update the continuity metadata
-- Downstream chapters will be marked as "Stale" if their continuity source changed
-
-## Module 2 Part 2: Voiceover
-
-### Prerequisites for Voiceover
-
-1. **FFmpeg** must be installed and available in your system PATH:
-   ```bash
-   # Check if FFmpeg is installed
-   ffmpeg -version
-   ```
-
-2. **Gemini API Key** - Same key used for script generation
-
-### Generating Voiceover
-
-1. Generate a script first (see Module 2 above)
-2. In the series chapter list, click **Voice** button on any scripted chapter
-3. Click **Auto-Split Script** to create voice sections
-4. Select your preferred voice from the dropdown (8 Gemini voices available)
-5. Click **Generate All** to generate audio for all sections
-6. Once all sections are done, click **Join All Sections** to create the final chapter audio
-7. Download the MP3 or play it directly in the browser
-
-### Voice Options
-
-| Voice | Description |
-|-------|-------------|
-| Aoede | Bright and clear |
-| Charon | Deep and resonant |
-| Fenrir | Bold and powerful |
-| Kore | Warm and expressive |
-| Leda | Soft and gentle |
-| Orus | Calm and measured |
-| Puck | Playful and energetic |
-| Zephyr | Light and airy |
-
-### Section Management
-
-- **Edit Section**: Click the menu on any section to edit its text
-- **Add Section**: Add new text sections manually
-- **Delete Section**: Remove unwanted sections
-- **Upload Audio**: Upload your own audio recording for any section
-- **Regenerate**: Regenerate audio for a specific section with different settings
-
-### Voice Analysis (Optional)
-
-For uploaded audio or to verify voice consistency:
-
-1. Install Python dependencies:
-   ```bash
-   pip install resemblyzer librosa numpy
-   ```
-
-2. The analysis will automatically check if all audio files use the same voice
-3. Results show similarity scores between sections
-
-### Output Files
-
-Voiceover files are saved in:
-```
-<DOWNLOAD_ROOT>/
-└── <Series Title>/
-    └── Chapter XXX/
-        └── audio/
-            ├── section_001.wav    # Individual section audio
-            ├── section_002.wav
-            ├── chapter_XXX.mp3    # Joined chapter audio
-            └── ...
-```
-
-## Module 3: Image Clipper
-
-Crop a chapter's downloaded pages into ordered images for the video.
-
-### Workflow
-1. Pick a series, then a chapter, to open the crop workspace.
-2. **Click** anywhere on the page to drop a full-width 1:1 crop; drag its edges/corners to set height and width.
-3. Crops are numbered top-to-bottom (story order); inserting/moving renumbers automatically.
-4. Optionally **Crop using AI** to get suggested crops to accept/reject.
-5. **Save all crops** to export them to disk.
-
-### Output Files
-```
-<DOWNLOAD_ROOT>/<Series Title>/Chapter XXX/crops/<series-slug>_crop_001.png
-```
-The absolute export path is stored on each `Crop.exportPath` and is the source of truth used by Module 4.
-
-### Key Endpoints (`/api/clipper`, `/api/ai-crop`)
-- `GET /clipper/series`, `GET /clipper/series/:id` — eligible series + chapters
-- `GET /clipper/chapters/:id/manifest`, `GET /clipper/chapters/:id/image/:filename`
-- `POST /clipper/chapters/:id/session`, crop CRUD under `/clipper/sessions` and `/clipper/crops`
-- `POST /clipper/sessions/:id/finalize` — export crops to disk
-
-### Socket.io Events
-- `clipper:finalize-progress`, `clipper:finalize-complete`
-
-## Module 4: Video Editor
-
-Compiles narration scripts + per-section voiceover audio + cropped images into a single 16:9 MP4, spanning one or more chapters as one continuous video.
-
-### Workflow
-1. Sidebar → **Editor**, pick a series.
-2. Select the chapters to include (only chapters with **finalized crops** *and* **per-section voiceover audio** are eligible). Chapters compile into the timeline sequentially.
-3. For each script part (the part's audio is the master clock): select images from the chapter's crop pool (or add a black filler), drag the slot boundaries to set per-image durations (the sum is locked to the audio), and tune motion/anchor/scale per image in the inspector.
-4. The final **End Card** part shows an editable title-card text + duration.
-5. Set **Audio & Music** (background track + master/music volume), **Preview** (live or rendered), then **Export**.
-
-### Core Editing Model
-- The atomic unit is a **script part**, backed by an `AudioSection` whose audio is never trimmed/stretched.
-- Selected images appear in **crop-number order** (no manual reordering); selecting/deselecting changes the set, durations re-split equally on add/remove.
-- **Foreground**: fit to frame height, centered; **background**: a blurred, 20%-darkened copy; cuts between images are instant.
-- **Motion**: gentle drift (zoom/pan) by default; **focus mode** (manual) zooms toward a placed anchor point.
-- **Outro**: the editor-managed end title card renders for a fixed duration (no outro audio exists in the pipeline); background music continues underneath.
-
-> Note: the title card is rendered with **sharp** (SVG→PNG), not FFmpeg `drawtext`, so card text works even on FFmpeg builds without `drawtext`/libfreetype.
-
-### Prisma Models (Module 4)
-- `VideoProject` — an export project for a series (chapter list, music track, master/music volume, title-card text/duration, status)
-- `VideoPartEdit` — one row per script part (+ a final outro row); `audioSectionId` is null for the outro
-- `VideoPartImage` — a selected crop or filler in a part (slotIndex from crop order, duration, motion/anchor/transform, `source`)
-- `MusicTrack` — a global background-music track
-- `VideoExport` — a render job (output path, resolution, preset, size, duration, status)
-- `VideoEditEvent` — an edit-event log for the future style model (`image_selected`/`deselected`, `duration_adjusted`, `motion_changed`, `anchor_set`/`moved`, `image_transformed`, `filler_used`, `suggestion_accepted`/`edited`/`rejected`)
-
-### API Endpoints (`/api/video`)
-- `GET /capabilities` — FFmpeg + filter availability, resolutions, AI-assist availability
-- `POST /projects/init`, `GET /projects/:id`, `PUT /projects/:id`
-- `GET /series/:seriesId/editable-chapters`, `GET /series-status`, `GET /chapters/:chapterId/crops`
-- `PUT /parts/:partId/images` — bulk-set a part's images (normalizes durations, derives slotIndex, logs an event)
-- `POST /parts/:partId/event` — log a standalone edit event
-- `POST /projects/:id/render`, `POST /exports/:exportId/cancel`, `GET /exports/:exportId`, `GET /exports/:exportId/open`, `GET /exports/:exportId/file`
-- `POST /projects/:id/preview` (proxy draft), `GET /projects/:id/preview/file`
-- `GET /parts/:partId/audio`, `GET /crops/:cropId/image`
-- Music: `GET /music`, `POST /music` (upload), `DELETE /music/:id`, `GET /music/:id/file`
-- AI assist: `POST /parts/:partId/suggest-images`, `POST /images/:imageId/suggest-anchor`
-
-### Socket.io Events
-- `video:render-progress`, `video:render-complete`, `video:render-failed`, `video:render-cancelled`
-- `video:preview-progress`, `video:preview-complete`
-
-### Disk Layout
-```
-<DOWNLOAD_ROOT>/<Series Title>/_video/<project-slug>_<resolution>_<timestamp>.mp4   # rendered videos
-<DOWNLOAD_ROOT>/_music/<timestamp>_<filename>                                       # global music library
-<OS temp dir>/mhs_preview_*.mp4                                                     # proxy previews (ephemeral)
-```
-
-### AI Assist (zero-shot, optional)
-Requires `GEMINI_API_KEY`. Uses Gemini vision to (a) suggest the contiguous crop range that illustrates a part (monotonic story-order alignment) and (b) suggest a focus anchor for an image. Suggestions are pre-filled for accept/edit/reject; the accepted/edited/rejected signal is logged via `VideoEditEvent` for a future trained style model. (Capturing the script→crop mapping at generation time isn't applicable here — crops don't exist until Module 3 and parts are voiceover-derived — so the zero-shot range alignment is the mechanism.)
-
-### FFmpeg Requirements
-FFmpeg must be on `PATH` (or set `FFMPEG_PATH`/`FFPROBE_PATH`). The engine detects `zoompan`, `gblur`/`boxblur`, and degrades gracefully (e.g. `gblur`→`boxblur`, missing `zoompan`→static holds). Export is disabled with a clear message if FFmpeg is unavailable. Optional `VIDEO_FONT_FILE` is unused for the card (sharp renders text).
-
-## Configuration
-
-### Settings Page
-
-Access via sidebar → **Settings** to configure:
-
-- Download root folder
-- Max concurrent downloads
-- Request delay (rate limiting)
-- User-Agent string
-- Image detection thresholds
-
-### Environment Variables
+## Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DOWNLOAD_ROOT` | Root folder for downloads | `./downloads` |
-| `CONCURRENCY` | Max concurrent downloads | `3` |
-| `REQUEST_DELAY_MS` | Delay between requests | `500` |
-| `PORT` | Server port | `3001` |
-| `DATABASE_URL` | SQLite database path | `file:./dev.db` |
-| `AI_PROVIDER` | AI provider for narration | `gemini` |
-| `AI_MODEL` | AI model name | `gemini-1.5-flash` |
-| `GEMINI_API_KEY` | Google Gemini API key | *(required for API mode)* |
-| `TTS_DEFAULT_VOICE` | Default TTS voice | `Kore` |
-| `PYTHON_PATH` | Path to Python (for voice analysis) | `python3` |
-
-## Troubleshooting
-
-### 403 Forbidden on Image Downloads
-
-Some CDNs require proper `Referer` and `User-Agent` headers. The app automatically sets these, but if you still get 403 errors:
-
-1. Check Settings → User-Agent is set to a valid browser string
-2. Some sites may have stricter bot protection that cannot be bypassed
-
-### Pattern Detection Fails
-
-If auto-detection doesn't work:
-1. Use "Manual URL List" mode instead
-2. Or manually enter the URL template with `{n}` placeholder
-
-### Cloudflare / Bot Protection
-
-The app does NOT attempt to bypass CAPTCHAs, login walls, or advanced bot protection. If a site uses these, you'll see a clear error message.
-
-### Images Not Detected
-
-1. Check Settings → Minimum Image Width (default 400px)
-2. Check Settings → Minimum Aspect Ratio (default 0.8)
-3. The page may use non-standard image loading techniques
-
-## API Endpoints
-
-### Series
-- `GET /api/series` - List all series
-- `GET /api/series/:id` - Get series with chapters
-- `POST /api/series` - Create series
-- `POST /api/series/infer-pattern` - Detect URL pattern
-- `POST /api/series/discover-chapters` - Auto-discover chapters
-
-### Downloads
-- `GET /api/downloads/status` - Queue status
-- `POST /api/downloads/queue` - Add chapters to queue
-- `POST /api/downloads/pause` - Pause downloads
-- `POST /api/downloads/resume` - Resume downloads
-- `POST /api/downloads/retry-failed` - Retry failed chapters
-
-### Settings
-- `GET /api/settings` - Get all settings
-- `PUT /api/settings` - Update settings
-
-## WebSocket Events
-
-- `queue:status` - Download queue status updates
-- `chapter:progress` - Per-chapter download progress
-- `chapter:status` - Chapter status changes
-- `discovery:progress` - Chapter discovery progress
-- `narration:progress` - Script generation progress
-- `narration:range-progress` - Multi-chapter generation progress
-- `narration:range-complete` - Multi-chapter generation complete
-- `voiceover:section-start` - Section audio generation started
-- `voiceover:section-complete` - Section audio generation complete
-- `voiceover:batch-start` - Batch generation started
-- `voiceover:batch-progress` - Batch generation progress
-- `voiceover:batch-complete` - Batch generation complete
-- `voiceover:join-start` - Audio join started
-- `voiceover:join-complete` - Audio join complete
-
-## Database Schema
-
-```prisma
-model Series {
-  id          String    @id
-  title       String
-  sourceSite  String
-  coverPath   String?
-  rootFolder  String
-  urlTemplate String?
-  chapters    Chapter[]
-}
-
-model Chapter {
-  id              String
-  seriesId        String
-  number          Float     // Supports 10.5 style chapters
-  title           String?
-  sourceUrl       String
-  folderPath      String
-  status          String    // pending|queued|downloading|done|failed|skipped
-  pageCount       Int?
-  downloadedCount Int
-  error           String?
-  pages           Page[]
-}
-
-model Page {
-  id        String
-  chapterId String
-  index     Int
-  sourceUrl String
-  localPath String?
-  status    String    // pending|done|failed
-  bytes     Int?
-}
-```
+| `DOWNLOAD_ROOT` | Folder every series lives under | `./downloads` |
+| `DATABASE_URL` | SQLite database | `file:./dev.db` |
+| `PORT` | Server port (the client expects 3002) | `3001` |
+| `CONCURRENCY`, `REQUEST_DELAY_MS` | Downloader concurrency and delay between pages | `3`, `500` |
+| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_PREFIX` | Cloudflare R2 (set from Settings → Cloudflare) | — |
+| `RELAY_URL`, `RELAY_TOKEN` | Phone relay Worker (live phone status) | — |
+| `WHISPERX_PYTHON_PATH` | Python with WhisperX, for alignment | `server/.venv-whisperx` |
+| `FFMPEG_PATH`, `FFPROBE_PATH` | FFmpeg binaries | on `PATH` |
 
 ## Project Structure
 
 ```
 Manhwa studio 2/
-├── client/                 # React frontend
-│   ├── src/
-│   │   ├── components/     # UI components
-│   │   ├── pages/          # Page components
-│   │   ├── lib/            # Utilities & API
-│   │   └── App.tsx
-│   └── package.json
-├── server/                 # Express backend
-│   ├── src/
-│   │   ├── routes/         # API routes
-│   │   ├── services/       # Business logic
-│   │   ├── utils/          # Helpers
-│   │   └── index.ts
-│   ├── prisma/
-│   │   └── schema.prisma
-│   └── package.json
-├── .env.example
-├── package.json
-└── README.md
+├── client/      # React frontend (pages/, components/, lib/api.ts)
+├── server/      # Express backend (routes/, services/, prisma/schema.prisma)
+├── relay/       # Cloudflare Worker + Durable Object relay for the phones
+├── desktop/     # Electron shell (Mac app)
+└── package.json
 ```
 
 ## License

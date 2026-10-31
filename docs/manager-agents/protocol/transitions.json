@@ -1,0 +1,224 @@
+[
+  {
+    "name": "accepted current command",
+    "state": "assigned",
+    "event": "accepted",
+    "facts": {
+      "currentAttempt": true
+    },
+    "expected": "running"
+  },
+  {
+    "name": "old acceptance cannot resume",
+    "state": "assigned",
+    "event": "accepted",
+    "facts": {
+      "currentAttempt": false
+    },
+    "expected": "reject"
+  },
+  {
+    "name": "disconnect before acceptance is unknown",
+    "state": "assigned",
+    "event": "disconnect",
+    "facts": {},
+    "expected": "uncertain"
+  },
+  {
+    "name": "disconnect after external submit",
+    "state": "running",
+    "event": "disconnect",
+    "facts": {
+      "submitted": true
+    },
+    "expected": "uncertain"
+  },
+  {
+    "name": "lease expiry never grants reassignment",
+    "state": "running",
+    "event": "lease_expired",
+    "facts": {},
+    "expected": "uncertain"
+  },
+  {
+    "name": "reconcile unknown submission holds",
+    "state": "uncertain",
+    "event": "reconcile",
+    "facts": {
+      "outcome": "unknown"
+    },
+    "expected": "uncertain"
+  },
+  {
+    "name": "submitted not yet saved holds",
+    "state": "uncertain",
+    "event": "reconcile",
+    "facts": {
+      "outcome": "submitted"
+    },
+    "expected": "uncertain"
+  },
+  {
+    "name": "confirmed unsent released work queues",
+    "state": "uncertain",
+    "event": "reconcile",
+    "facts": {
+      "outcome": "unsent",
+      "released": true
+    },
+    "expected": "queued"
+  },
+  {
+    "name": "unsent without release holds",
+    "state": "uncertain",
+    "event": "reconcile",
+    "facts": {
+      "outcome": "unsent",
+      "released": false
+    },
+    "expected": "uncertain"
+  },
+  {
+    "name": "saved result requires validation and publication",
+    "state": "uncertain",
+    "event": "reconcile",
+    "facts": {
+      "outcome": "saved"
+    },
+    "expected": "uncertain"
+  },
+  {
+    "name": "saved-before-ack reused at valid publication",
+    "state": "uncertain",
+    "event": "publish",
+    "facts": {
+      "currentAttempt": true,
+      "currentRevision": true,
+      "validated": true,
+      "reviewAccepted": true
+    },
+    "expected": "verified_complete"
+  },
+  {
+    "name": "old owner cannot publish",
+    "state": "running",
+    "event": "publish",
+    "facts": {
+      "currentAttempt": false,
+      "currentRevision": true,
+      "validated": true,
+      "reviewAccepted": true
+    },
+    "expected": "reject"
+  },
+  {
+    "name": "old revision cannot publish",
+    "state": "running",
+    "event": "publish",
+    "facts": {
+      "currentAttempt": true,
+      "currentRevision": false,
+      "validated": true,
+      "reviewAccepted": true
+    },
+    "expected": "reject"
+  },
+  {
+    "name": "acknowledgment alone never completes",
+    "state": "running",
+    "event": "result_saved",
+    "facts": {},
+    "expected": "running"
+  },
+  {
+    "name": "review gate blocks publication",
+    "state": "running",
+    "event": "publish",
+    "facts": {
+      "currentAttempt": true,
+      "currentRevision": true,
+      "validated": true,
+      "reviewAccepted": false
+    },
+    "expected": "awaiting_review"
+  },
+  {
+    "name": "invalid artifact is not complete",
+    "state": "running",
+    "event": "publish",
+    "facts": {
+      "currentAttempt": true,
+      "currentRevision": true,
+      "validated": false,
+      "reviewAccepted": true
+    },
+    "expected": "reject"
+  },
+  {
+    "name": "cancel blocks scheduled recovery",
+    "state": "recovering",
+    "event": "cancel",
+    "facts": {},
+    "expected": "cancelled"
+  },
+  {
+    "name": "cancelled attempt cannot resume",
+    "state": "cancelled",
+    "event": "accepted",
+    "facts": {
+      "currentAttempt": true
+    },
+    "expected": "reject"
+  },
+  {
+    "name": "cancelled attempt cannot publish",
+    "state": "cancelled",
+    "event": "publish",
+    "facts": {
+      "currentAttempt": true,
+      "currentRevision": true,
+      "validated": true,
+      "reviewAccepted": true
+    },
+    "expected": "reject"
+  },
+  {
+    "name": "replaced input supersedes running attempt",
+    "state": "running",
+    "event": "input_changed",
+    "facts": {},
+    "expected": "superseded"
+  },
+  {
+    "name": "superseded attempt cannot resume",
+    "state": "superseded",
+    "event": "accepted",
+    "facts": {
+      "currentAttempt": true
+    },
+    "expected": "reject"
+  },
+  {
+    "name": "pause blocks recovery execution",
+    "state": "recovering",
+    "event": "recover",
+    "facts": {
+      "paused": true
+    },
+    "expected": "reject"
+  },
+  {
+    "name": "stop remains pending without confirmation",
+    "state": "running",
+    "event": "stop_requested",
+    "facts": {},
+    "expected": "running"
+  },
+  {
+    "name": "verified completed unit skipped by resume",
+    "state": "verified_complete",
+    "event": "resume",
+    "facts": {},
+    "expected": "verified_complete"
+  }
+]

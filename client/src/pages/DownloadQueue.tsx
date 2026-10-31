@@ -16,14 +16,13 @@ import {
   Download,
   CheckCircle,
   XCircle,
-  Clock,
   Loader2,
   HardDrive
 } from 'lucide-react'
 
 export default function DownloadQueue() {
   const { toast } = useToast()
-  const { queueStatus, chapterProgress } = useSocket()
+  const { queueStatus } = useSocket()
   const [stats, setStats] = useState<DownloadStats | null>(null)
   const [series, setSeries] = useState<Series[]>([])
   const [loading, setLoading] = useState(true)
@@ -90,7 +89,6 @@ export default function DownloadQueue() {
   }
   
   const activeDownloads = queueStatus.pending + queueStatus.active
-  const totalProgress = Object.values(chapterProgress)
   
   // Get series with active downloads
   const activeSeries = series.filter(s => 

@@ -1,0 +1,33 @@
+{
+  "schema": "manager-report/1",
+  "eventId": "android-fixture-1",
+  "observedAt": "2026-10-18T06:00:00Z",
+  "source": {
+    "sequence": 1,
+    "manager": "device_clipping",
+    "id": "fixture-phone/device_clipping",
+    "deviceId": "fixture-phone"
+  },
+  "facts": [{
+    "total": 2,
+    "condition": null,
+    "stage": "crop_json",
+    "workState": "verified_complete",
+    "inputRevision": "pages:revision-1",
+    "identity": "mapped",
+    "scope": {
+      "chapterId": "chapter-fixture",
+      "profileId": null,
+      "seriesId": "series-fixture"
+    },
+    "availability": [{
+      "evidenceRef": "process:fixture-phone:chapter-fixture:crop_json",
+      "destination": "phone:fixture-phone",
+      "state": "produced_local"
+    }],
+    "override": false,
+    "compatibility": "current",
+    "done": 2,
+    "key": "chapter-fixture/crop_json"
+  }]
+}

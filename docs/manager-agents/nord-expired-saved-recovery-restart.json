@@ -1,0 +1,73 @@
+{
+  "checkedAt": "2026-10-20T08:12:29.590707+00:00",
+  "pidBefore": "14549",
+  "processAbsentAfterForceStop": true,
+  "launchIssued": true,
+  "nativeReconciliationObserved": "Verified publication retained; this phone is reconciled.",
+  "scope": "Owner-authorized direct USB force-stop/relaunch after completed publication; no data clear or task assignment.",
+  "completedAt": "2026-10-20T08:14:04.308153+00:00",
+  "pidAfter": "15942",
+  "processChanged": true,
+  "nativePostRestartMessage": "No managed page assigned. Start the single-page pilot in Studio first.",
+  "noProviderRegeneration": "Saved-only recovery invoked through observed native button; native upload-without-regeneration and publication-reconciliation messages observed; post-restart check has no assigned task; same original attempt/command/generation/lease independently confirmed.",
+  "sameAttemptCommandAndLease": true,
+  "result": {
+    "schema": "managed-task/1",
+    "task": {
+      "workspaceId": "studio_01df7f214f87472e802b2bc43b8d9165",
+      "seriesId": "7c5ac077-2b43-478c-aadd-8116190d0a96",
+      "chapterId": "d5fd1a64-2eef-472d-aeea-8813307af423",
+      "pageId": "page_30d567b0d78861b03c372948619ea01d4f07a2d17937a1a8389bd16746979a43",
+      "id": "task:sha256:c5ddae3bb5f6fb927df1533da5491e380c2902b33db771a835dd4eeecee5c9a7",
+      "fingerprint": "987c4ed24c99451298e209ab35608e93a13e1034c5620d32ae9c89f5ee9ff239",
+      "spec": {
+        "version": "crop-page/1",
+        "provider": "chatgpt",
+        "product": "chatgpt-web",
+        "model": "provider-default",
+        "settings": {
+          "mode": null,
+          "effort": null
+        },
+        "pageRevision": "sha256:b18044a1bdaff837d3119b55756251654e7e2079f3d394694d46081968bcb449",
+        "promptVersion": "managed-chatgpt-default-crop/1",
+        "validatorVersion": "managed-crop-validator/1",
+        "dependencies": [
+          {
+            "id": "page_30d567b0d78861b03c372948619ea01d4f07a2d17937a1a8389bd16746979a43",
+            "revision": "sha256:b18044a1bdaff837d3119b55756251654e7e2079f3d394694d46081968bcb449",
+            "sha256": "b18044a1bdaff837d3119b55756251654e7e2079f3d394694d46081968bcb449"
+          }
+        ]
+      },
+      "state": "verified_complete",
+      "generation": 1,
+      "attemptId": "59b4fcbd-c2e2-479d-8ac2-0bc7ebf9943b",
+      "canonical": "managed/studio_01df7f214f87472e802b2bc43b8d9165/c5ddae3bb5f6fb927df1533da5491e380c2902b33db771a835dd4eeecee5c9a7/59b4fcbd-c2e2-479d-8ac2-0bc7ebf9943b/crop_80302b6176edf41223f07862ce0556d5d6afb20b06e6dc8115762c527715d80d"
+    },
+    "attempt": {
+      "id": "59b4fcbd-c2e2-479d-8ac2-0bc7ebf9943b",
+      "activeCommandId": "bd1a2217-a714-4f60-b05f-e591f9cd15c3",
+      "taskId": "task:sha256:c5ddae3bb5f6fb927df1533da5491e380c2902b33db771a835dd4eeecee5c9a7",
+      "generation": 1,
+      "deviceId": "304527cb8fc1440a",
+      "profileId": "profile-2",
+      "accountId": null,
+      "leaseExpiresAt": "2026-10-20T07:23:54.901Z",
+      "phase": "published",
+      "submission": "saved",
+      "checkpointRef": "checkpoint/5d23f0e8-d0ba-4b79-bbd2-7088412a4e17"
+    },
+    "commands": [
+      {
+        "id": "bd1a2217-a714-4f60-b05f-e591f9cd15c3",
+        "taskId": "task:sha256:c5ddae3bb5f6fb927df1533da5491e380c2902b33db771a835dd4eeecee5c9a7",
+        "attemptId": "59b4fcbd-c2e2-479d-8ac2-0bc7ebf9943b",
+        "generation": 1,
+        "fingerprint": "987c4ed24c99451298e209ab35608e93a13e1034c5620d32ae9c89f5ee9ff239",
+        "action": "start",
+        "phase": "started"
+      }
+    ]
+  }
+}

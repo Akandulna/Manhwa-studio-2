@@ -1,0 +1,13 @@
+{
+  "checkedAt": "2026-10-20T06:25:39.971532+00:00",
+  "deviceId": "304527cb8fc1440a",
+  "profileId": "profile-2",
+  "profileName": "Neostopzone",
+  "ownerDeclaredPlan": "Plus",
+  "ownerReportedMessage": "Verified publication retained; this phone is reconciled.",
+  "evidenceType": "Owner confirmation of native message; not direct private-journal inspection",
+  "restartCheck": "Owner force-stopped/reopened app and reported: No managed page assigned; no new prompt started",
+  "restartAuthorityCheckedAt": "2026-10-20T06:29:12.869705+00:00",
+  "publicationUnchanged": true,
+  "attemptId": "feb034c0-4f2b-4f69-80a6-4f944ffbf78f"
+}

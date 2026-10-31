@@ -1,0 +1,9 @@
+{
+  // Local fixture binding only. Do not deploy this test configuration.
+  "name": "sleeper-cell-managed-artifact-local",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "durable_objects": { "bindings": [{ "name": "RELAY", "class_name": "Relay" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Relay"] }],
+  "r2_buckets": [{ "binding": "MANAGED_ARTIFACTS", "bucket_name": "managed-artifact-local-test" }]
+}

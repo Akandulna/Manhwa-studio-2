@@ -1,3 +1,4 @@
+import ManagedCropReview from '../sleeper/ManagedCropReview'
 /**
  * Clipper3Preview — Module 3 v3: Image Clipper 3.0
  *
@@ -12,8 +13,15 @@
  *
  * Pointer editing is delegated to CropPointerEditor (shared with the
  * per-image dialog in Clipper3ImageList) — this page just stacks one per
- * image, tracks which one is currently being edited so the rest can dim, and
- * keeps its own crop count in sync after a save.
+ * image with editing always enabled. A chapter-local session autosaves each
+ * completed adjustment and keeps Undo history across all pages.
+ *
+ * It is also where the desktop reviews a chapter the Master phone did not:
+ * the footer under the last page marks the whole chapter reviewed (Crop
+ * Sections waits for that, as it does for a Master phone review) and moves on
+ * to the next chapter. Chapters reviewed on the phone are cut by Sync json
+ * already; editing one here and pressing Crop Sections re-cuts it. A chapter
+ * already cut counts as reviewed, so its footer just says so.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
@@ -21,9 +29,30 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { ArrowLeft, Loader2, AlertTriangle, ZoomIn, ZoomOut, Pencil, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
-import { clipperApi, clipper3Api, type Clipper3ChapterImages, type Clipper3ImageCropFile } from '@/lib/api'
+import {
+  ArrowLeft,
+  Loader2,
+  AlertTriangle,
+  ZoomIn,
+  ZoomOut,
+  Undo2,
+  Check,
+  PanelLeftClose,
+  PanelLeftOpen,
+  ShieldCheck,
+  ShieldAlert,
+  Scissors,
+  ChevronRight
+} from 'lucide-react'
+import {
+  clipper3Api,
+  type Clipper3ChapterImages,
+  type Clipper3ChapterReview
+} from '@/lib/api'
+import { useToast } from '@/components/ui/use-toast'
 import { CropPointerEditor, type CropMetadataEntry } from '@/components/clipper3/CropPointerEditor'
+import ChapterSwitcher from '@/components/ChapterSwitcher'
+import { CropReviewSession, type CropReviewPage } from '@/lib/cropReviewSession'
 
 /**
  * Reads one image's metadata document into a crop-id -> entry map for the rail.
@@ -55,28 +84,68 @@ function parseMetadataByCropId(content: string): Record<string, CropMetadataEntr
   return out
 }
 
+/** "on phone (Redmi Note 10 Pro)" / "on desktop", plus when. */
+function describeReview(review: Clipper3ChapterReview): string {
+  const where = review.by === 'phone'
+    ? `on phone${review.device ? ` (${review.device})` : ''}`
+    : review.by === 'desktop' ? 'on desktop' : null
+  const when = review.reviewedAt ? new Date(review.reviewedAt).toLocaleString() : null
+  return ['Reviewed', where, when].filter(Boolean).join(' · ')
+}
+
+/** "Cropped · <time> — counts as reviewed". */
+function describeCropped(review: Clipper3ChapterReview): string {
+  const when = review.croppedAt ? new Date(review.croppedAt).toLocaleString() : null
+  return ['Cropped', when].filter(Boolean).join(' · ') + ' — counts as reviewed'
+}
+
+/** Header chip beside the crop count. */
+function ReviewBadge({ review }: { review: Clipper3ChapterReview }) {
+  if (review.reviewed && review.cropped) {
+    return (
+      <Badge variant="success" className="flex items-center gap-1 flex-shrink-0" title={describeCropped(review)}>
+        <Scissors className="h-3 w-3" />
+        Cropped
+      </Badge>
+    )
+  }
+  return review.reviewed ? (
+    <Badge variant="success" className="flex items-center gap-1 flex-shrink-0" title={describeReview(review)}>
+      <ShieldCheck className="h-3 w-3" />
+      Reviewed
+    </Badge>
+  ) : (
+    <Badge
+      variant="outline"
+      className="flex items-center gap-1 flex-shrink-0 text-amber-500 border-amber-500/50"
+      title="Crop Sections waits until the chapter is marked reviewed — at the bottom of this page, or on the Master phone"
+    >
+      <ShieldAlert className="h-3 w-3" />
+      Not reviewed
+    </Badge>
+  )
+}
+
+// Keyed by chapter so Previous/Next remounts the page with fresh per-file state.
 export default function Clipper3Preview() {
+  const { id } = useParams<{ id: string }>()
+  return <Clipper3ChapterPreview key={id} />
+}
+
+function Clipper3ChapterPreview() {
   const { id: chapterId } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const { toast } = useToast()
+  const [savingReview, setSavingReview] = useState(false)
 
   const [data, setData] = useState<Clipper3ChapterImages | null>(null)
-  const [filesByFile, setFilesByFile] = useState<Record<string, Clipper3ImageCropFile | null>>({})
+  const [session, setSession] = useState<CropReviewSession | null>(null)
+  const [, refreshSession] = useState(0)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [zoom, setZoom] = useState(0.4)
-  const [editingFile, setEditingFile] = useState<string | null>(null)
+  const [draggingFile, setDraggingFile] = useState<string | null>(null)
   const [navOpen, setNavOpen] = useState(true)
-
-  // Each image's crop descriptions, keyed by crop id, for the rail beside the
-  // page. Parsed here rather than in the editor because the store treats the
-  // metadata document as opaque text — this is a best-effort read of it, and
-  // an image whose document is missing or in another shape simply gets no
-  // descriptions rather than blocking the preview.
-  const [metaByFile, setMetaByFile] = useState<Record<string, Record<string, CropMetadataEntry>>>({})
-
-  // Bumped per image to ask that image's editor to enter edit mode, since the
-  // trigger now lives in the left drawer rather than on the card itself.
-  const [editRequests, setEditRequests] = useState<Record<string, number>>({})
 
   // Which image is currently in view, so the nav panel can highlight it.
   const [activeFile, setActiveFile] = useState<string | null>(null)
@@ -89,14 +158,6 @@ export default function Clipper3Preview() {
     setActiveFile(filename)
   }, [])
 
-  // Scroll to the image and ask its editor to enter edit mode. Both, because
-  // the drawer can be used to start editing a card that is nowhere near the
-  // viewport, and edit mode is useless if you can't see what you're dragging.
-  const requestEdit = useCallback((filename: string) => {
-    scrollToImage(filename)
-    setEditRequests(prev => ({ ...prev, [filename]: (prev[filename] ?? 0) + 1 }))
-  }, [scrollToImage])
-
   useEffect(() => {
     if (!chapterId) return
     let cancelled = false
@@ -107,35 +168,24 @@ export default function Clipper3Preview() {
         if (cancelled) return
         setData(fresh)
 
-        // Each image's own artifact, fetched independently — there is no
-        // chapter-wide file to read here.
-        const done = fresh.images.filter(img => img.status === 'done')
+        // Keep the original metadata text so Undo can restore removed crops
+        // together with their descriptions and exported filenames.
         const entries = await Promise.all(
-          done.map(async img => {
-            try {
-              const points = await clipper3Api.getImagePoints(chapterId, img.filename)
-              return [img.filename, points.file] as const
-            } catch {
-              return [img.filename, null] as const
-            }
+          fresh.images.filter(img => img.status === 'done' && !img.managed).map(async img => {
+            const [points, metadata] = await Promise.all([
+              clipper3Api.getImagePoints(chapterId, img.filename).catch(() => null),
+              clipper3Api.getImageMetadata(chapterId, img.filename).catch(() => ({ content: '' }))
+            ])
+            return [img.filename, points?.file ? { file: points.file, metadata: metadata.content } : null] as const
           })
         )
-        if (!cancelled) setFilesByFile(Object.fromEntries(entries))
-
-        // Descriptions, fetched after the pointers so the pages draw first —
-        // the rail filling in a moment later is better than an empty screen
-        // while every image's metadata document is read.
-        const metaEntries = await Promise.all(
-          done.map(async img => {
-            try {
-              const meta = await clipper3Api.getImageMetadata(chapterId, img.filename)
-              return [img.filename, parseMetadataByCropId(meta.content)] as const
-            } catch {
-              return [img.filename, {}] as const
-            }
-          })
-        )
-        if (!cancelled) setMetaByFile(Object.fromEntries(metaEntries))
+        if (cancelled) return
+        const pages: Record<string, CropReviewPage> = {}
+        for (const [filename, page] of entries) if (page) pages[filename] = page
+        setSession(new CropReviewSession(pages, fresh.seriesTitle, {
+          putPoints: (filename, file) => clipper3Api.putImagePoints(chapterId, filename, JSON.stringify(file, null, 2)),
+          putMetadata: (filename, content) => clipper3Api.putImageMetadata(chapterId, filename, content)
+        }, () => { if (!cancelled) refreshSession(version => version + 1) }))
       })
       .catch(err => {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : 'Failed to load this chapter')
@@ -164,7 +214,45 @@ export default function Clipper3Preview() {
     )
     Object.values(cardRefs.current).forEach(el => { if (el) observer.observe(el) })
     return () => observer.disconnect()
-  }, [data])
+  }, [data, loading])
+
+  // Warn only while work is unsaved, rather than whenever a page is editable.
+  useEffect(() => {
+    if (!session?.pending && !draggingFile) return
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', beforeUnload)
+    return () => window.removeEventListener('beforeunload', beforeUnload)
+  }, [session?.pending, draggingFile])
+
+  const canLeave = useCallback(() => {
+    if (!session?.pending && !draggingFile) return true
+    toast({
+      title: session?.errors.size ? 'Changes have not been saved' : 'Pointers are still saving',
+      description: session?.errors.size ? 'Use Retry save before leaving this chapter.' : 'Finish the adjustment and wait for autosave to complete.'
+    })
+    return false
+  }, [session, draggingFile, toast])
+
+  /** The footer's Mark reviewed / Unmark. */
+  const setReviewed = useCallback(async (reviewed: boolean) => {
+    if (!chapterId || !canLeave()) return
+    setSavingReview(true)
+    try {
+      const review = await clipper3Api.setChapterReview(chapterId, reviewed)
+      setData(prev => prev && { ...prev, review })
+    } catch (err) {
+      toast({
+        title: reviewed ? 'Could not mark reviewed' : 'Could not unmark',
+        description: err instanceof Error ? err.message : 'Failed to save the review',
+        variant: 'destructive'
+      })
+    } finally {
+      setSavingReview(false)
+    }
+  }, [chapterId, toast, canLeave])
 
   if (loading) {
     return (
@@ -186,7 +274,10 @@ export default function Clipper3Preview() {
     )
   }
 
-  const totalCrops = Object.values(filesByFile).reduce((n, file) => n + (file?.crops.length ?? 0), 0)
+  const managedChapter=!!data?.images.some(image=>image.managed)
+  const totalCrops = Object.values(session?.pages ?? {}).reduce((n, page) => n + page.file.crops.length, 0)+(data?.images.filter(image=>image.managed).reduce((total,image)=>total+image.cropCount,0)??0)
+  const saveErrors = [...(session?.errors.entries() ?? [])]
+  const unsaved = !!session?.pending || draggingFile != null
   const chapterLabel = `Chapter ${data.number}${data.title ? ` · ${data.title}` : ''}`
 
   return (
@@ -195,7 +286,7 @@ export default function Clipper3Preview() {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => navigate(`/clipper3/chapter/${chapterId}`)}
+          onClick={() => { if (canLeave()) navigate(`/clipper3/chapter/${chapterId}`) }}
         >
           <ArrowLeft className="h-4 w-4 mr-1" />
           Back
@@ -213,37 +304,66 @@ export default function Clipper3Preview() {
         <Badge variant="secondary" className="flex-shrink-0">
           {totalCrops} crop{totalCrops === 1 ? '' : 's'}
         </Badge>
+        {data.review && (managedChapter?<Badge variant={data.review.reviewed?'success':'secondary'}>{data.review.reviewed?'Managed cuts verified':'Managed page review / cut'}</Badge>:<ReviewBadge review={data.review} />)}
 
-        {editingFile && (
-          <span className="text-xs text-amber-500 flex items-center gap-1">
-            <Pencil className="h-3 w-3" />
-            Editing {editingFile}
-          </span>
+        <span
+          role="status"
+          className={`text-xs flex items-center gap-1 ${saveErrors.length ? 'text-red-500' : 'text-muted-foreground'}`}
+          title={saveErrors.map(([filename, message]) => `${filename}: ${message}`).join('\n') || (managedChapter?'Managed pages use their exact revision review controls. Other pages autosave.':'All pages are editable. Changes save automatically after each adjustment.')}
+        >
+          {saveErrors.length ? <AlertTriangle className="h-3 w-3" /> : unsaved ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+          {saveErrors.length ? 'Save failed' : unsaved ? 'Saving…' : managedChapter?'Page review controls':'Autosave on'}
+        </span>
+        {saveErrors.length > 0 && (
+          <Button variant="outline" size="sm" onClick={() => session?.retry()} disabled={session?.saving}>
+            Retry save
+          </Button>
         )}
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={!session?.undoFilename || draggingFile != null || savingReview}
+          title={session?.undoFilename ? `Undo last pointer edit on ${session.undoFilename}` : 'No pointer edits to undo'}
+          onClick={() => {
+            const filename = session?.undo()
+            if (filename) scrollToImage(filename)
+          }}
+        >
+          <Undo2 className="h-3.5 w-3.5 mr-1" />
+          Undo
+        </Button>
 
-        {!editingFile && (
-          <div className="flex items-center gap-1 ml-auto">
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 w-7 p-0"
-              onClick={() => setZoom(z => Math.max(0.1, z - 0.1))}
-            >
-              <ZoomOut className="h-3.5 w-3.5" />
-            </Button>
-            <span className="text-xs text-muted-foreground w-12 text-center">
-              {Math.round(zoom * 100)}%
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 w-7 p-0"
-              onClick={() => setZoom(z => Math.min(1.5, z + 0.1))}
-            >
-              <ZoomIn className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-        )}
+        <div className="flex items-center gap-1 ml-auto">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 w-7 p-0"
+            disabled={draggingFile != null}
+            onClick={() => setZoom(z => Math.max(0.1, z - 0.1))}
+            title="Zoom out"
+          >
+            <ZoomOut className="h-3.5 w-3.5" />
+          </Button>
+          <span className="text-xs text-muted-foreground w-12 text-center">{Math.round(zoom * 100)}%</span>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 w-7 p-0"
+            disabled={draggingFile != null}
+            onClick={() => setZoom(z => Math.min(1.5, z + 0.1))}
+            title="Zoom in"
+          >
+            <ZoomIn className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+
+        <div>
+          <ChapterSwitcher
+            neighbours={data.neighbours}
+            to={id => `/clipper3/chapter/${id}/preview`}
+            canLeave={canLeave}
+          />
+        </div>
       </div>
 
       <div className="flex flex-1 min-h-0">
@@ -260,14 +380,9 @@ export default function Clipper3Preview() {
             <ScrollArea className="flex-1">
               <div className="p-2 space-y-1">
                 {data.images.map((img, index) => {
-                  const file = filesByFile[img.filename]
-                  const cropCount = file?.crops.length ?? 0
+                  const file = session?.pages[img.filename]?.file
+                  const cropCount = file?.crops.length ?? (img.managed?img.cropCount:0)
                   const isActive = activeFile === img.filename
-                  const isEditingThis = editingFile === img.filename
-                  // Editing another image blocks starting a second one: the
-                  // editor saves per image, so two open at once would be two
-                  // unsaved documents with one Save panel between them.
-                  const canEdit = cropCount > 0 && (editingFile == null || isEditingThis)
                   return (
                     <div
                       key={img.filename}
@@ -284,7 +399,7 @@ export default function Clipper3Preview() {
                           {index + 1}
                         </span>
                         <img
-                          src={clipperApi.getImageUrl(chapterId!, img.filename)}
+                          src={clipper3Api.getImageUrl(chapterId!, img.filename)}
                           alt={img.filename}
                           loading="lazy"
                           draggable={false}
@@ -294,26 +409,9 @@ export default function Clipper3Preview() {
                           <span className="block text-[11px] font-mono truncate">{img.filename}</span>
                           <span className="block text-[10px] text-muted-foreground">
                             {cropCount > 0 ? `${cropCount} crop${cropCount === 1 ? '' : 's'}` : 'no crops'}
-                            {isEditingThis && ' · editing'}
                           </span>
                         </span>
                       </button>
-
-                      {/* The edit trigger lives here rather than on the card:
-                          a card can be several viewports tall, so an inline
-                          trigger meant scrolling back to its top to start. */}
-                      {canEdit && (
-                        <Button
-                          variant={isEditingThis ? 'secondary' : 'ghost'}
-                          size="sm"
-                          className="h-6 w-full justify-start px-2 text-[10px] rounded-t-none"
-                          onClick={() => requestEdit(img.filename)}
-                          disabled={isEditingThis}
-                        >
-                          <Pencil className="h-3 w-3 mr-1" />
-                          {isEditingThis ? 'Editing pointers' : 'Adjust pointers'}
-                        </Button>
-                      )}
                     </div>
                   )
                 })}
@@ -329,10 +427,13 @@ export default function Clipper3Preview() {
             where one image ends and the next begins. */}
         <div className="flex flex-col items-center gap-6 py-6">
           {data.images.map((img, index) => {
-            const file = filesByFile[img.filename]
+            const file = session?.pages[img.filename]?.file
             const isEven = index % 2 === 0
-            const isEditingThis = editingFile === img.filename
-            const isOtherEditing = editingFile != null && !isEditingThis
+            if(img.managed)return <div key={img.filename} ref={el=>{cardRefs.current[img.filename]=el}} data-filename={img.filename} className="w-full max-w-3xl rounded border bg-card p-3">
+              <p className="mb-2 text-sm font-medium">#{index+1} · {img.filename} · Managed page</p>
+              <p className="mb-3 text-sm text-muted-foreground">Review the proposed crops below. Use Adjust boundaries / flag feedback to save corrections before approving any cuts.</p>
+              {img.managed.pageId?<ManagedCropReview pageId={img.managed.pageId} taskId={img.managed.taskId} onChanged={()=>{void clipper3Api.getChapterReview(chapterId!).then(review=>setData(previous=>previous?{...previous,review}:previous))}}/>:<p>Sync the exact source page before reviewing this managed task.</p>}
+            </div>
             if (!file) return null
 
             return (
@@ -342,9 +443,8 @@ export default function Clipper3Preview() {
                 data-filename={img.filename}
                 className="relative ring-2 ring-offset-4 ring-offset-neutral-950 rounded-sm p-0 scroll-mt-4"
                 style={{
-                  opacity: isOtherEditing ? 0.35 : 1,
                   // @ts-expect-error CSS custom property for the ring color
-                  '--tw-ring-color': isEditingThis ? '#facc15' : (isEven ? '#3b82f6' : '#f97316')
+                  '--tw-ring-color': isEven ? '#3b82f6' : '#f97316'
                 }}
               >
                 <span
@@ -352,7 +452,7 @@ export default function Clipper3Preview() {
                   style={{
                     top: 4,
                     left: 4,
-                    background: isEditingThis ? '#facc15' : (isEven ? '#3b82f6' : '#f97316'),
+                    background: isEven ? '#3b82f6' : '#f97316',
                     color: '#0a0a0a',
                     pointerEvents: 'none',
                     zIndex: 40
@@ -361,20 +461,6 @@ export default function Clipper3Preview() {
                   #{index + 1} · {img.filename}
                   {file.crops.length > 0 ? ` · ${file.crops.length} crop${file.crops.length === 1 ? '' : 's'}` : ''}
                 </span>
-
-                {(editingFile == null || isEditingThis) && file.crops.length === 0 && (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    className="absolute h-6 px-2 text-[11px]"
-                    style={{ top: 4, right: 4, zIndex: 40 }}
-                    onClick={() => navigate(`/clipper3/chapter/${chapterId}?file=${encodeURIComponent(img.filename)}`)}
-                    title="Paste this image's crop pointer JSON"
-                  >
-                    <Pencil className="h-3 w-3 mr-1" />
-                    Edit
-                  </Button>
-                )}
 
                 <div className="pt-8">
                   <CropPointerEditor
@@ -386,39 +472,84 @@ export default function Clipper3Preview() {
                     seriesTitle={data.seriesTitle}
                     initialFile={file}
                     idleAccent={isEven ? '#3b82f6' : '#f97316'}
-                    floatingControls
+                    reviewMode
                     hideInlineTrigger
-                    editRequest={editRequests[img.filename] ?? 0}
-                    metadataByCropId={metaByFile[img.filename]}
+                    metadataByCropId={parseMetadataByCropId(session?.pages[img.filename]?.metadata ?? '')}
                     showMetadataRail
-                    onEditingChange={isNowEditing => setEditingFile(isNowEditing ? img.filename : null)}
-                    onSaved={stored => {
-                      setFilesByFile(prev => ({ ...prev, [img.filename]: stored.file }))
-                      setData(prev => prev && {
-                        ...prev,
-                        images: prev.images.map(i =>
-                          i.filename === img.filename
-                            ? { ...i, cropCount: stored.cropCount, status: stored.status, hasPoints: true }
-                            : i
-                        )
-                      })
-                      setEditingFile(null)
-
-                      // A save that removed crops also rewrites the metadata
-                      // document, so the rail is re-read rather than left
-                      // describing crops that no longer exist.
-                      clipper3Api.getImageMetadata(chapterId!, img.filename)
-                        .then(meta => setMetaByFile(prev => ({
-                          ...prev,
-                          [img.filename]: parseMetadataByCropId(meta.content)
-                        })))
-                        .catch(() => {})
+                    onInteractionChange={dragging => setDraggingFile(dragging ? img.filename : null)}
+                    onCommit={(next, removedCropId) => {
+                      try {
+                        session?.commit(img.filename, next, removedCropId)
+                      } catch (error) {
+                        toast({
+                          title: 'Could not update pointers',
+                          description: error instanceof Error ? error.message : 'Unknown error',
+                          variant: 'destructive'
+                        })
+                      }
                     }}
                   />
                 </div>
               </div>
             )
           })}
+
+          {/* The end of the chapter is where a review finishes, so the mark
+              lives here rather than in the header: reaching it means every
+              page above was scrolled past. */}
+          <div className="w-full max-w-xl mx-auto rounded-md border border-neutral-800 bg-card p-4 flex flex-wrap items-center gap-3">
+            {managedChapter ? <p className="text-sm">Review and cut each managed page using its controls above. Chapter completion follows those verified page results.</p> : data.review?.reviewed && data.review.cropped ? (
+              // Cut already, which counts as reviewed: nothing to mark, and
+              // Crop Sections stays available for a re-cut.
+              <span className="text-sm flex items-center gap-1.5 text-green-500 min-w-0">
+                <Scissors className="h-4 w-4 flex-shrink-0" />
+                <span className="truncate">{describeCropped(data.review)}</span>
+              </span>
+            ) : data.review?.reviewed ? (
+              <>
+                <span className="text-sm flex items-center gap-1.5 text-green-500 min-w-0">
+                  <ShieldCheck className="h-4 w-4 flex-shrink-0" />
+                  <span className="truncate">{describeReview(data.review)}</span>
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setReviewed(false)}
+                  disabled={savingReview || unsaved}
+                  title="Crop Sections is blocked again until the chapter is re-marked"
+                >
+                  Unmark
+                </Button>
+              </>
+            ) : (
+              <>
+                <span className="text-sm text-muted-foreground">End of chapter {data.number}.</span>
+                <Button
+                  size="sm"
+                  onClick={() => setReviewed(true)}
+                  disabled={savingReview || unsaved}
+                  title={unsaved ? 'Waiting for pointer changes to save' : 'Allow Crop Sections for this chapter'}
+                >
+                  {savingReview ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <ShieldCheck className="h-4 w-4 mr-1" />}
+                  Mark reviewed
+                </Button>
+              </>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              className="ml-auto"
+              disabled={!data.neighbours.next}
+              title={data.neighbours.next ? `Chapter ${data.neighbours.next.number}` : 'No later downloaded chapter'}
+              onClick={() => {
+                const next = data.neighbours.next
+                if (next && canLeave()) navigate(`/clipper3/chapter/${next.id}/preview`)
+              }}
+            >
+              Next chapter
+              <ChevronRight className="h-4 w-4 ml-1" />
+            </Button>
+          </div>
         </div>
         </ScrollArea>
       </div>

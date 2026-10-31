@@ -2,19 +2,81 @@
  * Series API Routes
  */
 
+import { withSeriesActivity } from '../services/seriesActivity.js';
 import { Router, Request, Response } from 'express';
-import { prisma } from '../index.js';
+import { prisma, downloadManager } from '../index.js';
+import { ownLibrarySeries, scheduleLibraryPublish } from '../services/librarySync.js';
 import { inferPattern, sanitizeTitle, zeroPad, generateUrl } from '../utils/urlPattern.js';
 import { extractSiteDomain, getPageTitle } from '../services/scraper.js';
 import { validateManualChapters } from '../services/discovery.js';
 import { Server } from 'socket.io';
+import { reconcileQuietly } from '../services/diskReconcile.js';
+import path from 'path';
+import fs from 'node:fs/promises';
+import { newSeriesFolder } from '../services/newSeriesFolder.js';
+import { libraryDeviceId, scheduleLibraryCleanup } from '../services/librarySync.js';
+import { libraryControl, libraryControls, saveLibraryControls, hiddenLibraryFolders } from '../services/libraryControls.js';
+import { notifySeriesProcessChanged } from '../services/seriesProcess.js';
+import { productionAutomation, getProductionStatus, reconcileManagedProduction, resumeManagedProduction, exportManagedProduction, adoptManagedProduction, pauseManagedProduction, handoffManagedProduction, accountHandoffManagedProduction, disposeManagedProductionRecovery } from '../services/productionAutomation.js';
+import { parseProductionConfig } from '../services/productionAutomationModel.js';
 
 const router = Router();
+
+router.get('/:id/automation', async (req, res) => {
+  try { res.json(await getProductionStatus(req.params.id)); }
+  catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
+});
+router.post('/:id/automation', async (req, res) => {
+  try { res.json(await productionAutomation.start(req.params.id, parseProductionConfig(req.body))); }
+  catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
+});
+router.post('/:id/automation/reconcile', async (req, res) => {
+  try { res.json(await reconcileManagedProduction(req.params.id,req.body)); }
+  catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
+});
+router.post('/:id/automation/resume', async (req, res) => {
+  try { res.json(await resumeManagedProduction(req.params.id,req.body)); }
+  catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
+});
+router.post('/:id/automation/export-run', async (req, res) => {
+  try { res.json(await exportManagedProduction(req.params.id,req.body)); }
+  catch (error) { res.status(409).json({error:error instanceof Error?error.message:String(error)}); }
+});
+router.post('/:id/automation/adopt-run', async (req, res) => {
+  try { res.json(await adoptManagedProduction(req.params.id,req.body)); }
+  catch (error) { res.status(409).json({error:error instanceof Error?error.message:String(error)}); }
+});
+router.post('/:id/automation/pause-handoff',async(req,res)=>{try{res.json(await pauseManagedProduction(req.params.id,req.body))}catch(error){res.status(409).json({error:error instanceof Error?error.message:String(error)})}});
+router.post('/:id/automation/recovery-disposition',async(req,res)=>{try{res.json(await disposeManagedProductionRecovery(req.params.id,req.body))}catch(error){res.status(409).json({error:error instanceof Error?error.message:String(error)})}});
+router.post('/:id/automation/account-handoff',async(req,res)=>{try{res.json(await accountHandoffManagedProduction(req.params.id,req.body))}catch(error){res.status(409).json({error:error instanceof Error?error.message:String(error)})}});
+router.post('/:id/automation/handoff',async(req,res)=>{try{res.json(await handoffManagedProduction(req.params.id,req.body))}catch(error){res.status(409).json({error:error instanceof Error?error.message:String(error)})}});
+router.post('/:id/automation/stop', async (req, res) => {
+  try { res.json(await productionAutomation.cancel(req.params.id)); }
+  catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
+});
+
+// Reversible visibility only: retains files, durable authority and diagnostic evidence.
+router.get('/archived', async (_req,res) => {
+  try { const folders=(await libraryControls()).filter(c=>c.archived?.done&&!c.deleted).map(c=>c.folder);res.json(await prisma.series.findMany({where:{rootFolder:{in:folders}},select:{id:true,title:true,rootFolder:true}})); }
+  catch { res.status(500).json({error:'Archive inventory unavailable'}); }
+});
+router.post('/:id/archive', async (req,res) => {
+  try {
+    if(Object.keys(req.body??{}).join(',')!=='archived'||typeof req.body.archived!=='boolean')throw new Error('Explicit archive or restore decision required');
+    const row=await prisma.series.findUnique({where:{id:req.params.id}});if(!row)throw new Error('Series not found');
+    const prior=await libraryControl(row.rootFolder);if(prior.deleted)throw new Error('Series is being deleted');
+    await saveLibraryControls([{folder:row.rootFolder,archived:{at:Math.max(Date.now(),(prior.archived?.at??0)+1),deviceId:await libraryDeviceId(),done:req.body.archived}}]);
+    scheduleLibraryPublish();notifySeriesProcessChanged();res.json({archived:req.body.archived,retained:true});
+  } catch(error) { res.status(409).json({error:error instanceof Error?error.message:'Archive unavailable'}); }
+});
 
 // Get all series
 router.get('/', async (req: Request, res: Response) => {
   try {
+    await reconcileQuietly();
+    const deleted = await hiddenLibraryFolders();
     const series = await prisma.series.findMany({
+      where: { rootFolder: { notIn: deleted } },
       include: {
         _count: {
           select: { chapters: true }
@@ -54,7 +116,7 @@ router.get('/', async (req: Request, res: Response) => {
       };
     });
     
-    res.json(result);
+    res.json(await withSeriesActivity(result));
   } catch (error) {
     console.error('Error fetching series:', error);
     res.status(500).json({ error: 'Failed to fetch series' });
@@ -64,6 +126,7 @@ router.get('/', async (req: Request, res: Response) => {
 // Get single series with chapters
 router.get('/:id', async (req: Request, res: Response) => {
   try {
+    const reconcile = await reconcileQuietly();
     const series = await prisma.series.findUnique({
       where: { id: req.params.id },
       include: {
@@ -77,7 +140,15 @@ router.get('/:id', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Series not found' });
     }
     
-    res.json(series);
+    // Pages trimmed by hand stay "done" in the database; report the gap so
+    // the row can show it.
+    res.json({
+      ...series,
+      chapters: series.chapters.map(c => ({
+        ...c,
+        missingPages: reconcile?.missingPages[c.id] ?? 0
+      }))
+    });
   } catch (error) {
     console.error('Error fetching series:', error);
     res.status(500).json({ error: 'Failed to fetch series' });
@@ -215,8 +286,20 @@ router.post('/', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'At least one chapter is required' });
     }
     
-    const sanitizedTitle = sanitizeTitle(title);
-    const rootFolder = sanitizedTitle;
+    const rootFolder = await newSeriesFolder(title,
+      async folder => !!(await libraryControl(folder)).deleted,
+      async folder => {
+        const control = await libraryControl(folder);
+        if (control.deleted || control.archived || control.parts) return true;
+        if (await prisma.series.findFirst({ where: { rootFolder: folder } })) return true;
+        try {
+          await fs.stat(path.resolve(process.env.DOWNLOAD_ROOT || './downloads', folder));
+          return true;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+          throw error;
+        }
+      });
     
     // Create series
     const series = await prisma.series.create({
@@ -243,6 +326,8 @@ router.post('/', async (req: Request, res: Response) => {
       }
     });
     
+    await ownLibrarySeries(series.id);
+    await downloadManager.queueChapters(series.chapters.map(c => c.id));
     res.status(201).json(series);
   } catch (error) {
     console.error('Error creating series:', error);
@@ -280,6 +365,32 @@ router.patch('/:id', async (req: Request, res: Response) => {
 });
 
 // Delete series
+router.post('/:id/delete-everywhere', async (req: Request, res: Response) => {
+  try {
+    const series = await prisma.series.findUnique({ where: { id: req.params.id } });
+    if (!series) return res.status(404).json({ error: 'Series not found' });
+    await saveLibraryControls([{ folder: path.basename(series.rootFolder), deleted: { at: Date.now(), deviceId: await libraryDeviceId(), done: true } }]);
+    scheduleLibraryPublish(); scheduleLibraryCleanup(); notifySeriesProcessChanged(true);
+    req.app.get('io')?.emit('library:updated');
+    res.status(202).json({ deleting: true });
+  } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : 'Could not delete series' }); }
+});
+
+router.put('/:id/parts/:part/completion', async (req: Request, res: Response) => {
+  try {
+    const part = Number(req.params.part);
+    if (!Number.isInteger(part) || part < 1 || part > 99999 || typeof req.body.done !== 'boolean') return res.status(400).json({ error: 'Choose a valid part and completion state' });
+    const series = await prisma.series.findUnique({ where: { id: req.params.id } });
+    if (!series) return res.status(404).json({ error: 'Series not found' });
+    const folder = path.basename(series.rootFolder);
+    const prior = await libraryControl(folder);
+    if (prior.deleted) return res.status(409).json({ error: 'This series is being deleted' });
+    await saveLibraryControls([{ folder, parts: { [part]: { at: Math.max(Date.now(), (prior.parts?.[part]?.at ?? 0) + 1), deviceId: await libraryDeviceId(), done: req.body.done } } }]);
+    scheduleLibraryPublish(); notifySeriesProcessChanged();
+    res.json({ done: req.body.done });
+  } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : 'Could not update part completion' }); }
+});
+
 router.delete('/:id', async (req: Request, res: Response) => {
   try {
     await prisma.series.delete({
@@ -332,6 +443,8 @@ router.post('/:id/chapters', async (req: Request, res: Response) => {
       })
     );
     
+    scheduleLibraryPublish();
+    await downloadManager.queueChapters(createdChapters.filter(c => c.status !== 'done').map(c => c.id));
     res.status(201).json(createdChapters);
   } catch (error) {
     console.error('Error adding chapters:', error);

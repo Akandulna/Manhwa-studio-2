@@ -1,3 +1,5 @@
+import {managedCropScopePresent,withManagedCropWorkspaceLock} from './managedCropProjection.js'
+import { withSeriesActivity } from './seriesActivity.js'
 /**
  * Storage — what the local disk is actually holding, per series and chapter,
  * and what is safe to reclaim.
@@ -19,6 +21,12 @@
 import fs from 'fs/promises'
 import path from 'path'
 import { prisma } from '../index.js'
+import {
+  NARRATION_LANGUAGES,
+  NarrationLanguage,
+  audioFolderName,
+  video2FolderName
+} from './narrationLanguage.js'
 
 /** Resolve a stored (possibly relative) download path against DOWNLOAD_ROOT. */
 function getFullFolderPath(relativePath: string): string {
@@ -57,7 +65,7 @@ export const CATEGORIES: CategoryMeta[] = [
   {
     key: 'pages',
     label: 'Source pages',
-    description: 'Downloaded manhwa page images — re-downloadable from the source site.',
+    description: 'Manhwa page images — re-fetchable from the phones (Get from phones) while still in R2.',
     reclaimable: true
   },
   {
@@ -75,7 +83,7 @@ export const CATEGORIES: CategoryMeta[] = [
   {
     key: 'audio',
     label: 'Voiceover audio',
-    description: 'Generated narration audio — regenerable from the script, at the cost of TTS time.',
+    description: 'Voiceover audio fetched from the phones — re-fetchable while still in R2.',
     reclaimable: true
   },
   {
@@ -87,7 +95,7 @@ export const CATEGORIES: CategoryMeta[] = [
   {
     key: 'video',
     label: 'Rendered video',
-    description: 'Exported MP4s. The finished product — deleted only on its own.',
+    description: 'Exported MP4s — delete individually or delete renders after saving a compressed video.',
     reclaimable: false
   },
   {
@@ -107,11 +115,19 @@ const DIR_CATEGORY: Record<string, CategoryKey> = {
   crop_points: 'cropJson',
   crop_points3: 'cropJson',
   crop_metadata3: 'cropJson',
-  audio: 'audio'
+  audio: 'audio',
+  audio_hi: 'audio'
 }
 
-/** Series-level folders holding rendered video (Editor 1.0 and 2.0). */
-const VIDEO_DIRS = ['_video', '_video2']
+/** Series-level folders holding rendered video (Editor 1.0, and 2.0 in English and Hindi). */
+export type VideoDir = '_video' | '_video2' | '_video2_hi'
+export const VIDEO_DIRS: VideoDir[] = ['_video', '_video2', '_video2_hi']
+
+/** The video folders that count as one narration language's renders. */
+export function videoDirsFor(language?: NarrationLanguage): VideoDir[] {
+  if (!language) return VIDEO_DIRS
+  return language === 'en' ? ['_video', '_video2'] : [video2FolderName('hi') as VideoDir]
+}
 
 /** Classify a loose file sitting directly in a chapter folder. */
 function categorizeChapterFile(name: string): CategoryKey {
@@ -152,7 +168,7 @@ export function reclaimableOf(sizes: Sizes): number {
  * directory that has vanished mid-scan counts as zero instead of failing the
  * whole page — this runs against a tree the user is actively deleting from.
  */
-async function measureDir(dir: string): Promise<{ bytes: number; files: number }> {
+export async function measureDir(dir: string): Promise<{ bytes: number; files: number }> {
   let bytes = 0
   let files = 0
 
@@ -185,20 +201,33 @@ async function measureDir(dir: string): Promise<{ bytes: number; files: number }
 
 // ============ Exported? ============
 
+/** The chapter number a rendered video's file name carries (`ch007_…`), or null. */
+export function videoChapterNumber(fileName: string): number | null {
+  const m = /(?:^|_)ch(\d{3,})_/.exec(fileName)
+  if (!m) return null
+  const n = parseInt(m[1], 10)
+  return Number.isFinite(n) ? n : null
+}
+
 /**
  * The chapter numbers this series has a rendered MP4 for.
  *
  * Editor 2.0 owns no database rows — the `_video2` folder IS its record — so
- * the filename's `_ch007_` segment is read back here, exactly as
- * editor2Export writes it. Files that don't carry that segment (a hand-renamed
+ * the filename's leading `ch007_` (or the older `_ch007_` segment) is read
+ * back here, exactly as editor2Export writes it. Files that don't carry that segment (a hand-renamed
  * render like `PMU2.mp4`, a manual concatenation) can't be attributed to a
  * chapter and are counted as series-level video instead of marking anything
  * exported; guessing would be the one error that costs source material.
  */
-async function scanExportedChapterNumbers(rootFolder: string): Promise<Set<number>> {
+export async function scanExportedChapterNumbers(
+  rootFolder: string,
+  dirs: VideoDir[] = VIDEO_DIRS,
+  /** Skip 0-byte files (a render that died before writing), as Editor 2.0's own list does. */
+  nonEmpty = false
+): Promise<Set<number>> {
   const found = new Set<number>()
 
-  for (const dirName of VIDEO_DIRS) {
+  for (const dirName of dirs) {
     const dir = path.join(getFullFolderPath(rootFolder), dirName)
     let entries: string[]
     try {
@@ -208,10 +237,16 @@ async function scanExportedChapterNumbers(rootFolder: string): Promise<Set<numbe
     }
     for (const name of entries) {
       if (!name.toLowerCase().endsWith('.mp4')) continue
-      const m = /_ch(\d{3,})_/.exec(name)
-      if (!m) continue
-      const n = parseInt(m[1], 10)
-      if (Number.isFinite(n)) found.add(n)
+      const n = videoChapterNumber(name)
+      if (n === null || found.has(n)) continue
+      if (nonEmpty) {
+        try {
+          if ((await fs.stat(path.join(dir, name))).size === 0) continue
+        } catch {
+          continue
+        }
+      }
+      found.add(n)
     }
   }
 
@@ -233,10 +268,12 @@ export interface ChapterStorage {
   totalBytes: number
   reclaimableBytes: number
   fileCount: number
-  /** A rendered MP4 exists for this chapter number. */
+  /** A rendered MP4 exists for this chapter number, or its Part was completed. */
   exported: boolean
+  /** The Part this chapter was completed with (files deleted), or null. */
+  completedPart: number | null
   /** Which exporter's record vouches for it, for the tooltip. */
-  exportedVia: 'editor2' | 'editor1' | null
+  exportedVia: 'editor2' | null
 }
 
 export interface SeriesStorage {
@@ -256,6 +293,7 @@ export interface SeriesStorage {
   /** Rendered MP4s under _video / _video2, kept apart from chapter totals. */
   videoBytes: number
   videoFileCount: number
+  videoCleanupFolders: VideoCleanupFolder[]
   chapters: ChapterStorage[]
 }
 
@@ -324,30 +362,10 @@ export async function scanStorage(): Promise<StorageOverview> {
     orderBy: { title: 'asc' }
   })
 
-  // Editor 1.0's exports are database-tracked; one query covers every series.
-  const doneExports = await prisma.videoExport.findMany({
-    where: { status: 'done' },
-    select: { project: { select: { seriesId: true, chapterIds: true } } }
-  })
-  // Editor 1.0 renders a whole VideoProject, so a finished export vouches for
-  // every chapter id listed in that project.
-  const editor1ExportedIds = new Map<string, Set<string>>()
-  for (const row of doneExports) {
-    if (!row.project) continue
-    const set = editor1ExportedIds.get(row.project.seriesId) ?? new Set<string>()
-    try {
-      for (const id of JSON.parse(row.project.chapterIds) as string[]) set.add(id)
-    } catch {
-      // Malformed JSON: ignore this project.
-    }
-    editor1ExportedIds.set(row.project.seriesId, set)
-  }
-
   const seriesOut: SeriesStorage[] = []
 
   for (const s of allSeries) {
     const exportedNumbers = await scanExportedChapterNumbers(s.rootFolder)
-    const exportedIds = editor1ExportedIds.get(s.id) ?? new Set<string>()
 
     const chapters: ChapterStorage[] = []
     const BATCH = 8
@@ -357,7 +375,7 @@ export async function scanStorage(): Promise<StorageOverview> {
         slice.map(async ch => {
           const { sizes, files, exists } = await scanChapterFolder(ch.folderPath)
           const viaEditor2 = exportedNumbers.has(Math.round(ch.number))
-          const viaEditor1 = exportedIds.has(ch.id)
+          const completed = ch.completedAt !== null
           const chapter: ChapterStorage = {
             id: ch.id,
             number: ch.number,
@@ -370,8 +388,9 @@ export async function scanStorage(): Promise<StorageOverview> {
             totalBytes: totalOf(sizes),
             reclaimableBytes: reclaimableOf(sizes),
             fileCount: files,
-            exported: viaEditor2 || viaEditor1,
-            exportedVia: viaEditor2 ? 'editor2' : viaEditor1 ? 'editor1' : null
+            exported: viaEditor2 || completed,
+            exportedVia: viaEditor2 ? 'editor2' : null,
+            completedPart: completed ? ch.completedPart : null
           }
           return chapter
         })
@@ -382,10 +401,12 @@ export async function scanStorage(): Promise<StorageOverview> {
     // Series-level rendered video, which lives beside the chapters, not in them.
     let videoBytes = 0
     let videoFileCount = 0
+    const videoCleanupFolders: VideoCleanupFolder[] = []
     for (const dirName of VIDEO_DIRS) {
       const measured = await measureDir(path.join(getFullFolderPath(s.rootFolder), dirName))
       videoBytes += measured.bytes
       videoFileCount += measured.files
+      videoCleanupFolders.push(await scanVideoCleanupFolder(s.rootFolder, dirName))
     }
 
     const sizes = emptySizes()
@@ -420,6 +441,7 @@ export async function scanStorage(): Promise<StorageOverview> {
         .reduce((sum, c) => sum + c.reclaimableBytes, 0),
       videoBytes,
       videoFileCount,
+      videoCleanupFolders,
       chapters
     })
   }
@@ -453,7 +475,7 @@ export async function scanStorage(): Promise<StorageOverview> {
     safeToDeleteBytes: seriesOut.reduce((sum, s) => sum + s.safeToDeleteBytes, 0),
     videoBytes: seriesOut.reduce((sum, s) => sum + s.videoBytes, 0),
     sharedBytes,
-    series: seriesOut,
+    series: await withSeriesActivity(seriesOut),
     scannedAt: new Date().toISOString()
   }
 }
@@ -468,7 +490,7 @@ export async function scanStorage(): Promise<StorageOverview> {
 // which is the only form that can be trusted.
 
 /** Delete `target`, but only if it really resolves inside the download root. */
-async function removeWithin(target: string): Promise<boolean> {
+async function removeWithinLegacy(target: string): Promise<boolean> {
   const root = path.resolve(process.env.DOWNLOAD_ROOT || './downloads')
   const resolved = path.resolve(target)
 
@@ -517,6 +539,9 @@ export async function deleteChapterData(
     include: { series: { select: { id: true, rootFolder: true } } }
   })
   if (!chapter) throw new Error('Chapter not found')
+  if (chapter.completedAt) {
+    return { chapterId: chapter.id, chapterNumber: chapter.number, categories: [], freedBytes: 0, skipped: 'Part completed — nothing left to clean' }
+  }
 
   const selected = categories.filter(key => {
     const meta = CATEGORIES.find(c => c.key === key)
@@ -533,19 +558,22 @@ export async function deleteChapterData(
     freedBytes: 0
   }
 
+  // Audio belongs to one narration language, so it is only reclaimed for a
+  // language whose video exists — an English render must not cost the Hindi
+  // voiceover that hasn't been rendered yet. Pages and crops are shared, so any
+  // render clears them, as before.
+  let audioLanguages: NarrationLanguage[] = [...NARRATION_LANGUAGES]
   if (!options.allowUnexported) {
-    const exportedNumbers = await scanExportedChapterNumbers(chapter.series.rootFolder)
-    if (!exportedNumbers.has(Math.round(chapter.number))) {
-      const editor1 = await prisma.videoExport.count({
-        where: {
-          status: 'done',
-          project: { seriesId: chapter.series.id, chapterIds: { contains: chapter.id } }
-        }
-      })
-      if (editor1 === 0) {
-        return { ...base, skipped: 'Chapter has not been exported to video' }
-      }
+    const number = Math.round(chapter.number)
+    const exportedIn: NarrationLanguage[] = []
+    for (const language of NARRATION_LANGUAGES) {
+      const numbers = await scanExportedChapterNumbers(chapter.series.rootFolder, videoDirsFor(language))
+      if (numbers.has(number)) exportedIn.push(language)
     }
+    if (exportedIn.length === 0) {
+      return { ...base, skipped: 'Chapter has not been exported to video' }
+    }
+    audioLanguages = exportedIn
   }
 
   // Measured before the delete so the number reported back is what was really
@@ -568,6 +596,13 @@ export async function deleteChapterData(
         if (!entry.isFile()) continue
         if (categorizeChapterFile(entry.name) !== 'pages') continue
         await removeWithin(path.join(dir, entry.name))
+      }
+      continue
+    }
+
+    if (key === 'audio') {
+      for (const language of audioLanguages) {
+        await removeWithin(path.join(dir, audioFolderName(language)))
       }
       continue
     }
@@ -599,9 +634,10 @@ export async function deleteChapterData(
   if (selected.includes('audio')) {
     // Audio rows point at files that are now gone; the sections they belong to
     // survive, so the script can be re-voiced without being retyped.
-    await prisma.audioFile.deleteMany({ where: { chapterId: chapter.id } })
+    const language = { in: audioLanguages }
+    await prisma.audioFile.deleteMany({ where: { chapterId: chapter.id, language } })
     await prisma.audioSection.updateMany({
-      where: { chapterId: chapter.id },
+      where: { chapterId: chapter.id, language },
       data: { status: 'none' }
     })
   }
@@ -640,12 +676,79 @@ export async function deleteSeriesExportedData(
 /** One rendered MP4 under a series' _video / _video2 folder. */
 export interface VideoFileInfo {
   seriesId: string
-  dir: '_video' | '_video2'
+  dir: VideoDir
   fileName: string
   bytes: number
   modifiedAt: string
   /** The chapter number in the filename, when it carries one. */
   chapterNumber: number | null
+}
+
+export interface VideoCleanupFolder {
+  dir: VideoDir
+  /** Nonempty videos inside a compressed/Compress subfolder, relative to dir. */
+  compressedVideos: string[]
+  renderedFileCount: number
+  renderedBytes: number
+}
+
+const COMPRESSED_FOLDER_NAMES = new Set(['compressed', 'compress'])
+const isVideoFile = (name: string) => /\.(mp4|mov|mkv|webm|m4v|avi)$/i.test(name)
+
+/** Only direct rendered MP4s are eligible; compressed folders are never targets. */
+export async function scanVideoCleanupFolder(rootFolder: string, dir: VideoDir): Promise<VideoCleanupFolder> {
+  const result: VideoCleanupFolder = { dir, compressedVideos: [], renderedFileCount: 0, renderedBytes: 0 }
+  const folder = path.join(getFullFolderPath(rootFolder), dir)
+  // Do not accept a symlink as either the render folder or its compressed copy.
+  if (!(await fs.lstat(folder).catch(() => null))?.isDirectory()) return result
+  const entries = await fs.readdir(folder, { withFileTypes: true }).catch(() => [])
+  for (const entry of entries) {
+    if (entry.isFile() && /\.mp4$/i.test(entry.name)) {
+      const stat = await fs.lstat(path.join(folder, entry.name)).catch(() => null)
+      if (!stat?.isFile()) continue
+      result.renderedFileCount++
+      result.renderedBytes += stat.size
+    } else if (entry.isDirectory() && COMPRESSED_FOLDER_NAMES.has(entry.name.toLowerCase())) {
+      for (const video of await fs.readdir(path.join(folder, entry.name), { withFileTypes: true }).catch(() => [])) {
+        if (!video.isFile() || !isVideoFile(video.name)) continue
+        const stat = await fs.lstat(path.join(folder, entry.name, video.name)).catch(() => null)
+        if (stat?.isFile() && stat.size > 0) result.compressedVideos.push(`${entry.name}/${video.name}`)
+      }
+    }
+  }
+  result.compressedVideos.sort()
+  return result
+}
+
+/** Delete direct renders only after rechecking a compressed video on disk. */
+export async function deleteCompressedSeriesVideos(
+  seriesId: string,
+  dirName: string
+): Promise<{ freedBytes: number; deletedFiles: number }> {
+  if (!(VIDEO_DIRS as string[]).includes(dirName)) throw new Error('Unknown video folder')
+  const series = await prisma.series.findUnique({ where: { id: seriesId }, select: { rootFolder: true } })
+  if (!series) throw new Error('Series not found')
+  const dir = dirName as VideoDir
+  const folder = path.join(getFullFolderPath(series.rootFolder), dir)
+  const root = await fs.realpath(process.env.DOWNLOAD_ROOT || './downloads')
+  const resolved = await fs.realpath(folder)
+  if (!resolved.startsWith(root + path.sep)) throw new Error('Video folder is outside the download root')
+  const state = await scanVideoCleanupFolder(series.rootFolder, dir)
+  if (state.compressedVideos.length === 0) {
+    throw new Error('Place a nonempty video in a compressed subfolder of this render folder before deleting renders')
+  }
+  let freedBytes = 0
+  let deletedFiles = 0
+  for (const entry of await fs.readdir(folder, { withFileTypes: true })) {
+    if (!entry.isFile() || !/\.mp4$/i.test(entry.name)) continue
+    const target = path.join(folder, entry.name)
+    const stat = await fs.lstat(target).catch(() => null)
+    if (!stat?.isFile()) continue
+    await removeWithin(target)
+    freedBytes += stat.size
+    deletedFiles++
+  }
+  return { freedBytes, deletedFiles }
 }
 
 /** Every rendered MP4 of a series, newest first. */
@@ -670,10 +773,10 @@ export async function listSeriesVideos(seriesId: string): Promise<VideoFileInfo[
       if (!name.toLowerCase().endsWith('.mp4')) continue
       try {
         const stat = await fs.stat(path.join(dir, name))
-        const m = /_ch(\d{3,})_/.exec(name)
+        const m = /(?:^|_)ch(\d{3,})_/.exec(name)
         out.push({
           seriesId: series.id,
-          dir: dirName as '_video' | '_video2',
+          dir: dirName,
           fileName: name,
           bytes: stat.size,
           modifiedAt: stat.mtime.toISOString(),
@@ -691,9 +794,8 @@ export async function listSeriesVideos(seriesId: string): Promise<VideoFileInfo[
 /**
  * Delete one rendered MP4.
  *
- * Deliberately one file at a time and addressed by name: these are the finished
- * videos, and a bulk "delete all exports" button is a mis-click away from
- * losing the only copy of a published chapter.
+ * Addressed by name for individual removal. Folder-wide deletion uses
+ * deleteCompressedSeriesVideos, which requires a saved compressed video.
  */
 export async function deleteSeriesVideo(
   seriesId: string,
@@ -706,7 +808,7 @@ export async function deleteSeriesVideo(
   })
   if (!series) throw new Error('Series not found')
 
-  if (!VIDEO_DIRS.includes(dirName)) {
+  if (!(VIDEO_DIRS as string[]).includes(dirName)) {
     throw new Error('Unknown video folder')
   }
   // The filename comes from the client, so a path of any kind is rejected
@@ -742,6 +844,10 @@ export interface PublishedMap {
   chapters: Record<string, boolean>
   /** Series id → how many of its chapters are published, out of how many. */
   series: Record<string, { published: number; total: number }>
+  /** Chapter id → the Part it was completed with (files deleted, scripts' continuity kept). */
+  completed: Record<string, number>
+  /** Series id → its completed Part numbers, ascending. */
+  completedParts: Record<string, number[]>
   scannedAt: string
 }
 
@@ -752,43 +858,52 @@ export interface PublishedMap {
  * Deliberately cheap: the expensive part of `scanStorage` is measuring every
  * chapter folder, and none of that is needed to answer "is this published?".
  */
-export async function getPublishedChapters(seriesId?: string): Promise<PublishedMap> {
+/**
+ * `language` narrows "published" to one narration language's renders — the
+ * Hindi tabs ask whether the Hindi video exists, since an English one doesn't
+ * make the Hindi voiceover redundant. Without it, any render counts (what the
+ * image modules want: crops are shared by both languages).
+ */
+export async function getPublishedChapters(
+  seriesId?: string,
+  language?: NarrationLanguage
+): Promise<PublishedMap> {
   const allSeries = await prisma.series.findMany({
     where: seriesId ? { id: seriesId } : undefined,
-    select: { id: true, rootFolder: true, chapters: { select: { id: true, number: true } } }
-  })
-
-  // Editor 1.0's finished renders vouch for every chapter id in their project.
-  const doneExports = await prisma.videoExport.findMany({
-    where: {
-      status: 'done',
-      ...(seriesId ? { project: { seriesId } } : {})
-    },
-    select: { project: { select: { chapterIds: true } } }
-  })
-  const editor1Ids = new Set<string>()
-  for (const row of doneExports) {
-    if (!row.project) continue
-    try {
-      for (const id of JSON.parse(row.project.chapterIds) as string[]) editor1Ids.add(id)
-    } catch {
-      // Malformed JSON: this project vouches for nothing.
+    select: {
+      id: true,
+      rootFolder: true,
+      chapters: { select: { id: true, number: true, completedAt: true, completedPart: true } }
     }
-  }
+  })
 
   const chapters: Record<string, boolean> = {}
   const series: Record<string, { published: number; total: number }> = {}
+  const completed: Record<string, number> = {}
+  const completedParts: Record<string, number[]> = {}
 
   for (const s of allSeries) {
-    const exportedNumbers = await scanExportedChapterNumbers(s.rootFolder)
+    const exportedNumbers = await scanExportedChapterNumbers(s.rootFolder, videoDirsFor(language))
     let published = 0
     for (const ch of s.chapters) {
-      const isPublished = exportedNumbers.has(Math.round(ch.number)) || editor1Ids.has(ch.id)
+      // A completed Part's videos were deleted with it (the user keeps the final
+      // cut elsewhere), so its chapters stay published in both languages.
+      const isPublished = ch.completedAt !== null || exportedNumbers.has(Math.round(ch.number))
       chapters[ch.id] = isPublished
       if (isPublished) published += 1
+      if (ch.completedAt !== null) completed[ch.id] = ch.completedPart ?? 0
     }
     series[s.id] = { published, total: s.chapters.length }
+    const parts = [...new Set(s.chapters.filter(ch => ch.completedAt !== null).map(ch => ch.completedPart ?? 0))]
+    if (parts.length > 0) completedParts[s.id] = parts.sort((a, b) => a - b)
   }
 
-  return { chapters, series, scannedAt: new Date().toISOString() }
+  return { chapters, series, completed, completedParts, scannedAt: new Date().toISOString() }
+}
+
+export async function removeWithin(target:string):Promise<boolean> {
+ return withManagedCropWorkspaceLock(async()=>{
+  if(await managedCropScopePresent(target))throw new Error('Managed crop tasks protect this path. Reconcile them before deletion.')
+  return removeWithinLegacy(target)
+ })
 }

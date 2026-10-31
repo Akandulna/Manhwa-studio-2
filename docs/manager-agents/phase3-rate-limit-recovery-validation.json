@@ -1,0 +1,38 @@
+{
+  "verifiedAt": "2026-10-19T11:47:57.447163+00:00",
+  "server": {
+    "files": 53,
+    "tests": 413,
+    "failures": 0,
+    "buildPassed": true
+  },
+  "android": {
+    "offlineJvmTests": 311,
+    "failures": 0,
+    "errors": 0,
+    "skips": 0,
+    "apkBuiltOrInstalled": false
+  },
+  "relayTypecheckPassed": true,
+  "forced429": {
+    "realLocalRelay": true,
+    "configuredOperations": 3,
+    "operationsAtCutoff": 3,
+    "rowWritesBeforeRestart": 37,
+    "rowWritesAfterRestartAndRejection": 37,
+    "retryAfterPresent": true,
+    "cutoffSurvivedProcessRestart": true
+  },
+  "clientRecovery": {
+    "realLoopbackHttp429": true,
+    "realDiskJournalRestart": true,
+    "sameEventBytesOnRetry": true,
+    "noHttpRequestsBeforeDeadline": true,
+    "drainedAfterDeadline": true,
+    "httpDateSupported": true,
+    "delaysBeyondOneDayHonored": true,
+    "concurrentPauseNeverShortened": true,
+    "corruptStateAndFailedWritesBlockDelivery": true
+  },
+  "scope": "Isolated relay cutoff, real local HTTP/SQLite sender recovery, and Android pure JVM policy reconstruction. Does not instrument installed APK SharedPreferences/WorkManager or force production/phone 429. No account-wide allowance claim."
+}
