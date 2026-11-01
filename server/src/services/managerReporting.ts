@@ -144,7 +144,9 @@ export function recordLocalManagerChapter(input: { seriesId: string; chapterId: 
   const at = input.observedAt ?? new Date().toISOString()
   const grouped = new Map<ManagerId, ManagerFact[]>()
   for (const [key, stage] of Object.entries(input.stages)) {
-    const fact = managerFact(`${scope.chapterId}/${key}`, key as ProcessStage, scope)
+    // Metadata is carried by the split protocol; older manager/1 peers reject unknown stages.
+    if(key==='metadata')continue
+    const fact = managerFact(`${scope.chapterId}/${key}`, key as Exclude<ProcessStage, 'metadata'>, scope)
     fact.workState = workState(stage.state); fact.done = stage.done ?? null; fact.total = stage.total ?? null
     fact.inputRevision = input.pageRevision ? `pages:${input.pageRevision}` : null
     // A page revision alone says nothing about script/audio/prompt compatibility.
@@ -274,7 +276,7 @@ export async function acknowledgeManagerIncident(id: string, notificationId: str
 }
 
 /** Called only after an existing cloud GET/import operation; never initiates cloud scans or retries. */
-type ManagerTransferInput = { seriesId: string; chapterId: string; stage: ProcessStage; phase: 'cloud' | 'imported' | 'failed'; objectVersion: string | null }
+type ManagerTransferInput = { seriesId: string; chapterId: string; stage: Exclude<ProcessStage,'metadata'>; phase: 'cloud' | 'imported' | 'failed'; objectVersion: string | null }
 export function managerTransferFact(input: ManagerTransferInput): ManagerFact {
   const fact = managerFact(`handoff/${input.chapterId}/${input.stage}`, input.stage, { seriesId: input.seriesId, chapterId: input.chapterId, profileId: null })
   fact.inputRevision = input.objectVersion ? `object:${digest(input.objectVersion)}` : null

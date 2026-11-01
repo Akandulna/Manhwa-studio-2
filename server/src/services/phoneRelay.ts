@@ -62,6 +62,7 @@ export type PhoneAction =
   | 'youtube_start'
   | 'editor_start'
   | 'voiceover_start'
+  | 'metadata_start'
   | 'run_stop'
   | 'run_finish'
   | 'screen_on'

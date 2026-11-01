@@ -115,6 +115,7 @@ export interface PhoneCropsFetch {
   cropped: CroppedPublish
   /** Reviewed markers this run put in R2 or took out of it, to match the desktop's reviews. */
   reviewedMarkers: ReviewedPublish
+  metadata?: {imported:number;errors:string[]}
 }
 
 /** What putting the reviewed markers in step did. */
@@ -759,6 +760,18 @@ export async function fetchPhoneCrops(seriesId: string, chapterIds?: string[]): 
   result.cropped = await backfillCropped(client, config, series, listing)
   // The desktop's own reviews, so the Master shows them (same listing, no extra LIST).
   result.reviewedMarkers = await syncReviewedMarkers(client, config, series, listing)
+  // Ordinary Sync also receives independent Metadata JSON; it never recuts or replaces pointers.
+  const {fetchMetadataResults}=await import('./clipper3/metadataSplit.js')
+  for (const chapter of series.chapters) {
+    if(wanted && !wanted.has(chapter.id))continue
+    if(!await fs.stat(path.join(process.env.DOWNLOAD_ROOT || './downloads',chapter.folderPath,'.metadata-cut-receipt.json')).then(()=>true,()=>false))continue
+    if(await (await import('./managedCropProjection.js')).managedCropBindingCount(chapter.folderPath))continue
+    const metadata=await fetchMetadataResults({...chapter,seriesId,series:{title:series.title}})
+    result.metadata ??= {imported:0,errors:[]}
+    result.metadata.imported+=metadata.imported
+    result.metadata.errors.push(...metadata.errors.map(reason=>`${path.basename(chapter.folderPath)}: ${reason}`))
+  }
+
 
   return result
   })

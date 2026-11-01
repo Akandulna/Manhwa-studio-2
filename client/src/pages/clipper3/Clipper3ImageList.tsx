@@ -297,6 +297,16 @@ function Clipper3ChapterImageList() {
             Crop Sections
           </Button>
         </span>
+        <Button variant="outline" size="sm" disabled={isCropping || !data.review?.reviewed || data.images.some(image=>image.managed)}
+          onClick={async()=>{
+            try {
+              const response=await fetch(`/api/clipper3/chapters/${chapterId}/metadata/sync`,{method:'POST'})
+              const result=await response.json()
+              if(!response.ok)throw new Error(result.error||'Metadata synchronization failed')
+              toast({title:'Metadata · AI Studio',description:`${result.queued??0} approved page jobs queued; ${result.imported??0} metadata pages imported.${result.errors?.length?' '+result.errors.join('; '):''}`})
+              window.location.reload()
+            }catch(error){toast({title:'Metadata is not ready',description:error instanceof Error?error.message:String(error),variant:'destructive'})}
+          }}>Sync Metadata</Button>
       </div>
 
       {/* The Sleeper-Cell phone's progress on this chapter, re-read only when
@@ -433,7 +443,7 @@ function Clipper3ChapterImageList() {
                           (e.g. which crop ids don't match) rather than a generic
                           "something's wrong" — that's the whole point of surfacing it. */}
                       {!isDone && !img.hasPoints && !img.hasMetadata && ' · no crop JSON yet — Sync json'}
-                      {!isDone && img.hasPoints && !img.hasMetadata && ' · needs metadata'}
+                      {img.hasPoints && !img.hasMetadata && ' · metadata follows manual review and cropping'}
                       {!isDone && !img.hasPoints && img.hasMetadata && ' · needs crop JSON'}
                       {!isDone && img.hasPoints && img.hasMetadata && !img.metadataValid && (
                         img.metadataErrors.length > 0

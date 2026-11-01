@@ -3,7 +3,7 @@ export const PART_CHAPTERS = 20
 export const PROCESS_STAGES = [
   'download', 'cleanup', 'stitch', 'script_en', 'script_hi',
   'split_en', 'voice_en', 'split_hi', 'voice_hi', 'align_en', 'align_hi',
-  'crop_json', 'review', 'crop', 'timeline_en', 'processed_en', 'export_en', 'timeline_hi', 'processed_hi', 'export_hi'
+  'crop_json', 'review', 'crop', 'metadata', 'timeline_en', 'processed_en', 'export_en', 'timeline_hi', 'processed_hi', 'export_hi'
 ] as const
 export type ProcessStage = typeof PROCESS_STAGES[number]
 export type ProcessState = 'pending' | 'active' | 'partial' | 'review' | 'failed' | 'done'

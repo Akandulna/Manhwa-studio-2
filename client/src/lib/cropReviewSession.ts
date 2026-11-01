@@ -87,7 +87,7 @@ export class CropReviewSession {
     const before = this.pages[filename]
     if (!before || JSON.stringify(before.file) === JSON.stringify(file)) return
     let metadata = before.metadata
-    if (removedCropId) {
+    if (removedCropId && metadata.trim()) {
       const updated = removeCropFromMetadata(metadata, removedCropId, file.crops, {
         seriesTitle: this.seriesTitle,
         imageFilename: filename

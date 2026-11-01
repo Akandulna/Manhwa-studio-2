@@ -218,17 +218,13 @@ describe('phone relay', () => {
       editor: { tabs: 2, staged: true, chatGpt: { mode: 'Chat', model: 'Selected model', effort: 'High' } }
     })
 
-    const clip = await sendAutomationCommand('start', { seriesId: 's1', tabs: 2, ai: 'aistudio', flow: 'steps', language: 'hi' })
+    const clip = await sendAutomationCommand('start', { seriesId: 's1', tabs: 2, ai: 'aistudio', flow: 'classic', language: 'hi' })
     await until(() => received.some(m => m.includes(clip.id)))
     expect(JSON.parse(received.find(m => m.includes(clip.id))!)).toEqual({
       type: 'request', id: clip.id, requestedAt: clip.requestedAt, action: 'clipper_start', series: 'Solo Hero', tabs: 2, ai: 'aistudio', flow: 'steps'
     })
 
-    const gemini = await sendAutomationCommand('start', { seriesId: 's1', ai: 'gemini', flow: 'steps' })
-    await until(() => received.some(m => m.includes(gemini.id)))
-    expect(JSON.parse(received.find(m => m.includes(gemini.id))!)).toMatchObject({
-      action: 'clipper_start', ai: 'gemini', flow: 'steps'
-    })
+    await expect(sendAutomationCommand('start', { seriesId: 's1', ai: 'gemini', flow: 'steps' })).rejects.toThrow('Image Clipper supports ChatGPT or AI Studio')
 
     const editorChoices = { mode: 'Chat' as const, model: 'Selected model', effort: 'High' }
     const editor = await sendAutomationCommand('start', { kind: 'editor', seriesId: 's1', tabs: 2, language: 'hi', chatGpt: editorChoices })

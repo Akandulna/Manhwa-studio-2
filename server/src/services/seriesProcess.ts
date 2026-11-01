@@ -108,6 +108,11 @@ async function localStages(chapter: any, title: string, timelines: any[]): Promi
         const crops = await readChapterCropState({ folderPath: chapter.folderPath, series: { title } }).catch(() => null)
         if (crops) {
           result.crop_json = stage(crops.targets.length, crops.totalImages)
+          try {
+            const {requireCurrentSplitMetadata}=await import('./clipper3/metadataSplit.js')
+            const split=await requireCurrentSplitMetadata({...chapter,series:{title}})
+            if(split || await chapterStoryLinksCurrent(root(),chapter.folderPath)) result.metadata = {state:'done',done:crops.totalImages,total:crops.totalImages}
+          } catch { result.metadata = {state:'pending',total:crops.totalImages} }
           result.crop = { state: crops.outputs.complete && crops.fullyAttached ? 'done' : isChapterCropping(chapter.id) ? 'active' : crops.chopped ? 'partial' : 'pending' }
         }
       }
@@ -127,7 +132,7 @@ function mergeRemote(stages: ChapterStages, folder: string, name: string, replac
       if (!preservedRestartStages.has(key) && !sameRestart(revision, chapter?.restartRevision)) continue
       if (replacement && ['crop_json', 'review'].includes(key) && chapter?.pageRevision !== replacement.revision) continue
       // Rendering, processing and alignment are desktop facts, never guessed from a phone's script or package.
-      if (key.startsWith('export_') || key.startsWith('processed_') || key.startsWith('align_') || key === 'crop') continue
+      if (key.startsWith('export_') || key.startsWith('processed_') || key.startsWith('align_') || key === 'crop' || key === 'metadata') continue
       const value = remote[key]
       if (value && ['pending', 'active', 'partial', 'review', 'failed', 'done'].includes(value.state)) stages[key] = mergeStage(stages[key], value)
     }
@@ -181,7 +186,7 @@ async function scan(): Promise<ProcessSnapshot> {
     for (const c of row.chapters) {
       const stages = await localStages(c, row.title, timelines.filter(t => t.chapterId === c.id))
       const replacement = await readPageReplacement(c.folderPath)
-      if (revision && !await chapterStoryLinksCurrent(root(), c.folderPath)) stages.crop_json = { state: 'pending', total: c.pageCount ?? 0 }
+      if (revision && !await chapterStoryLinksCurrent(root(), c.folderPath)) stages.metadata = { state: 'pending', total: c.pageCount ?? 0 }
       if (restarting) for (const key of PROCESS_STAGES) if (!preservedRestartStages.has(key)) stages[key] = { state: 'pending' }
       const local = structuredClone(stages)
       local.export_en = { state: !c.completedAt && en.has(c.number) ? 'done' : 'pending' }

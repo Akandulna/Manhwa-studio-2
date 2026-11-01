@@ -81,6 +81,7 @@ import {
   seriesSlug,
   type CropChapter
 } from '../services/clipper3/chapterCrop.js'
+import {publishMetadataJobs,fetchMetadataResults} from '../services/clipper3/metadataSplit.js'
 import { fetchPhoneCrops, publishAllCroppedMarkers, publishChapterCropped, publishChapterReviewed } from '../services/phoneCropImport.js'
 import { readEffectiveReview, setDesktopReview } from '../services/clipper3/chapterReview.js'
 import { reconcileQuietly } from '../services/diskReconcile.js'
@@ -140,8 +141,20 @@ export function initClipper3Routes(io: Server): Router {
   // Every finished cut (Crop Sections or auto) tells the phones the chapter is
   // cropped, so the Master shows it as such and clipping phones leave it be.
   onChapterCropped(chapter => publishChapterCropped(chapter.id))
+  onChapterCropped(chapter => publishMetadataJobs(chapter))
   // A cut chapter may be ready for its timeline JSON: Editor 2.0 sends it to the phone.
   onChapterCropped(async chapter => queueEditorPublish(chapter.id))
+
+  // Explicit Metadata refresh: publish JSON jobs and fetch metadata without touching geometry.
+  router.post('/chapters/:id/metadata/sync',async(req:Request,res:Response)=>{
+    try {
+      const chapter=await findChapter(req.params.id);if(!chapter)return res.status(404).json({error:'Chapter not found'})
+      await assertUnmanagedCropChapter(chapter.folderPath)
+      const fetched=await fetchMetadataResults(chapter)
+      const jobs=await publishMetadataJobs(chapter)
+      res.json({...jobs,...fetched})
+    }catch(e){res.status(409).json({error:e instanceof Error?e.message:String(e)})}
+  })
 
   // ============ Series & chapter listing ============
 
@@ -308,7 +321,9 @@ export function initClipper3Routes(io: Server): Router {
           // the result, and an image is only finished once it has both AND
           // the metadata actually still matches those crops.
           const redo = await readPageRedo(chapter.folderPath, img.filename)
-          const status: 'done' | 'pending' = redo?.status !== 'pending' && parseable && hasMetadata && metadataValid ? 'done' : 'pending'
+          const geometryOnly = hasArtifact && (await readImagePoints(chapter.folderPath,img.filename))?.file?.workflow === 'clipper-geometry/1'
+          if (geometryOnly && parseable) exportedNames = expectedExportedFilenames(seriesSlug(chapter.series.title),img.filename,extractCrops((await readImagePoints(chapter.folderPath,img.filename))?.file??null))
+          const status: 'done' | 'pending' = redo?.status !== 'pending' && parseable && (geometryOnly || (hasMetadata && metadataValid)) ? 'done' : 'pending'
           if (status === 'done') {
             expectedOutputs.push(...exportedNames)
             doneFiles.push(img.filename)
@@ -322,6 +337,8 @@ export function initClipper3Routes(io: Server): Router {
             height: img.height,
             hasPoints: hasArtifact,
             hasMetadata,
+            geometryReady: parseable,
+            metadataPending: !hasMetadata || !metadataValid,
             metadataValid,
             // Empty whenever metadataValid, or when there's no metadata to
             // check yet — populated only for the "looked done but isn't" case
@@ -721,7 +738,7 @@ export function initClipper3Routes(io: Server): Router {
       const { targets } = await readChapterCropState(chapter)
       if (targets.length === 0) {
         return res.status(400).json({
-          error: 'No image is ready to cut — each needs its crop JSON and metadata that still matches it'
+          error: 'No image is ready to cut — import valid crop pointers first'
         })
       }
 

@@ -167,7 +167,8 @@ async function checkAlignment(
  * against them, and crops3/ holds exactly the files those pages cut to, none
  * older than its page's crop points.
  */
-async function checkCrops(folderPath: string, slug: string): Promise<ChecklistItem & { hasMetadata: boolean }> {
+async function checkCrops(chapter: {id:string;number:number;seriesId:string;folderPath:string}, slug: string): Promise<ChecklistItem & { hasMetadata: boolean }> {
+  const folderPath = chapter.folderPath
   try {
     const managed=await readManagedChapterAssets(folderPath)
     if(managed)return {ok:true,hasMetadata:true,detail:`All ${managed.pages.length} managed pages reviewed and cut — ${managed.assets.length} verified crops`}
@@ -178,6 +179,10 @@ async function checkCrops(folderPath: string, slug: string): Promise<ChecklistIt
   } catch {
     return { ok: false, hasMetadata: false, detail: 'No page images on disk' }
   }
+  try {
+    const {requireCurrentSplitMetadata} = await import('./clipper3/metadataSplit.js')
+    await requireCurrentSplitMetadata({...chapter,series:{title:slug}})
+  } catch(error) { return {ok:false,hasMetadata:false,detail:`Metadata pending: ${(error as Error).message}`} }
   const pointed = await listPointedImageStems(folderPath)
   const described = await listMetadataImageStems(folderPath)
 
@@ -217,7 +222,7 @@ async function checkCrops(folderPath: string, slug: string): Promise<ChecklistIt
 
 /** One chapter's checklist. `storedJson` is its Editor2Timeline paste, if any. */
 async function buildChecklist(
-  chapter: { id?: string; folderPath: string; audioSections: SectionRow[] },
+  chapter: { id: string; number:number; seriesId:string; folderPath: string; audioSections: SectionRow[] },
   language: NarrationLanguage,
   slug: string,
   storedJson: string | null
@@ -225,7 +230,7 @@ async function buildChecklist(
   const [audio, alignment, crops] = await Promise.all([
     checkAudio(chapter.audioSections),
     checkAlignment(chapter.folderPath, language, chapter.audioSections),
-    checkCrops(chapter.folderPath, slug)
+    checkCrops(chapter, slug)
   ])
   const timeline: ChecklistItem = storedJson?.trim()
     ? { ok: true, detail: 'Timeline JSON stored for this chapter' }

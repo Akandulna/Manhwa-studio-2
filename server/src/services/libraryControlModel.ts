@@ -22,7 +22,7 @@ export function mergeControl(a: LibraryControl, b: LibraryControl): LibraryContr
 /** Match a whole series directory, never similarly named series or unrelated objects. */
 export function isSeriesObject(key: string, folder: string): boolean {
   const segments = key.split('/')
-  const i = segments.findIndex(kind => ['manhwa', 'scripts', 'crops', 'voiceover', 'editor'].includes(kind))
+  const i = segments.findIndex(kind => ['manhwa', 'scripts', 'crops', 'metadata', 'metadata-jobs', 'voiceover', 'editor'].includes(kind))
   return i >= 0 && segments[i + 1] === folder && segments.length > i + 2 ||
     segments.at(-1) === `${folder}.zip`
 }

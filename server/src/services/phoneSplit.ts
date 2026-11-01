@@ -386,6 +386,7 @@ export async function buildSplitPlan(input: SplitInput): Promise<SplitPlan> {
 }
 
 const NOTHING_LEFT: Record<PhoneRunKind, string> = {
+  metadata: 'No approved cropped chapter is waiting for Metadata',
   clipper: 'Every chapter of this series is clipped on the phones already',
   narration: NARRATION_ONE_PHONE,
   editor: 'No chapter of this series is waiting for its timeline on the phones',

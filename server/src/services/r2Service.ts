@@ -1132,8 +1132,8 @@ export interface PhoneAutomation {
  * Gemini in AI Studio, in one prompt or four steps), the narration scripts
  * (Gemini), Editor 2.0's timelines (ChatGPT) and the voiceover (Gemini speech).
  */
-export type PhoneRunKind = 'clipper' | 'narration' | 'editor' | 'voiceover'
-export const PHONE_RUN_KINDS: readonly PhoneRunKind[] = ['clipper', 'narration', 'editor', 'voiceover']
+export type PhoneRunKind = 'metadata' | 'clipper' | 'narration' | 'editor' | 'voiceover'
+export const PHONE_RUN_KINDS: readonly PhoneRunKind[] = ['clipper', 'metadata', 'narration', 'editor', 'voiceover']
 export type PhoneClipperAi = 'chatgpt' | 'aistudio' | 'gemini'
 export type PhoneClipperFlow = 'classic' | 'steps'
 
@@ -1440,6 +1440,7 @@ export interface PhoneAutomationOptions {
 
 const START_ACTION: Record<PhoneRunKind, PhoneAction> = {
   clipper: 'clipper_start',
+  metadata: 'metadata_start',
   narration: 'narration_start',
   editor: 'editor_start',
   voiceover: 'voiceover_start'
@@ -1447,6 +1448,7 @@ const START_ACTION: Record<PhoneRunKind, PhoneAction> = {
 
 export const RUN_LABEL: Record<PhoneRunKind, string> = {
   clipper: 'Image Clipper',
+  metadata: 'Metadata · AI Studio',
   narration: 'Narration scripts',
   editor: 'Editor 2.0 timelines',
   voiceover: 'Voiceover'
@@ -1495,6 +1497,9 @@ export async function sendAutomationCommand(
     const sent = await sendPhoneRequest(action, { device })
     return { ...sent, via: 'relay', targets: [target(sent)] }
   }
+  if (kind === 'clipper' && options.ai && !['chatgpt','aistudio'].includes(options.ai)) throw new Error('Image Clipper supports ChatGPT or AI Studio')
+  if (kind === 'metadata' && (runsOn.length===0 || runsOn.some(r=>!r.includes('metadata')))) throw new Error('Update every selected phone before starting Metadata')
+  if (kind === 'metadata' && options.ai && options.ai !== 'aistudio') throw new Error('Metadata supports AI Studio only')
   const old = runsOn.length > 0 && runsOn.every(runs => !runs.includes(kind))
   if (old) throw new Error(`Update Sleeper-Cell to start ${RUN_LABEL[kind]} from here: this build can only start Image Clipper`)
   if (kind !== 'clipper' && !options.seriesId) throw new Error(`Pick a series for ${RUN_LABEL[kind]}`)
@@ -1505,7 +1510,18 @@ export async function sendAutomationCommand(
     // The phone names series by their folder (see place() in getPhoneOverview).
     series = path.basename(row.rootFolder)
   }
-  const takesTabs = kind === 'clipper' || kind === 'editor' || kind === 'voiceover'
+  if(kind==='metadata') {
+    if(options.split)throw new Error('Assign approved Metadata chapters to one selected phone per start')
+    if(!device||!series||!options.chapters?.length)throw new Error('Metadata requires one phone and explicit approved chapters')
+    const {publishMetadataJobs}=await import('./clipper3/metadataSplit.js')
+    const chapters=await prisma.chapter.findMany({where:{seriesId:options.seriesId},include:{series:{select:{title:true}}}})
+    for(const name of options.chapters) {
+      const chapter=chapters.find(c=>path.basename(c.folderPath)===name)
+      if(!chapter)throw new Error('Unknown Metadata chapter')
+      await publishMetadataJobs(chapter, {notify:false})
+    }
+  }
+  const takesTabs = kind === 'clipper' || kind === 'metadata' || kind === 'editor' || kind === 'voiceover'
   if (options.chapters !== undefined) {
     if (!device || !options.seriesId || options.split) throw new Error('A chapter scope needs one device and series')
     if (!Array.isArray(options.chapters) || !options.chapters.length || options.chapters.some(c => typeof c !== 'string' || !c)) throw new Error('Pick chapters to run')
@@ -1521,7 +1537,8 @@ export async function sendAutomationCommand(
     series,
     ...(options.chapters ? { chapters: [...new Set(options.chapters)] } : {}),
     tabs: takesTabs ? options.tabs : undefined,
-    ...(kind === 'clipper' ? { ai: options.ai, flow: options.flow, chatGpt: options.chatGpt } : {}),
+    ...(kind === 'clipper' ? { ai: options.ai, flow: options.ai ? (options.ai==='aistudio'?'steps' as const:'classic' as const) : undefined, chatGpt: options.chatGpt } : {}),
+    ...(kind === 'metadata' ? {ai:'aistudio' as const} : {}),
     ...(kind === 'editor' ? { ai: options.ai, smallBatches: options.smallBatches, chatGpt: options.chatGpt } : {}),
     // Narration's AI only when asked for: Run automation has no choice of it, so the phone keeps its own.
     ...(kind === 'narration' && options.ai ? { ai: options.ai } : {}),

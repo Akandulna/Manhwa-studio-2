@@ -70,6 +70,7 @@ export interface PhoneRunReadiness {
   items: ReadinessItem[]
   /** A send to the phones is going (any series): its progress comes as `phone-send:progress`. */
   sending: boolean
+  metadataChapters?: {name:string;number:number}[]
 }
 
 function plural(n: number, word: string): string {
@@ -238,10 +239,28 @@ async function voiceoverItems(seriesId: string, language: NarrationLanguage): Pr
 export async function getRunReadiness(kind: PhoneRunKind, seriesId: string, language: NarrationLanguage): Promise<PhoneRunReadiness> {
   let items: ReadinessItem[]
   let canWork: boolean
+  const metadataChapters:{name:string;number:number}[]=[]
   if (kind === 'clipper' || kind === 'narration') {
     const pages = await pagesItems(kind, seriesId)
     items = pages.items
     canWork = pages.onPhone > 0
+  } else if (kind === 'metadata') {
+    const chapters = await prisma.chapter.findMany({where:{seriesId},include:{series:{select:{title:true}}}})
+    const {currentMetadataJobs,metadataGenerations,requireCurrentSplitMetadata} = await import('./clipper3/metadataSplit.js')
+    items = []
+    let eligible = 0
+    for (const chapter of chapters) {
+      try {
+        await currentMetadataJobs(chapter, await metadataGenerations(chapter))
+        if(await requireCurrentSplitMetadata(chapter).catch(()=>false))continue
+        eligible++
+        metadataChapters.push({name:chapter.folderPath.split(/[\\/]/).pop()!,number:chapter.number})
+      } catch (error) {
+        items.push({id:`metadata-${chapter.id}`,label:`Chapter ${chapter.number}`,state:'blocked',detail:error instanceof Error?error.message:String(error),link:{to:`/clipper3`,label:'Review and cut in Image Clipper'}})
+      }
+    }
+    items.unshift({id:'metadata-ready',label:'Reviewed and cut chapters',state:eligible?'ready':'blocked',detail:`${eligible} chapters eligible. Select one phone and explicit chapters; Metadata uses AI Studio. Synchronize original pages and the English script on that phone first.`})
+    canWork = eligible > 0
   } else if (kind === 'editor') {
     ({ items, canWork } = await editorItems(seriesId, language))
   } else {
@@ -254,6 +273,7 @@ export async function getRunReadiness(kind: PhoneRunKind, seriesId: string, lang
     ready: items.every(i => i.state === 'ready' || i.state === 'note'),
     canWork,
     items,
+    ...(kind==='metadata'?{metadataChapters}:{}),
     sending: getSendJob()?.state === 'running'
   }
 }

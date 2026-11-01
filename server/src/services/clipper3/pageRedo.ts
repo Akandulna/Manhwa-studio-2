@@ -45,7 +45,7 @@ async function save(folder: string, value: PageRedo) {
 }
 /** Old incoming JSON is never eligible again, including after a restart or an interrupted import. */
 export function matchesRedo(value: PageRedo, pointers: string, metadata: string): boolean {
-  try { return JSON.parse(pointers).studioRedoRevision === value.revision && JSON.parse(metadata).studioRedoRevision === value.revision }
+  try { const p=JSON.parse(pointers); return p.studioRedoRevision === value.revision && (p.workflow==='clipper-geometry/1' ? true : JSON.parse(metadata).studioRedoRevision === value.revision) }
   catch { return false }
 }
 export async function finishPageRedo(folder: string, value: PageRedo) { await save(folder, { ...value, status: 'imported' }) }

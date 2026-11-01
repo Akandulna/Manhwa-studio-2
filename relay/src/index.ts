@@ -114,7 +114,7 @@ function tokenMatches(given: string | null, expected: string): boolean {
   return a.byteLength === b.byteLength && crypto.subtle.timingSafeEqual(a, b)
 }
 
-const FEATURES = ['receipt-source-revision/1','youtube-automation/1','manager-batch/1','native-manager-coverage/1','account-audit-deadline/1','recovery-dispatch-hints/1']
+const FEATURES = ['metadata-automation/1', 'receipt-source-revision/1','youtube-automation/1','manager-batch/1','native-manager-coverage/1','account-audit-deadline/1','recovery-dispatch-hints/1']
 const pauses = new WeakMap<Env,{until:number}>()
 async function forwardRelay(request:Request,env:Env):Promise<Response> {
   const cached=pauses.get(env)
@@ -183,7 +183,7 @@ const SILENT_MS = 150_000
 
 /** What a request may ask of the phone besides its receipts. */
 const ACTIONS = new Set([
-  'sync', 'clipper_start', 'clipper_stop', 'narration_start', 'editor_start', 'voiceover_start', 'youtube_start', 'run_stop', 'run_finish',
+  'sync', 'metadata_start', 'clipper_start', 'clipper_stop', 'narration_start', 'editor_start', 'voiceover_start', 'youtube_start', 'run_stop', 'run_finish',
   'screen_on', 'screen_off', 'screenshot', 'profile_select', 'chatgpt_options'
 ])
 
@@ -208,11 +208,11 @@ function chatGptSettings(value: unknown): ChatGptSettings | null {
 }
 
 /** The actions that start a run on `series`. */
-const START_ACTIONS = new Set(['clipper_start', 'narration_start', 'editor_start', 'voiceover_start', 'youtube_start'])
+const START_ACTIONS = new Set(['metadata_start', 'clipper_start', 'narration_start', 'editor_start', 'voiceover_start', 'youtube_start'])
 /** The runs that take `tabs`. */
-const TAB_ACTIONS = new Set(['clipper_start', 'editor_start', 'voiceover_start'])
+const TAB_ACTIONS = new Set(['metadata_start', 'clipper_start', 'editor_start', 'voiceover_start'])
 /** The runs that take `chapters`: a phone's share of a series split between phones (or a running one's new scope). */
-const CHAPTER_ACTIONS = new Set(['clipper_start', 'editor_start', 'voiceover_start'])
+const CHAPTER_ACTIONS = new Set(['metadata_start', 'clipper_start', 'editor_start', 'voiceover_start'])
 /** The runs that take a `language`. */
 const LANGUAGE_ACTIONS = new Set(['editor_start', 'voiceover_start'])
 
@@ -658,6 +658,11 @@ export class Relay extends DurableObject<Env> {
       const names = chapters.filter((c): c is string => typeof c === 'string' && !!c && c.length <= MAX_CHAPTER_NAME)
       if (names.length > MAX_CHAPTERS) return null
       if (names.length) request.chapters = names
+    }
+    if (started === 'metadata_start') {
+      if (ai !== undefined && ai !== 'aistudio') return null
+      if (!request.series || !request.device || !request.chapters?.length) return null
+      request.ai = 'aistudio'
     }
     if (started === 'clipper_start') {
       if (typeof ai === 'string' && AIS.has(ai)) request.ai = ai

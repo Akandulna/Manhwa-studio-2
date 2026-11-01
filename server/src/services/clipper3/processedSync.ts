@@ -355,7 +355,8 @@ function toArtifact(
       : parsed?.crop
         ? [{ id: parsed.id ?? 'c1', reason: parsed.reason ?? '', crop: parsed.crop }]
         : [],
-    receivedAt: new Date().toISOString()
+    receivedAt: new Date().toISOString(),
+    ...(parsed?.workflow === "clipper-geometry/1" ? {workflow: "clipper-geometry/1" as const, sourceSha256: parsed.sourceSha256} : {})
   }
 }
 
@@ -455,7 +456,7 @@ async function syncChapterProcessedLegacy(input: SyncChapterInput): Promise<Chap
 
     const stem = stemOf(image.filename)
     const redo = await readPageRedo(input.folderPath, image.filename)
-    if (redo && (!page.pointersText || !page.metadataText || !matchesRedo(redo, page.pointersText, page.metadataText))) {
+    if (redo && (!page.pointersText || !matchesRedo(redo, page.pointersText, page.metadataText ?? ''))) {
       record('skipped', 'Waiting for Sleeper Cell to regenerate this rejected page.', image.filename)
       continue
     }
@@ -495,6 +496,28 @@ async function syncChapterProcessedLegacy(input: SyncChapterInput): Promise<Chap
       } else record('failed', reason, image.filename, cropCount)
     }
 
+    // Versioned geometry-only drafts are intentionally reviewed/cut before metadata exists.
+    if (page.pointersText && !page.metadataText) {
+      try {
+        const raw=JSON.parse(page.pointersText)
+        if(raw.workflow==='clipper-geometry/1') {
+          const current=await readImagePoints(input.folderPath,image.filename)
+          if(current?.file && !replacingRejectedPage) {record('skipped','Saved pointers preserved; use explicit redo to replace them.',image.filename);continue}
+          if(studioFinal && !replacingRejectedPage) {record('skipped','Studio-reviewed geometry preserved.',image.filename);continue}
+          const sourceHash=sha256(await fs.readFile(path.join(getSourceFolderPath(input.folderPath),image.filename)))
+          if(raw.sourceSha256!==sourceHash)throw new Error('Pointers belong to a different source image')
+          if(raw.image?.filename!==image.filename||raw.image?.width!==image.width||raw.image?.height!==image.height||raw.coordinateSystem!=='normalized')throw new Error('Pointer image identity differs')
+          const artifact=toArtifact(raw,image),crops=extractCrops(artifact)
+          if(!Array.isArray(raw.crops)||crops.length!==raw.crops.length||new Set(crops.map(c=>c.id)).size!==crops.length)throw new Error('Invalid crop list')
+          for(const c of crops)if(!['rectangle','perspective'].includes(c.crop.mode)||c.crop.points.some(p=>p.x<0||p.x>1||p.y<0||p.y>1))throw new Error('Crop outside source image')
+          if(input.dryRun){record('ready','Pointers ready for manual review; Metadata follows cropping.',image.filename,crops.length);continue}
+          await writeImagePoints(input.folderPath,image.filename,artifact)
+          if(redo?.status==='pending')await finishPageRedo(input.folderPath,redo)
+          record('imported','Pointers imported; awaiting manual review and crop.',image.filename,crops.length)
+          continue
+        }
+      }catch(e){record('failed',e instanceof Error?e.message:String(e),image.filename);continue}
+    }
     if (!page.pointersText || !page.metadataText) {
       const missing = [
         !page.pointersText ? 'crop-pointers' : null,

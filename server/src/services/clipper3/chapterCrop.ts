@@ -1,3 +1,4 @@
+import {recordMetadataCut,captureMetadataGeometry} from './metadataSplit.js'
 import {readManagedChapterAssets} from '../managedChapterAssets.js'
 import {withUnmanagedCropChapter,withManagedCropReadSnapshot,readManagedCrop} from '../managedCropProjection.js'
 /**
@@ -121,7 +122,7 @@ async function readChapterCropStateSnapshot(chapter: Pick<CropChapter, 'folderPa
     const publication=await readManagedCrop(chapter.folderPath,img.filename)
     if(publication) {targets.push({filename:img.filename,crops:extractCrops(JSON.parse(publication.pointers))});continue}
     const stem = stemOf(img.filename)
-    if (!pointed.has(stem) || !described.has(stem)) continue
+    if (!pointed.has(stem)) continue
     const stored = await readImagePoints(chapter.folderPath, img.filename)
     const crops = extractCrops(stored?.file ?? null)
     if (crops.length === 0 && !hasNoCrops(stored?.file ?? null)) continue
@@ -131,8 +132,8 @@ async function readChapterCropStateSnapshot(chapter: Pick<CropChapter, 'folderPa
     const metadataText = await readImageMetadata(chapter.folderPath, img.filename)
     const exportedNames = expectedExportedFilenames(slug, img.filename, crops)
     if (
-      metadataText == null ||
-      !validateMetadata(metadataText, crops.map(c => c.id), exportedNames, slug).isValid
+      stored?.file?.workflow !== "clipper-geometry/1" && (metadataText == null ||
+      !validateMetadata(metadataText, crops.map(c => c.id), exportedNames, slug).isValid)
     ) continue
 
     targets.push({ filename: img.filename, crops })
@@ -175,6 +176,7 @@ async function runChapterCropLegacy(
   if (pageReplacementActive(chapter.folderPath)) throw new Error('This chapter’s pages are being replaced')
   cropping.add(chapterId)
 
+  const metadataBaseline = await captureMetadataGeometry(chapter).catch(() => null)
   const allFiles: CutFile[] = []
   let failed = 0
   const warnings: string[] = []
@@ -232,6 +234,8 @@ async function runChapterCropLegacy(
       )
     }
 
+    if (failed === 0 && unreadable.length === 0 && metadataBaseline) await recordMetadataCut(chapter, metadataBaseline)
+
     io.emit('clipper3:crop-complete', {
       ...tag,
       images: targets.length,
@@ -246,7 +250,7 @@ async function runChapterCropLegacy(
     // After the event, and not awaited: a slow or failing R2 PUT must not
     // hold up (or fail) the cut the user is waiting on. Listeners log their
     // own failures.
-    if (allFiles.length > 0) {
+    if (failed === 0 && unreadable.length === 0 && (allFiles.length > 0 || metadataBaseline)) {
       for (const listener of croppedListeners) {
         void listener(chapter).catch(err => console.error('[clipper3] after-crop step failed:', err))
       }

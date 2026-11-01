@@ -1937,7 +1937,7 @@ export interface PhoneAutomation {
 }
 
 /** The automation runs Sleeper-Cell can start from here (PhoneRunKind in r2Service.ts). */
-export type PhoneRunKind = 'clipper' | 'narration' | 'editor' | 'voiceover'
+export type PhoneRunKind = 'clipper' | 'metadata' | 'narration' | 'editor' | 'voiceover'
 /** Image Clipper's AI: ChatGPT, AI Studio, or Gemini on the web. */
 export type PhoneClipperAi = 'chatgpt' | 'aistudio' | 'gemini'
 /** Image Clipper's prompting: one prompt then review rounds (classic), or four steps. */
@@ -2144,6 +2144,7 @@ export interface PhoneRunReadiness {
   items: PhoneReadinessItem[]
   /** A send to the phones is going; progress comes as `phone-send:progress`. */
   sending: boolean
+  metadataChapters?: {name:string;number:number}[]
 }
 
 /** The script zip the phone uploads once every chapter of a series is done ("Zip and upload to R2"). */

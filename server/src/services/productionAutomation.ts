@@ -146,7 +146,7 @@ async function ensureScripts(job: ProductionJob, signal: AbortSignal, names: str
   }, 'The latest scripts have not synced to every phone. Check shared scripts and resume.', 10 * 60_000)
 }
 
-async function runPhone(job: ProductionJob, signal: AbortSignal, report: Report, kind: Exclude<PhoneRunKind, 'editor'>, keys: ProcessStage[], language?: 'en' | 'hi') {
+async function runPhone(job: ProductionJob, signal: AbortSignal, report: Report, kind: Exclude<PhoneRunKind, 'editor' | 'metadata'>, keys: ProcessStage[], language?: 'en' | 'hi') {
   const scope = productionChapters(await series(job.seriesId)).filter(c => !stagesDone([c], keys))
   const shares = productionShares(job.config, kind, scope)
   if (!shares.length) return

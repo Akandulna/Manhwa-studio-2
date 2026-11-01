@@ -200,7 +200,7 @@ export function initR2Routes(io: Server): Router {
 
   router.post('/phone/automation', async (req: Request, res: Response) => {
     try {
-      const { command, kind, seriesId, tabs, ai, flow, language, device, split, after, chatGpt, assignments, smallBatches } = req.body ?? {}
+      const { command, kind, seriesId, chapters, tabs, ai, flow, language, device, split, after, chatGpt, assignments, smallBatches } = req.body ?? {}
       if (command !== 'start' && command !== 'stop') throw new Error('command must be start or stop')
       if (kind !== undefined && !PHONE_RUN_KINDS.includes(kind)) throw new Error(`kind must be one of ${PHONE_RUN_KINDS.join(', ')}`)
       if (ai !== undefined && ai !== 'chatgpt' && ai !== 'aistudio' && ai !== 'gemini') throw new Error('ai must be chatgpt, aistudio or gemini')
@@ -209,13 +209,14 @@ export function initR2Routes(io: Server): Router {
       if (smallBatches !== undefined && (kind !== 'editor' || typeof smallBatches !== 'boolean')) throw new Error('smallBatches must be true or false for Editor')
       if (after !== undefined && typeof after !== 'boolean') throw new Error('after must be true or false')
       if (seriesId !== undefined && (typeof seriesId !== 'string' || !seriesId)) throw new Error('seriesId must be a series id')
+      if (chapters !== undefined && (!Array.isArray(chapters) || !chapters.length || chapters.some((c: unknown) => typeof c !== 'string' || !c))) throw new Error('chapters must be a nonempty list of chapter folders')
       if (tabs !== undefined && typeof tabs !== 'number') throw new Error('tabs must be a number')
       if (device !== undefined && (typeof device !== 'string' || !device)) throw new Error('device must be a phone id')
       if (split !== undefined && typeof split !== 'boolean') throw new Error('split must be true or false')
       if (device !== undefined && split) throw new Error('Pick one phone or split, not both')
       if (assignments !== undefined && (!split || !isAssignments(assignments))) throw new Error('assignments must go with split, as { <phone id>: [chapter folders] }')
       const choices = chatGpt === undefined || chatGpt === null ? undefined : parseChatGptSettings(chatGpt)
-      res.json(await sendAutomationCommand(command, { kind, seriesId, tabs, ai, flow, chatGpt: choices, language, device, split, after, assignments, smallBatches }))
+      res.json(await sendAutomationCommand(command, { kind, seriesId, chapters, tabs, ai, flow, chatGpt: choices, language, device, split, after, assignments, smallBatches }))
     } catch (error) {
       console.error('Phone automation command failed:', error)
       res.status(400).json({ error: message(error, 'Could not reach the phone') })

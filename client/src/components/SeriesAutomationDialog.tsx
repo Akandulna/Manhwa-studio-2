@@ -75,7 +75,7 @@ export function SeriesAutomationDialog({ series, onClose }: { series: Series; on
       setExtraDevices(savedDevices)
     } else setExtraDevices(ids => ids.filter(id => id !== target.id))
     setClipper(state?.job?.config.device === target.id ? state.job.config.clipper : {
-      ai: target.automation?.clipper?.ai ?? 'chatgpt', flow: target.automation?.clipper?.flow ?? 'classic',
+      ai: target.automation?.clipper?.ai==='gemini'?'aistudio':target.automation?.clipper?.ai ?? 'chatgpt', flow: target.automation?.clipper?.flow ?? 'classic',
       tabs: target.automation?.clipper?.tabs ?? 2, chatGpt: target.automation?.clipper?.chatGpt ?? NO_CHATGPT_CHOICES
     })
   }

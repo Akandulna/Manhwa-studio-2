@@ -17,7 +17,7 @@ const STEPS: { title: string; items: { label: string; key: ProcessStage; units?:
   { title: 'Script generation', items: [{ label: 'English', key: 'script_en' }, { label: 'Hinglish', key: 'script_hi' }] },
   { title: 'Voiceover generation', items: [{ label: 'English · script splits', key: 'split_en', units: 'splits' }, { label: 'English · voiceover', key: 'voice_en', units: 'splits voiced' }, { label: 'Hinglish · script splits', key: 'split_hi', units: 'splits' }, { label: 'Hinglish · voiceover', key: 'voice_hi', units: 'splits voiced' }] },
   { title: 'Voiceover alignment', items: [{ label: 'English', key: 'align_en' }, { label: 'Hinglish', key: 'align_hi' }] },
-  { title: 'Image clipping', items: [{ label: 'JSON generation', key: 'crop_json', units: 'pages' }, { label: 'Review', key: 'review' }, { label: 'Cropping', key: 'crop' }] },
+  { title: 'Image clipping', items: [{ label: 'Crop pointers', key: 'crop_json', units: 'pages' }, { label: 'Review', key: 'review' }, { label: 'Cropping', key: 'crop' }, { label: 'Metadata', key: 'metadata', units: 'pages' }] },
   { title: 'Editor 2.0', items: [{ label: 'English · timeline', key: 'timeline_en' }, { label: 'English · processed', key: 'processed_en' }, { label: 'English · exported', key: 'export_en' }, { label: 'Hinglish · timeline', key: 'timeline_hi' }, { label: 'Hinglish · processed', key: 'processed_hi' }, { label: 'Hinglish · exported', key: 'export_hi' }] }
 ]
 

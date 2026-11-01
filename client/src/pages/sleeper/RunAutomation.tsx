@@ -76,6 +76,8 @@ interface Automation {
 }
 
 export const AUTOMATIONS: Automation[] = [
+  {kind:'metadata',name:'Metadata',icon:PenLine,does:'Creates descriptions and English-script links from reviewed crops',ai:'AI Studio only',
+   tabs:{unit:'page'},fixed:'Review and cut chapters in Studio first. Select approved chapters below. The phone recreates temporary crops from originals and deletes them after saving metadata; only JSON is synchronized.'},
   {
     kind: 'narration',
     name: 'Narration scripts',
@@ -101,7 +103,7 @@ export const AUTOMATIONS: Automation[] = [
     name: 'Image Clipper',
     icon: Scissors,
     does: 'Crops every page left in a series',
-    ai: 'ChatGPT, AI Studio or Gemini',
+    ai: 'ChatGPT or AI Studio',
     tabs: { unit: 'page' },
     clipper: true,
     split: true,
@@ -132,7 +134,6 @@ const SPLIT_HINT: Partial<Record<PhoneRunKind, string>> = {
 const AI_CHOICES: Choice<PhoneClipperAi>[] = [
   { value: 'chatgpt', label: 'ChatGPT', hint: 'Uses the ChatGPT accounts’ image uploads; switches account at each limit.' },
   { value: 'aistudio', label: 'AI Studio', hint: 'Gemini in AI Studio at High thinking, against each profile’s own Gemini limit.' },
-  { value: 'gemini', label: 'Gemini', hint: 'Uses Gemini on the web in the phone’s selected profile.' }
 ]
 
 const EDITOR_AI_CHOICES: Choice<'chatgpt' | 'aistudio'>[] = [
@@ -145,8 +146,8 @@ const EDITOR_METHOD_CHOICES: Choice<'batches' | 'full'>[] = [
 ]
 
 const FLOW_CHOICES: Choice<PhoneClipperFlow>[] = [
-  { value: 'classic', label: '1 step', hint: 'One long prompt finds, measures and describes every crop, then review rounds.' },
-  { value: 'steps', label: '4 steps', hint: 'Find the shots, place them, describe them, review: smaller asks, for lower models.' }
+  { value: 'classic', label: 'Classic', hint: 'Find shots and place corners, then inspect crops and audit annotated pages.' },
+  { value: 'steps', label: '4 steps', hint: 'Find shots, place corners, inspect actual crops, then audit annotated pages.' }
 ]
 
 const LANGUAGE_CHOICES: Choice<NarrationLanguage>[] = NARRATION_LANGUAGES.map(language => ({ value: language, label: LANGUAGE_LABEL[language] }))
@@ -308,7 +309,7 @@ export function ClipperSettings({ phone, profiles, relay, screen, now, value, on
   const supportsSettings = !!phone.automation?.clipper
   return <div className="space-y-4">
     <Choices label="AI" choices={AI_CHOICES} value={value.ai} onChange={ai => onChange({ ...value, ai })} disabled={supportsSettings ? undefined : 'Update Sleeper-Cell to configure Image Clipping.'} />
-    <Choices label="Method" choices={FLOW_CHOICES} value={value.flow} onChange={flow => onChange({ ...value, flow })} disabled={supportsSettings ? undefined : 'Update Sleeper-Cell to configure Image Clipping.'} />
+    <Choices label="Method" choices={FLOW_CHOICES.filter(c=>c.value===(value.ai==='chatgpt'?'classic':'steps'))} value={value.ai==='chatgpt'?'classic':'steps'} onChange={flow => onChange({ ...value, flow })} disabled={supportsSettings ? undefined : 'Update Sleeper-Cell to configure Image Clipping.'} />
     {value.ai === 'chatgpt' && phone.automation?.clipper?.chatGpt && <ChatGptChoices phone={phone} profiles={profiles} relay={relay} screen={screen} now={now} value={value.chatGpt} onChange={chatGpt => onChange({ ...value, chatGpt })} />}
     <TabChoices value={value.tabs} onChange={tabs => onChange({ ...value, tabs })} each={false} unit="page" />
   </div>
@@ -390,8 +391,7 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
 
   const [kind, setKind] = useState<PhoneRunKind | null>(null)
   const [picked, setPicked] = useState<Partial<Record<PhoneRunKind, string>>>({})
-  const [ai, setAi] = useState<PhoneClipperAi>(last?.ai ?? 'chatgpt')
-  const [flow, setFlow] = useState<PhoneClipperFlow>(last?.flow ?? 'classic')
+  const [ai, setAi] = useState<PhoneClipperAi>(last?.ai==='gemini'?'aistudio':last?.ai ?? 'chatgpt')
   const [clipTabs, setClipTabs] = useState(last?.tabs ?? resume?.tabs ?? DEFAULT_TABS)
   const [voiceTabs, setVoiceTabs] = useState(DEFAULT_TABS)
   const [editorTabs, setEditorTabs] = useState(editorLast?.tabs ?? 1)
@@ -435,6 +435,10 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
   }, [seriesId])
   const readiness = useRunReadiness(automation ? automation.kind : null, seriesId, language, runNarration)
   const checked = readiness.readiness
+  const availableMetadata = kind==='metadata' && checked?.kind==='metadata' && checked.seriesId===seriesId ? checked.metadataChapters??[] : []
+  const metadataKey=availableMetadata.map(c=>c.name).join('\0')
+  const [metadataChapters,setMetadataChapters]=useState<string[]>([])
+  useEffect(()=>{setMetadataChapters(metadataKey?metadataKey.split('\0'):[])},[kind,seriesId,metadataKey])
   const blocked = !!checked?.items.some(i => i.state === 'blocked')
   // "Get ready & start": waits for the phone to have it all, then starts by itself.
   const [armed, setArmed] = useState(false)
@@ -486,9 +490,10 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
     }
     const options: PhoneAutomationOptions = {
       kind: automation.kind,
+      ...(kind==='metadata'?{ai:'aistudio' as const,device:phone.id,chapters:metadataChapters}:{}),
       seriesId: seriesId || undefined,
       ...(automation.tabs && !(kind === 'editor' && tabsBlocked) ? { tabs } : {}),
-      ...(automation.clipper && choosesHow ? { ai, flow } : {}),
+      ...(automation.clipper && choosesHow ? { ai, flow:ai==='chatgpt'?'classic' as const:'steps' as const } : {}),
       ...(automation.clipper && choosesChatGpt && ai === 'chatgpt'
         ? { chatGpt: hasChoices(profiles.find(p => p.selected) ?? null) === false ? NO_CHATGPT_CHOICES : chatGpt }
         : {}),
@@ -497,7 +502,7 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
       ...(automation.language ? { language } : {}),
       ...(splitting && plan
         ? { split: true, assignments: Object.fromEntries(planned.map(t => [t.device, t.chapters])) }
-        : phone.id && several ? { device: phone.id } : {})
+        : phone.id && (several || kind==='metadata') ? { device: phone.id } : {})
     }
     if (await onStart(options)) close(false)
   }
@@ -591,6 +596,14 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
               </div>
 
               {seriesId && <RunReadinessPanel state={readiness} />}
+              {kind==='metadata' && <div className="space-y-2">
+                <p className="text-sm font-medium">Approved chapters</p>
+                {availableMetadata.map(ch=><label key={ch.name} className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={metadataChapters.includes(ch.name)} onChange={event=>setMetadataChapters(prev=>event.target.checked?[...prev,ch.name]:prev.filter(name=>name!==ch.name))}/>
+                  Chapter {ch.number} · {ch.name}
+                </label>)}
+                {!availableMetadata.length && <p className="text-xs text-muted-foreground">No unfinished reviewed and cut chapters are eligible. Review and cut in Image Clipper, then check again.</p>}
+              </div>}
 
               {splitting
                 ? <SplitProfiles phones={startable} overview={overview} relay={relay} screens={screens} onPending={onPending} />
@@ -607,9 +620,9 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
                   />
                   <Choices
                     label="Method"
-                    choices={FLOW_CHOICES}
-                    value={flow}
-                    onChange={setFlow}
+                    choices={FLOW_CHOICES.filter(c=>c.value===(ai==='chatgpt'?'classic':'steps'))}
+                    value={ai==='chatgpt'?'classic':'steps'}
+                    onChange={() => {}}
                     disabled={choosesHow ? undefined : 'Same for the method: 1 step or 4 steps as last picked on the phone.'}
                   />
                   {ai === 'chatgpt' && (choosesChatGpt
@@ -692,7 +705,7 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
                       <Button
                         variant={notReady && readiness.fixable.length > 0 && !plan ? 'outline' : 'default'}
                         onClick={start}
-                        disabled={sending || planning || selectingProfile || (!seriesId && (splitting || !automation.clipper)) || (!!plan && !planned.length)}
+                        disabled={sending || planning || selectingProfile || (kind==='metadata' && (!phone.id || !metadataChapters.length || readiness.loading)) || (!seriesId && (splitting || !automation.clipper)) || (!!plan && !planned.length)}
                         title={selectingProfile
                           ? 'Waiting for the phone to switch profile'
                           : splitting && !plan ? 'Shows which phone takes which chapters, to check before it starts'

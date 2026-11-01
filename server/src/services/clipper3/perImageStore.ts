@@ -120,6 +120,8 @@ export interface Clipper3ImageCropFile {
   crops: Clipper3CropEntry[]
   /** When this JSON was received. Provenance, not part of the crop contract. */
   receivedAt?: string
+  workflow?: "clipper-geometry/1"
+  sourceSha256?: string
 }
 
 /**
@@ -449,7 +451,19 @@ export async function writeImagePoints(
   return withUnmanagedCropWrite(folderPath, imageFilename, async () => {
     await ensurePointsDir(folderPath)
     const target = getPointsFilePathFor(folderPath, imageFilename)
-    await fs.writeFile(target, JSON.stringify(file, null, 2), 'utf-8')
+    const previous = await fs.readFile(target,'utf8').then(JSON.parse).catch((e:NodeJS.ErrnoException)=>{if(e.code==='ENOENT')return null;throw e})
+    // Manual point editing preserves geometry-only provenance; it does not create metadata readiness.
+    const saved = previous?.workflow==='clipper-geometry/1' && !file.workflow
+      ? {...file,workflow:previous.workflow,sourceSha256:previous.sourceSha256} : file
+    if(saved.workflow==='clipper-geometry/1') {
+      const geometry = (p: Clipper3ImageCropFile | null) => JSON.stringify([p?.workflow,p?.sourceSha256,p?.image,p?.coordinateSystem,p?.crops])
+      if(geometry(previous)!==geometry(saved)) {
+        // Revoke before changing approved geometry; even a failed/crashed save cannot retain stale approval.
+        const {writeChapterReview,notReviewed}=await import('./chapterReview.js')
+        await writeChapterReview(folderPath,notReviewed())
+      }
+    }
+    await fs.writeFile(target, JSON.stringify(saved, null, 2), 'utf-8')
     return path.resolve(target)
   })
 }

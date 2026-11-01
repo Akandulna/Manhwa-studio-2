@@ -162,4 +162,16 @@ describe('chapter review autosave and Undo', () => {
     expect(session.pages['page_001.png']).toBe(original)
     expect(store.putPoints).not.toHaveBeenCalled()
   })
+  it('removes and undoes pointer-only crops before Metadata exists',async()=>{
+    const original={...page(),metadata:''}
+    const store={putPoints:vi.fn(async()=>{}),putMetadata:vi.fn(async()=>{})}
+    const session=new CropReviewSession({'page_001.png':original},'Solo',store,vi.fn())
+    session.commit('page_001.png',{...original.file,crops:original.file.crops.slice(1)},'c1')
+    await saved(session)
+    expect(session.pages['page_001.png'].file.crops).toHaveLength(1)
+    expect(store.putMetadata).not.toHaveBeenCalled()
+    session.undo();await saved(session)
+    expect(session.pages['page_001.png']).toBe(original)
+  })
+
 })
