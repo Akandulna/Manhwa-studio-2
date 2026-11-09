@@ -95,7 +95,7 @@ export const CATEGORIES: CategoryMeta[] = [
   {
     key: 'video',
     label: 'Rendered video',
-    description: 'Exported MP4s — delete individually or delete renders after saving a compressed video.',
+    description: 'Exported MP4s — delete individually or delete renders once a compressed video has been saved.',
     reclaimable: false
   },
   {
@@ -401,13 +401,12 @@ export async function scanStorage(): Promise<StorageOverview> {
     // Series-level rendered video, which lives beside the chapters, not in them.
     let videoBytes = 0
     let videoFileCount = 0
-    const videoCleanupFolders: VideoCleanupFolder[] = []
     for (const dirName of VIDEO_DIRS) {
       const measured = await measureDir(path.join(getFullFolderPath(s.rootFolder), dirName))
       videoBytes += measured.bytes
       videoFileCount += measured.files
-      videoCleanupFolders.push(await scanVideoCleanupFolder(s.rootFolder, dirName))
     }
+    const videoCleanupFolders = await scanSeriesVideoCleanup(s.id, s.rootFolder)
 
     const sizes = emptySizes()
     let fileCount = 0
@@ -688,39 +687,116 @@ export interface VideoCleanupFolder {
   dir: VideoDir
   /** Nonempty videos inside a compressed/Compress subfolder, relative to dir. */
   compressedVideos: string[]
+  /**
+   * When a compressed video was last seen here. The checkpoint outlives the
+   * video, so the user can delete it to free space and still clean up later.
+   */
+  checkpointAt: string | null
+  /** The compressed videos seen at the checkpoint. */
+  checkpointVideos: string[]
   renderedFileCount: number
   renderedBytes: number
+  /** Renders written by the checkpoint — the only ones Delete renders removes. */
+  coveredFileCount: number
+  coveredBytes: number
 }
 
 const COMPRESSED_FOLDER_NAMES = new Set(['compressed', 'compress'])
 const isVideoFile = (name: string) => /\.(mp4|mov|mkv|webm|m4v|avi)$/i.test(name)
 
+/** Direct rendered MP4s in a video folder, with their write times. */
+async function renderedFiles(folder: string): Promise<{ name: string; bytes: number; mtimeMs: number }[]> {
+  const out: { name: string; bytes: number; mtimeMs: number }[] = []
+  for (const entry of await fs.readdir(folder, { withFileTypes: true }).catch(() => [])) {
+    if (!entry.isFile() || !/\.mp4$/i.test(entry.name)) continue
+    const stat = await fs.lstat(path.join(folder, entry.name)).catch(() => null)
+    if (stat?.isFile()) out.push({ name: entry.name, bytes: stat.size, mtimeMs: stat.mtimeMs })
+  }
+  return out
+}
+
 /** Only direct rendered MP4s are eligible; compressed folders are never targets. */
 export async function scanVideoCleanupFolder(rootFolder: string, dir: VideoDir): Promise<VideoCleanupFolder> {
-  const result: VideoCleanupFolder = { dir, compressedVideos: [], renderedFileCount: 0, renderedBytes: 0 }
+  const result: VideoCleanupFolder = {
+    dir, compressedVideos: [], checkpointAt: null, checkpointVideos: [],
+    renderedFileCount: 0, renderedBytes: 0, coveredFileCount: 0, coveredBytes: 0
+  }
   const folder = path.join(getFullFolderPath(rootFolder), dir)
   // Do not accept a symlink as either the render folder or its compressed copy.
   if (!(await fs.lstat(folder).catch(() => null))?.isDirectory()) return result
-  const entries = await fs.readdir(folder, { withFileTypes: true }).catch(() => [])
-  for (const entry of entries) {
-    if (entry.isFile() && /\.mp4$/i.test(entry.name)) {
-      const stat = await fs.lstat(path.join(folder, entry.name)).catch(() => null)
-      if (!stat?.isFile()) continue
-      result.renderedFileCount++
-      result.renderedBytes += stat.size
-    } else if (entry.isDirectory() && COMPRESSED_FOLDER_NAMES.has(entry.name.toLowerCase())) {
-      for (const video of await fs.readdir(path.join(folder, entry.name), { withFileTypes: true }).catch(() => [])) {
-        if (!video.isFile() || !isVideoFile(video.name)) continue
-        const stat = await fs.lstat(path.join(folder, entry.name, video.name)).catch(() => null)
-        if (stat?.isFile() && stat.size > 0) result.compressedVideos.push(`${entry.name}/${video.name}`)
-      }
+  for (const render of await renderedFiles(folder)) {
+    result.renderedFileCount++
+    result.renderedBytes += render.bytes
+  }
+  for (const entry of await fs.readdir(folder, { withFileTypes: true }).catch(() => [])) {
+    if (!entry.isDirectory() || !COMPRESSED_FOLDER_NAMES.has(entry.name.toLowerCase())) continue
+    for (const video of await fs.readdir(path.join(folder, entry.name), { withFileTypes: true }).catch(() => [])) {
+      if (!video.isFile() || !isVideoFile(video.name)) continue
+      const stat = await fs.lstat(path.join(folder, entry.name, video.name)).catch(() => null)
+      if (stat?.isFile() && stat.size > 0) result.compressedVideos.push(`${entry.name}/${video.name}`)
     }
   }
   result.compressedVideos.sort()
   return result
 }
 
-/** Delete direct renders only after rechecking a compressed video on disk. */
+// ============ Compressed-video checkpoint ============
+
+/**
+ * A compressed video is a checkpoint, not a completion marker: seeing one
+ * records that the renders written so far are safe to delete. The record is
+ * local to this Mac and survives the user deleting the compressed video.
+ */
+type CompressedCheckpoints = Partial<Record<VideoDir, { at: number; videos: string[] }>>
+const CHECKPOINT_PREFIX = 'compressedCheckpoint:'
+let checkpointWrites: Promise<unknown> = Promise.resolve()
+
+/** Scan a series' video folders, recording a checkpoint wherever a compressed video is present. */
+export async function scanSeriesVideoCleanup(
+  seriesId: string,
+  rootFolder: string,
+  dirs: VideoDir[] = VIDEO_DIRS
+): Promise<VideoCleanupFolder[]> {
+  const scanned = await Promise.all(dirs.map(dir => scanVideoCleanupFolder(rootFolder, dir)))
+  const key = CHECKPOINT_PREFIX + seriesId
+  const write = checkpointWrites.catch(() => {}).then(async () => {
+    const row = await prisma.setting.findUnique({ where: { key } })
+    const checkpoints: CompressedCheckpoints = row ? JSON.parse(row.value) : {}
+    let changed = false
+    for (const folder of scanned) {
+      if (!folder.compressedVideos.length) continue
+      const prior = checkpoints[folder.dir]
+      const renders = await renderedFiles(path.join(getFullFolderPath(rootFolder), folder.dir))
+      // Move the checkpoint only when it would cover something new.
+      if (prior && prior.videos.join('\n') === folder.compressedVideos.join('\n') &&
+        renders.every(r => r.mtimeMs <= prior.at)) continue
+      checkpoints[folder.dir] = { at: Date.now(), videos: folder.compressedVideos }
+      changed = true
+    }
+    if (changed) {
+      const value = JSON.stringify(checkpoints)
+      await prisma.setting.upsert({ where: { key }, create: { key, value }, update: { value } })
+    }
+    return checkpoints
+  })
+  checkpointWrites = write
+  const checkpoints = await write
+  return Promise.all(scanned.map(async folder => {
+    const checkpoint = checkpoints[folder.dir]
+    if (!checkpoint) return folder
+    const covered = (await renderedFiles(path.join(getFullFolderPath(rootFolder), folder.dir)))
+      .filter(r => r.mtimeMs <= checkpoint.at)
+    return {
+      ...folder,
+      checkpointAt: new Date(checkpoint.at).toISOString(),
+      checkpointVideos: checkpoint.videos,
+      coveredFileCount: covered.length,
+      coveredBytes: covered.reduce((sum, r) => sum + r.bytes, 0)
+    }
+  }))
+}
+
+/** Delete the direct renders a compressed-video checkpoint covers; newer renders stay. */
 export async function deleteCompressedSeriesVideos(
   seriesId: string,
   dirName: string
@@ -733,18 +809,18 @@ export async function deleteCompressedSeriesVideos(
   const root = await fs.realpath(process.env.DOWNLOAD_ROOT || './downloads')
   const resolved = await fs.realpath(folder)
   if (!resolved.startsWith(root + path.sep)) throw new Error('Video folder is outside the download root')
-  const state = await scanVideoCleanupFolder(series.rootFolder, dir)
-  if (state.compressedVideos.length === 0) {
+  const [state] = await scanSeriesVideoCleanup(seriesId, series.rootFolder, [dir])
+  if (!state.checkpointAt) {
     throw new Error('Place a nonempty video in a compressed subfolder of this render folder before deleting renders')
   }
+  const checkpointAt = Date.parse(state.checkpointAt)
   let freedBytes = 0
   let deletedFiles = 0
-  for (const entry of await fs.readdir(folder, { withFileTypes: true })) {
-    if (!entry.isFile() || !/\.mp4$/i.test(entry.name)) continue
-    const target = path.join(folder, entry.name)
-    const stat = await fs.lstat(target).catch(() => null)
-    if (!stat?.isFile()) continue
-    await removeWithin(target)
+  for (const render of await renderedFiles(folder)) {
+    // Recheck the write time: a render finished after the checkpoint has no compressed copy.
+    const stat = await fs.lstat(path.join(folder, render.name)).catch(() => null)
+    if (!stat?.isFile() || stat.mtimeMs > checkpointAt) continue
+    await removeWithin(path.join(folder, render.name))
     freedBytes += stat.size
     deletedFiles++
   }
@@ -795,7 +871,7 @@ export async function listSeriesVideos(seriesId: string): Promise<VideoFileInfo[
  * Delete one rendered MP4.
  *
  * Addressed by name for individual removal. Folder-wide deletion uses
- * deleteCompressedSeriesVideos, which requires a saved compressed video.
+ * deleteCompressedSeriesVideos, which requires a compressed-video checkpoint.
  */
 export async function deleteSeriesVideo(
   seriesId: string,

@@ -17,8 +17,13 @@ let failPromptUpload = false
 let failTimelineUpload = false
 let phonePrefixes = ['Phone/']
 let stagedFixtures = false
+let groupedAlignment = false
 let restartVersion: string | null = null
 let storyLinksReady = true
+let retainedReady = false
+vi.mock('../retainedMetadata.js', () => ({ retainedMetadataApproval: async (c: {folderPath: string}) => retainedReady && c.folderPath.endsWith('001') ? {schema:'retained-story-links/1',currentEnglishScriptSha256:'b'.repeat(64),sourceScriptSha256:'a'.repeat(64)} : null }))
+let claimed: { chapterId: string; language: string }[] = []
+vi.mock('../editorClaims.js', () => ({ activeEditorClaims: async () => claimed }))
 vi.mock('../seriesRestartGuard.js', () => ({ requireSeriesRestartReady: async () => restartVersion }))
 vi.mock('../seriesRestartFiles.js', () => ({ chapterStoryLinksCurrent: async () => storyLinksReady }))
 
@@ -108,7 +113,7 @@ vi.mock('../r2Service.js', () => ({
 }))
 
 vi.mock('../videoEditor2Service.js', () => ({
-  getChapterTimelineBundle: async (id: string) => ({ text: id === 'c3' ? '' : stagedFixtures ? '## Section 1\n00:00.00 - 00:05.00: "One."\n## Section 2\n00:00.00 - 00:04.50: "Two."' : `## Section 1\n\ntimeline of ${id}` }),
+  getChapterTimelineBundle: async (id: string) => ({ text: id === 'c3' ? '' : stagedFixtures ? (groupedAlignment ? '## Section 1\n00:00.00 - 00:02.00: "One."\n00:02.00 - 00:05.00: "More."\n## Section 2\n00:00.00 - 00:04.50: "Two."' : '## Section 1\n00:00.00 - 00:05.00: "One."\n## Section 2\n00:00.00 - 00:04.50: "Two."') : `## Section 1\n\ntimeline of ${id}` }),
   getChapterCropMetadataBundle: async (id: string) => ({ text: stagedFixtures ? JSON.stringify({ crops: [{ exportedFilename: 'crop.png', description: 'A woman summons a spirit.' }] }) : `## page_001.webp\n\nmetadata of ${id}` }),
   getChapterBlockers: async (id: string) => blockers[id] ?? []
 }))
@@ -129,6 +134,7 @@ function timelineBody(chapter: string, timeline: string, madeAt: string, languag
 }
 
 beforeEach(() => {
+  claimed = []
   bucket.clear()
   modifiedAt.clear()
   settings.clear()
@@ -138,8 +144,10 @@ beforeEach(() => {
   failTimelineUpload = false
   phonePrefixes = ['Phone/']
   stagedFixtures = false
+  groupedAlignment = false
   restartVersion = null
   storyLinksReady = true
+  retainedReady = false
   rows = []
   blockers = {}
   unreviewed = new Set()
@@ -148,6 +156,37 @@ beforeEach(() => {
 })
 
 describe('sendEditorPackages', () => {
+  it('imports grouped beats with their exact audio tail without changing scene timing or bypassing input guards', async () => {
+    stagedFixtures = groupedAlignment = true
+    fs.mkdirSync(path.join(folders, 'staged-crops'), { recursive: true })
+    fs.writeFileSync(path.join(folders, 'staged-crops', 'crop.png'), '')
+    await sendEditorPackages('s1', 'hi', ['c1'], '', 'staged')
+    const pkg = JSON.parse(bucket.get('Phone/editor/Demo/Chapter 001.hi.package.json')!)
+    expect(pkg.workflow.beats).toHaveLength(3)
+    const json = JSON.stringify({ sections: [
+      { section: 'Section 1', timelines: [{ timeline: '00:00.00 - 00:05.20', selectedImages: ['crop.png'] }] },
+      { section: 'Section 2', timelines: [{ timeline: '00:00.00 - 00:04.50', selectedImages: ['crop.png'] }] }
+    ] })
+    const hash = createHash('sha256').update(`${pkg.timeline}\u0000${pkg.metadata}\u0000${pkg.workflow.sourceHash}`).digest('hex')
+    const body = { ...JSON.parse(timelineBody('Chapter 001', json, new Date().toISOString(), 'hi')), workflowHash: pkg.workflow.sourceHash, packageSha256: hash }
+    const key = 'Phone/editor/Demo/Chapter 001.hi.timeline.json'
+    bucket.set(key, JSON.stringify(body))
+    expect((await fetchPhoneTimelines('s1', 'hi')).imported).toHaveLength(1)
+    expect(rows[0].json).toBe(json)
+    expect((await fetchPhoneTimelines('s1', 'hi')).upToDate).toBe(1)
+    bucket.set(key, JSON.stringify({ ...body, timeline: json.replaceAll('crop.png', 'old-crop.png') }))
+    expect((await fetchPhoneTimelines('s1', 'hi')).failed[0].error).toMatch(/crop filenames/)
+    // A different timeline from old prompts/inputs is refused...
+    const other = json.replace('00:05.20', '00:05.10')
+    bucket.set(key, JSON.stringify({ ...body, timeline: other, workflowHash: 'old-prompts' }))
+    expect((await fetchPhoneTimelines('s1', 'hi')).failed[0].error).toMatch(/inputs or prompts changed/)
+    bucket.set(key, JSON.stringify({ ...body, timeline: other, packageSha256: 'old-inputs' }))
+    expect((await fetchPhoneTimelines('s1', 'hi')).failed[0].error).toMatch(/inputs or prompts changed/)
+    expect(rows[0].json).toBe(json)
+    // ...but the exact timeline already held here is simply up to date, not a failure.
+    bucket.set(key, JSON.stringify({ ...body, workflowHash: 'old-prompts' }))
+    expect(await fetchPhoneTimelines('s1', 'hi')).toMatchObject({ upToDate: 1, failed: [] })
+  })
   it('imports only staged results with current input/prompt hashes and every original timestamp', async () => {
     stagedFixtures = true
     fs.mkdirSync(path.join(folders, 'staged-crops'), { recursive: true })
@@ -163,7 +202,7 @@ describe('sendEditorPackages', () => {
     bucket.set(key, JSON.stringify({ ...body, timeline: json.replace('00:05.00', '00:05.01') }))
     expect((await fetchPhoneTimelines('s1', 'hi')).failed[0].error).toMatch(/timestamp/)
     expect(rows[0].json).toBe(json)
-    bucket.set(key, JSON.stringify({ ...body, workflowHash: 'old-prompts' }))
+    bucket.set(key, JSON.stringify({ ...body, timeline: json.replace('crop.png', 'crop.png", "crop.png'), workflowHash: 'old-prompts' }))
     expect((await fetchPhoneTimelines('s1', 'hi')).failed[0].error).toMatch(/inputs or prompts changed/)
   })
   it('sends a versioned staged package with built-in instructions, preserving the mode on automatic republish', async () => {
@@ -492,6 +531,27 @@ describe('fetchPhoneTimelines', () => {
     expect(rows[0].processedJson).toBeNull()
   })
 
+  it('never replaces a timeline made in Studio (paste, edit or AntiGravity), even an older one', async () => {
+    bucket.set('Phone/editor/Demo/Chapter 001.timeline.json', timelineBody('Chapter 001', '{"phone":1}', '2026-10-09T10:00:00Z'))
+    rows.push({ chapterId: 'c1', language: 'en', json: '{"studio":1}', processedJson: null, updatedAt: new Date('2026-10-09T09:00:00Z') })
+    settings.set('editor2-phone-timeline-edit:c1:en', JSON.stringify({ jsonSha256: createHash('sha256').update('{"studio":1}').digest('hex'), madeAt: '2026-10-09T09:00:00Z', sourceSha256: null }))
+    const result = await fetchPhoneTimelines('s1', 'en')
+    expect(result.imported).toHaveLength(0)
+    expect(result.kept.map(k => k.chapterId)).toEqual(['c1'])
+    expect(rows[0].json).toBe('{"studio":1}')
+  })
+
+  it('does not take a phone timeline while an AntiGravity Timeline job is making that chapter', async () => {
+    bucket.set('Phone/editor/Demo/Chapter 001.timeline.json', timelineBody('Chapter 001', '{"phone":1}', '2026-10-09T10:00:00Z'))
+    claimed = [{ chapterId: 'c1', language: 'en' }]
+    const result = await fetchPhoneTimelines('s1', 'en')
+    expect(result.imported).toHaveLength(0)
+    expect(result.inProgress.map(k => k.chapterId)).toEqual(['c1'])
+    expect(rows).toHaveLength(0)
+    claimed = [{ chapterId: 'c1', language: 'hi' }]
+    expect((await fetchPhoneTimelines('s1', 'en')).imported).toHaveLength(1)
+  })
+
   it('finds new chapters across every prefix and imports the latest copy of a modified timeline', async () => {
     const oldKey = 'Phone/editor/Demo/Chapter 001.timeline.json'
     const newKey = 'Manhwa/editor/Demo/Chapter 001.timeline.json'
@@ -513,6 +573,16 @@ describe('fetchPhoneTimelines', () => {
 
 
 describe('restart publication diagnostics', () => {
+  it('delivers explicitly retained originals with a current-narration approval while other stale chapters stay blocked', async () => {
+    restartVersion = '123-nord'; storyLinksReady = false; retainedReady = true
+    const result = await publishReadyEditorPackages(['c1', 'c2'])
+    expect(result.sent.some(c => c.chapterId === 'c1')).toBe(true)
+    expect(result.failed.some(c => c.chapterId === 'c2')).toBe(true)
+    const pkg = JSON.parse(bucket.get('Phone/editor/Demo/Chapter 001.package.json')!)
+    expect(pkg.finalCropAuthority.retainedStoryLinks).toMatchObject({schema:'retained-story-links/1',sourceScriptSha256:'a'.repeat(64)})
+    expect(pkg.timeline).toContain('timeline of c1')
+  })
+
   it('reports the source-link blocker for each language instead of silently sending zero packages', async () => {
     restartVersion = '123-nord'; storyLinksReady = false
     const result = await publishReadyEditorPackages(['c1'])

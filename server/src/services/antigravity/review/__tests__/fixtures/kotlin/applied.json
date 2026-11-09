@@ -1,0 +1,144 @@
+{
+  "schema_version": "crop-studio-review/1.0",
+  "job_id": "solo_leveling-ch010-page_003-0123456789ab",
+  "source_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "source_width": 800,
+  "source_height": 5000,
+  "page_stem": "page_003",
+  "review_revision": 2,
+  "created_at": "2026-11-07T10:01:00.000Z",
+  "updated_at": "2026-11-07T10:02:00.000Z",
+  "based_on": {
+    "kind": "chatgpt_import",
+    "response_sha256": "6c10196f2a61257a1b4ac0e4b88846ab520e4daea147ae3da6d6d62af55615ff"
+  },
+  "crops": [
+    {
+      "key": "candidate-01",
+      "origin": "chatgpt",
+      "reason": "framed_shot",
+      "bounds": {
+        "x0": 40,
+        "y0": 100,
+        "x1": 760,
+        "y1": 1600
+      },
+      "description": "",
+      "description_status": "missing",
+      "disposition": "merged",
+      "visual_evidence": "Visible border",
+      "gpt_flags": [
+        "boundary_uncertain"
+      ],
+      "unknown_flags": [
+        "weird_flag"
+      ],
+      "acknowledged": [],
+      "note": ""
+    },
+    {
+      "key": "candidate-03.a",
+      "origin": "operator",
+      "reason": "tall_action",
+      "bounds": {
+        "x0": 0,
+        "y0": 2248,
+        "x1": 800,
+        "y1": 3248
+      },
+      "description": "",
+      "description_status": "missing",
+      "disposition": "split",
+      "visual_evidence": "",
+      "gpt_flags": [],
+      "unknown_flags": [],
+      "acknowledged": [],
+      "note": "Split by ChatGPT review from candidate-03"
+    },
+    {
+      "key": "candidate-03.b",
+      "origin": "operator",
+      "reason": "tall_action",
+      "bounds": {
+        "x0": 0,
+        "y0": 3248,
+        "x1": 800,
+        "y1": 4196
+      },
+      "description": "",
+      "description_status": "missing",
+      "disposition": "split",
+      "visual_evidence": "",
+      "gpt_flags": [],
+      "unknown_flags": [],
+      "acknowledged": [],
+      "note": "Split by ChatGPT review from candidate-03"
+    },
+    {
+      "key": "candidate-04",
+      "origin": "chatgpt",
+      "reason": "framed_shot",
+      "bounds": {
+        "x0": 100,
+        "y0": 4396,
+        "x1": 140,
+        "y1": 4436
+      },
+      "description": "",
+      "description_status": "missing",
+      "disposition": "kept",
+      "visual_evidence": "Visible border",
+      "gpt_flags": [],
+      "unknown_flags": [],
+      "acknowledged": [
+        "TINY",
+        "MOSTLY_BLANK"
+      ],
+      "note": ""
+    },
+    {
+      "key": "candidate-06",
+      "origin": "chatgpt",
+      "reason": "framed_shot",
+      "bounds": {
+        "x0": 300,
+        "y0": 4596,
+        "x1": 720,
+        "y1": 4896
+      },
+      "description": "",
+      "description_status": "missing",
+      "disposition": "adjusted",
+      "visual_evidence": "Visible border",
+      "gpt_flags": [],
+      "unknown_flags": [],
+      "acknowledged": [],
+      "note": ""
+    },
+    {
+      "key": "op-01",
+      "origin": "operator",
+      "reason": "new_or_split_part",
+      "bounds": {
+        "x0": 0,
+        "y0": 1700,
+        "x1": 800,
+        "y1": 2100
+      },
+      "description": "",
+      "description_status": "missing",
+      "disposition": "adjusted",
+      "visual_evidence": "",
+      "gpt_flags": [],
+      "unknown_flags": [],
+      "acknowledged": [],
+      "note": "Added by ChatGPT review"
+    }
+  ],
+  "page": {
+    "sweep_done": true,
+    "no_eligible_artwork_confirmed": false,
+    "note": "ChatGPT: Merged hair cut."
+  },
+  "chatgpt_reviews": 1
+}

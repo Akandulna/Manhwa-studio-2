@@ -195,8 +195,12 @@ function ChapterList({ rows, seriesId }: { rows: StitchChapterRow[]; seriesId: s
                   {r.title && <div className="text-sm text-muted-foreground truncate">{r.title}</div>}
                 </div>
                 {r.stitched ? (
-                  <Badge variant="success" title={`Stitched ${new Date(r.stitched.stitchedAt).toLocaleString()}`}>
-                    Stitched {r.stitched.originalPages} → {r.pageCount}
+                  <Badge variant="success" title={r.stitched.stitchedAt
+                    ? `Stitched ${new Date(r.stitched.stitchedAt).toLocaleString()}`
+                    : 'Stitching complete · originals deleted'}>
+                    {r.stitched.originalPages === null
+                      ? `Stitched · ${r.pageCount} pages`
+                      : `Stitched ${r.stitched.originalPages} → ${r.pageCount}`}
                   </Badge>
                 ) : (
                   <Badge
@@ -206,7 +210,19 @@ function ChapterList({ rows, seriesId }: { rows: StitchChapterRow[]; seriesId: s
                     {r.pageCount} pages
                   </Badge>
                 )}
-                {!r.stitched && (
+                {r.stitched ? (
+                  <Button
+                    size="sm"
+                    onClick={e => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      navigate(`/stitch/chapter/${r.id}?again=1&auto=1`)
+                    }}
+                  >
+                    <Sparkles className="h-4 w-4 mr-1.5" />
+                    Stitch again
+                  </Button>
+                ) : (
                   <Button
                     size="sm"
                     title="Plan cuts at blank rows for this chapter and preview them"

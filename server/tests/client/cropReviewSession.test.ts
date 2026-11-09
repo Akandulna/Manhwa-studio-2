@@ -117,7 +117,7 @@ describe('chapter review autosave and Undo', () => {
     await saved(session)
     const metadata = JSON.parse(session.pages['page_001.png'].metadata)
     expect(metadata.crops).toEqual([{
-      id: 'c2', description: 'Description for c2', exportedFilename: 'solo_page_001_01_panel.png'
+      id: 'crop-01', description: 'Description for c2', exportedFilename: 'solo_page_001_01_panel.png'
     }])
     session.undo()
     await saved(session)
@@ -174,4 +174,92 @@ describe('chapter review autosave and Undo', () => {
     expect(session.pages['page_001.png']).toBe(original)
   })
 
+})
+
+describe('manual crops during review', () => {
+  function withAddedCrop(original: CropReviewPage) {
+    return { ...original.file, crops: [...original.file.crops, { ...original.file.crops[0], id: 'manual-new', reason: 'missing panel' }] }
+  }
+
+  it('saves an added pointer and matching metadata, then restores both on Undo', async () => {
+    const { session, pages, store } = setup()
+    const original = pages['page_001.png']
+    const next = withAddedCrop(original)
+    session.commit('page_001.png', next, undefined, 'A missed panel')
+    await saved(session)
+    expect(store.putPoints).toHaveBeenLastCalledWith('page_001.png', session.pages['page_001.png'].file)
+    const metadata = JSON.parse(session.pages['page_001.png'].metadata)
+    expect(metadata.crops[0].description).toBe('Description for c1')
+    expect(metadata.crops[1]).toEqual({ id: 'crop-02', description: 'A missed panel', exportedFilename: 'solo_page_001_02_missing_panel.png' })
+    expect(metadata.crops[2].description).toBe('Description for c2')
+    expect(store.putMetadata).toHaveBeenCalledWith('page_001.png', session.pages['page_001.png'].metadata)
+    session.undo()
+    await saved(session)
+    expect(store.putPoints).toHaveBeenLastCalledWith('page_001.png', original.file)
+    expect(store.putMetadata).toHaveBeenLastCalledWith('page_001.png', original.metadata)
+  })
+
+  it('adds pointers when metadata has not been generated yet', async () => {
+    const original = { ...page(), metadata: '' }
+    const store = { putPoints: vi.fn(async () => {}), putMetadata: vi.fn(async () => {}) }
+    const session = new CropReviewSession({ 'page_001.png': original }, 'Solo', store, vi.fn())
+    session.commit('page_001.png', withAddedCrop(original))
+    await saved(session)
+    expect(session.pages['page_001.png'].file.crops).toHaveLength(3)
+    expect(store.putMetadata).not.toHaveBeenCalled()
+  })
+
+  it('keeps unreadable metadata intact and rejects the addition before saving', () => {
+    const original = { ...page(), metadata: 'unreadable document' }
+    const store = { putPoints: vi.fn(), putMetadata: vi.fn() }
+    const session = new CropReviewSession({ 'page_001.png': original }, 'Solo', store, vi.fn())
+    expect(() => session.commit('page_001.png', withAddedCrop(original))).toThrow('metadata could not be read')
+    expect(session.pages['page_001.png']).toBe(original)
+    expect(store.putPoints).not.toHaveBeenCalled()
+  })
+})
+
+describe('crop numbering follows reading order', () => {
+  it('inserts between 1 and 2, shifts later numbers, and keeps descriptions and references paired', async () => {
+    const original = page()
+    original.file.crops = Array.from({ length: 4 }, (_, i) => ({
+      ...original.file.crops[0], id: `crop-0${i + 1}`,
+      crop: { ...original.file.crops[0].crop, points: original.file.crops[0].crop.points.map(point => ({ ...point, y: point.y / 5 + i * 0.2 })) }
+    }))
+    original.metadata = JSON.stringify({ custom: 'preserved', crops: original.file.crops.map((crop, i) => ({
+      id: crop.id, description: `Original ${i + 1}`, scriptRefs: [`P${i + 1}`]
+    })) })
+    const store = { putPoints: vi.fn(async () => {}), putMetadata: vi.fn(async () => {}) }
+    const session = new CropReviewSession({ 'page_001.png': original }, 'Solo', store, vi.fn())
+    const inserted = { ...original.file.crops[0], id: 'manual-new', crop: {
+      ...original.file.crops[0].crop, points: original.file.crops[0].crop.points.map(point => ({ ...point, y: point.y + 0.1 }))
+    } }
+    session.commit('page_001.png', { ...original.file, crops: [...original.file.crops, inserted] })
+    await saved(session)
+    const result = session.pages['page_001.png']
+    expect(result.file.crops.map(crop => crop.id)).toEqual(['crop-01', 'crop-02', 'crop-03', 'crop-04', 'crop-05'])
+    expect(result.file.crops[1].crop).toEqual(inserted.crop)
+    const metadata = JSON.parse(result.metadata)
+    expect(metadata.custom).toBe('preserved')
+    expect(metadata.crops.map((entry: any) => entry.description)).toEqual(['Original 1', '', 'Original 2', 'Original 3', 'Original 4'])
+    expect(metadata.crops[2]).toMatchObject({ id: 'crop-03', scriptRefs: ['P2'], exportedFilename: 'solo_page_001_03_panel.png' })
+    session.undo()
+    await saved(session)
+    expect(session.pages['page_001.png']).toBe(original)
+  })
+
+  it('renumbers after a crop is dragged above another and saves both JSON files', async () => {
+    const { session, pages, store } = setup()
+    const original = pages['page_001.png']
+    const movedSecond = { ...original.file.crops[1], crop: { ...original.file.crops[1].crop,
+      points: original.file.crops[1].crop.points.map(point => ({ ...point, y: point.y - 0.6 }))
+    } }
+    session.commit('page_001.png', { ...original.file, crops: [original.file.crops[0], movedSecond] })
+    await saved(session)
+    const result = session.pages['page_001.png']
+    expect(result.file.crops[0]).toMatchObject({ id: 'crop-01', crop: movedSecond.crop })
+    expect(JSON.parse(result.metadata).crops.map((entry: any) => entry.description)).toEqual(['Description for c2', 'Description for c1'])
+    expect(store.putPoints).toHaveBeenLastCalledWith('page_001.png', result.file)
+    expect(store.putMetadata).toHaveBeenLastCalledWith('page_001.png', result.metadata)
+  })
 })

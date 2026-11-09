@@ -14,7 +14,7 @@ import { AlertTriangle, Info, Smartphone } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { PhoneRefreshButton } from '@/components/PhoneRefreshButton'
 import type { PhoneReceipt } from '@/hooks/usePhoneReceipt'
-import type { PhoneOverview, PhoneOverviewPhone, PhoneOverviewRun, RelayStatus } from '@/lib/api'
+import type { PhoneOverview, PhoneOverviewPhone, PhoneOverviewRun, PhoneOverviewWorking, RelayStatus } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 export const MINUTE = 60_000
@@ -120,16 +120,28 @@ export function runTitle(run: PhoneOverviewRun): string {
   return run.tabs.length > 1 ? `Voicing ${run.tabs.length} splits` : 'Voicing'
 }
 
+/** Is the phone writing this page's metadata, rather than clipping it in Image Clipper. */
+export function isMetadata(working: PhoneOverviewWorking): boolean {
+  return working.process === 'metadata'
+}
+
 /** What one phone is doing, from the overview: its pages and runs, and the headline for them. */
 export function phoneActivity(overview: PhoneOverview | null, phone: PhoneOverviewPhone, several: boolean) {
   const working = (overview?.working ?? []).filter(w => onPhone(w, phone, several))
   const runs = (overview?.runs ?? []).filter(r => onPhone(r, phone, several))
   const youtube = phone.automation?.youtube?.active ? phone.automation.youtube : null
-  const clipping = working.filter(w => !w.paused).length
+  const active = working.filter(w => !w.paused)
+  const metadata = active.filter(isMetadata).length
+  const clipping = active.length - metadata
   const activeRuns = runs.filter(r => !r.paused)
-  // Image Clipper first: "Clipping 2 pages", then "Writing scripts", "Voicing 3 splits".
-  const going = [...(clipping ? [`Clipping ${plural(clipping, 'page')}`] : []), ...activeRuns.map(runTitle), ...(youtube && !youtube.paused ? [youtube.label] : [])]
-  const paused = working.length - clipping + runs.length - activeRuns.length + (youtube?.paused ? 1 : 0)
+  // Image Clipper first: "Clipping 2 pages", "Metadata for 4 pages", then "Writing scripts", "Voicing 3 splits".
+  const going = [
+    ...(clipping ? [`Clipping ${plural(clipping, 'page')}`] : []),
+    ...(metadata ? [`Metadata for ${plural(metadata, 'page')}`] : []),
+    ...activeRuns.map(runTitle),
+    ...(youtube && !youtube.paused ? [youtube.label] : [])
+  ]
+  const paused = working.length - active.length + runs.length - activeRuns.length + (youtube?.paused ? 1 : 0)
   return {
     working,
     runs,

@@ -23,6 +23,7 @@ import Clipper3Library from '@/pages/clipper3/Clipper3Library'
 import Clipper3SeriesView from '@/pages/clipper3/Clipper3SeriesView'
 import Clipper3ImageList from '@/pages/clipper3/Clipper3ImageList'
 import Clipper3Preview from '@/pages/clipper3/Clipper3Preview'
+import { MetadataLibrary, MetadataSeries, MetadataChapter } from '@/pages/metadata/Metadata'
 
 // Sleeper Cells: the phone app's status, its accounts, and its live progress
 import PhoneStatus from '@/pages/sleeper/PhoneStatus'
@@ -30,6 +31,14 @@ import ManagedPilot from '@/pages/sleeper/ManagedPilot'
 import AccountsStatus from '@/pages/sleeper/AccountsStatus'
 import LiveProgress from '@/pages/sleeper/LiveProgress'
 import ManagerIssues from '@/pages/sleeper/ManagerIssues'
+import AntiGravitySeries from '@/pages/antigravity/AntiGravitySeries'
+import AntiGravityParts from '@/pages/antigravity/AntiGravityParts'
+import AntiGravityWorkflow from '@/pages/antigravity/AntiGravityWorkflow'
+import AntiGravityClipper from '@/pages/antigravity/AntiGravityClipper'
+import AntiGravityMetadata from '@/pages/antigravity/AntiGravityMetadata'
+import AntiGravityTimeline from '@/pages/antigravity/AntiGravityTimeline'
+import AntiGravityRuns from '@/pages/antigravity/AntiGravityRuns'
+import AntiGravityChapterPreview from '@/pages/antigravity/AntiGravityChapterPreview'
 import { ManagerProvider } from '@/hooks/useManagers'
 
 // Module 4: Editor 2.0
@@ -64,6 +73,10 @@ function App() {
           <Route path="/clipper3/chapter/:id" element={<Clipper3ImageList />} />
           <Route path="/clipper3/chapter/:id/preview" element={<Clipper3Preview />} />
 
+          <Route path="/metadata" element={<MetadataLibrary />} />
+          <Route path="/metadata/series/:id" element={<MetadataSeries />} />
+          <Route path="/metadata/chapter/:id" element={<MetadataChapter />} />
+
           {/* Module 4: Editor 2.0 */}
           <Route path="/editor2" element={<EditorLibrary2 />} />
           <Route path="/editor2/:seriesId" element={<EditorChapterList2 />} />
@@ -73,6 +86,18 @@ function App() {
           <Route path="/youtube/series/:seriesId" element={<YouTubeWorkspace />} />
 
           {/* Sleeper Cells */}
+          {/* Studio AntiGravity (docs/PRD-antigravity-studio.md §6.1) */}
+          <Route path="/antigravity" element={<AntiGravitySeries />} />
+          <Route path="/antigravity/settings" element={<Navigate to="/settings?tab=antigravity" replace />} />
+          <Route path="/antigravity/series/:seriesId" element={<AntiGravityParts />} />
+          <Route path="/antigravity/series/:seriesId/parts/:partNumber" element={<AntiGravityWorkflow />} />
+          <Route path="/antigravity/series/:seriesId/parts/:partNumber/image-clipper" element={<AntiGravityClipper />} />
+          <Route path="/antigravity/series/:seriesId/parts/:partNumber/metadata" element={<AntiGravityMetadata />} />
+          <Route path="/antigravity/series/:seriesId/parts/:partNumber/timeline" element={<AntiGravityTimeline />} />
+          <Route path="/antigravity/series/:seriesId/parts/:partNumber/chapters/:chapterId" element={<AntiGravityChapterPreview />} />
+          <Route path="/antigravity/runs" element={<AntiGravityRuns />} />
+          <Route path="/antigravity/runs/phones" element={<AntiGravityRuns phonesView />} />
+          <Route path="/antigravity/runs/:runId" element={<AntiGravityRuns />} />
           <Route path="/sleeper-cells" element={<PhoneStatus />} />
           <Route path="/sleeper-cells/managed" element={<ManagedPilot />} />
           <Route path="/sleeper-cells/accounts" element={<AccountsStatus />} />

@@ -15,7 +15,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -38,7 +38,8 @@ import {
   NarrationAlignmentProgress,
   NarrationPhoneFetch,
   NarrationPhonePreview,
-  NarrationSeriesDetail
+  NarrationSeriesDetail,
+  PhoneScriptConflict
 } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -52,10 +53,12 @@ import { CompletedBadge, PublishedBadge, completedRowClass, publishedRowClass } 
 import { PhoneScriptBadge } from '@/components/PhoneSyncBadge'
 import { PhoneRefreshButton } from '@/components/PhoneRefreshButton'
 import { PhoneFetchDialog, type PhoneFetchSelection } from '@/components/narration/PhoneFetchDialog'
+import { PhoneVersionsDialog } from '@/components/narration/PhoneVersionsDialog'
 import { ReplaceScriptDialog } from '@/components/narration/ReplaceScriptDialog'
 import { ResetAlignmentDialog } from '@/components/narration/ResetAlignmentDialog'
 import { AlignmentProgressStatus } from '@/components/narration/AlignmentProgressStatus'
 import { cn } from '@/lib/utils'
+import { CLIPPER_PART_SIZE, clipperChapterParts } from '@/lib/clipperParts'
 
 const chapters = (n: number) => `${n} chapter${n === 1 ? '' : 's'}`
 
@@ -151,6 +154,14 @@ export default function NarrationChapters() {
   const { toast } = useToast()
   const { socket } = useSocket()
   const [language, setLanguage] = useNarrationLanguage('narration')
+  // ?part=N shows one twenty-chapter part, as in Image Clipper; the language tab stays in the URL.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const selectedPart = Number(searchParams.get('part')) || null
+  const showPart = (part: number | null) => setSearchParams(prev => {
+    const next = new URLSearchParams(prev)
+    if (part === null) next.delete('part'); else next.set('part', String(part))
+    return next
+  }, { replace: true })
 
   const [series, setSeries] = useState<NarrationSeriesDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -166,6 +177,9 @@ export default function NarrationChapters() {
   const [aligningNow, setAligningNow] = useState<Set<string>>(new Set())
   const [replacing, setReplacing] = useState<NarrationChapter | null>(null)
   const [resettingAlignment, setResettingAlignment] = useState<NarrationChapter | null>(null)
+  // Chapters where a phone finished a different script; they wait for your choice.
+  const [conflicts, setConflicts] = useState<PhoneScriptConflict[]>([])
+  const [versionsOpen, setVersionsOpen] = useState(false)
 
   // Rendered or completed chapters in this language.
   const { isPublished, completedPart } = usePublishedChapters(id, language)
@@ -187,12 +201,23 @@ export default function NarrationChapters() {
     }
   }, [id, language])
 
+  const loadConflicts = useCallback(async () => {
+    if (!id) return
+    try {
+      setConflicts((await narrationApi.getPhoneConflicts(id, language)).conflicts)
+    } catch {
+      setConflicts([]) // R2 unreachable: nothing to decide until it is
+    }
+  }, [id, language])
+
   useEffect(() => {
     setLastFetch(null)
     setReplacing(null)
     setResettingAlignment(null)
+    setConflicts([])
     loadSeries()
-  }, [loadSeries])
+    loadConflicts()
+  }, [loadSeries, loadConflicts])
 
   useEffect(() => {
     narrationApi.getAlignmentStatus().then(setAligner).catch(() => setAligner(null))
@@ -221,6 +246,7 @@ export default function NarrationChapters() {
         setFetchRun(null)
         setLastFetch(run)
         loadSeries()
+        loadConflicts()
         if (run.stage === 'failed') {
           toast({ title: 'Fetch from phone failed', description: run.error, variant: 'destructive' })
         }
@@ -250,14 +276,18 @@ export default function NarrationChapters() {
     socket.on('connect', loadSeries)
     const onReplacement = (event: AlignmentEvent) => { if (chapterIds.current.has(event.chapterId) && mine(event)) scheduleReload() }
     socket.on('narration:script-replaced', onReplacement)
+    // Studio's own look at the phones (on open, on their receipts) may find a differing version.
+    const onAutoSync = (report: { seriesId?: string }) => { if (report.seriesId === id) loadConflicts() }
+    socket.on('narration:auto-sync', onAutoSync)
     return () => {
+      socket.off('narration:auto-sync', onAutoSync)
       socket.off('narration:fetch', onFetchEvent)
       socket.off('alignment:progress', onAlignmentEvent)
       socket.off('alignment:chapter-complete', onAlignmentEvent)
       socket.off('connect', loadSeries)
       socket.off('narration:script-replaced', onReplacement)
     }
-  }, [socket, id, language, loadSeries, scheduleReload])
+  }, [socket, id, language, loadSeries, loadConflicts, scheduleReload])
 
   const handlePreview = async () => {
     if (!id) return
@@ -360,6 +390,8 @@ export default function NarrationChapters() {
   const documents = list.filter(c => c.documentWritten).length
   const phoneSeries = phoneScripts?.series[series.id]
   const fetching = !!fetchRun
+  const chapterParts = clipperChapterParts(list)
+  const visibleParts = selectedPart ? chapterParts.filter(part => part.number === selectedPart) : chapterParts
 
   return (
     <div className="p-6">
@@ -432,12 +464,42 @@ export default function NarrationChapters() {
         </Card>
       )}
 
+      {conflicts.length > 0 && id && (
+        <Card className="mb-6 border-amber-500">
+          <CardContent className="flex items-center justify-between gap-3 py-4">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600" />
+              <div>
+                <p className="font-medium">
+                  Phone has a different version of {chapters(conflicts.length)}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Chapter {conflicts.map(c => c.number).join(', ')}. Studio keeps its own script until you choose.
+                </p>
+              </div>
+            </div>
+            <Button variant="outline" onClick={() => setVersionsOpen(true)}>Compare</Button>
+          </CardContent>
+        </Card>
+      )}
+      {id && (
+        <PhoneVersionsDialog
+          seriesId={id}
+          language={language}
+          conflicts={conflicts}
+          open={versionsOpen}
+          onClose={() => setVersionsOpen(false)}
+          onResolved={() => { loadConflicts(); loadSeries() }}
+        />
+      )}
+
       {(fetchRun || lastFetch) && (
         <Card className="mb-6">
           <CardContent className="py-4">
             {fetchRun ? (
               <p className="flex items-center gap-2 text-sm">
                 <Loader2 className="h-4 w-4 animate-spin" />
+                {fetchRun.automatic ? 'New from the phones: ' : ''}
                 {fetchRun.stage === 'scripts'
                   ? 'Saving the phone\'s scripts...'
                   : fetchRun.chapterNumber !== undefined
@@ -451,12 +513,38 @@ export default function NarrationChapters() {
         </Card>
       )}
 
-      {/* Chapters */}
+      {/* Chapters, by part */}
+      {chapterParts.length > 0 && (
+        <div className="mb-4 flex flex-wrap gap-2" aria-label="Chapter parts">
+          <Button size="sm" variant={selectedPart === null ? 'default' : 'outline'} onClick={() => showPart(null)}>All chapters</Button>
+          {chapterParts.map(part => (
+            <Button key={part.number} size="sm" variant={selectedPart === part.number ? 'default' : 'outline'} onClick={() => showPart(part.number)}>
+              Part {part.number}
+            </Button>
+          ))}
+        </div>
+      )}
+      {list.length === 0 && (
+        <Card><p className="p-4 text-sm text-muted-foreground">No downloaded chapters in this series.</p></Card>
+      )}
+      {list.length > 0 && visibleParts.length === 0 && (
+        <p className="text-sm text-muted-foreground">No chapters in this part. Choose All chapters to see the series.</p>
+      )}
+      <div className="space-y-6">
+      {visibleParts.map(part => {
+        const partScripted = part.chapters.filter(c => c.hasScript).length
+        const partVoiced = part.chapters.filter(c => c.sections > 0 && c.withAudio === c.sections).length
+        const partAligned = part.chapters.filter(c => c.sections > 0 && c.aligned === c.sections).length
+        return (
+      <section key={part.number} aria-labelledby={`narration-part-${part.number}`}>
+        <div className="mb-2">
+          <h2 id={`narration-part-${part.number}`} className="font-semibold">Part {part.number}</h2>
+          <p className="text-xs text-muted-foreground">
+            Chapters {(part.number - 1) * CLIPPER_PART_SIZE + 1}–{part.number * CLIPPER_PART_SIZE} · {chapters(part.chapters.length)} · {partScripted} scripts · {partVoiced} with audio · {partAligned} aligned
+          </p>
+        </div>
       <Card className="overflow-hidden divide-y">
-        {list.length === 0 && (
-          <p className="p-4 text-sm text-muted-foreground">No downloaded chapters in this series.</p>
-        )}
-        {list.map(chapter => {
+        {part.chapters.map(chapter => {
           // A completed Part's chapter: files deleted, only continuity kept — nothing left to fetch.
           const completed = completedPart(chapter.id)
           const aligning = chapter.aligning || aligningNow.has(chapter.id)
@@ -573,6 +661,10 @@ export default function NarrationChapters() {
           )
         })}
       </Card>
+      </section>
+        )
+      })}
+      </div>
 
       <PhoneFetchDialog
         language={language}

@@ -17,6 +17,7 @@ import { newSeriesFolder } from '../services/newSeriesFolder.js';
 import { libraryDeviceId, scheduleLibraryCleanup } from '../services/librarySync.js';
 import { libraryControl, libraryControls, saveLibraryControls, hiddenLibraryFolders } from '../services/libraryControls.js';
 import { notifySeriesProcessChanged } from '../services/seriesProcess.js';
+import { NARRATION_LANGUAGES, type NarrationLanguage } from '../services/narrationLanguage.js';
 import { productionAutomation, getProductionStatus, reconcileManagedProduction, resumeManagedProduction, exportManagedProduction, adoptManagedProduction, pauseManagedProduction, handoffManagedProduction, accountHandoffManagedProduction, disposeManagedProductionRecovery } from '../services/productionAutomation.js';
 import { parseProductionConfig } from '../services/productionAutomationModel.js';
 
@@ -389,6 +390,22 @@ router.put('/:id/parts/:part/completion', async (req: Request, res: Response) =>
     scheduleLibraryPublish(); notifySeriesProcessChanged();
     res.json({ done: req.body.done });
   } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : 'Could not update part completion' }); }
+});
+
+router.put('/:id/done', async (req: Request, res: Response) => {
+  try {
+    const language = req.body.language;
+    if (typeof req.body.done !== 'boolean' || !(NARRATION_LANGUAGES as string[]).includes(language)) return res.status(400).json({ error: 'Choose a language and Done state' });
+    const series = await prisma.series.findUnique({ where: { id: req.params.id } });
+    if (!series) return res.status(404).json({ error: 'Series not found' });
+    const folder = path.basename(series.rootFolder);
+    const prior = await libraryControl(folder);
+    if (prior.deleted) return res.status(409).json({ error: 'This series is being deleted' });
+    const lang = language as NarrationLanguage;
+    await saveLibraryControls([{ folder, seriesDone: { [lang]: { at: Math.max(Date.now(), (prior.seriesDone?.[lang]?.at ?? 0) + 1), deviceId: await libraryDeviceId(), done: req.body.done } } }]);
+    scheduleLibraryPublish();
+    res.json({ done: req.body.done });
+  } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : 'Could not update series Done' }); }
 });
 
 router.delete('/:id', async (req: Request, res: Response) => {

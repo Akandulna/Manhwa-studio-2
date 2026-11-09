@@ -1,14 +1,15 @@
 /**
  * PhoneFetchDialog — choose what "Fetch from phone" brings onto this Mac.
  *
- * The Sleeper-Cell phones upload two things per series and language to R2:
- * one script zip (every chapter's script, summary and closing paragraph) and
- * one voiceover zip per fully voiced chapter. The preview (one click, the only
- * R2 read) lists both side by side per chapter, and the user ticks what to
- * take: new scripts and new or re-uploaded voiceovers start ticked; a script
- * that would replace a different one here starts unticked, since it may be the
- * one the voiceover was made from. Confirming starts the fetch on the server;
- * attached voiceovers are aligned by themselves.
+ * The Sleeper-Cell phones send each finished chapter's scripts to R2 on its
+ * own (script, summary, closing paragraph and image review), and one voiceover
+ * zip per fully voiced chapter. Studio already fetches chapters it has nothing
+ * for by itself; this is for the rest. The preview lists both side by side per
+ * chapter, and the user ticks what to take: new scripts and new or re-uploaded
+ * voiceovers start ticked; a script that would replace a different one here
+ * starts unticked, since it may be the one the voiceover was made from.
+ * Confirming starts the fetch on the server; attached voiceovers are aligned by
+ * themselves.
  */
 
 import { useMemo, useState } from 'react'
@@ -138,7 +139,7 @@ function DialogBody({ language, preview, starting, onCancel, onConfirm }: Props 
         <DialogDescription>
           Ticked scripts are saved to their chapter with the summary and closing paragraph; ticked voiceovers
           replace the chapter's sections and audio, then align by themselves.
-          {scripts && <> Scripts uploaded {formatWhen(scripts.zip.uploadedAt) ?? 'recently'}.</>}
+          {scripts && <> Scripts last sent {formatWhen(scripts.zip.uploadedAt) ?? 'recently'}.</>}
         </DialogDescription>
       </DialogHeader>
 
@@ -151,7 +152,7 @@ function DialogBody({ language, preview, starting, onCancel, onConfirm }: Props 
                 {preview.scriptsError}
               </span>
             ) : (
-              `No ${hinglish ? 'Hinglish ' : ''}script zip from the phone yet — it uploads one once every chapter is done there.`
+              `No finished ${hinglish ? 'Hinglish ' : ''}scripts from the phones yet — each chapter is sent as soon as it's done there.`
             )}
           </p>
         )}

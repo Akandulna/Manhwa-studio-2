@@ -1,6 +1,7 @@
 /**
  * Splitting a run between the phones: Run automation's "Split across N", for
- * Image Clipper, Editor 2.0 timelines and Voiceover. Never Narration scripts:
+ * Image Clipper, Metadata, Editor 2.0 timelines and Voiceover, between all the
+ * startable phones or the ones picked ("Selected devices"). Never Narration scripts:
  * each chapter's prompt goes on from the previous chapter's summary, so one
  * phone writes a series' chapters in order (NARRATION_ONE_PHONE).
  *
@@ -24,6 +25,8 @@
  */
 
 import path from 'path'
+import { voiceoverChapterScope } from './voiceoverChapterScope.js'
+import { importedVoiceoverFolders } from './voiceoverCleanup.js'
 import { prisma } from '../index.js'
 import { LANGUAGE_NAMES, type NarrationLanguage } from './narrationLanguage.js'
 import { mergeCropsReceipts } from './phoneReceipts.js'
@@ -102,19 +105,27 @@ export type SplitState =
   | { state: 'busySame'; inProgress: string[] }
   | { state: 'busyOther'; reason: string }
 
-/** Image Clipper's pages in progress on a phone, by series folder (stale ones dropped, as on Live Progress). */
-function clipperWorking(crops: Obj | null, now: number): Map<string, string[]> {
-  const bySeries = new Map<string, string[]>()
+/** The page runs: Image Clipper and Metadata both work page by page, told apart by each working page's `process`. */
+type PageRun = 'clipper' | 'metadata'
+
+/**
+ * The pages in progress on a phone, by run and series folder (stale ones dropped, as on Live Progress). A working
+ * page without `process` (older builds) is Image Clipper's.
+ */
+function pagesWorking(crops: Obj | null, now: number): Map<PageRun, Map<string, string[]>> {
+  const byRun = new Map<PageRun, Map<string, string[]>>([['clipper', new Map()], ['metadata', new Map()]])
   for (const [series, entry] of Object.entries(objectAt(crops, 'series'))) {
     if (!isObject(entry)) continue
     const list = Array.isArray(entry.workingPages) ? entry.workingPages : entry.working ? [entry.working] : []
-    const chapters = list
-      .filter((w): w is Obj => isObject(w) && typeof w.chapter === 'string' && !!w.chapter && typeof w.page === 'string' && !!w.page)
-      .filter(w => !(typeof w.since === 'string' && now - Date.parse(w.since) > WORKING_STALE_MS))
-      .map(w => w.chapter as string)
-    if (chapters.length) bySeries.set(series, [...new Set(chapters)])
+    for (const w of list) {
+      if (!isObject(w) || typeof w.chapter !== 'string' || !w.chapter || typeof w.page !== 'string' || !w.page) continue
+      if (typeof w.since === 'string' && now - Date.parse(w.since) > WORKING_STALE_MS) continue
+      const bySeries = byRun.get(w.process === 'metadata' ? 'metadata' : 'clipper')!
+      const chapters = bySeries.get(series) ?? []
+      if (!chapters.includes(w.chapter)) bySeries.set(series, [...chapters, w.chapter])
+    }
   }
-  return bySeries
+  return byRun
 }
 
 /**
@@ -137,18 +148,26 @@ function runLanguage(raw: unknown): NarrationLanguage | null {
 export function splitState(kind: PhoneRunKind, series: string, language: NarrationLanguage, phone: SplitPhone, now = Date.now()): SplitState {
   const raws = Array.isArray(phone.scripts?.runs) ? phone.scripts!.runs as unknown[] : []
   const runs = raws.flatMap(raw => parseScriptRuns([raw], now).map(run => ({ ...run, language: runLanguage(raw) })))
-  const working = clipperWorking(phone.crops, now)
+  const working = pagesWorking(phone.crops, now)
   const busy = (label: string, on: string, paused = false) => ({ state: 'busyOther' as const, reason: `busy: ${label} · ${on}${paused ? ' (paused)' : ''}` })
-  if (kind === 'clipper') {
+  const pageRuns: PageRun[] = ['clipper', 'metadata']
+  if (kind === 'clipper' || kind === 'metadata') {
     const run = runs[0]
     if (run) return busy(RUN_LABEL[run.kind], run.series, run.paused)
-    const other = [...working.keys()].find(s => s !== series)
-    if (other) return busy(RUN_LABEL.clipper, other)
-    const here = working.get(series)
+    for (const other of pageRuns.filter(r => r !== kind)) {
+      const on = [...working.get(other)!.keys()][0]
+      if (on !== undefined) return busy(RUN_LABEL[other], on)
+    }
+    const mine = working.get(kind)!
+    const other = [...mine.keys()].find(s => s !== series)
+    if (other) return busy(RUN_LABEL[kind], other)
+    const here = mine.get(series)
     return here ? { state: 'busySame', inProgress: here } : { state: 'idle' }
   }
-  const clipping = [...working.keys()][0]
-  if (clipping !== undefined) return busy(RUN_LABEL.clipper, clipping)
+  for (const pageRun of pageRuns) {
+    const on = [...working.get(pageRun)!.keys()][0]
+    if (on !== undefined) return busy(RUN_LABEL[pageRun], on)
+  }
   const isThis = (r: (typeof runs)[number]) =>
     r.kind === kind && r.series === series && (kind === 'narration' || r.language === null || r.language === language)
   const other = runs.find(r => !isThis(r))
@@ -302,8 +321,12 @@ export interface SplitInput {
   /** Every phone's receipts, startable or not: what's done anywhere counts. */
   all: SplitPhone[]
   chapters: SplitChapter[]
+  /** Retained scripts in completed parts must never re-enter the share. */
+  excludedChapters?: string[]
   /** Editor 2.0's chapters waiting for their timeline (from R2); asked for only once the phones are fit to split. */
   editorWaiting?: () => Promise<string[]>
+  /** Metadata: the approved, cut chapters picked in Run automation. Only these are shared out. */
+  metadataChapters?: string[]
   now?: number
 }
 
@@ -311,6 +334,7 @@ export interface SplitInput {
 export async function buildSplitPlan(input: SplitInput): Promise<SplitPlan> {
   const { kind, series, language, phones, all, chapters } = input
   const label = RUN_LABEL[kind]
+  const excluded = new Set(input.excludedChapters ?? [])
   if (kind === 'narration') throw new Error(NARRATION_ONE_PHONE)
   if (phones.length < 2) throw new Error('Splitting needs two phones open with “Start from Manhwa Studio” on')
   const old = phones.filter(p => !takesChapters(kind, p.automation))
@@ -337,7 +361,7 @@ export async function buildSplitPlan(input: SplitInput): Promise<SplitPlan> {
   const pinned = new Map<string, string[]>()
   const held = new Set<string>()
   for (const id of ids) {
-    pinned.set(id, inProgressOf(id).filter(c => !held.has(c)))
+    pinned.set(id, inProgressOf(id).filter(c => !held.has(c) && !excluded.has(c)))
     for (const c of inProgressOf(id)) held.add(c)
   }
   const pinnedOf = (id: string) => pinned.get(id) ?? []
@@ -352,12 +376,17 @@ export async function buildSplitPlan(input: SplitInput): Promise<SplitPlan> {
     weight = chapter => Math.max(1, made.pagesLeft.get(chapter) ?? pages.get(chapter) ?? 1)
   } else if (kind === 'editor') {
     candidates = (await input.editorWaiting!()).map(chapter => ({ chapter, eligible: null }))
+  } else if (kind === 'metadata') {
+    // Studio publishes each chapter's job to R2 at the start, so any phone may take any picked chapter.
+    candidates = [...new Set(input.metadataChapters ?? [])].sort(reading(chapters)).map(chapter => ({ chapter, eligible: null }))
   } else {
     const made = voiceoverCandidates(series, language, ids, all, chapters)
     candidates = made.candidates
     available = made.available
   }
 
+  candidates = candidates.filter(c => !excluded.has(c.chapter))
+  if (available && excluded.size) available = new Map(ids.map(id => [id, candidates.filter(c => !c.eligible || c.eligible.includes(id)).length]))
   const shares = assignSplit(candidates, taking.map(p => ({ id: p.id, pinned: pinnedOf(p.id) })), weight, available)
   const order = reading(chapters)
   const targets: SplitTarget[] = phones.map(phone => {
@@ -419,9 +448,28 @@ export function onThisRun(kind: PhoneRunKind, series: string, language: Narratio
   return splitState(kind, series, language, relayedPhones().phoneOf(device, device)).state === 'busySame'
 }
 
+/** Which phones a split goes to (`devices`: the ones picked, else every startable phone) and Metadata's or the voiceover part's chapters. */
+export interface SplitScope {
+  devices?: string[]
+  chapters?: string[]
+}
+
+/**
+ * The startable phones a split goes to: all of them, or the `devices` picked, in the order shown. A picked phone
+ * that went away fails the plan rather than quietly leaving its chapters to the others.
+ */
+export function selectSplitPhones<T extends { id: string }>(startable: T[], devices?: string[]): T[] {
+  if (devices === undefined) return startable
+  if (devices.some(id => !startable.some(p => p.id === id))) {
+    throw new Error('A selected phone is no longer available. Review the device selection and try again')
+  }
+  return startable.filter(p => devices.includes(p.id))
+}
+
 /** The split plan for `kind` on a series, from the phones the relay can start now and their receipts. */
-export async function planSplit(kind: PhoneRunKind, seriesId: string, language: NarrationLanguage = 'en'): Promise<SplitPlan> {
+export async function planSplit(kind: PhoneRunKind, seriesId: string, language: NarrationLanguage = 'en', scope: SplitScope = {}): Promise<SplitPlan> {
   if (kind === 'narration') throw new Error(NARRATION_ONE_PHONE)
+  if (kind === 'metadata' && !scope.chapters?.length) throw new Error('Select the approved chapters to share between the phones')
   const row = await prisma.series.findUnique({
     where: { id: seriesId },
     select: { rootFolder: true, chapters: { select: { folderPath: true, number: true, pageCount: true } } }
@@ -429,15 +477,28 @@ export async function planSplit(kind: PhoneRunKind, seriesId: string, language: 
   if (!row) throw new Error('Series not found')
   const series = path.basename(row.rootFolder)
   const { phoneOf, devices } = relayedPhones()
+  const voiceScope = kind === 'voiceover' ? await voiceoverChapterScope(seriesId) : null
+  const folders = new Set(row.chapters.map(c => path.basename(c.folderPath)))
+  if (scope.chapters?.some(c => !folders.has(c))) throw new Error('A chapter in the run is not in this series')
   const filterPhone = async (phone: SplitPhone): Promise<SplitPhone> => ({ ...phone, crops: phone.crops ? await filterReplacedCropFacts(phone.crops) : null })
   return buildSplitPlan({
     kind,
     seriesId,
     series,
     language,
-    phones: await Promise.all(startablePhones().map(p => filterPhone(phoneOf(p.id, p.name)))),
+    phones: await Promise.all(selectSplitPhones(startablePhones(), scope.devices).map(p => filterPhone(phoneOf(p.id, p.name)))),
     all: await Promise.all([...devices].map(id => filterPhone(phoneOf(id, id)))),
     chapters: row.chapters.map(c => ({ folder: path.basename(c.folderPath), number: c.number ?? null, pageCount: c.pageCount ?? null })),
-    editorWaiting: async () => (await import('./phoneEditor.js')).editorWaitingChapters(seriesId, language)
+    // A voiceover split for one part shares out only that part's chapters (`scope.chapters`).
+    excludedChapters: voiceScope
+      ? [...new Set([
+          ...voiceScope.excluded,
+          ...(scope.chapters ? [...folders].filter(c => !scope.chapters!.includes(c)) : []),
+          // Already in Studio: their R2 zip may be cleaned up, which hides them from the phones (voiceoverCleanup.ts).
+          ...await importedVoiceoverFolders(row.chapters.map(c => c.folderPath), language)
+        ])]
+      : undefined,
+    editorWaiting: async () => (await import('./phoneEditor.js')).editorWaitingChapters(seriesId, language),
+    metadataChapters: kind === 'metadata' ? scope.chapters : undefined
   })
 }

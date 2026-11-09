@@ -22,6 +22,8 @@ export interface EditorFetchResult {
   imported: { chapterId: string; number: number; review: number; model: string | null }[]
   upToDate: number
   kept: { chapterId: string; number: number }[]
+  /** Being made by a Studio AntiGravity Timeline job right now; the phone's timeline was not taken. */
+  inProgress?: { chapterId: string; number: number }[]
   unmatched: string[]
   failed: { key: string; error: string }[]
 }

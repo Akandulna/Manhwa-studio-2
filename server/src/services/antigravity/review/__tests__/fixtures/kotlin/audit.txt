@@ -1,0 +1,20 @@
+HEIGHT_OUTLIER|candidate-01|800 px tall, 2.9× the median of the other crops (275 px)
+TALL_ASPECT|candidate-03|800×1948 px is 2.4× taller than wide — check it isn't several shots, or keep it as one continuous scene
+PAGE_FRACTION|candidate-03|Covers 39% of the page height (review above 20%)
+HEIGHT_OUTLIER|candidate-03|1948 px tall, 7.1× the median of the other crops (275 px)
+TINY|candidate-04|Only 40×40 px — too small to be a readable shot, or a stray box
+TINY|candidate-05|Only 41×40 px — too small to be a readable shot, or a stray box
+SHARED_EDGE:candidate-01|candidate-02|Its top edge meets candidate-01's bottom edge with no gutter — if the same shot continues across that line, merge the two; keep them apart only if a drawn panel border, gutter or clear artwork break runs along it
+DUPLICATE:candidate-04|candidate-05|Nearly identical to candidate-04 (98% overlap)
+HIGH_OVERLAP:candidate-06|candidate-07|100% of the smaller box lies inside candidate-06
+FILLER_REASON|candidate-07|Its reason "speech_bubble" names bubble — keep it only if a person, creature, object or place is its subject, not background, bubbles or lettering
+EDGE_ON_CONTENT:bottom|candidate-01|The strip just past the bottom edge is 50% ink and looks like the artwork inside — the shot may continue past it
+EDGE_ON_CONTENT:top|candidate-02|The strip just past the top edge is 50% ink and looks like the artwork inside — the shot may continue past it
+EDGE_ON_CONTENT:bottom|candidate-02|The strip just past the bottom edge is 50% ink and looks like the artwork inside — the shot may continue past it
+EDGE_ON_CONTENT:top|candidate-07|The strip just past the top edge is 50% ink and looks like the artwork inside — the shot may continue past it
+EDGE_ON_CONTENT:left|candidate-07|The strip just past the left edge is 50% ink and looks like the artwork inside — the shot may continue past it
+MOSTLY_BLANK|candidate-04|100% of its rows are a flat colour — check it holds a real shot, not an empty transition or a plain background behind lettering
+MOSTLY_BLANK|candidate-05|100% of its rows are a flat colour — check it holds a real shot, not an empty transition or a plain background behind lettering
+--
+1500|2248|0.3402406417112304
+4196|4396|0.0

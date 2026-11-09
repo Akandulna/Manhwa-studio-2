@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('../r2Usage.js', () => ({ FREE_PLAN: {}, attachUsageCounter: () => {}, getMonthUsage: () => ({}), monthKey: () => '' }))
 vi.mock('../../index.js', () => ({ prisma: {} }))
 
-const { buildSplitPlan, splitState } = await import('../phoneSplit.js')
+const { buildSplitPlan, selectSplitPhones, splitState } = await import('../phoneSplit.js')
 type SplitPhone = import('../phoneSplit.js').SplitPhone
 type SplitInput = import('../phoneSplit.js').SplitInput
 
@@ -14,7 +14,7 @@ const SERIES = 'Solo Hero'
 const CHAPTERS = [1, 2, 3, 4, 5, 6].map(n => ({ folder: `Chapter 00${n}`, number: n, pageCount: 10 }))
 const ch = (...ns: number[]) => ns.map(n => `Chapter 00${n}`)
 
-const NEW = { remoteStart: true, runs: ['clipper', 'narration', 'editor', 'voiceover'], chapterRuns: ['clipper', 'narration', 'editor', 'voiceover'], rescope: true, editor: { tabs: 1 } }
+const NEW = { remoteStart: true, runs: ['clipper', 'metadata', 'narration', 'editor', 'voiceover'], chapterRuns: ['clipper', 'metadata', 'narration', 'editor', 'voiceover'], rescope: true, editor: { tabs: 1 } }
 
 function phone(id: string, parts: Partial<Omit<SplitPhone, 'id' | 'name'>> = {}): SplitPhone {
   return { id, name: id.toUpperCase(), automation: NEW, sync: null, scripts: null, crops: null, ...parts }
@@ -58,6 +58,15 @@ describe('splitState', () => {
 })
 
 describe('buildSplitPlan', () => {
+  it('excludes completed-part scripts from voiceover shares, including a retained running chapter', async () => {
+    const scripts = { series: { [SERIES]: { chapters: Object.fromEntries(ch(1, 2, 3, 4).map(c => [c, { status: 'done' }])) } } }
+    const a = phone('a', { scripts: { ...scripts, runs: [run('voiceover', SERIES, ch(1))] } })
+    const b = phone('b', { scripts })
+    const result = await plan({ kind: 'voiceover', phones: [a, b], excludedChapters: ch(1, 2) })
+    expect(result.targets.flatMap(t => t.chapters).sort()).toEqual(ch(3, 4))
+    expect(result.targets.find(t => t.device === 'a')!.inProgress).toEqual(ch(1))
+  })
+
   it('never splits narration scripts: one phone writes a series in order', async () => {
     await expect(plan({ kind: 'narration', phones: [phone('a'), phone('b')] }))
       .rejects.toThrow('Narration scripts run on one phone at a time: start it on one phone')
@@ -147,5 +156,43 @@ describe('buildSplitPlan', () => {
     const idle = phone('c', { crops: crops([]) })
     const rest = await plan({ kind: 'clipper', phones: [a, idle] })
     expect(rest.targets.map(t => [t.device, t.chapters, t.action])).toEqual([['a', ch(6), 'rescope'], ['c', [], 'skip']])
+  })
+})
+
+describe('Metadata split', () => {
+  const working = (process: string | undefined, chapter: string, series = SERIES) =>
+    ({ series: { [series]: { workingPages: [{ chapter, page: 'p1.webp', since: AT, ...(process ? { process } : {}) }] } } })
+
+  it('tells Metadata pages from Image Clipper pages', () => {
+    const describing = phone('a', { crops: working('metadata', 'Chapter 002') })
+    expect(splitState('metadata', SERIES, 'en', describing, NOW)).toEqual({ state: 'busySame', inProgress: ch(2) })
+    expect(splitState('clipper', SERIES, 'en', describing, NOW)).toMatchObject({ state: 'busyOther', reason: 'busy: Metadata · AI Studio · Solo Hero' })
+    expect(splitState('editor', SERIES, 'en', describing, NOW)).toMatchObject({ state: 'busyOther', reason: 'busy: Metadata · AI Studio · Solo Hero' })
+    // Older builds don't say `process`: their working pages are Image Clipper's.
+    const clipping = phone('b', { crops: working(undefined, 'Chapter 003') })
+    expect(splitState('metadata', SERIES, 'en', clipping, NOW)).toMatchObject({ state: 'busyOther', reason: 'busy: Image Clipper · Solo Hero' })
+    expect(splitState('clipper', SERIES, 'en', clipping, NOW)).toEqual({ state: 'busySame', inProgress: ch(3) })
+    expect(splitState('metadata', SERIES, 'en', phone('c', { crops: working('metadata', 'Chapter 001', 'Other') }), NOW))
+      .toMatchObject({ state: 'busyOther', reason: 'busy: Metadata · AI Studio · Other' })
+  })
+
+  it('shares only the picked chapters between the selected phones, in reading order', async () => {
+    const result = await plan({ kind: 'metadata', phones: [phone('a'), phone('b')], metadataChapters: ch(5, 1, 2, 4) })
+    expect(result.targets.map(t => [t.device, t.chapters, t.action])).toEqual([['a', ch(1, 4), 'start'], ['b', ch(2, 5), 'start']])
+  })
+
+  it('keeps a phone on its Metadata chapter and refuses builds without Metadata shares', async () => {
+    const a = phone('a', { crops: working('metadata', 'Chapter 002') })
+    const result = await plan({ kind: 'metadata', phones: [a, phone('b')], metadataChapters: ch(1, 2, 3) })
+    expect(result.targets.map(t => [t.device, t.chapters, t.action])).toEqual([['a', ch(2, 3), 'rescope'], ['b', ch(1), 'start']])
+    const old = phone('c', { automation: { ...NEW, chapterRuns: ['clipper', 'editor'] } })
+    await expect(plan({ kind: 'metadata', phones: [phone('a'), old], metadataChapters: ch(1) })).rejects.toThrow('Update Sleeper-Cell on C')
+  })
+
+  it('splits between the selected devices only', () => {
+    const phones = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
+    expect(selectSplitPhones(phones)).toEqual(phones)
+    expect(selectSplitPhones(phones, ['c', 'a'])).toEqual([{ id: 'a' }, { id: 'c' }])
+    expect(() => selectSplitPhones(phones, ['a', 'z'])).toThrow('no longer available')
   })
 })

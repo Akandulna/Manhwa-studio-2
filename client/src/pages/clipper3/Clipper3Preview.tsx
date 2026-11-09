@@ -25,7 +25,7 @@ import ManagedCropReview from '../sleeper/ManagedCropReview'
  * already cut counts as reviewed, so its footer just says so.
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -48,11 +48,15 @@ import {
 import {
   clipper3Api,
   type Clipper3ChapterImages,
-  type Clipper3ChapterReview
+  type Clipper3ChapterReview,
+  type PhonePageFinish
 } from '@/lib/api'
 import { useToast } from '@/components/ui/use-toast'
 import { CropPointerEditor, type CropMetadataEntry } from '@/components/clipper3/CropPointerEditor'
 import ChapterSwitcher from '@/components/ChapterSwitcher'
+import { formatTook } from '@/components/PhoneSyncBadge'
+import { PhoneRefreshButton } from '@/components/PhoneRefreshButton'
+import { usePhoneCrops } from '@/hooks/usePhoneCrops'
 import { CropReviewSession, type CropReviewPage } from '@/lib/cropReviewSession'
 
 /**
@@ -100,6 +104,20 @@ function describeCropped(review: Clipper3ChapterReview): string {
   return ['Cropped', when].filter(Boolean).join(' · ') + ' — counts as reviewed'
 }
 
+/** Completion receipts time the whole page, including pauses between AI rounds. */
+function PageCompletion({ finish }: { finish?: PhonePageFinish }) {
+  const models = finish?.models.filter(model => model.trim()).join(' → ')
+  const ai = models || (finish?.run === 'manual' ? 'Pasted by hand · AI not recorded' : 'AI not recorded')
+  const took = finish?.took
+  const duration = took != null && Number.isFinite(took) && took >= 0 ? formatTook(took) : 'not recorded'
+  return (
+    <span className="block text-[10px] text-muted-foreground break-words">
+      <span className="block">{models ? `AI: ${ai}` : ai}</span>
+      <span className="block" title="Elapsed time from making page sections to exporting JSON; pauses count.">Time: {duration}</span>
+    </span>
+  )
+}
+
 /** Header chip beside the crop count. */
 function ReviewBadge({ review }: { review: Clipper3ChapterReview }) {
   if (review.reviewed && review.cropped) {
@@ -133,14 +151,39 @@ export default function Clipper3Preview() {
   return <Clipper3ChapterPreview key={id} />
 }
 
-function Clipper3ChapterPreview() {
-  const { id: chapterId } = useParams<{ id: string }>()
+/** What a host page (AntiGravity's chapter Preview) can put at the end of the chapter. */
+export interface ChapterPreviewFooterContext {
+  chapterId: string
+  data: Clipper3ChapterImages
+  /** Pointer edits not saved yet: leaving or cutting must wait. */
+  unsaved: boolean
+  /** Re-reads the chapter's review / cropped marker without reloading the pages. */
+  refreshReview: () => void
+}
+
+export interface ChapterPreviewProps {
+  /** Defaults to the route's :id. */
+  chapterId?: string
+  /** Where Back (and the load-error button) goes; defaults to Clipper's chapter page. */
+  backTo?: string
+  /** Address of another chapter's preview (chapter switcher, Next chapter); defaults to Clipper's. */
+  chapterHref?: (chapterId: string) => string
+  /** Extra controls in the end-of-chapter footer, e.g. Crop Sections. */
+  footerExtra?: (context: ChapterPreviewFooterContext) => ReactNode
+}
+
+export function Clipper3ChapterPreview({ chapterId: chapterIdProp, backTo, chapterHref, footerExtra }: ChapterPreviewProps = {}) {
+  const { id: routeId } = useParams<{ id: string }>()
+  const chapterId = chapterIdProp ?? routeId
+  const previewHref = chapterHref ?? ((id: string) => `/clipper3/chapter/${id}/preview`)
   const navigate = useNavigate()
   const { toast } = useToast()
   const [savingReview, setSavingReview] = useState(false)
   const [redoVersion, setRedoVersion] = useState(0)
 
   const [data, setData] = useState<Clipper3ChapterImages | null>(null)
+  const phoneReceipt = usePhoneCrops(data?.seriesId, chapterId)
+  const phoneCrops = phoneReceipt.status
   const [session, setSession] = useState<CropReviewSession | null>(null)
   const [, refreshSession] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -269,8 +312,8 @@ function Clipper3ChapterPreview() {
       <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
         <AlertTriangle className="h-8 w-8 text-amber-500" />
         <p>{loadError || 'Failed to load this chapter'}</p>
-        <Button variant="outline" size="sm" onClick={() => navigate('/clipper3')}>
-          Back to Image Clipper 3.0
+        <Button variant="outline" size="sm" onClick={() => navigate(backTo ?? '/clipper3')}>
+          {backTo ? 'Back' : 'Back to Image Clipper 3.0'}
         </Button>
       </div>
     )
@@ -288,7 +331,7 @@ function Clipper3ChapterPreview() {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => { if (canLeave()) navigate(`/clipper3/chapter/${chapterId}`) }}
+          onClick={() => { if (canLeave()) navigate(backTo ?? `/clipper3/chapter/${chapterId}`) }}
         >
           <ArrowLeft className="h-4 w-4 mr-1" />
           Back
@@ -362,7 +405,7 @@ function Clipper3ChapterPreview() {
         <div>
           <ChapterSwitcher
             neighbours={data.neighbours}
-            to={id => `/clipper3/chapter/${id}/preview`}
+            to={previewHref}
             canLeave={canLeave}
           />
         </div>
@@ -374,10 +417,11 @@ function Clipper3ChapterPreview() {
             recognises. */}
         {navOpen && (
           <div className="w-56 flex-shrink-0 border-r bg-card flex flex-col min-h-0">
-            <div className="px-3 py-2 border-b flex-shrink-0">
+            <div className="px-3 py-2 border-b flex-shrink-0 space-y-2 [&>div]:flex-wrap">
               <p className="text-xs font-medium text-muted-foreground">
                 {data.images.length} image{data.images.length === 1 ? '' : 's'}
               </p>
+              {phoneCrops?.configured && <PhoneRefreshButton receipt={phoneReceipt} />}
             </div>
             <ScrollArea className="flex-1">
               <div className="p-2 space-y-1">
@@ -412,6 +456,9 @@ function Clipper3ChapterPreview() {
                           <span className="block text-[10px] text-muted-foreground">
                             {cropCount > 0 ? `${cropCount} crop${cropCount === 1 ? '' : 's'}` : 'no crops'}
                           </span>
+                          {img.redo?.status !== 'pending' && (img.status === 'done' || phoneCrops?.pages[img.filename] === 'done') && (
+                            <PageCompletion finish={phoneCrops?.pages[img.filename] === 'done' ? phoneCrops.finished[img.filename] : undefined} />
+                          )}
                         </span>
                       </button>
                     </div>
@@ -467,7 +514,8 @@ function Clipper3ChapterPreview() {
                   {file.crops.length > 0 ? ` · ${file.crops.length} crop${file.crops.length === 1 ? '' : 's'}` : ''}
                 </span>
 
-                <div className="flex justify-end px-2 pt-8">
+                <div className="flex items-center justify-between gap-3 px-2 pt-8">
+                  <PageCompletion finish={img.redo?.status !== 'pending' && phoneCrops?.pages[img.filename] === 'done' ? phoneCrops.finished[img.filename] : undefined} />
                   <RejectPageButton chapterId={chapterId!} filename={img.filename} redo={img.redo}
                     disabled={unsaved || draggingFile !== null} onChanged={() => setRedoVersion(v => v + 1)} />
                 </div>
@@ -486,9 +534,10 @@ function Clipper3ChapterPreview() {
                     metadataByCropId={parseMetadataByCropId(session?.pages[img.filename]?.metadata ?? '')}
                     showMetadataRail
                     onInteractionChange={dragging => setDraggingFile(dragging ? img.filename : null)}
-                    onCommit={(next, removedCropId) => {
+                    onCommit={(next, removedCropId, addedDescription) => {
                       try {
-                        session?.commit(img.filename, next, removedCropId)
+                        session?.commit(img.filename, next, removedCropId, addedDescription)
+                        return session?.pages[img.filename]?.file
                       } catch (error) {
                         toast({
                           title: 'Could not update pointers',
@@ -544,6 +593,12 @@ function Clipper3ChapterPreview() {
                 </Button>
               </>
             )}
+            {footerExtra?.({
+              chapterId: chapterId!,
+              data,
+              unsaved,
+              refreshReview: () => { void clipper3Api.getChapterReview(chapterId!).then(review => setData(previous => previous ? { ...previous, review } : previous)).catch(() => { /* the old marker stays */ }) }
+            })}
             <Button
               variant="outline"
               size="sm"
@@ -552,7 +607,7 @@ function Clipper3ChapterPreview() {
               title={data.neighbours.next ? `Chapter ${data.neighbours.next.number}` : 'No later downloaded chapter'}
               onClick={() => {
                 const next = data.neighbours.next
-                if (next && canLeave()) navigate(`/clipper3/chapter/${next.id}/preview`)
+                if (next && canLeave()) navigate(previewHref(next.id))
               }}
             >
               Next chapter

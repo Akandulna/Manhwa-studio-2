@@ -14,7 +14,7 @@
  */
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { useParams, useNavigate, Link } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom'
 import {
   seriesApi,
   videoApi2,
@@ -69,10 +69,12 @@ import {
   RotateCcw
 } from 'lucide-react'
 
+import { CLIPPER_PART_SIZE, clipperChapterParts } from '@/lib/clipperParts'
+import { exportEtaLabel } from './exportEta'
 import { useWakeLock } from '@/hooks/useWakeLock'
 import { usePublishedChapters } from '@/hooks/usePublishedChapters'
 import { CompletedBadge, completedRowClass } from '@/components/PublishedBadge'
-import { SeriesDoneBadge } from './SeriesDoneBadge'
+import { SeriesDoneBadge, SeriesDoneToggle } from './SeriesDoneBadge'
 import { chapterList, phoneEditorApi, loadSavedEditorPrompt as readSavedPrompt } from './phoneEditor'
 import { LanguageTabs } from '@/components/LanguageTabs'
 import { TimelineModelBadge } from './TimelineModelBadge'
@@ -187,6 +189,9 @@ export default function EditorChapterList2() {
   const navigate = useNavigate()
   const { toast } = useToast()
   const [language, setLanguage] = useNarrationLanguage('editor2')
+  const [searchParams, setSearchParams] = useSearchParams()
+  // Kept in the URL so language changes and browser Back retain the export scope.
+  const exportPart = searchParams.get('exportPart')
 
   const [seriesTitle, setSeriesTitle] = useState('')
   const [chapters, setChapters] = useState<Editable2Chapter[]>([])
@@ -439,7 +444,8 @@ export default function EditorChapterList2() {
         if (review.length > 0) parts.push(`${chapterList(review.map(i => i.number))} still had issues on the phone; check the preview.`)
       }
       if (result.upToDate > 0) parts.push(`${result.upToDate} already up to date.`)
-      if (result.kept.length > 0) parts.push(`${chapterList(result.kept.map(k => k.number))} kept: pasted here after the phone made it.`)
+      if (result.kept.length > 0) parts.push(`${chapterList(result.kept.map(k => k.number))} kept: the Studio's own timeline (pasted, edited or AntiGravity) stays.`)
+      if (result.inProgress?.length) parts.push(`${chapterList(result.inProgress.map(k => k.number))}: AntiGravity is making ${result.inProgress.length === 1 ? 'it' : 'them'} now, so the phone's was not taken.`)
       if (result.unmatched.length > 0) parts.push(`No chapter here for ${result.unmatched.join(', ')}.`)
       if (result.failed.length > 0) parts.push(`${result.failed.length} could not be read: ${result.failed[0].error}.`)
       toast({
@@ -590,9 +596,9 @@ export default function EditorChapterList2() {
    * the browser, and re-processing it server-side is what makes the exported
    * video match the preview.
    */
-  async function exportAll(force = false, chapterIds?: string[]) {
+  async function exportAll(force: boolean, chapterIds: string[]) {
     if (!seriesId) return
-    const all = collectProcessed(readyIds(), language).filter(i => !chapterIds || chapterIds.includes(i.chapterId))
+    const all = collectProcessed(readyIds(), language).filter(i => chapterIds.includes(i.chapterId))
     const inputs = force ? all : all.filter(i => needsExport(i.chapterId))
     if (inputs.length === 0) return
 
@@ -934,7 +940,7 @@ export default function EditorChapterList2() {
     }
   }, [seriesId, language, exportJob?.id, exportJob?.status])
 
-  // Recheck compressed videos when returning from saving or cleaning up files.
+  // Recheck the Done mark when returning, since another window or Mac may change it.
   useEffect(() => {
     if (!seriesId) return
     let cancelled = false
@@ -983,7 +989,7 @@ export default function EditorChapterList2() {
     )
   }
 
-  // How much of the series is ready to export. Read through processedTick so
+  // How much of the selected part is ready to export. Read through processedTick so
   // this recomputes after a paste, a clear, or a return from the preview —
   // the markers live in localStorage, which React cannot subscribe to.
   void processedTick
@@ -991,11 +997,17 @@ export default function EditorChapterList2() {
   // pool Export All draws from. Whatever is processed (previewed) right now is
   // exportable — the rest of the series is allowed to lag behind, and a
   // chapter that has not been through the pipeline yet simply waits its turn.
+  const chapterParts = clipperChapterParts(chapters)
   const readySet = new Set(readyIds())
   const readyChapters = chapters.filter(ch => readySet.has(ch.id))
-  const processedInputs = collectProcessed(readyChapters.map(ch => ch.id), language)
+  const exportChapterIds = chapterParts
+    .filter(part => exportPart === null || String(part.number) === exportPart)
+    .flatMap(part => part.chapters.map(ch => ch.id))
+  const exportReadyChapters = readyChapters.filter(ch => exportChapterIds.includes(ch.id))
+  const exportScopeLabel = exportPart === null ? 'All parts' : `Part ${exportPart}`
+  const processedInputs = collectProcessed(exportReadyChapters.map(ch => ch.id), language)
   const processedCount = processedInputs.length
-  const allProcessed = readyChapters.length > 0 && processedCount === readyChapters.length
+  const allProcessed = exportReadyChapters.length > 0 && processedCount === exportReadyChapters.length
 
   // Ready, pasted, and not yet processed — exactly what Process All would do.
   const pendingProcessCount = readyChapters.filter(ch => {
@@ -1007,7 +1019,7 @@ export default function EditorChapterList2() {
   // processed count — is what Export All would actually do, so it is what the
   // button counts and what decides whether it has anything to do at all.
   const pendingExport = processedInputs.filter(i => needsExport(i.chapterId)).length
-  const exportedCount = readyChapters.filter(ch => exported[ch.id] && !needsExport(ch.id)).length
+  const exportedCount = exportReadyChapters.filter(ch => exported[ch.id] && !needsExport(ch.id)).length
   // Nothing left to render: every chapter processed so far is already out.
   // Pressing the button then means re-render those, not wait for the others.
   const everythingExported = processedCount > 0 && pendingExport === 0
@@ -1025,6 +1037,7 @@ export default function EditorChapterList2() {
           <div className="flex items-center gap-2">
             <h1 className="text-lg font-bold truncate">{seriesTitle}</h1>
             <SeriesDoneBadge completion={completion} />
+            {seriesId && <SeriesDoneToggle seriesId={seriesId} language={language} completion={completion} onChange={setCompletion} />}
           </div>
           <p className="text-xs text-muted-foreground">
             Editor 2.0 — {LANGUAGE_LABEL[language]} · {readyChapters.length}/{chapters.filter(ch => completedPart(ch.id) === null).length} ready to edit
@@ -1078,14 +1091,16 @@ export default function EditorChapterList2() {
           Reset timelines
         </Button>
 
-        {/* Export All — every processed chapter in one action. It does not
-            wait for the whole series: whatever is ready now gets rendered,
-            and the chapters processed later are picked up next time. */}
+        {/* Export only the selected part's processed chapters. */}
         {exporting ? (
           <div className="flex items-center gap-3 flex-shrink-0">
             <div className="text-right">
               <p className="text-xs font-medium flex items-center justify-end gap-1">
                 Exporting {exportJob!.percent}%
+                <span className="text-muted-foreground font-normal tabular-nums"
+                  title="Estimated time for the remaining export, based on average progress so far. Chapter lengths and rendering speed can vary.">
+                  · {exportEtaLabel(exportJob!)}
+                </span>
                 {currentlyRendering && (
                   <span className="text-muted-foreground font-normal">
                     · Chapter {currentlyRendering.chapterNumber}
@@ -1124,11 +1139,10 @@ export default function EditorChapterList2() {
           </div>
         ) : (
           <div className="flex items-center gap-2 flex-shrink-0">
-            {/* How much of the series is already rendered, so the state is
-                readable without counting badges down the list. */}
+            {/* Export counts follow the selected part. */}
             {exportedCount > 0 && (
               <span className="text-xs text-muted-foreground tabular-nums">
-                {exportedCount}/{readyChapters.length} exported
+                {exportedCount}/{exportReadyChapters.length} exported · {exportScopeLabel}
               </span>
             )}
 
@@ -1181,24 +1195,47 @@ export default function EditorChapterList2() {
               Check Images
             </Button>
 
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              Export chapters
+              <select
+                aria-label="Export chapters"
+                className="h-8 rounded border bg-background px-2 text-xs text-foreground"
+                value={exportPart ?? 'all'}
+                disabled={starting || processingAll !== null}
+                onChange={e => setSearchParams(prev => {
+                  const next = new URLSearchParams(prev)
+                  if (e.target.value === 'all') next.delete('exportPart')
+                  else next.set('exportPart', e.target.value)
+                  return next
+                }, { replace: true })}
+              >
+                <option value="all">All parts</option>
+                {chapterParts.map(part => (
+                  <option key={part.number} value={String(part.number)}>
+                    Part {part.number} · Chapters {(part.number - 1) * CLIPPER_PART_SIZE + 1}–{part.number * CLIPPER_PART_SIZE}
+                  </option>
+                ))}
+              </select>
+            </label>
+
             <Button
               size="sm"
               variant={everythingExported ? 'outline' : 'default'}
               className="h-8"
-              onClick={() => exportAll(everythingExported)}
+              onClick={() => void exportAll(everythingExported, exportChapterIds)}
               disabled={processedCount === 0 || starting || processingAll !== null}
               title={
-                readyChapters.length === 0
-                  ? 'No chapter is ready yet — every checklist item (voiceover audio, alignment, timeline JSON, cropped images) has to pass first'
+                exportReadyChapters.length === 0
+                  ? `${exportScopeLabel}: no chapter is ready yet — every checklist item (voiceover audio, alignment, timeline JSON, cropped images) has to pass first`
                   : processedCount === 0
-                    ? 'No ready chapter has been previewed yet — preview one to export it'
+                    ? `${exportScopeLabel}: no ready chapter has been previewed yet — preview one to export it`
                     : everythingExported
-                      ? `Every processed chapter is already exported — re-render all ${processedCount} from scratch`
-                      : `Render the ${pendingExport} processed chapter${pendingExport === 1 ? '' : 's'} with a missing or older video` +
+                      ? `${exportScopeLabel}: every processed chapter is already exported — re-render these ${processedCount} from scratch`
+                      : `${exportScopeLabel}: render the ${pendingExport} processed chapter${pendingExport === 1 ? '' : 's'} with a missing or older video` +
                         (allProcessed
                           ? ''
-                          : ` — ${readyChapters.length - processedCount} ready chapter${
-                              readyChapters.length - processedCount === 1 ? '' : 's'
+                          : ` — ${exportReadyChapters.length - processedCount} ready chapter${
+                              exportReadyChapters.length - processedCount === 1 ? '' : 's'
                             } not processed yet and left out`)
               }
             >
@@ -1207,21 +1244,14 @@ export default function EditorChapterList2() {
               ) : (
                 <Film className="h-3 w-3 mr-1" />
               )}
-              {/* "All" only when the whole ready series is processed —
-                  otherwise this press covers just the processed part, and
-                  the count says how many chapters that is. */}
-              {everythingExported
-                ? allProcessed
-                  ? 'Re-export All'
-                  : 'Re-export Ready'
-                : allProcessed
-                  ? 'Export All'
-                  : 'Export Ready'}
-              {(allProcessed ? !everythingExported && exportedCount > 0 : true) && (
-                <span className="ml-1 opacity-70">
-                  ({everythingExported ? processedCount : pendingExport})
-                </span>
-              )}
+              {exportPart !== null
+                ? `${everythingExported ? 'Re-export' : 'Export'} ${exportScopeLabel}`
+                : everythingExported
+                  ? allProcessed ? 'Re-export All' : 'Re-export Ready'
+                  : allProcessed ? 'Export All' : 'Export Ready'}
+              <span className="ml-1 opacity-70">
+                ({everythingExported ? processedCount : pendingExport})
+              </span>
             </Button>
           </div>
         )}
@@ -1236,7 +1266,23 @@ export default function EditorChapterList2() {
             </div>
           )}
 
-          {chapters.map(ch => {
+          {chapterParts.map(part => (
+            <section key={part.number} aria-labelledby={`editor-part-${part.number}`}>
+              <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 bg-muted/40 border-b">
+                <div>
+                  <h2 id={`editor-part-${part.number}`} className="text-sm font-semibold">Part {part.number}</h2>
+                  <p className="text-xs text-muted-foreground">
+                    Chapters {(part.number - 1) * CLIPPER_PART_SIZE + 1}–{part.number * CLIPPER_PART_SIZE}
+                    {' · '}{part.chapters.length} chapter{part.chapters.length === 1 ? '' : 's'}
+                  </p>
+                </div>
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {part.chapters.filter(ch => readySet.has(ch.id)).length} ready to edit
+                  {' · '}{part.chapters.filter(ch => exported[ch.id] && !needsExport(ch.id)).length} exported
+                </span>
+              </div>
+              <div className="divide-y">
+          {part.chapters.map(ch => {
             const completed = completedPart(ch.id)
             if (completed !== null) {
               return (
@@ -1573,6 +1619,9 @@ export default function EditorChapterList2() {
               </div>
             )
           })}
+              </div>
+            </section>
+          ))}
         </div>
       </div>
 

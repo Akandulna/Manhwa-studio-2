@@ -750,7 +750,7 @@ export async function startPhoneSend(requests: PhoneSendRequest[], io: Server, a
         const origin = await isLibraryOrigin(row.id)
         if (origin && !request?.resetClipping) {
           const { prepareLibrarySeries } = await import('./libraryPreparation.js')
-          await prepareLibrarySeries(row.id)
+          await prepareLibrarySeries(row.id, request?.chapterIds)
         }
         state = await seriesState(row, receipt, autoSeries.has(row.id))
         progress.folder = `${folder}${state.index.series}/`

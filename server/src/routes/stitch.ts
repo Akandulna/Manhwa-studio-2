@@ -8,7 +8,7 @@ import { withSeriesActivity } from '../services/seriesActivity.js'
  *   GET    /chapters/:id/profiles          per-page row "ink" profiles + repeated intro/outro for Auto stitch
  *   GET    /chapters/:id/thumb/:filename   a small preview of one page
  *   GET    /chapters/:id/image/:filename   one page at full size
- *   POST   /chapters/:id                   stitch, body { groups: (string | { file, top, bottom })[][] }
+ *   POST   /chapters/:id                   stitch, body { groups: (string | { file, top, bottom })[][], restitch?: boolean }
  *   POST   /chapters/:id/undo              restore the originals from the backup
  *   DELETE /chapters/:id/backup            keep the stitch, delete the originals
  */
@@ -22,6 +22,7 @@ import { reconcileQuietly } from '../services/diskReconcile.js'
 import { getImageFiles } from '../services/chapterManifest.js'
 import { PROFILE_WIDTH, profilePages } from '../services/stitchAnalysis.js'
 import { IntroOutro, detectIntroOutro } from '../services/stitchIntroOutro.js'
+import { readStitchCompletion } from '../services/stitchCompletion.js'
 import {
   STITCH_MAX_HEIGHT,
   StitchError,
@@ -29,7 +30,6 @@ import {
   doneNeighbours,
   getStitchState,
   measurePages,
-  readRecord,
   stitchChapter,
   undoStitch
 } from '../services/pageStitch.js'
@@ -91,7 +91,7 @@ export function initStitchRoutes(): Router {
 
       const rows = await Promise.all(
         chapters.map(async c => {
-          const record = await readRecord(c.folderPath)
+          const stitched = await readStitchCompletion(c.folderPath)
           return {
             id: c.id,
             number: c.number,
@@ -101,9 +101,7 @@ export function initStitchRoutes(): Router {
             rootFolder: c.series.rootFolder,
             createdAt: c.series.createdAt,
             pageCount: c.pageCount ?? 0,
-            stitched: record
-              ? { originalPages: record.originals.length, stitchedAt: record.stitchedAt }
-              : null
+            stitched
           }
         })
       )
@@ -195,7 +193,7 @@ export function initStitchRoutes(): Router {
     try {
       const chapter = await findChapter(req.params.id)
       if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
-      const record = await stitchChapter(chapter, req.body?.groups)
+      const record = await stitchChapter(chapter, req.body?.groups, req.body?.restitch === true)
       res.json({
         originalPages: record.originals.length,
         stitchedPages: record.outputs.length,

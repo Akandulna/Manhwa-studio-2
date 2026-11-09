@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   normalizePartDurations,
+  splitRenderBatches,
   ensureFfmpegAvailable
 } from '../videoMath.js'
 
@@ -53,4 +54,34 @@ describe('ensureFfmpegAvailable (no-FFmpeg fallback)', () => {
   it('passes when FFmpeg is available', () => {
     expect(() => ensureFfmpegAvailable({ ffmpegAvailable: true })).not.toThrow()
   })
+})
+
+
+describe('splitRenderBatches', () => {
+  it('preserves every image, duration and motion in order without splitting an image', () => {
+    const images = Array.from({ length: 91 }, (_, i) => ({
+      duration: i === 0 ? 45 : 3.25, motionEffect: 'pan-left', id: i
+    }))
+    const batches = splitRenderBatches(images)
+    expect(batches.flat()).toEqual(images)
+    batches.flat().forEach((image, i) => expect(image).toBe(images[i]))
+    for (const batch of batches) {
+      expect(batch.length).toBeLessThanOrEqual(12)
+      if (batch.length > 1) expect(sum(batch)).toBeLessThanOrEqual(30)
+    }
+    expect(batches[0]).toEqual([images[0]])
+  })
+
+  it('bounds very short images by count and handles empty input', () => {
+    expect(splitRenderBatches(Array.from({ length: 25 }, () => ({ duration: 0.1 }))).map(b => b.length)).toEqual([12, 12, 1])
+    expect(splitRenderBatches([])).toEqual([])
+  })
+})
+
+
+it('balances a short chapter across workers without changing its image timings', () => {
+  const images = Array.from({ length: 6 }, () => ({ duration: 1.5 }))
+  const batches = splitRenderBatches(images, 9 / 3)
+  expect(batches.map(batch => batch.length)).toEqual([2, 2, 2])
+  expect(batches.flat()).toEqual(images)
 })

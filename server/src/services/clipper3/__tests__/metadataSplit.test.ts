@@ -59,6 +59,24 @@ describe('pointer-only clipping and approved Metadata handoff',()=>{
  })
 })
 
+describe('Metadata jobs for redone pages',()=>{
+ async function redo(status:'pending'|'imported'){
+  await fs.mkdir(path.join(root,folder,'.studio-page-redo'),{recursive:true})
+  await fs.writeFile(path.join(root,folder,'.studio-page-redo',`${page}.json`),JSON.stringify({schema:'studio-page-redo/1',revision:'redo-1',series:'Series',chapter:'Chapter 001',chapterNumber:'1',page,sourceSha256:'x',sourceBytes:1,restartRevision:null,pageRevision:null,deviceId:null,requestedAt:new Date().toISOString(),status}))
+ }
+ it('names the finished redo so phones stop treating the page as rejected',async()=>{
+  const plain=JSON.parse((await reviewedJob()).payloadText)
+  expect(plain).not.toHaveProperty('studioRedoRevision')
+  await redo('imported')
+  const job=(await currentMetadataJobs(chapter,{restartRevision:null,pageRevision:null})).jobs[0]
+  expect(JSON.parse(job.payloadText).studioRedoRevision).toBe('redo-1');expect(job.revision).toBe(sha256(job.payloadText))
+ })
+ it('still refuses a page whose redo is pending',async()=>{
+  await reviewedJob();await redo('pending')
+  await expect(currentMetadataJobs(chapter,{restartRevision:null,pageRevision:null})).rejects.toThrow(/waiting for regenerated pointers/)
+ })
+})
+
 async function reviewedJob(empty=false) {
   const points=await pointers();if(empty)points.crops=[]
   await writeImagePoints(folder,page,points);await setDesktopReview(folder,true)

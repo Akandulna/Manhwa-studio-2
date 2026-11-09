@@ -11,7 +11,6 @@ import {managedChapterImage} from '../services/managedChapterAssets.js'
  */
 
 import { Router, Request, Response } from 'express'
-import { createHash } from 'crypto'
 import { reconcileQuietly } from '../services/diskReconcile.js'
 import { createReadStream, existsSync, statSync } from 'fs'
 import path from 'path'
@@ -38,9 +37,8 @@ import {
   type Export2Input
 } from '../services/editor2Export.js'
 import { NarrationLanguage, requestLanguage } from '../services/narrationLanguage.js'
-import { captureEditorTimelineSource, fetchPhoneTimelines, getEditorPrompt, saveEditorPrompt, sendEditorPackages } from '../services/phoneEditor.js'
-import { queueEditorPublish } from '../services/editorAutoPublish.js'
-import { retainEditorTimelineReset } from '../services/editorTimelineReset.js'
+import { fetchPhoneTimelines, getEditorPrompt, saveEditorPrompt, sendEditorPackages } from '../services/phoneEditor.js'
+import { storeEditorTimeline } from '../services/editorTimelineStore.js'
 import { editorWorkflowSession } from '../services/editorWorkflowStore.js'
 import { WorkflowReplyError } from '../services/editorWorkflow.js'
 
@@ -102,7 +100,7 @@ export function initVideoEditor2Routes(io: Server): Router {
     }
   })
 
-  /** GET /series/:seriesId/completion — saved compressed videos in this language. */
+  /** GET /series/:seriesId/completion — the user's Done mark in this language. */
   router.get('/series/:seriesId/completion', async (req: Request, res: Response) => {
     try {
       res.json(await getSeriesCompletion2(req.params.seriesId, requestLanguage(req)))
@@ -246,33 +244,8 @@ export function initVideoEditor2Routes(io: Server): Router {
       if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt)) {
         return res.status(400).json({ error: 'updatedAt (epoch ms) is required' })
       }
-      const chapterId = req.params.id
-      const language = requestLanguage(req)
-      const key = { chapterId_language: { chapterId, language } }
-      const existing = await prisma.editor2Timeline.findUnique({ where: key })
-      if (existing && existing.updatedAt.getTime() >= updatedAt) {
-        return res.json(toStored(existing))
-      }
-      const changed = existing?.json !== json || reset === true
-      const sourceSha256 = changed && json.trim() ? await captureEditorTimelineSource(chapterId, language) : null
-      const data = { json, processedJson, model: existing?.json.trim() === json.trim() && json.trim() ? existing.model : null, updatedAt: new Date(updatedAt) }
-      const outcome = await prisma.$transaction(async tx => {
-        const latest = await tx.editor2Timeline.findUnique({ where: key })
-        if (latest && latest.updatedAt.getTime() >= updatedAt) return { row: latest, publish: false }
-        const saved = await tx.editor2Timeline.upsert({
-          where: key, create: { chapterId, language, ...data }, update: data
-        })
-        if (changed) {
-          await retainEditorTimelineReset(tx.setting, chapterId, language, json.trim() ? undefined : saved.updatedAt.toISOString())
-          const editKey = `editor2-phone-timeline-edit:${chapterId}:${language}`
-          const value = JSON.stringify({ jsonSha256: createHash('sha256').update(json).digest('hex'), madeAt: saved.updatedAt.toISOString(), sourceSha256 })
-          await tx.setting.upsert({ where: { key: editKey }, create: { key: editKey, value }, update: { value } })
-        }
-        return { row: saved, publish: changed }
-      })
-      const row = outcome.row
-      // The saved edit and its durable publication intent commit together.
-      if (outcome.publish) queueEditorPublish(chapterId)
+      // Newest write wins; a changed timeline records its publication intent and goes to the phones.
+      const { row } = await storeEditorTimeline({ chapterId: req.params.id, language: requestLanguage(req), json, processedJson, updatedAt, reset })
       res.json(toStored(row))
     } catch (error) {
       console.error('[videoEditor2] saving stored timeline failed:', error)

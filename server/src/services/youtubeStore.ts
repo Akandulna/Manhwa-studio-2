@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { createHash, randomUUID } from 'node:crypto'
 import type { YouTubeGuideline, YouTubeGuidelineKind, YouTubeGuidelines, YouTubeWorkspace } from './youtubeTypes.js'
 import { buildTitlePrompt, parseTitleResponse, titleKey, validateTitle, YouTubeTitleError } from './youtubeTitles.js'
-import { buildDescriptionPrompt, parseDescriptionPair, validateDescription, validateHinglishDescription } from './youtubeDescriptions.js'
+import { buildDescriptionPrompt, parseDescriptionPair, validateDescription, validateHinglishDescription, assertDescriptionOmitsSeriesNames, descriptionSeriesNames, DESCRIPTION_IDENTITY_POLICY } from './youtubeDescriptions.js'
 import type { YouTubeDescriptionRequest } from './youtubeTypes.js'
 
 export const MAX_GUIDELINE_BYTES = 10 * 1024 * 1024
@@ -329,7 +329,7 @@ export class YouTubeStore {
       id: randomUUID(), title: workspace.selectedTitle, seriesName: source?.seriesName ?? latest?.seriesName ?? seriesName,
       createdAt: new Date().toISOString(), guidelineVersion: guideline.id, guidelineSha256: guideline.sha256,
       research: source?.response?.research ?? latest?.response?.research ?? null,
-      feedback, prompt: '', importedAt: null, importedDescription: null, importedHinglishDescription: null, outputVersion: 2
+      feedback, prompt: '', importedAt: null, importedDescription: null, importedHinglishDescription: null, outputVersion: 2, identityPolicy: DESCRIPTION_IDENTITY_POLICY
     }
     request.prompt = buildDescriptionPrompt(request, workspace, guideline)
     workspace.descriptions.requests.push(request)
@@ -345,7 +345,7 @@ export class YouTubeStore {
       if (!workspace.selectedTitle) throw new YouTubeError('Choose a title before creating its description.')
       if (input.reuse === true && !feedback) {
         const index = await this.index()
-        if (workspace.descriptions.requests.some(item => item.title === workspace.selectedTitle && !item.importedAt && item.outputVersion === 2 && item.guidelineVersion === index.description)) return workspace
+        if (workspace.descriptions.requests.some(item => item.title === workspace.selectedTitle && !item.importedAt && item.outputVersion === 2 && item.identityPolicy === DESCRIPTION_IDENTITY_POLICY && item.guidelineVersion === index.description)) return workspace
       }
       await this.appendDescriptionRequest(workspace, seriesName, feedback)
       return this.saveWorkspace(workspace)
@@ -359,6 +359,9 @@ export class YouTubeStore {
       if (!request) throw new YouTubeError('Description prompt not found for this series.', 404)
       const pair = parseDescriptionPair(input.response, request, seriesId)
       const text = pair.english
+      const names = descriptionSeriesNames(workspace)
+      assertDescriptionOmitsSeriesNames(text, names)
+      assertDescriptionOmitsSeriesNames(pair.hinglish ?? workspace.hinglishDescription, names)
       if (request.importedAt) {
         if (request.importedDescription === text && (request.importedHinglishDescription ?? null) === pair.hinglish) return workspace
         throw new YouTubeError('This prompt already has a description. Prepare a new prompt to regenerate it.', 409)
@@ -387,6 +390,7 @@ export class YouTubeStore {
       if (variant !== 'en' && variant !== 'hinglish') throw new YouTubeError('Choose the English or Hinglish description.')
       const text = variant === 'hinglish' ? validateHinglishDescription(input.text, workspace.description) : validateDescription(input.text)
       if (variant === 'en' && workspace.hinglishDescription) validateHinglishDescription(workspace.hinglishDescription, text)
+      assertDescriptionOmitsSeriesNames(text, descriptionSeriesNames(workspace))
       const current = variant === 'en' ? workspace.description : workspace.hinglishDescription
       const needsUpdate = variant === 'en' ? workspace.descriptionNeedsUpdate : workspace.hinglishDescriptionNeedsUpdate
       if (text === current && !needsUpdate) return workspace
@@ -404,6 +408,9 @@ export class YouTubeStore {
       this.checkRevision(workspace, input.expectedRevision)
       const version = workspace.descriptions.versions.find(item => item.id === input.versionId)
       if (!version) throw new YouTubeError('Description version not found for this series.', 404)
+      const names = descriptionSeriesNames(workspace)
+      assertDescriptionOmitsSeriesNames(version.text, names)
+      assertDescriptionOmitsSeriesNames('hinglishText' in version ? version.hinglishText : workspace.hinglishDescription, names)
       workspace.descriptions.selectedVersionId = version.id; workspace.description = version.text
       workspace.descriptionNeedsUpdate = Boolean(version.text) && (version.title !== workspace.selectedTitle || Boolean(version.englishNeedsUpdate))
       if ('hinglishText' in version) workspace.hinglishDescription = version.hinglishText ?? null

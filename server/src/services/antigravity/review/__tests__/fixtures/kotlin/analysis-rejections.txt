@@ -1,0 +1,100 @@
+wrong-job
+GPT_PAGE_MISMATCH|job_id|job_id is "nope" but this page's package says "solo_leveling-ch010-page_003-0123456789a…" — the reply is for a different page or an older version of it|null
+--warnings--
+UNKNOWN_REVIEW_FLAG|candidates[0].review_flags|candidate-01: review flag "weird_flag" is not in the vocabulary; kept as a note only|candidate-01
+--candidates--
+null
+==
+oob
+GPT_COORDINATES_INVALID|candidates[0].bottom_right.x|candidate-01: bottom_right.x 900 is outside slice-01's width 0–800|candidate-01
+--warnings--
+
+--candidates--
+null
+==
+unknown-slice
+GPT_COORDINATES_INVALID|candidates[0].top_left.slice_id|candidate-01: top_left.slice_id "slice-07" is not one of this page's slices (slice-01, slice-02, slice-03)|candidate-01
+--warnings--
+
+--candidates--
+null
+==
+dup
+GPT_JSON_INVALID|candidates[1].candidate_id|Duplicate candidate_id "candidate-01"|candidate-01
+--warnings--
+UNKNOWN_REVIEW_FLAG|candidates[0].review_flags|candidate-01: review flag "weird_flag" is not in the vocabulary; kept as a note only|candidate-01
+UNKNOWN_REVIEW_FLAG|candidates[1].review_flags|candidate-01: review flag "weird_flag" is not in the vocabulary; kept as a note only|candidate-01
+--candidates--
+null
+==
+empty-complete
+
+--warnings--
+EMPTY_CANDIDATES|candidates|ChatGPT proposed no crops. Export will need an explicit confirmation that this page has no eligible artwork.|null
+--candidates--
+
+==
+empty-incomplete
+
+--warnings--
+EMPTY_CANDIDATES|candidates|ChatGPT proposed no crops. Export will need an explicit confirmation that this page has no eligible artwork.|null
+GPT_VISUAL_UNCERTAINTY|page_inspection_complete|ChatGPT says it could not fully inspect the page — check its page flags and sweep the page yourself|null
+--candidates--
+
+==
+fence
+
+--warnings--
+MARKDOWN_FENCE_STRIPPED||The reply was wrapped in a Markdown code fence; the fence was removed|null
+UNKNOWN_REVIEW_FLAG|candidates[0].review_flags|candidate-01: review flag "weird_flag" is not in the vocabulary; kept as a note only|candidate-01
+--candidates--
+candidate-01|framed_shot|Box(x0=40, y0=100, x1=760, y1=900)|[slice-01]|[boundary_uncertain]|[weird_flag]|Visible border|
+==
+messy
+GPT_JSON_INVALID|candidates[1].candidate_id|candidates[1].candidate_id must be a non-empty string (got "")|null
+GPT_COORDINATES_INVALID|candidates[1].top_left.x|#2: top_left.x must be a whole pixel (got 1.5)|#2
+GPT_COORDINATES_INVALID|candidates[1].top_left.y|#2: top_left.y must be a number (got "3")|#2
+GPT_COORDINATES_INVALID|candidates[1].bottom_right|#2: bottom_right must be an object {slice_id, x, y} (got 5)|#2
+GPT_JSON_INVALID|candidates[1].reason|#2: reason must be a non-empty string (got "   ")|#2
+GPT_JSON_INVALID|candidates[1].visual_evidence|#2: visual_evidence must be a string (got 7)|#2
+GPT_COORDINATES_INVALID|candidates[2]|x2: box (100,100)–(50,100) has no area — the bottom-right corner must be below and right of the top-left|x2
+GPT_JSON_INVALID|candidates[2].reason|x2: reason "!!!" has no usable characters|x2
+--warnings--
+UNKNOWN_FIELD|bonus|Unknown field "bonus" was ignored|null
+UNKNOWN_FIELD|candidates[0].extra|Unknown field "extra" on x1 was ignored|x1
+REASON_NORMALIZED|candidates[0].reason|x1: reason "Framed Reaction!" normalized to "framed_reaction"|x1
+EVIDENCE_MISSING|candidates[0].visual_evidence|x1: no visual_evidence given|x1
+UNKNOWN_REVIEW_FLAG|candidates[0].review_flags|x1: review flag "odd" is not in the vocabulary; kept as a note only|x1
+EVIDENCE_MISSING|candidates[2].visual_evidence|x2: no visual_evidence given|x2
+--candidates--
+null
+==
+canonical
+GPT_COORDINATES_INVALID|candidates[0].bounds|a: y 0–5001 runs outside the page height 0–5000|a
+--warnings--
+EVIDENCE_MISSING|candidates[0].visual_evidence|a: no visual_evidence given|a
+EVIDENCE_MISSING|candidates[1].visual_evidence|b: no visual_evidence given|b
+--candidates--
+null
+==
+identity
+GPT_JSON_INVALID|schema_version|schema_version must be "chatgpt-analysis/1.0" (got "chatgpt-analysis/2")|null
+GPT_PAGE_MISMATCH|job_id|job_id is 5 but this page's package says "solo_leveling-ch010-page_003-0123456789a…" — the reply is for a different page or an older version of it|null
+GPT_PAGE_MISMATCH|source_sha256|source_sha256 is null but this page's package says "0123456789abcdef0123456789abcdef01234567…" — the reply is for a different page or an older version of it|null
+GPT_PAGE_MISMATCH|source_width|source_width is true but this page's package says 800 — the reply is for a different page or an older version of it|null
+GPT_PAGE_MISMATCH|source_height|source_height is "5000" but this page's package says 5000 — the reply is for a different page or an older version of it|null
+GPT_COORDINATES_INVALID|coordinate_system|coordinate_system must be "slice_local_pixels" or "canonical_original_pixels" (got "pixels")|null
+GPT_JSON_INVALID|page_inspection_complete|page_inspection_complete must be true or false (got "yes")|null
+GPT_JSON_INVALID|page_review_flags|page_review_flags must be an array of strings|null
+GPT_JSON_INVALID|candidates|candidates must be an array (got an object)|null
+--warnings--
+
+--candidates--
+null
+==
+not-object
+GPT_JSON_INVALID||The reply must be one JSON object (got an array)|null
+--warnings--
+
+--candidates--
+null

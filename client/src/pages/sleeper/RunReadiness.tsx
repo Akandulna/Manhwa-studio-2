@@ -59,36 +59,40 @@ export function useRunReadiness(
   kind: PhoneRunKind | null,
   seriesId: string,
   language: NarrationLanguage,
-  onRunNarration: () => void
+  onRunNarration: () => void,
+  part?: import('@/lib/api').NarrationPartChoice
 ): RunReadiness {
   const { socket } = useSocket()
   const { toast } = useToast()
   const [readiness, setReadiness] = useState<PhoneRunReadiness | null>(null)
+  const [loadedTarget, setLoadedTarget] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [job, setJob] = useState<PhoneSendJob | null>(null)
   const [fixing, setFixing] = useState<RunReadiness['fixing']>(null)
   // Only Editor 2.0 and the voiceover differ by language: the others don't reload on a change of it.
   const lang = kind === 'editor' || kind === 'voiceover' ? language : 'en'
-  const target = kind && seriesId ? `${kind}:${seriesId}:${lang}` : null
+  const target = kind && seriesId ? `${kind}:${seriesId}:${lang}:${part ?? 'default'}` : null
+  const checked = loadedTarget === target ? readiness : null
   const current = useRef(target)
   current.current = target
 
   const load = useCallback(async () => {
     if (!kind || !seriesId) return
-    const asked = `${kind}:${seriesId}:${lang}`
+    const asked = `${kind}:${seriesId}:${lang}:${part ?? 'default'}`
     setLoading(true)
     try {
-      const next = await r2Api.getRunReadiness(kind, seriesId, lang)
+      const next = await r2Api.getRunReadiness(kind, seriesId, lang, part)
       if (current.current !== asked) return
       setReadiness(prev => (prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next))
+      setLoadedTarget(asked)
       setError(null)
     } catch (e) {
       if (current.current === asked) setError(e instanceof Error ? e.message : String(e))
     } finally {
       if (current.current === asked) setLoading(false)
     }
-  }, [kind, seriesId, lang])
+  }, [kind, seriesId, lang, part])
 
   useEffect(() => {
     setReadiness(null)
@@ -153,7 +157,7 @@ export function useRunReadiness(
     }
   }, [send, load])
 
-  const fixable = (readiness?.items ?? []).filter(i => i.fix && i.fix.action !== 'run_narration' && (i.state === 'missing' || i.state === 'waiting'))
+  const fixable = (checked?.items ?? []).filter(i => i.fix && i.fix.action !== 'run_narration' && (i.state === 'missing' || i.state === 'waiting'))
 
   const fixAll = useCallback(async () => {
     const items = [...fixable].sort((a, b) => FIX_ORDER.indexOf(a.fix!.action) - FIX_ORDER.indexOf(b.fix!.action))
@@ -173,7 +177,7 @@ export function useRunReadiness(
     }
   }, [fixable, send, load])
 
-  return { readiness, loading, error, job, fixing, fixable, reload: load, fix, fixAll }
+  return { readiness: checked, loading: loading || !!target && loadedTarget !== target, error, job, fixing, fixable, reload: load, fix, fixAll }
 }
 
 const STATE_ICON: Record<PhoneReadinessState, { icon: typeof CheckCircle2; className: string }> = {

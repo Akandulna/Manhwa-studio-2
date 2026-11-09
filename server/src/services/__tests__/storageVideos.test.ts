@@ -3,10 +3,17 @@ import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 
-vi.mock('../../index.js', () => ({ prisma: { series: {
-  findUnique: async () => ({ id: 's', rootFolder: 'Demo' }),
-  findMany: async () => [{ id: 's', title: 'Demo', rootFolder: 'Demo', chapters: [] }]
-} } }))
+const settings = vi.hoisted(() => new Map<string, string>())
+vi.mock('../../index.js', () => ({ prisma: {
+  series: {
+    findUnique: async () => ({ id: 's', rootFolder: 'Demo' }),
+    findMany: async () => [{ id: 's', title: 'Demo', rootFolder: 'Demo', chapters: [] }]
+  },
+  setting: {
+    findUnique: async ({ where }: any) => settings.has(where.key) ? { value: settings.get(where.key) } : null,
+    upsert: async ({ where, create }: any) => { settings.set(where.key, create.value) }
+  }
+} }))
 
 const { deleteCompressedSeriesVideos, scanStorage, removeWithin } = await import('../storageService.js')
 let root: string
@@ -23,6 +30,7 @@ beforeAll(async () => {
   process.env.DOWNLOAD_ROOT = root
 })
 beforeEach(async () => {
+  settings.clear()
   await fs.rm(path.join(root, 'Demo'), { recursive: true, force: true })
   await write('_video2/ch001_demo.mp4', 'original')
 })
@@ -42,7 +50,9 @@ describe('render cleanup after compression', () => {
     await write('_video2_hi/ch001_demo.mp4', 'hindi')
     const overview = await scanStorage()
     expect(overview.series[0].videoCleanupFolders.find(f => f.dir === '_video2')).toEqual({
-      dir: '_video2', compressedVideos: [`${name}/Finished cut.MP4`], renderedFileCount: 2, renderedBytes: 18
+      dir: '_video2', compressedVideos: [`${name}/Finished cut.MP4`],
+      checkpointAt: expect.any(String), checkpointVideos: [`${name}/Finished cut.MP4`],
+      renderedFileCount: 2, renderedBytes: 18, coveredFileCount: 2, coveredBytes: 18
     })
     expect(await deleteCompressedSeriesVideos('s', '_video2')).toEqual({ freedBytes: 18, deletedFiles: 2 })
     await expect(read('_video2/ch001_demo.mp4')).rejects.toThrow()
@@ -63,10 +73,33 @@ describe('render cleanup after compression', () => {
     }
   })
 
-  it('rechecks disk at deletion time when the compressed copy was removed after scanning', async () => {
+  it('keeps the checkpoint after the user deletes the compressed video', async () => {
     await write('_video2/compressed/final.mkv')
-    expect((await scanStorage()).series[0].videoCleanupFolders[1].compressedVideos).toHaveLength(1)
-    await fs.unlink(path.join(root, 'Demo/_video2/compressed/final.mkv'))
+    const checkpointAt = (await scanStorage()).series[0].videoCleanupFolders[1].checkpointAt
+    expect(checkpointAt).toEqual(expect.any(String))
+    await fs.rm(path.join(root, 'Demo/_video2/compressed'), { recursive: true })
+    const folder = (await scanStorage()).series[0].videoCleanupFolders[1]
+    expect(folder).toMatchObject({ compressedVideos: [], checkpointAt, checkpointVideos: ['compressed/final.mkv'], coveredFileCount: 1 })
+    expect(await deleteCompressedSeriesVideos('s', '_video2')).toEqual({ freedBytes: 8, deletedFiles: 1 })
+    await expect(read('_video2/ch001_demo.mp4')).rejects.toThrow()
+  })
+
+  it('keeps renders written after the checkpoint once the compressed video is gone', async () => {
+    await write('_video2/compressed/final.mkv')
+    await scanStorage()
+    await fs.rm(path.join(root, 'Demo/_video2/compressed'), { recursive: true })
+    await write('_video2/ch002_demo.mp4', 'new render')
+    const later = new Date(Date.now() + 60_000)
+    await fs.utimes(path.join(root, 'Demo/_video2/ch002_demo.mp4'), later, later)
+    expect((await scanStorage()).series[0].videoCleanupFolders[1]).toMatchObject({ renderedFileCount: 2, coveredFileCount: 1 })
+    expect(await deleteCompressedSeriesVideos('s', '_video2')).toEqual({ freedBytes: 8, deletedFiles: 1 })
+    expect(await read('_video2/ch002_demo.mp4')).toBe('new render')
+  })
+
+  it('records a checkpoint per video folder', async () => {
+    await write('_video2_hi/compressed/hindi.mp4')
+    await scanStorage()
+    await fs.rm(path.join(root, 'Demo/_video2_hi/compressed'), { recursive: true })
     await expect(deleteCompressedSeriesVideos('s', '_video2')).rejects.toThrow('nonempty video')
     expect(await read('_video2/ch001_demo.mp4')).toBe('original')
   })

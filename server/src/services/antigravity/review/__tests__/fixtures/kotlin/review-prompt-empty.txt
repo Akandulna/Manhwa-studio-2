@@ -1,0 +1,86 @@
+REVIEW ROUND for "page_003"
+
+Use the 3 slices of this page already attached earlier in this conversation (slice-01, slice-02, slice-03, 800×5000 px in total).
+
+Below are the crops currently proposed for this page. Act as the reviewer. Compare every crop with the page and decide its FINAL form:
+- keep it exactly (same corners),
+- adjust its corners so it holds the complete shot — whole faces, hands, weapons, effects — and nothing from the neighbouring shot; trim any top or bottom stretch that is only bubbles, narration, a caption/system text window or empty background (the edge goes where the artwork starts and ends),
+- split it when it actually contains separate shots (return each part as a new crop with "from_keys": [its key]),
+- merge crops that are really one continuous shot (return one crop with "key" = one of them and "from_keys" = the others),
+- remove it (list its key in "removed_keys") when it is not an independently readable illustrated moment.
+SHOT CONTINUITY — apply before choosing crop boundaries
+- One continuous composition stays ONE crop, including all characters and objects sharing it. Start with real drawn panel borders and gutters. Separate unframed shots only when there is a visible artwork break or a distinct camera view/inset, not merely a change of subject, scale, expression, shading or background within the same composition.
+- Never place an internal boundary through a continuous face, hair, body, hand, clothing or object to create two crops. A child's hair above and face/body below are one shot; attendants behind a child are one group shot; a hand and the object it interacts with remain together in one continuous scene.
+- A head, hair, hand, body or SFX that breaks out past a panel's drawn border belongs to that panel: one crop holds the panel and its pop-out. The frame line the figure crosses is not a split, and a change of background pattern or effect inside one panel is not one either.
+- Two crops never meet edge to edge on one line unless a drawn panel border, gutter or clear artwork break runs along that whole line. If you are about to end one crop exactly where the next begins, check that line first: when the same figure, object or panel continues across it, make it one crop.
+- A slice seam, image edge between uploads, top/middle/bottom hint, crop label, target crop count or aspect ratio is not a drawn panel boundary. Keep a continuous shot whole across slices, however tall it is.
+- Speech bubbles, narration and SFX never justify a crop or a split.
+- Before accepting separate crops, trace the proposed dividing edge on the source artwork. If subject outlines or the same composition continue across it without a real shot boundary, use one enclosing crop. Matching backgrounds alone do not prove continuity: retain separate panels and genuine distinct shots.
+- Size and height checks request inspection, never a split. If the boundary cannot be verified, keep the complete continuous composition and flag boundary_uncertain rather than inventing a cut.
+ADJACENT-CROP AUDIT: inspect every shared or nearby edge between proposed crops, even when neither has an automatic check. The coloured boxes and their labels are proposals, not panel borders. If two boxes divide the same head, body, hand/object interaction, group composition or framed panel, merge them into one complete shot: keep one key and list the other keys in from_keys. A SHARED_EDGE check means two boxes meet with no gutter: merge them unless you can see a drawn panel border, gutter or clear artwork break along that line, and only then tick its token. Trace the source artwork before keeping the split; preserve genuine separate panels and insets. Review the merged crop as a whole even if its height triggers a size check.
+ALWAYS remove a crop whose content is only speech/thought/narration bubbles, caption boxes or SFX over a plain, gradient, sky, sparkle, particle, glow or speed-line background, even if its checks pass.
+
+CHECKS: each crop lists automatic checks with a token. Look at what each one points to. If the crop is fine despite it (or after your fix), put its token in "checks_reviewed". Leave a token out if you could not verify it.
+
+SWEEP: go through the whole page top to bottom, independently of the crops below, for artwork no crop holds — small inserts, grayscale panels, objects, landscapes, effects shots. These uncovered stretches are inked enough to hold artwork:
+  slice-01 y 0 → slice-03 y 904 (44% ink)
+Add a crop (key null, no from_keys) for any real artwork there. Ink includes bubbles and lettering: a stretch holding only bubbles, narration or SFX over background stays uncovered. Set "sweep_done": true only after you have actually swept the page.
+
+DESCRIPTIONS: write none. Descriptions and story associations are generated later by the separate AI Studio Metadata flow. Return crop geometry only.
+
+MEASURING: corners are in the pixel grid of the slice each corner falls in — { "slice_id", "x", "y" } — exactly as in your first answer. bottom_right is exclusive. Whole pixels only.
+
+RULES FOR THE REPLY:
+- "crops" is the COMPLETE final list for the page.
+- Every current key must appear exactly once: as a crop's "key", inside a "from_keys", or in "removed_keys".
+- Copy job_id, source_sha256 and review_revision exactly: solo_leveling-ch010-page_003-0123456789ab / 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef / 1.
+- Return ONE JSON object (clipper-review-geometry/1.0), no prose, no Markdown fences. Shape (example values):
+{
+  "schema_version": "clipper-review-geometry/1.0",
+  "job_id": "solo_leveling-ch010-page_003-0123456789ab",
+  "source_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "review_revision": 1,
+  "coordinate_system": "slice_local_pixels",
+  "crops": [
+    {
+      "key": "candidate-01",
+      "reason": "framed_reaction",
+      "top_left": {
+        "slice_id": "slice-01",
+        "x": 0,
+        "y": 0
+      },
+      "bottom_right": {
+        "slice_id": "slice-01",
+        "x": 800,
+        "y": 500
+      },
+      "checks_reviewed": []
+    },
+    {
+      "key": null,
+      "from_keys": [
+        "<key of the crop this was split from, or the keys merged into it; omit for a brand-new crop>"
+      ],
+      "reason": "new_or_split_part",
+      "top_left": {
+        "slice_id": "slice-01",
+        "x": 0,
+        "y": 0
+      },
+      "bottom_right": {
+        "slice_id": "slice-01",
+        "x": 100,
+        "y": 100
+      },
+      "checks_reviewed": []
+    }
+  ],
+  "removed_keys": [],
+  "sweep_done": true,
+  "page_has_no_artwork": false,
+  "notes": ""
+}
+
+CURRENT CROPS:
+[]

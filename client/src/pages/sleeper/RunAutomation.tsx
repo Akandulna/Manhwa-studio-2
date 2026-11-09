@@ -5,7 +5,7 @@ import { useSeriesOrder } from '@/hooks/useSeriesOrder'
  * timelines, Voiceover), then how (its series, the profile it starts in, and
  * the choices that run has: ChatGPT or Gemini, one prompt or four steps, ChatGPT's mode, model and
  * effort on plans that have them (PhoneProfile.tsx), tabs, language, one phone
- * or split between them). Image Clipper, Editor 2.0 and the voiceover can be
+ * or split between them). Image Clipper, Metadata, Editor 2.0 and the voiceover can be
  * split between phones (never the narration scripts: each chapter's prompt goes
  * on from the one before's summary, so one phone writes them in order): each phone has
  * its own profile picker, so each can work in an account of its own, and Start
@@ -21,7 +21,7 @@ import { useSeriesOrder } from '@/hooks/useSeriesOrder'
  * starts the run by itself once the phone has it.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { AlertTriangle, ArrowLeft, Clapperboard, Loader2, Mic, PenLine, Play, Scissors, Send, type LucideIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -30,6 +30,8 @@ import {
   r2Api,
   seriesApi,
   type Series,
+  type NarrationPartChoice,
+  type NarrationRunScope,
   type PhoneAutomationOptions,
   type PhoneChatGptSettings,
   type PhoneClipperAi,
@@ -37,13 +39,16 @@ import {
   type PhoneOverview,
   type PhoneOverviewPhone,
   type PhoneOverviewSeries,
+  type PhoneReadinessItem,
   type PhoneRunKind,
+  type PhoneRunReadiness,
   type PhoneScreen,
   type PhoneSplitPlan,
   type PhoneSplitTarget,
   type PhoneUploadProfile,
   type RelayStatus
 } from '@/lib/api'
+import { defaultMetadataPart, metadataParts, scopeMetadata, type MetadataBlockedChapter, type MetadataChapter, type MetadataPart, type MetadataPartChoice } from '@/lib/metadataParts'
 import { LANGUAGE_LABEL, NARRATION_LANGUAGES, type NarrationLanguage } from '@/lib/narrationLanguage'
 import { cn } from '@/lib/utils'
 import { ChatGptChoices, hasChoices, NO_CHATGPT_CHOICES, PhoneProfilePicker } from './PhoneProfile'
@@ -77,7 +82,7 @@ interface Automation {
 
 export const AUTOMATIONS: Automation[] = [
   {kind:'metadata',name:'Metadata',icon:PenLine,does:'Creates descriptions and English-script links from reviewed crops',ai:'AI Studio only',
-   tabs:{unit:'page'},fixed:'Review and cut chapters in Studio first. Select approved chapters below. The phone recreates temporary crops from originals and deletes them after saving metadata; only JSON is synchronized.'},
+   tabs:{unit:'page'},split:true,fixed:'Review and cut chapters in Studio first. Select approved chapters below. The phone recreates temporary crops from originals and deletes them after saving metadata; only JSON is synchronized.'},
   {
     kind: 'narration',
     name: 'Narration scripts',
@@ -127,6 +132,7 @@ export const AUTOMATION_NAME = Object.fromEntries(AUTOMATIONS.map(a => [a.kind, 
 /** What "Split across N" shares out, for each run. */
 const SPLIT_HINT: Partial<Record<PhoneRunKind, string>> = {
   clipper: 'Shares the series’ chapters left out between the phones, balanced by pages, in reading order: no page is clipped twice.',
+  metadata: 'Shares the approved chapters picked above between the selected phones, balanced by pages, in reading order: no chapter gets its metadata twice. Each phone needs the chapter’s original pages and English script.',
   editor: 'Shares the chapters waiting for their timeline out between the phones, in reading order: no chapter is made twice.',
   voiceover: 'Shares the chapters waiting for their voiceover out between the phones with their newest script, in reading order: no split is voiced twice.'
 }
@@ -159,6 +165,38 @@ function takesShare(kind: PhoneRunKind, phone: PhoneOverviewPhone): boolean {
   if (automation?.chapterRuns) return automation.chapterRuns.includes(kind)
   // Builds from before `chapterRuns` took a share of Editor 2.0 when they said its tabs.
   return kind === 'editor' && !!automation?.editor
+}
+
+/**
+ * Metadata's checklist for the picked part only: its eligible count and its not-ready chapters.
+ * Chapters of other parts never show as blockers. Not-ready chapters are notes while some
+ * chapter of the part can run (they're simply not selectable), blockers when none can.
+ */
+function scopedMetadataReadiness(
+  check: PhoneRunReadiness,
+  parts: MetadataPart[],
+  part: MetadataPartChoice,
+  scope: { ready: MetadataChapter[]; blocked: MetadataBlockedChapter[] }
+): PhoneRunReadiness {
+  const range = parts.find(p => p.part === part)
+  const where = part === 'all' ? 'All parts' : `Part ${part}${range ? ` (Ch. ${range.from}–${range.to})` : ''}`
+  const eligible = scope.ready.length
+  const items: PhoneReadinessItem[] = [
+    {
+      id: 'metadata-ready',
+      label: 'Reviewed and cut chapters',
+      state: eligible ? 'ready' : 'blocked',
+      detail: `${where}: ${eligible} chapter${eligible === 1 ? '' : 's'} eligible${scope.blocked.length ? `, ${scope.blocked.length} not ready yet` : ''}. Metadata uses AI Studio, on one phone or split across the selected phones. Synchronize original pages and the English script on each phone first.`
+    },
+    ...scope.blocked.map((chapter): PhoneReadinessItem => ({
+      id: `metadata-${chapter.id}`,
+      label: `Chapter ${chapter.number}`,
+      state: eligible ? 'note' : 'blocked',
+      detail: chapter.reason,
+      link: { to: '/clipper3', label: 'Review and cut in Image Clipper' }
+    }))
+  ]
+  return { ...check, items, ready: items.every(i => i.state === 'ready' || i.state === 'note'), canWork: eligible > 0 }
 }
 
 /** Chapters, short and in order: "Ch 1–4, 7"; folders without a number by name. */
@@ -210,6 +248,63 @@ function SplitPlanView({ plan }: { plan: PhoneSplitPlan }) {
           )
         })}
       </ul>
+    </div>
+  )
+}
+
+const LINE = 'bg-muted-foreground/40'
+/** The column gap the Voiceover → Metadata arrow runs through (2.5rem), so each column's centre is 25% ∓ 0.625rem. */
+const LEFT_CENTRE = 'left-[calc(25%-0.625rem)]'
+const RIGHT_CENTRE = 'right-[calc(25%-0.625rem)]'
+
+function ArrowTip({ right }: { right?: boolean }) {
+  return right
+    ? <span className="h-0 w-0 border-y-[5px] border-l-[6px] border-y-transparent border-l-muted-foreground/40" />
+    : <span className="h-0 w-0 border-x-[5px] border-t-[6px] border-x-transparent border-t-muted-foreground/40" />
+}
+
+function DownArrow({ className }: { className?: string }) {
+  return (
+    <span aria-hidden className={cn('flex flex-col items-center', className)}>
+      <span className={cn('w-[1.5px] flex-1', LINE)} />
+      <ArrowTip />
+    </span>
+  )
+}
+
+/**
+ * The runs in the order work goes through them: narration scripts → voiceover, Image Clipper → metadata,
+ * voiceover → metadata, and voiceover and metadata both → Editor 2.0 timelines. [card] draws one run's tile;
+ * the tiles stay in reading order for keyboards and screen readers, and the connectors are decoration.
+ */
+export function AutomationFlow({ card }: { card: (kind: PhoneRunKind) => ReactNode }) {
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_2.5rem_minmax(0,1fr)]">
+      {card('narration')}
+      <span />
+      {card('clipper')}
+
+      <DownArrow className="h-7" />
+      <span />
+      <DownArrow className="h-7" />
+
+      {card('voiceover')}
+      <span aria-hidden className="flex items-center px-1">
+        <span className={cn('h-[1.5px] flex-1', LINE)} />
+        <ArrowTip right />
+      </span>
+      {card('metadata')}
+
+      <div aria-hidden className="relative col-span-3 h-9">
+        <span className={cn('absolute top-0 h-1/2 w-[1.5px] -translate-x-1/2', LINE, LEFT_CENTRE)} />
+        <span className={cn('absolute top-0 h-1/2 w-[1.5px] translate-x-1/2', LINE, RIGHT_CENTRE)} />
+        <span className={cn('absolute top-1/2 h-[1.5px]', LINE, LEFT_CENTRE, RIGHT_CENTRE)} />
+        <DownArrow className="absolute bottom-0 left-1/2 top-1/2 -translate-x-1/2" />
+      </div>
+
+      <div className="col-span-3 flex justify-center">
+        <div className="flex w-[calc(50%-1.25rem)] flex-col">{card('editor')}</div>
+      </div>
     </div>
   )
 }
@@ -282,6 +377,17 @@ export function EditorSettings({ ai, smallBatches, onAiChange, onSmallBatchesCha
     <Choices label="AI" choices={EDITOR_AI_CHOICES} value={ai} onChange={onAiChange} disabled={disabled} />
     <Choices label="Method" choices={EDITOR_METHOD_CHOICES} value={smallBatches ? 'batches' : 'full'} onChange={v => onSmallBatchesChange(v === 'batches')} disabled={disabled} />
   </>
+}
+
+export function NarrationPartChoices({ scope, onChange, allHint, disabled }: {
+  scope: NarrationRunScope; onChange: (part: NarrationPartChoice) => void; allHint?: string; disabled?: string
+}) {
+  return <Choices label="Part" value={String(scope.part)} onChange={value => onChange(value === 'all' ? 'all' : Number(value))} disabled={disabled}
+    choices={[
+      ...scope.parts.map(part => ({ value: String(part.number), label: `Part ${part.number}`,
+        hint: `Chapters ${part.first}–${part.last} only · ${part.chapters.length} chapters.${part.complete ? ' Marked complete or already scripted.' : ''}` })),
+      { value: 'all', label: 'All chapters', hint: allHint ?? 'Checks every available chapter, including unfinished English or Hinglish scripts in earlier parts.' }
+    ]} />
 }
 
 function TabChoices({ value, onChange, each, unit, disabled }: {
@@ -400,6 +506,8 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
   const choosesEditor = editorLast?.providers?.includes('chatgpt') && editorLast.providers.includes('aistudio') && typeof editorLast.smallBatches === 'boolean'
   const [language, setLanguage] = useState<NarrationLanguage>('en')
   const [split, setSplit] = useState(false)
+  // "Selected devices": the phones a split goes to, every startable phone until some are unticked.
+  const [unselected, setUnselected] = useState<Set<string>>(new Set())
   const [chatGpt, setChatGpt] = useState<PhoneChatGptSettings>(last?.chatGpt ?? NO_CHATGPT_CHOICES)
   const [editorChatGpt, setEditorChatGpt] = useState<PhoneChatGptSettings>(editorLast?.chatGpt ?? NO_CHATGPT_CHOICES)
   // Phones a profile selection is on its way to (by device id, '' for this one when it has none).
@@ -433,35 +541,84 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
     setPicked(p => ({ ...p, narration: seriesId }))
     setKind('narration')
   }, [seriesId])
-  const readiness = useRunReadiness(automation ? automation.kind : null, seriesId, language, runNarration)
+  const [narrationPartBySeries, setNarrationPartBySeries] = useState<Record<string, NarrationPartChoice>>({})
+  const narrationPart = kind === 'narration' ? narrationPartBySeries[seriesId] : undefined
+  // The voiceover voices every unfinished chapter unless a part is picked (then only that part's chapters).
+  const [voiceoverPartBySeries, setVoiceoverPartBySeries] = useState<Record<string, NarrationPartChoice>>({})
+  const voiceoverPart = kind === 'voiceover' ? voiceoverPartBySeries[seriesId] : undefined
+  const seriesReadiness = useRunReadiness(automation ? automation.kind : null, seriesId, language, runNarration, kind === 'voiceover' ? voiceoverPart : narrationPart)
+  const narrationScope = kind === 'narration' ? seriesReadiness.readiness?.narrationScope : undefined
+  // Lock the default once loaded, so live receipts cannot move a pending start to another part.
+  useEffect(() => {
+    if (kind === 'narration' && narrationPart === undefined && narrationScope) {
+      setNarrationPartBySeries(previous => ({ ...previous, [seriesId]: narrationScope.part }))
+    }
+  }, [kind, seriesId, narrationPart, narrationScope])
+  const outsideNarration = narrationScope ? overview.runs.filter(run => run.kind === 'narration' && run.seriesId === seriesId && run.device === phone.id)
+    .flatMap(run => run.tabs).find(tab => !narrationScope.chapters.includes(tab.chapter)) : undefined
+  const narrationBlocked = kind === 'narration' && (!!outsideNarration || !phone.id || !phone.automation?.chapterRuns?.includes('narration') ||
+    seriesReadiness.loading || !narrationScope?.chapters.length)
+  const voiceoverScope = kind === 'voiceover' && seriesReadiness.readiness?.seriesId === seriesId ? seriesReadiness.readiness?.voiceoverScope : undefined
+  // The last parts loaded for this series keep the picker in place while a newly picked part loads.
+  const [voiceoverParts, setVoiceoverParts] = useState<{ seriesId: string; scope: NarrationRunScope } | null>(null)
+  useEffect(() => { if (voiceoverScope) setVoiceoverParts({ seriesId, scope: voiceoverScope }) }, [voiceoverScope, seriesId])
+  const shownVoiceoverScope = kind !== 'voiceover' ? undefined : voiceoverScope
+    ?? (voiceoverParts?.seriesId === seriesId ? { ...voiceoverParts.scope, part: voiceoverPart ?? 'all' } : undefined)
+  const voiceoverOnePart = kind === 'voiceover' && typeof voiceoverPart === 'number'
+  const voiceoverPartUnsupported = !phone.automation?.chapterRuns?.includes('voiceover')
+    ? `Update Sleeper-Cell on ${phone.name} to voice only one part.` : undefined
+  // Metadata works on one part at a time (fixed twenty-chapter parts, as on the phone): only the
+  // picked part's chapters are listed, checked, counted as blockers and sent.
+  const metadataCheck = kind === 'metadata' && seriesReadiness.readiness?.kind === 'metadata' && seriesReadiness.readiness.seriesId === seriesId ? seriesReadiness.readiness : null
+  const [pickedPart, setPickedPart] = useState<MetadataPartChoice | null>(null)
+  useEffect(() => { setPickedPart(null) }, [kind, seriesId])
+  const parts = metadataParts(metadataCheck?.metadataChapters ?? [], metadataCheck?.metadataBlocked ?? [], pickedPart)
+  const metadataPart = pickedPart ?? defaultMetadataPart(parts)
+  const metadataScope = scopeMetadata(parts, metadataPart)
+  const availableMetadata = metadataScope.ready
+  const metadataKey = availableMetadata.map(c => c.name).join('\0')
+  const [metadataChapters, setMetadataChapters] = useState<string[]>([])
+  useEffect(() => { setMetadataChapters(metadataKey ? metadataKey.split('\0') : []) }, [kind, seriesId, metadataPart, metadataKey])
+  const readiness = metadataCheck ? { ...seriesReadiness, readiness: scopedMetadataReadiness(metadataCheck, parts, metadataPart, metadataScope) } : seriesReadiness
   const checked = readiness.readiness
-  const availableMetadata = kind==='metadata' && checked?.kind==='metadata' && checked.seriesId===seriesId ? checked.metadataChapters??[] : []
-  const metadataKey=availableMetadata.map(c=>c.name).join('\0')
-  const [metadataChapters,setMetadataChapters]=useState<string[]>([])
-  useEffect(()=>{setMetadataChapters(metadataKey?metadataKey.split('\0'):[])},[kind,seriesId,metadataKey])
   const blocked = !!checked?.items.some(i => i.state === 'blocked')
   // "Get ready & start": waits for the phone to have it all, then starts by itself.
   const [armed, setArmed] = useState(false)
-  useEffect(() => { setArmed(false) }, [kind, seriesId, language])
+  useEffect(() => { setArmed(false) }, [kind, seriesId, language, narrationPart, voiceoverPart])
   const canSplit = !!automation?.split && several && startable.length >= 2 && startable.some(p => p.id === phone.id)
+  const selectedPhones = startable.filter(p => !unselected.has(p.id))
+  const selectedKey = selectedPhones.map(p => p.id).join('\0')
   // Builds that take no share of this run would each do the whole series.
-  const oldBuilds = automation ? startable.filter(p => !takesShare(automation.kind, p)) : []
+  const oldBuilds = automation ? selectedPhones.filter(p => !takesShare(automation.kind, p)) : []
   const splitBlocked = oldBuilds.length && automation
-    ? `Update Sleeper-Cell on ${oldBuilds.map(p => p.name).join(' and ')} to split ${automation.name} between the phones.`
+    ? `Update Sleeper-Cell on ${oldBuilds.map(p => p.name).join(' and ')} to split ${automation.name} between the phones, or untick it.`
     : undefined
-  const splitting = canSplit && split && !splitBlocked
+  const splitting = canSplit && split
+  // Shown, greyed out, when it can't be used: a phone that hasn't reported "Start from Manhwa Studio" yet must
+  // not make the choice silently disappear.
+  const notStartable = (overview.phones ?? []).filter(p => !startable.some(s => s.id === p.id))
+    .map(p => `${p.name} (${!p.connected ? 'offline' : p.automation?.remoteStart === false ? '“Start from Manhwa Studio” off' : 'not reported yet'})`)
+  const splitUnavailable = canSplit ? undefined
+    : !startable.some(p => p.id === phone.id)
+      ? `${phone.name} can’t be started from here yet. Connect it, turn on “Start from Manhwa Studio”, then Refresh from phone.`
+      : `Selected devices needs two or more phones connected with “Start from Manhwa Studio” on.${notStartable.length ? ` Not ready: ${notStartable.join(', ')}.` : ''} Turn it on there, then Refresh from phone.`
+  const tooFewSelected = splitting && selectedPhones.length < 2
   const tabs = kind === 'voiceover' ? voiceTabs : kind === 'editor' ? editorTabs : clipTabs
   const setTabs = kind === 'voiceover' ? setVoiceTabs : kind === 'editor' ? setEditorTabs : setClipTabs
   const tabsBlocked = kind === 'editor' && !editorLast
     ? `${phone.name} runs an older Sleeper-Cell: its Editor 2.0 run works in one tab. Update it to pick more.`
     : undefined
-  const selectingProfile = Object.entries(selecting).some(([device, pending]) => pending && (splitting || device === phone.id))
+  const selectingProfile = Object.entries(selecting).some(([device, pending]) =>
+    pending && (splitting ? selectedPhones.some(p => p.id === device) : device === phone.id))
 
   // Split across the phones: Start first asks for the plan, shown to confirm; Start there sends it as planned.
   const [plan, setPlan] = useState<PhoneSplitPlan | null>(null)
   const [planning, setPlanning] = useState(false)
   const [planError, setPlanError] = useState<string | null>(null)
-  useEffect(() => { setPlan(null); setPlanError(null) }, [kind, seriesId, language, splitting])
+  useEffect(() => { setPlan(null); setPlanError(null) }, [kind, seriesId, language, splitting, selectedKey, kind === 'metadata' ? metadataChapters.join('\0') : '', voiceoverPart])
+  // One part picked: wait for its chapters, and there must be some.
+  const voiceoverPartBlocked = voiceoverOnePart && (seriesReadiness.loading || !voiceoverScope?.chapters.length || (!splitting && !!voiceoverPartUnsupported))
+  const voiceoverPartChapters = voiceoverOnePart && voiceoverScope ? voiceoverScope.chapters : undefined
   const planned = plan ? plan.targets.filter(t => t.action !== 'skip') : []
 
   const close = (next: boolean) => {
@@ -473,14 +630,18 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
   }
 
   const start = async () => {
-    if (!automation) return
+    if (!automation || narrationBlocked || voiceoverPartBlocked) return
     setArmed(false)
     if (splitting && !plan) {
       if (!seriesId) return
       setPlanning(true)
       setPlanError(null)
       try {
-        setPlan(await r2Api.planPhoneSplit(automation.kind, seriesId, language))
+        setPlan(await r2Api.planPhoneSplit(automation.kind, seriesId, language, {
+          devices: selectedPhones.map(p => p.id),
+          ...(automation.kind === 'metadata' ? { chapters: metadataChapters } : {}),
+          ...(voiceoverPartChapters ? { chapters: voiceoverPartChapters } : {})
+        }))
       } catch (error) {
         setPlanError(error instanceof Error ? error.message : String(error))
       } finally {
@@ -490,7 +651,10 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
     }
     const options: PhoneAutomationOptions = {
       kind: automation.kind,
-      ...(kind==='metadata'?{ai:'aistudio' as const,device:phone.id,chapters:metadataChapters}:{}),
+      // A Metadata split sends each phone its share of the picked chapters, as planned, in place of one phone's list.
+      ...(kind==='metadata'?{ai:'aistudio' as const,...(splitting?{}:{device:phone.id,chapters:metadataChapters})}:{}),
+      ...(kind === 'narration' && narrationScope ? { device: phone.id, chapters: narrationScope.chapters } : {}),
+      ...(voiceoverPartChapters && !splitting ? { device: phone.id, chapters: voiceoverPartChapters } : {}),
       seriesId: seriesId || undefined,
       ...(automation.tabs && !(kind === 'editor' && tabsBlocked) ? { tabs } : {}),
       ...(automation.clipper && choosesHow ? { ai, flow:ai==='chatgpt'?'classic' as const:'steps' as const } : {}),
@@ -501,7 +665,7 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
       ...(kind === 'editor' && editorAi === 'chatgpt' && editorLast?.staged ? { chatGpt: hasChoices(profiles.find(p => p.selected) ?? null) === false ? NO_CHATGPT_CHOICES : editorChatGpt } : {}),
       ...(automation.language ? { language } : {}),
       ...(splitting && plan
-        ? { split: true, assignments: Object.fromEntries(planned.map(t => [t.device, t.chapters])) }
+        ? { split: true, devices: selectedPhones.map(p => p.id), assignments: Object.fromEntries(planned.map(t => [t.device, t.chapters])) }
         : phone.id && (several || kind==='metadata') ? { device: phone.id } : {})
     }
     if (await onStart(options)) close(false)
@@ -509,8 +673,8 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
   const startRef = useRef(start)
   startRef.current = start
   useEffect(() => {
-    if (armed && checked?.ready && !checked.sending && !readiness.job && !readiness.loading && readiness.fixing === null) void startRef.current()
-  }, [armed, checked, readiness.job, readiness.loading, readiness.fixing])
+    if (armed && !narrationBlocked && !voiceoverPartBlocked && checked?.ready && !checked.sending && !readiness.job && !readiness.loading && readiness.fixing === null) void startRef.current()
+  }, [armed, checked, readiness.job, readiness.loading, readiness.fixing, narrationBlocked, voiceoverPartBlocked])
 
   const getReady = async () => {
     // With something only fixable elsewhere, it would never be all there: send what can be, but don't wait to start.
@@ -531,7 +695,7 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
           </DialogTitle>
           <DialogDescription>
             {fixedSeries && <span className="mb-1 block font-medium text-foreground">{fixedSeries.title}</span>}
-            {automation ? `On ${splitting ? `${startable.length} phones` : phone.name}. ${automation.does}.` : `What should ${phone.name} run?`}
+            {automation ? `On ${splitting ? `${selectedPhones.length} phones` : phone.name}. ${automation.does}.` : `What should ${phone.name} run?`}
           </DialogDescription>
         </DialogHeader>
 
@@ -539,31 +703,30 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
           ? <SplitPlanView plan={plan} />
           : !automation
           ? (
-            <div className="grid gap-3 sm:grid-cols-2">
-              {AUTOMATIONS.map(a => {
-                const supported = runs.includes(a.kind)
-                return (
-                  <button
-                    key={a.kind}
-                    type="button"
-                    disabled={!supported}
-                    onClick={() => setKind(a.kind)}
-                    className={cn(
-                      'flex flex-col gap-1.5 rounded-lg border p-4 text-left transition-colors',
-                      supported ? 'hover:border-primary hover:bg-secondary/50' : 'cursor-not-allowed opacity-50'
-                    )}
-                  >
-                    <span className="flex items-center gap-2 font-medium">
-                      <a.icon className="h-4 w-4 text-muted-foreground" /> {a.name}
-                    </span>
-                    <span className="text-sm text-muted-foreground">{a.does}</span>
-                    <span className="mt-auto pt-1 text-xs text-muted-foreground">
-                      {supported ? a.ai : 'Update Sleeper-Cell on this phone to start it from here'}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
+            <AutomationFlow card={k => {
+              const a = AUTOMATIONS.find(x => x.kind === k)!
+              const supported = runs.includes(a.kind)
+              return (
+                <button
+                  key={a.kind}
+                  type="button"
+                  disabled={!supported}
+                  onClick={() => setKind(a.kind)}
+                  className={cn(
+                    'flex h-full flex-col gap-1.5 rounded-lg border p-4 text-left transition-colors',
+                    supported ? 'hover:border-primary hover:bg-secondary/50' : 'cursor-not-allowed opacity-50'
+                  )}
+                >
+                  <span className="flex items-center gap-2 font-medium">
+                    <a.icon className="h-4 w-4 text-muted-foreground" /> {a.name}
+                  </span>
+                  <span className="text-sm text-muted-foreground">{a.does}</span>
+                  <span className="mt-auto pt-1 text-xs text-muted-foreground">
+                    {supported ? a.ai : 'Update Sleeper-Cell on this phone to start it from here'}
+                  </span>
+                </button>
+              )
+            }} />
           )
           : (
             <div className="space-y-5">
@@ -595,18 +758,47 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
                 </Select>}
               </div>
 
+              {kind === 'narration' && narrationScope && <NarrationPartChoices scope={narrationScope} onChange={part => {
+                setArmed(false)
+                setNarrationPartBySeries(previous => ({ ...previous, [seriesId]: part }))
+              }} />}
+              {outsideNarration && <p className="text-xs text-amber-500">Stop the current Narration scripts run on {phone.name} ({outsideNarration.chapter}) before switching parts.</p>}
+              {kind === 'narration' && !phone.automation?.chapterRuns?.includes('narration') && <p className="text-xs text-amber-500">Update Sleeper-Cell on {phone.name} to start scripts for a selected part.</p>}
+              {shownVoiceoverScope && shownVoiceoverScope.parts.length > 0 && <NarrationPartChoices
+                scope={shownVoiceoverScope}
+                allHint="Voices every unfinished chapter, in reading order. Completed parts are skipped."
+                onChange={part => {
+                  setArmed(false)
+                  setVoiceoverPartBySeries(previous => ({ ...previous, [seriesId]: part }))
+                }} />}
+              {voiceoverOnePart && !splitting && voiceoverPartUnsupported && <p className="text-xs text-amber-500">{voiceoverPartUnsupported}</p>}
               {seriesId && <RunReadinessPanel state={readiness} />}
+              {kind === 'metadata' && parts.length > 0 && (
+                <Choices
+                  label="Part"
+                  choices={[
+                    ...parts.map(p => ({
+                      value: String(p.part),
+                      label: `Part ${p.part}`,
+                      hint: `Ch. ${p.from}–${p.to} only: ${p.ready.length} ready${p.blocked.length ? `, ${p.blocked.length} not ready` : ''}. Other parts aren’t listed or sent.`
+                    })),
+                    { value: 'all', label: 'All parts', hint: `Every part: ${parts.reduce((n, p) => n + p.ready.length, 0)} ready, ${parts.reduce((n, p) => n + p.blocked.length, 0)} not ready.` }
+                  ]}
+                  value={String(metadataPart)}
+                  onChange={v => setPickedPart(v === 'all' ? 'all' : Number(v))}
+                />
+              )}
               {kind==='metadata' && <div className="space-y-2">
                 <p className="text-sm font-medium">Approved chapters</p>
                 {availableMetadata.map(ch=><label key={ch.name} className="flex items-center gap-2 text-sm">
                   <input type="checkbox" checked={metadataChapters.includes(ch.name)} onChange={event=>setMetadataChapters(prev=>event.target.checked?[...prev,ch.name]:prev.filter(name=>name!==ch.name))}/>
                   Chapter {ch.number} · {ch.name}
                 </label>)}
-                {!availableMetadata.length && <p className="text-xs text-muted-foreground">No unfinished reviewed and cut chapters are eligible. Review and cut in Image Clipper, then check again.</p>}
+                {!availableMetadata.length && <p className="text-xs text-muted-foreground">No unfinished reviewed and cut chapters are eligible{metadataPart === 'all' ? '' : ` in Part ${metadataPart}`}. Review and cut them in Image Clipper, then check again.</p>}
               </div>}
 
               {splitting
-                ? <SplitProfiles phones={startable} overview={overview} relay={relay} screens={screens} onPending={onPending} />
+                ? <SplitProfiles phones={selectedPhones} overview={overview} relay={relay} screens={screens} onPending={onPending} />
                 : <PhoneProfilePicker phone={phone} profiles={profiles} relay={relay} screen={screen} onPending={onThisPending} />}
 
               {automation.clipper && (
@@ -639,21 +831,48 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
                 <TabChoices value={tabs} onChange={setTabs} each={splitting} unit={automation.tabs.unit} disabled={tabsBlocked} />
               )}
 
-              {canSplit && (
+              {automation.split && several && (
                 <Choices
                   label="Phones"
                   choices={[
                     { value: 'one', label: `Only ${phone.name}` },
                     {
                       value: 'split',
-                      label: `Split across ${startable.length}`,
+                      label: 'Selected devices',
                       hint: `${SPLIT_HINT[automation.kind] ?? ''} A phone already on this run keeps the chapter it’s on; one busy with something else is left alone. Start shows the plan first. Each phone works in the profile picked for it.`
                     }
                   ]}
                   value={splitting ? 'split' : 'one'}
                   onChange={v => setSplit(v === 'split')}
-                  disabled={splitBlocked}
+                  disabled={splitUnavailable}
                 />
+              )}
+              {splitting && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-medium">Devices</p>
+                    <Button variant="outline" size="sm" disabled={sending || planning || !unselected.size} onClick={() => setUnselected(new Set())}>
+                      Select all devices
+                    </Button>
+                  </div>
+                  {startable.map(p => (
+                    <label key={p.id} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={!unselected.has(p.id)}
+                        disabled={sending || planning}
+                        onChange={event => setUnselected(prev => {
+                          const next = new Set(prev)
+                          if (event.target.checked) next.delete(p.id); else next.add(p.id)
+                          return next
+                        })}
+                      />
+                      {p.name}
+                    </label>
+                  ))}
+                  {tooFewSelected && <p className="text-xs text-amber-500">Select at least two devices to split between them.</p>}
+                  {splitBlocked && <p className="text-xs text-amber-500">{splitBlocked}</p>}
+                </div>
               )}
 
               {automation.fixed && (
@@ -692,7 +911,7 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
                   {notReady && readiness.fixable.length > 0 && !armed && !plan && (
                     <Button
                       onClick={() => void getReady()}
-                      disabled={sending || readiness.fixing !== null || selectingProfile}
+                      disabled={sending || readiness.fixing !== null || selectingProfile || narrationBlocked || voiceoverPartBlocked}
                       title={blocked ? 'Sends what can be sent from here; the rest needs doing first, so it won’t start by itself' : 'Sends what the phone is missing, then starts once it has it'}
                     >
                       {readiness.fixing === 'all' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
@@ -705,7 +924,7 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
                       <Button
                         variant={notReady && readiness.fixable.length > 0 && !plan ? 'outline' : 'default'}
                         onClick={start}
-                        disabled={sending || planning || selectingProfile || (kind==='metadata' && (!phone.id || !metadataChapters.length || readiness.loading)) || (!seriesId && (splitting || !automation.clipper)) || (!!plan && !planned.length)}
+                        disabled={sending || planning || selectingProfile || narrationBlocked || voiceoverPartBlocked || tooFewSelected || (splitting && !!splitBlocked) || (kind==='metadata' && (!phone.id || !metadataChapters.length || readiness.loading)) || (!seriesId && (splitting || !automation.clipper)) || (!!plan && !planned.length)}
                         title={selectingProfile
                           ? 'Waiting for the phone to switch profile'
                           : splitting && !plan ? 'Shows which phone takes which chapters, to check before it starts'

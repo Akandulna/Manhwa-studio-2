@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import express from 'express'
 import { createServer, type Server } from 'node:http'
 import { YouTubeStore } from '../youtubeStore.js'
-import { parseDescriptionResponse, parseDescriptionPair, validateDescription, validateHinglishDescription } from '../youtubeDescriptions.js'
+import { parseDescriptionResponse, parseDescriptionPair, validateDescription, validateHinglishDescription, assertDescriptionOmitsSeriesNames } from '../youtubeDescriptions.js'
 import { createYouTubeRouter } from '../../routes/youtube.js'
 import type { YouTubeWorkspace } from '../youtubeTypes.js'
 let root: string
@@ -126,5 +126,57 @@ describe('description workflow', () => {
   res=await post(`${base}/a/descriptions/current`,{title:s.selectedTitle,text:'User edited description.',expectedRevision:s.titles.revision},'PUT');expect(res.status).toBe(200);s=await res.json()
   res=await post(`${base}/a/descriptions/current`,{title:s.selectedTitle,text:'A fresh English version describing this story in Hindi.',variant:'hinglish',expectedRevision:s.titles.revision},'PUT');expect(res.status).toBe(200);s=await res.json();expect(s.description).toBe('User edited description.');expect(s.hinglishDescription).toContain('in Hindi')
   res=await post(`${base}/a/descriptions/restore`,{versionId:old.id,expectedRevision:s.titles.revision});expect(res.status).toBe(200);expect((await res.json()).description).toBe(old.text)
+ })
+})
+
+
+describe('no real series identity in publishable descriptions', () => {
+ it('rejects names in prose, hashtags, translated titles, URLs and encoded text', () => {
+  const names = ["I'm Gonna Annihilate This Land (Holy Hella's Ultimate End)", 'Test Hunter (테스트 헌터)']
+  for (const text of [
+    "Watch I'm Gonna Annihilate This Land today.", '#ImGonnaAnnihilateThisLand',
+    'https://reader.test/holy-hellas-ultimate-end', 'Read 테스트 헌터 here.',
+    '#ＴｅｓｔＨｕｎｔｅｒ', 'Test\u200b Hunter',
+    'https://reader.test/%54%65%73%74-Hunter', "I&#39;m Gonna Annihilate This Land"
+  ]) expect(() => assertDescriptionOmitsSeriesNames(text, names)).toThrow('real manhwa name')
+  expect(() => assertDescriptionOmitsSeriesNames('A hunter faces impossible odds. #ManhwaRecap #Fantasy', names)).not.toThrow()
+ })
+ it('makes the identity rule mandatory in every new prompt and replaces reusable old prompts', async () => {
+  let s = await selected();const request = s.descriptions.requests[0]
+  expect(request.identityPolicy).toBe('no-series-name/1')
+  expect(request.prompt).toContain('Never include the real manhwa/manhua name anywhere')
+  expect(request.prompt).toContain('abbreviations');expect(request.prompt).toContain('URLs')
+  delete request.identityPolicy
+  const file = path.join(root, 'workspaces', createHash('sha256').update('a').digest('hex') + '.json')
+  await fs.writeFile(file, JSON.stringify(s))
+  s = await store.prepareDescription('a', 'Test Hunter', { reuse: true, expectedRevision: s.titles.revision })
+  expect(s.descriptions.requests).toHaveLength(2)
+  expect(s.descriptions.requests.at(-1)?.identityPolicy).toBe('no-series-name/1')
+ })
+ it('rejects a leak in either generated language without importing the other half', async () => {
+  const s = await selected();const request = s.descriptions.requests[0]
+  for (const response of [{ ...payload(s), description: 'Watch Test Hunter. #Manhwa' },
+    { ...payload(s), hinglishDescription: 'Discover a secret in Hindi. #TestHunter' }]) {
+    await expect(store.importDescription('a', { requestId: request.id, response: JSON.stringify(response), expectedRevision: s.titles.revision })).rejects.toThrow('real manhwa name')
+    const unchanged = await store.openWorkspace('a')
+    expect(unchanged.description).toBeNull();expect(unchanged.hinglishDescription).toBeNull()
+    expect(unchanged.descriptions.versions).toHaveLength(0)
+  }
+ })
+ it('checks the researched alternate name as well as the library name', async () => {
+  const s = await selected();const request = s.descriptions.requests[0]
+  request.research = { resolvedTitle: "Test Hunter (Hidden Hunter's Return)", summary: 'Verified hunter premise.', sources: [] }
+  expect(() => parseDescriptionPair(JSON.stringify(payload(s, 'Watch #HiddenHuntersReturn.')), request, 'a')).toThrow('real manhwa name')
+ })
+ it('rejects manual edits and contaminated history restores while retaining current safe text', async () => {
+  const s = await imported()
+  for (const variant of ['en', 'hinglish'] as const) await expect(store.saveDescription('a', {
+    title: s.selectedTitle, text: 'Follow Test Hunter in Hindi. #TestHunter', variant, expectedRevision: s.titles.revision
+  })).rejects.toThrow('real manhwa name')
+  const version = { ...s.descriptions.versions[0], id: 'old-leaking', text: 'Read Test Hunter.', hinglishText: 'Explore Test Hunter in Hindi.' }
+  s.descriptions.versions.push(version)
+  await fs.writeFile(path.join(root, 'workspaces', createHash('sha256').update('a').digest('hex') + '.json'), JSON.stringify(s))
+  await expect(store.restoreDescription('a', { versionId: version.id, expectedRevision: s.titles.revision })).rejects.toThrow('real manhwa name')
+  expect((await store.openWorkspace('a')).description).toBe(s.description)
  })
 })

@@ -1,0 +1,61 @@
+drop-key
+GPT_JSON_INVALID|crops|Not accounted for: candidate-07. Every current crop must be kept, changed, merged, split or listed in "removed_keys".|null
+--correction--
+The app's validator REJECTED that reply. Problems:
+- crops: Not accounted for: candidate-07. Every current crop must be kept, changed, merged, split or listed in "removed_keys".
+
+Fix every problem and return the COMPLETE corrected JSON object (not a diff), with no prose.
+==
+wrong-revision
+GPT_PAGE_MISMATCH|review_revision|The reply answers revision 2 but the review is now at 1 — copy the fix prompt again|null
+--correction--
+The app's validator REJECTED that reply. Problems:
+- review_revision: The reply answers revision 2 but the review is now at 1 — copy the fix prompt again
+
+Fix every problem and return the COMPLETE corrected JSON object (not a diff), with no prose.
+==
+bad-coords
+GPT_COORDINATES_INVALID|crops[4].bottom_right.x|candidate-06: bottom_right.x 801 is outside slice-03's width 0–800|candidate-06
+GPT_COORDINATES_INVALID|crops[5].top_left.slice_id|new crop #6: top_left.slice_id "slice-09" is not one of this page's slices (slice-01, slice-02, slice-03)|new crop #6
+--correction--
+The app's validator REJECTED that reply. Problems:
+- crops[4].bottom_right.x: candidate-06: bottom_right.x 801 is outside slice-03's width 0–800
+- crops[5].top_left.slice_id: new crop #6: top_left.slice_id "slice-09" is not one of this page's slices (slice-01, slice-02, slice-03)
+
+Fix every problem and return the COMPLETE corrected JSON object (not a diff), with no prose.
+==
+twice
+GPT_JSON_INVALID|removed_keys|"candidate-04" appears more than once (crops[3].key and removed_keys)|null
+--correction--
+The app's validator REJECTED that reply. Problems:
+- removed_keys: "candidate-04" appears more than once (crops[3].key and removed_keys)
+
+Fix every problem and return the COMPLETE corrected JSON object (not a diff), with no prose.
+==
+wrong-schema
+GPT_JSON_INVALID|schema_version|schema_version must be "clipper-review-geometry/1.0" — is this the reply to the REVIEW prompt?|null
+GPT_PAGE_MISMATCH|job_id|job_id is "other" but this page's is solo_leveling-ch010-page_003-0123456789ab|null
+--correction--
+The app's validator REJECTED that reply. Problems:
+- schema_version: schema_version must be "clipper-review-geometry/1.0" — is this the reply to the REVIEW prompt?
+- job_id: job_id is "other" but this page's is solo_leveling-ch010-page_003-0123456789ab
+
+Fix every problem and return the COMPLETE corrected JSON object (not a diff), with no prose.
+==
+fraction
+GPT_COORDINATES_INVALID|crops[3].bottom_right.x|candidate-04: bottom_right.x must be a whole pixel (got 140.5)|candidate-04
+GPT_COORDINATES_INVALID|crops[3].bottom_right.y|candidate-04: bottom_right.y must be a number (got "340")|candidate-04
+--correction--
+The app's validator REJECTED that reply. Problems:
+- crops[3].bottom_right.x: candidate-04: bottom_right.x must be a whole pixel (got 140.5)
+- crops[3].bottom_right.y: candidate-04: bottom_right.y must be a number (got "340")
+
+Fix every problem and return the COMPLETE corrected JSON object (not a diff), with no prose.
+==
+inverted
+GPT_COORDINATES_INVALID|crops[3]|candidate-04: box (100,4396)–(90,4436) has no area — the bottom-right corner must be below and right of the top-left|candidate-04
+--correction--
+The app's validator REJECTED that reply. Problems:
+- crops[3]: candidate-04: box (100,4396)–(90,4436) has no area — the bottom-right corner must be below and right of the top-left
+
+Fix every problem and return the COMPLETE corrected JSON object (not a diff), with no prose.

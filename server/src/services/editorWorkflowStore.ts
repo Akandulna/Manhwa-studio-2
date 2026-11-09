@@ -82,9 +82,9 @@ export async function editorWorkflowSession(chapterId: string, language: Narrati
       const view = nextWorkflowTask(workflow, current)
       let rejection: { fingerprint: string; reply: string; error: string; repairPrompt: string } | null = null
       try { rejection = JSON.parse(await fs.readFile(rejectionFile, 'utf-8')) } catch { /* Diagnostic only; checkpoint parsing above is strict. */ }
-      return { ...view, counts, revision: digest(current), error: null,
+      return { ...view, counts, revision: digest(current), sourceHash: workflow.sourceHash, error: null,
         rejection: rejection?.fingerprint === view.task?.fingerprint ? rejection : null }
     }
-    catch (e) { return { task: null, completed: Object.keys(current.replies).length, warnings: [], json: null, counts, revision: digest(current), error: (e as Error).message, rejection: null } }
+    catch (e) { return { task: null, completed: Object.keys(current.replies).length, warnings: [], json: null, counts, revision: digest(current), sourceHash: workflow.sourceHash, error: (e as Error).message, rejection: null } }
   })
 }

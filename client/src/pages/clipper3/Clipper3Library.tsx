@@ -1,3 +1,5 @@
+import { useSeriesProcess } from '@/hooks/useSeriesProcess'
+import { currentClipperPart } from '@/lib/clipperParts'
 import { useSeriesOrder } from '@/hooks/useSeriesOrder'
 /**
  * Clipper3Library — Module 3 v3: Image Clipper 3.0
@@ -21,6 +23,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import {
+  ChevronDown,
   Locate,
   Loader2,
   AlertTriangle,
@@ -49,6 +52,8 @@ export default function Clipper3Library() {
   const { seriesCompletedParts } = usePublishedChapters()
   const [seriesList, setSeriesList] = useState<Clipper3Series[]>([])
   const orderedSeries = useSeriesOrder(seriesList)
+  const { progress: processProgress } = useSeriesProcess()
+  const [collapsedParts, setCollapsedParts] = useState<Set<number>>(new Set())
   const [chapters, setChapters] = useState<Clipper3Chapter[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -147,6 +152,19 @@ export default function Clipper3Library() {
     return () => { cancelled = true }
   }, [seriesWithChapters])
 
+  const partSections = useMemo(() => {
+    const trackers = new Map(processProgress?.series.map(series => [series.seriesId, series]))
+    const groups = new Map<number, Clipper3Series[]>()
+    for (const series of orderedSeries) {
+      if (!chapters.some(chapter => chapter.seriesId === series.id)) continue
+      const part = currentClipperPart(trackers.get(series.id))
+      const rows = groups.get(part) ?? []
+      rows.push(series)
+      groups.set(part, rows)
+    }
+    return [...groups].sort(([a], [b]) => a - b)
+  }, [orderedSeries, chapters, processProgress])
+
   const header = (
     <div className="mb-6 flex items-start justify-between gap-4">
       <div>
@@ -211,8 +229,27 @@ export default function Clipper3Library() {
       )}
 
       {seriesWithChapters.length > 0 && (
-        <Card className="overflow-hidden divide-y">
-          {orderedSeries.filter(s => chapters.some(c => c.seriesId === s.id)).map(s => {
+        <div className="space-y-5">
+          {partSections.map(([part, rows]) => (
+            <section key={part}>
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 py-2 text-left font-semibold"
+                aria-expanded={!collapsedParts.has(part)}
+                aria-controls={`clipper-library-part-${part}`}
+                onClick={() => setCollapsedParts(previous => {
+                  const next = new Set(previous)
+                  if (next.has(part)) next.delete(part)
+                  else next.add(part)
+                  return next
+                })}
+              >
+                <ChevronDown className={`h-4 w-4 transition-transform ${collapsedParts.has(part) ? '-rotate-90' : ''}`} />
+                Part {part}
+                <span className="text-xs font-normal text-muted-foreground">{rows.length} series · chapters {(part - 1) * 20 + 1}–{part * 20}</span>
+              </button>
+              <Card id={`clipper-library-part-${part}`} hidden={collapsedParts.has(part)} className="overflow-hidden divide-y">
+          {rows.map(s => {
             const seriesChapters = chapters.filter(c => c.seriesId === s.id)
             // Done here means "every page has its crops and matching metadata",
             // the same bar Clipper 3's own chapter list calls fully attached.
@@ -227,7 +264,7 @@ export default function Clipper3Library() {
             return (
               <Link
                 key={s.id}
-                to={`/clipper3/series/${s.id}`}
+                to={`/clipper3/series/${s.id}?part=${part}`}
                 className="flex items-center gap-4 px-4 py-3 hover:bg-accent/50 transition-colors"
               >
               <div className="h-10 w-10 shrink-0 rounded-md bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center">
@@ -283,7 +320,10 @@ export default function Clipper3Library() {
               </Link>
             )
           })}
-        </Card>
+              </Card>
+            </section>
+          ))}
+        </div>
       )}
 
       <PhonePullDialog open={pullOpen} onOpenChange={setPullOpen} onPulled={() => setReloadKey(k => k + 1)} />

@@ -1,6 +1,6 @@
 import {recordMetadataCut,captureMetadataGeometry} from './metadataSplit.js'
 import {readManagedChapterAssets} from '../managedChapterAssets.js'
-import {withUnmanagedCropChapter,withManagedCropReadSnapshot,readManagedCrop} from '../managedCropProjection.js'
+import {assertUnmanagedCropChapter,withUnmanagedCropChapter,withManagedCropReadSnapshot,readManagedCrop} from '../managedCropProjection.js'
 /**
  * Image Clipper 3.0 — cutting a whole chapter (Crop Sections), by hand or
  * automatically after Sync json.
@@ -44,7 +44,7 @@ import {
   type Clipper3CropEntry
 } from './perImageStore.js'
 import { cutImageCrops, type CutFile } from './perImageCrop.js'
-import { readChapterReview } from './chapterReview.js'
+import { readChapterReview, readEffectiveReview } from './chapterReview.js'
 import { pageReplacementActive } from '../chapterPageReplacement.js'
 
 /** The chapter fields cutting needs. */
@@ -86,7 +86,7 @@ export function onChapterCropped(listener: (chapter: CropChapter) => Promise<unk
 }
 
 export function isChapterCropping(chapterId: string): boolean {
-  return cropping.has(chapterId)
+  return cropping.has(chapterId) || autoQueued.has(chapterId)
 }
 
 /** Where a chapter stands: which pages are Done (and so cut), and how crops3/ compares. */
@@ -299,33 +299,69 @@ async function autoCropTargets(chapter: CropChapter): Promise<CropTarget[] | nul
  * Each chapter is re-checked when its turn comes, so one edited or cut by
  * hand while it waited is not cut again.
  */
-export async function queueAutoCrop(
-  io: Server,
-  chapters: CropChapter[]
-): Promise<{ chapterId: string; chapterNumber: number }[]> {
-  const queued: { chapterId: string; chapterNumber: number }[] = []
-  for (const chapter of chapters) {
-    if (autoQueued.has(chapter.id) || cropping.has(chapter.id)) continue
-    if (!(await autoCropTargets(chapter))) continue
+export interface BulkCropResult {
+  queued: { chapterId: string; chapterNumber: number }[]
+  skipped: { chapterId: string; chapterNumber: number; reason: string }[]
+}
 
+/** Desktop and phone reviews share the manual bulk action; partial chapters must wait. */
+async function reviewedCropTargets(chapter: CropChapter): Promise<CropTarget[] | null> {
+  if (pageReplacementActive(chapter.folderPath)) return null
+  await assertUnmanagedCropChapter(chapter.folderPath)
+  if (!(await readEffectiveReview(chapter.folderPath)).reviewed) return null
+  const state = await readChapterCropState(chapter)
+  return state.fullyAttached && !state.outputs.complete ? state.targets : null
+}
+
+/** One shared queue for bulk and automatic cuts, including chapters waiting their turn. */
+async function queueCrops(io: Server, chapters: CropChapter[], auto: boolean): Promise<BulkCropResult> {
+  const result: BulkCropResult = { queued: [], skipped: [] }
+  const targetsFor = auto ? autoCropTargets : reviewedCropTargets
+  for (const chapter of chapters) {
+    const tag = { chapterId: chapter.id, chapterNumber: chapter.number }
+    if (autoQueued.has(chapter.id) || cropping.has(chapter.id)) {
+      result.skipped.push({ ...tag, reason: 'Already queued or cropping' })
+      continue
+    }
+    // Reserve before any asynchronous checks, including concurrent HTTP requests.
     autoQueued.add(chapter.id)
-    queued.push({ chapterId: chapter.id, chapterNumber: chapter.number })
-    autoChain = autoChain
-      .then(async () => {
-        if (cropping.has(chapter.id)) return
-        const targets = await autoCropTargets(chapter)
-        if (!targets) return
-        console.log(`[clipper3] auto crop: chapter ${chapter.number} (${chapter.series.title}), reviewed on phone`)
-        await runChapterCrop(io, chapter, targets, { auto: true })
-      })
-      .catch(err => {
-        console.error(`[clipper3] auto crop of chapter ${chapter.number} failed:`, err)
-      })
-      .finally(() => {
-        autoQueued.delete(chapter.id)
-      })
+    let queued = false
+    try {
+      if (!(await targetsFor(chapter))) {
+        result.skipped.push({ ...tag, reason: 'Needs review, has pending pages, is already cropped, or pages are being replaced' })
+        continue
+      }
+      queued = true
+      result.queued.push(tag)
+      autoChain = autoChain
+        .then(async () => {
+          if (cropping.has(chapter.id)) return
+          // Re-read at execution: review and pointers may have changed while waiting.
+          const targets = await targetsFor(chapter)
+          if (!targets) return
+          await runChapterCrop(io, chapter, targets, { auto })
+        })
+        .catch(err => {
+          console.error(`[clipper3] queued crop of chapter ${chapter.number} failed:`, err)
+          io.emit('clipper3:crop-complete', { ...tag, seriesId: chapter.seriesId, auto,
+            error: err instanceof Error ? err.message : String(err) })
+        })
+        .finally(() => { autoQueued.delete(chapter.id) })
+    } catch (err) {
+      result.skipped.push({ ...tag, reason: err instanceof Error ? err.message : String(err) })
+    } finally {
+      if (!queued) autoQueued.delete(chapter.id)
+    }
   }
-  return queued
+  return result
+}
+
+export async function queueAutoCrop(io: Server, chapters: CropChapter[]) {
+  return (await queueCrops(io, chapters, true)).queued
+}
+
+export async function queueReviewedCrop(io: Server, chapters: CropChapter[]): Promise<BulkCropResult> {
+  return queueCrops(io, chapters, false)
 }
 
 export async function readChapterCropState(chapter:Pick<CropChapter,'folderPath'|'series'>):Promise<ChapterCropState> {

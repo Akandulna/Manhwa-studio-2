@@ -56,7 +56,7 @@ import {
   scanExportedChapterNumbers,
   videoChapterNumber,
   videoDirsFor,
-  scanVideoCleanupFolder
+  scanSeriesVideoCleanup
 } from './storageService.js'
 import { NARRATION_LANGUAGES, partExportSuffix, type NarrationLanguage } from './narrationLanguage.js'
 import { updatePhoneIndexes } from './phoneSend.js'
@@ -123,7 +123,11 @@ export interface SeriesParts {
   seriesId: string
   title: string
   r2Configured: boolean
+  /** Compressed videos on disk now. */
   compressedVideos: string[]
+  /** When a compressed video was last seen in any video folder; outlives the video. */
+  checkpointAt: string | null
+  checkpointVideos: string[]
   parts: SeriesPart[]
 }
 
@@ -300,9 +304,11 @@ export async function getSeriesParts(seriesId: string, measure = true): Promise<
     })
   }
 
-  const compressedVideos = (await Promise.all(VIDEO_DIRS.map(dir => scanVideoCleanupFolder(series.rootFolder, dir))))
-    .flatMap(folder => folder.compressedVideos.map(file => `${folder.dir}/${file}`))
-  return { seriesId: series.id, title: series.title, r2Configured: getR2Config() !== null, compressedVideos, parts }
+  const folders = await scanSeriesVideoCleanup(series.id, series.rootFolder)
+  const compressedVideos = folders.flatMap(folder => folder.compressedVideos.map(file => `${folder.dir}/${file}`))
+  const checkpointVideos = folders.flatMap(folder => folder.checkpointVideos.map(file => `${folder.dir}/${file}`))
+  const checkpointAt = folders.map(folder => folder.checkpointAt).filter((at): at is string => at !== null).sort().at(-1) ?? null
+  return { seriesId: series.id, title: series.title, r2Configured: getR2Config() !== null, compressedVideos, checkpointAt, checkpointVideos, parts }
 }
 
 // ============ Continuity backup ============
@@ -703,11 +709,14 @@ export async function completePart(seriesId: string, partNumber: number, confirm
   }
 }
 
-/** Local-only cleanup of the explicitly selected Part. Scripts and database script rows survive. */
+/**
+ * Local-only cleanup of the explicitly selected Part. Scripts and database script rows survive.
+ * Needs the compressed-video checkpoint, not the video itself, which the user may have deleted.
+ */
 export async function cleanPartWorkingFiles(seriesId: string, partNumber: number, confirm: string) {
   const data = await getSeriesParts(seriesId, false)
   if (confirm.trim() !== data.title.trim()) throw new Error('Type the series title to confirm')
-  if (!data.compressedVideos.length) throw new Error('A nonempty compressed video is required')
+  if (!data.checkpointAt) throw new Error('A nonempty compressed video is required')
   const part = data.parts.find(p => p.number === partNumber)
   if (!part) throw new Error('Part not found')
   const series = await prisma.series.findUnique({ where: { id: seriesId }, select: { rootFolder: true } })

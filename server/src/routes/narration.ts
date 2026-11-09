@@ -23,9 +23,13 @@ import { withSeriesActivity } from '../services/seriesActivity.js'
  */
 
 import { Router, Request, Response } from 'express'
+import fs from 'fs/promises'
+import path from 'path'
 import type { Server } from 'socket.io'
 import { prisma } from '../index.js'
-import { importPhoneScripts, previewPhoneScripts, type PhoneImportResult } from '../services/phoneScriptImport.js'
+import { importPhoneScripts, phoneScriptFiles, previewPhoneScripts, type PhoneImportResult } from '../services/phoneScriptImport.js'
+import { keepStudioVersion, narrationSeriesOpened, openConflicts, scheduleNarrationAutoSync } from '../services/phoneNarrationAutoSync.js'
+import { listMetadataImageStems } from '../services/clipper3/perImageStore.js'
 import {
   fetchPhoneVoiceover,
   previewPhoneVoiceover,
@@ -33,6 +37,7 @@ import {
   type PhoneVoiceoverFetch
 } from '../services/phoneVoiceoverImport.js'
 import { getR2Config } from '../services/r2Service.js'
+import { phoneFetchJobs, type PhoneFetchState } from '../services/narrationFetchJobs.js'
 import { alignChapter, alignSection, alignmentProgress, checkAlignmentAvailable, pendingAlignments } from '../services/alignment/alignmentService.js'
 import { resetSectionAlignment } from '../services/alignment/resetAlignment.js'
 import { hasAlignmentDocument, writeAlignmentDocument } from '../services/alignment/alignmentDocument.js'
@@ -91,23 +96,8 @@ const NO_SECTIONS: SectionCounts = { sections: 0, withAudio: 0, aligned: 0 }
 
 // ============ Phone fetch jobs ============
 
-/** A "Fetch from phone" run, as emitted on `narration:fetch`. */
-interface PhoneFetchState {
-  seriesId: string
-  language: NarrationLanguage
-  stage: 'scripts' | 'voiceover' | 'done' | 'failed'
-  /** Voiceover: the chapter downloading now, as "current of total". */
-  chapterNumber?: number
-  current?: number
-  total?: number
-  /** Done: what each half did. */
-  scripts?: PhoneImportResult | null
-  voiceovers?: PhoneVoiceoverFetch | null
-  error?: string
-}
-
-/** Fetches running now, by `seriesId:language`, so a page opened mid-run shows it. */
-const fetchJobs = new Map<string, PhoneFetchState>()
+/** Fetches running now (yours and Studio's automatic ones), by `seriesId:language`, so a page opened mid-run shows it. */
+const fetchJobs = phoneFetchJobs
 
 /** Chapters whose "Align again" is running, by `chapterId:language`. */
 const alignRuns = new Set<string>()
@@ -244,6 +234,8 @@ router.get('/series/:id', async (req: Request, res: Response) => {
       }
     }))
 
+    // Finished scripts and voiceovers the phones sent since: fetched in the background (gaps only).
+    narrationSeriesOpened(series.id)
     res.json({
       id: series.id,
       title: series.title,
@@ -264,6 +256,98 @@ router.get('/alignment/status', async (_req: Request, res: Response) => {
     res.json(await checkAlignmentAvailable())
   } catch (error) {
     res.json({ available: false, error: message(error, 'Alignment check failed') })
+  }
+})
+
+// ============ Phone versions that differ ============
+
+/**
+ * Chapters where a phone has finished a different script than Studio's, which
+ * automatic fetching never imports: both texts, and what in Studio was made
+ * from Studio's script (so you can see what a switch would need redone).
+ * Chapters where you kept Studio's version are left out until a phone sends
+ * yet another version.
+ */
+router.get('/series/:id/phone/conflicts', async (req: Request, res: Response) => {
+  try {
+    const language = requestLanguage(req)
+    if (!getR2Config()) return res.json({ conflicts: [] })
+    const preview = await previewPhoneScripts(req.params.id, language)
+    const open = await openConflicts(preview, language)
+    if (open.length === 0) return res.json({ conflicts: [] })
+    const phone = await phoneScriptFiles(req.params.id, language)
+    const counts = await sectionCounts(language, { seriesId: req.params.id, status: 'done' })
+    const conflicts = []
+    for (const row of open) {
+      const chapter = await prisma.chapter.findUnique({
+        where: { id: row.chapterId },
+        select: { folderPath: true, scripts: { where: { language: 'hi' }, select: { status: true } } }
+      })
+      const files = phone?.chapters.find(c => c.folder === row.folder)
+      if (!chapter || !files?.script) continue
+      const dir = path.join(process.env.DOWNLOAD_ROOT || './downloads', chapter.folderPath)
+      const studioScript = await fs.readFile(path.join(dir, language === 'en' ? 'script.md' : 'script.hi.md'), 'utf-8').then(t => t.trim(), () => '')
+      const sections = counts.get(row.chapterId) ?? NO_SECTIONS
+      const timeline = await prisma.editor2Timeline.findUnique({ where: { chapterId_language: { chapterId: row.chapterId, language } } })
+      conflicts.push({
+        chapterId: row.chapterId,
+        number: row.number,
+        folder: row.folder,
+        phoneSha256: row.phoneSha256,
+        device: row.device,
+        phoneSavedAt: row.savedAt,
+        phoneScript: files.script,
+        studioScript,
+        studioStatus: row.desktopStatus,
+        affects: {
+          // Crop descriptions are linked to the English script.
+          metadataPages: language === 'en' ? (await listMetadataImageStems(chapter.folderPath)).size : 0,
+          voiceoverSections: sections.withAudio,
+          alignedSections: sections.aligned,
+          hinglish: language === 'en' && SCRIPT_WRITTEN.includes(chapter.scripts[0]?.status ?? ''),
+          timeline: !!timeline?.json
+        }
+      })
+    }
+    res.json({ conflicts, etag: preview?.zip.etag ?? null })
+  } catch (error) {
+    console.error('[narration] phone conflicts failed:', error)
+    res.status(400).json({ error: message(error, 'Could not compare the phones\' scripts') })
+  }
+})
+
+/**
+ * Your choice for one differing chapter: "phone" imports the phone's script
+ * (what was made from Studio's script then needs redoing, as after any
+ * replaced script); "studio" keeps Studio's and stops asking about this
+ * phone version.
+ */
+router.post('/series/:id/phone/conflicts/resolve', async (req: Request, res: Response) => {
+  try {
+    const language = requestLanguage(req)
+    const seriesId = req.params.id
+    const { chapterId, choice, phoneSha256 } = req.body ?? {}
+    if (typeof chapterId !== 'string' || typeof phoneSha256 !== 'string' || (choice !== 'phone' && choice !== 'studio')) {
+      return res.status(400).json({ error: 'chapterId, phoneSha256 and choice (phone or studio) are required' })
+    }
+    if (fetchJobs.has(`${seriesId}:${language}`)) return res.status(409).json({ error: 'Wait for the phone fetch to finish' })
+    if (scriptReplacementBusy(chapterId)) return res.status(409).json({ error: 'Wait for script replacement to finish' })
+    const preview = await previewPhoneScripts(seriesId, language)
+    const row = preview?.chapters.find(c => c.chapterId === chapterId)
+    if (!preview || !row || row.action !== 'replace' || !row.textDiffers || row.phoneSha256 !== phoneSha256) {
+      return res.status(409).json({ error: 'The phone version changed since you opened it. Open it again.' })
+    }
+    if (choice === 'studio') {
+      await keepStudioVersion(chapterId, language, phoneSha256)
+      return res.json({ kept: true })
+    }
+    const result = await importPhoneScripts(seriesId, preview.zip.etag, [chapterId], language, { about: 'fill' })
+    // A Hinglish script converted from the new English may now be importable.
+    if (language === 'en') scheduleNarrationAutoSync(seriesId, 2_000)
+    res.json({ imported: result.imported })
+  } catch (error) {
+    console.error('[narration] resolving phone version failed:', error)
+    res.status(400).json({ error: message(error, 'Could not apply your choice') })
   }
 })
 

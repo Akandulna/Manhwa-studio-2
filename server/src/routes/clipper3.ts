@@ -76,6 +76,7 @@ import {
   isChapterCropping,
   onChapterCropped,
   queueAutoCrop,
+  queueReviewedCrop,
   readChapterCropState,
   runChapterCrop,
   seriesSlug,
@@ -748,6 +749,30 @@ export function initClipper3Routes(io: Server): Router {
       if(error instanceof TaskConflict)return res.status(409).json({error:'Use the exact managed page review/cut controls in Preview for this chapter.'})
       console.error('[clipper3] starting crop failed:', error)
       res.status(500).json({ error: 'Failed to start cropping' })
+    }
+  })
+
+  /** Queue reviewed, fully attached chapters without re-cutting current outputs. */
+  router.post('/series/:seriesId/crop-reviewed', async (req: Request, res: Response) => {
+    try {
+      const chapterIds: unknown = req.body?.chapterIds
+      if (chapterIds !== undefined && (!Array.isArray(chapterIds) || chapterIds.length === 0 ||
+          !chapterIds.every(id => typeof id === 'string' && id.length > 0))) {
+        return res.status(400).json({ error: 'chapterIds must be a non-empty array of chapter IDs' })
+      }
+      const seriesId = req.params.seriesId
+      if (syncingSeries.has(seriesId) || unsyncingSeries.has(seriesId) || slicingSeries.has(seriesId)) {
+        return res.status(409).json({ error: 'Wait for this series’ current operation to finish' })
+      }
+      const chapters = await prisma.chapter.findMany({
+        where: { seriesId, completedAt: null, ...(Array.isArray(chapterIds) ? { id: { in: chapterIds as string[] } } : {}) },
+        orderBy: { number: 'asc' },
+        select: { id: true, number: true, seriesId: true, folderPath: true, series: { select: { title: true } } }
+      })
+      res.json(await queueReviewedCrop(io, chapters))
+    } catch (error) {
+      console.error('[clipper3] queueing reviewed crops failed:', error)
+      res.status(500).json({ error: 'Failed to queue reviewed chapters' })
     }
   })
 

@@ -1,0 +1,14 @@
+CROP_UNREVIEWED|candidate-01: not reviewed yet|candidate-01
+FINDING_UNACKNOWLEDGED|candidate-01: 3 flags not yet reviewed (HEIGHT_OUTLIER, EDGE_ON_CONTENT, boundary_uncertain)|candidate-01
+CROP_UNREVIEWED|candidate-02: not reviewed yet|candidate-02
+FINDING_UNACKNOWLEDGED|candidate-02: 3 flags not yet reviewed (SHARED_EDGE, EDGE_ON_CONTENT, EDGE_ON_CONTENT)|candidate-02
+CROP_UNREVIEWED|candidate-03: not reviewed yet|candidate-03
+FINDING_UNACKNOWLEDGED|candidate-03: 3 flags not yet reviewed (TALL_ASPECT, PAGE_FRACTION, HEIGHT_OUTLIER)|candidate-03
+CROP_UNREVIEWED|candidate-04: not reviewed yet|candidate-04
+FINDING_UNACKNOWLEDGED|candidate-04: 2 flags not yet reviewed (TINY, MOSTLY_BLANK)|candidate-04
+CROP_UNREVIEWED|candidate-05: not reviewed yet|candidate-05
+FINDING_UNACKNOWLEDGED|candidate-05: 3 flags not yet reviewed (TINY, DUPLICATE, MOSTLY_BLANK)|candidate-05
+CROP_UNREVIEWED|candidate-06: not reviewed yet|candidate-06
+CROP_UNREVIEWED|candidate-07: not reviewed yet|candidate-07
+FINDING_UNACKNOWLEDGED|candidate-07: 4 flags not yet reviewed (HIGH_OVERLAP, FILLER_REASON, EDGE_ON_CONTENT, EDGE_ON_CONTENT)|candidate-07
+SWEEP_NOT_DONE|The top-to-bottom page sweep for missed artwork is not done|null

@@ -30,10 +30,12 @@ import {
   AlertTriangle,
   Film,
   FolderOpen,
-  ShieldAlert
+  ShieldAlert,
+  CloudOff
 } from 'lucide-react'
 import {
   openFolder,
+  r2Api,
   storageApi,
   type StorageOverview,
   type SeriesStorage,
@@ -167,6 +169,37 @@ export default function StorageManager({ libraryRoot }: { libraryRoot?: string }
   const [videos, setVideos] = useState<Record<string, StorageVideoFile[]>>({})
   const [loadingVideos, setLoadingVideos] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
+  const [cleaningR2, setCleaningR2] = useState(false)
+
+  /** Lists first (dry run), asks, then deletes. A few R2 LISTs and one index PUT per series; deletes are free. */
+  const cleanUpR2 = async () => {
+    setCleaningR2(true)
+    try {
+      const plan = await r2Api.cleanup(true)
+      const skipped = plan.pages.skipped ?? plan.voiceover.skipped
+      if (skipped) { toast({ title: 'Nothing cleaned', description: skipped }); return }
+      const pages = plan.pages.cleared, voice = plan.voiceover.deleted
+      if (pages.length + voice.length === 0) { toast({ title: 'R2 is clean', description: 'No done Part or already-imported voiceover is left in R2.' }); return }
+      const imported = voice.filter(t => t.reason === 'imported').length
+      const ok = window.confirm(
+        `Delete from R2 (${formatBytes(plan.pages.freedBytes + plan.voiceover.freedBytes)})?\n\n` +
+        `• ${pages.length} chapter page zip(s) of done Parts (${formatBytes(plan.pages.freedBytes)})\n` +
+        `• ${voice.length - imported} voiceover file(s) of done Parts\n` +
+        `• ${imported} voiceover zip(s) already imported and aligned in Studio\n\n` +
+        `Studio and the phones keep their copies. This can't be undone.`)
+      if (!ok) return
+      const result = await r2Api.cleanup(false)
+      const warnings = result.pages.warnings
+      toast({
+        title: `Freed ${formatBytes(result.pages.freedBytes + result.voiceover.freedBytes)} in R2`,
+        description: `${result.pages.cleared.length} page zip(s), ${result.voiceover.deleted.length} voiceover file(s) deleted` + (warnings.length ? ` · ${warnings.join(' · ')}` : '')
+      })
+    } catch (err) {
+      toast({ title: 'R2 cleanup failed', description: err instanceof Error ? err.message : String(err), variant: 'destructive' })
+    } finally {
+      setCleaningR2(false)
+    }
+  }
 
   // What a cleanup removes. Crops and audio are on by default because they are
   // the bulk of the reclaimable space and are both regenerable; source pages
@@ -337,11 +370,15 @@ export default function StorageManager({ libraryRoot }: { libraryRoot?: string }
   }
 
   const deleteCompressedRenders = async (series: SeriesStorage, folder: StorageVideoCleanupFolder) => {
+    const newer = folder.renderedFileCount - folder.coveredFileCount
     if (!window.confirm(
-      `Delete ${folder.renderedFileCount} rendered MP4s from "${series.title}/${folder.dir}"?\n\n` +
-      `This frees about ${formatBytes(folder.renderedBytes)} and cannot be undone.\n\n` +
-      `Compressed video found:\n${folder.compressedVideos.join('\n')}\n\n` +
-      `Check that the compressed video contains the finished cut you need. The compressed folder and its contents will be kept.`
+      `Delete ${folder.coveredFileCount} rendered MP4s from "${series.title}/${folder.dir}"?\n\n` +
+      `This frees about ${formatBytes(folder.coveredBytes)} and cannot be undone.\n\n` +
+      (folder.compressedVideos.length
+        ? `Compressed video found:\n${folder.compressedVideos.join('\n')}\n\n` +
+          `Check that the compressed video contains the finished cut you need. The compressed folder and its contents will be kept.`
+        : `Checkpoint from ${new Date(folder.checkpointAt!).toLocaleString()} (compressed video since removed):\n${folder.checkpointVideos.join('\n')}`) +
+      (newer > 0 ? `\n\n${newer} newer render${newer === 1 ? '' : 's'} will be kept — save a compressed copy to cover ${newer === 1 ? 'it' : 'them'}.` : '')
     )) return
 
     setBusy(`${series.id}/${folder.dir}`)
@@ -416,12 +453,21 @@ export default function StorageManager({ libraryRoot }: { libraryRoot?: string }
             </p>
           )}
         </div>
-        <Button variant="outline" onClick={() => load(true)} disabled={scanning}>
-          {scanning
-            ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            : <RefreshCw className="mr-2 h-4 w-4" />}
-          Rescan
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={cleanUpR2} disabled={cleaningR2}
+            title="Delete done Parts' page zips and voiceovers from R2, and voiceover zips Studio already imported and aligned">
+            {cleaningR2
+              ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              : <CloudOff className="mr-2 h-4 w-4" />}
+            Clean up R2
+          </Button>
+          <Button variant="outline" onClick={() => load(true)} disabled={scanning}>
+            {scanning
+              ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              : <RefreshCw className="mr-2 h-4 w-4" />}
+            Rescan
+          </Button>
+        </div>
       </div>
 
       {error && (
@@ -634,17 +680,25 @@ export default function StorageManager({ libraryRoot }: { libraryRoot?: string }
                       <div className="mt-4 space-y-2 border-t pt-4">
                         <p className="text-sm font-medium">Rendered video cleanup · Compressed copies are kept</p>
                         {videoCleanupFolders.map(folder => {
-                          const ready = folder.compressedVideos.length > 0
+                          const ready = folder.coveredFileCount > 0
+                          const newer = folder.renderedFileCount - folder.coveredFileCount
                           const busyKey = `${series.id}/${folder.dir}`
                           return (
                             <div key={folder.dir} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3">
                               <div className="min-w-0 text-sm">
                                 <p className="font-medium">{folder.dir} · {folder.renderedFileCount} render{folder.renderedFileCount === 1 ? '' : 's'} · {formatBytes(folder.renderedBytes)}</p>
-                                <p className={`mt-1 break-words text-xs ${ready ? 'text-green-500' : 'text-muted-foreground'}`}>
-                                  {ready
+                                <p className={`mt-1 break-words text-xs ${folder.checkpointAt ? 'text-green-500' : 'text-muted-foreground'}`}>
+                                  {folder.compressedVideos.length
                                     ? `Compressed video found: ${folder.compressedVideos.join(', ')}`
-                                    : 'Add a video to a compressed subfolder to enable deleting renders.'}
+                                    : folder.checkpointAt
+                                      ? `Checkpoint saved ${new Date(folder.checkpointAt).toLocaleDateString()} · compressed video removed, safe to keep it deleted`
+                                      : 'Add a video to a compressed subfolder to enable deleting renders.'}
                                 </p>
+                                {folder.checkpointAt && newer > 0 && (
+                                  <p className="mt-1 text-xs text-muted-foreground">
+                                    {newer} render{newer === 1 ? '' : 's'} written after the checkpoint — kept until a compressed copy is saved.
+                                  </p>
+                                )}
                               </div>
                               <Button
                                 variant="destructive"
@@ -748,8 +802,9 @@ export default function StorageManager({ libraryRoot }: { libraryRoot?: string }
                             <ShieldAlert className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
                             <span>
                               These are the finished exports and are never removed by a cleanup.
-                              Save the finished video in a compressed subfolder, then use Delete renders
-                              to free the original MP4s. Compressed videos are kept. Click Rescan after adding a video.
+                              Save the finished video in a compressed subfolder and click Rescan — that records a checkpoint.
+                              Delete renders then frees the original MP4s. You can delete the compressed video yourself
+                              afterwards; the checkpoint is kept.
                             </span>
                           </p>
 

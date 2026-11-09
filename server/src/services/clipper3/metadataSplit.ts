@@ -92,9 +92,17 @@ export async function currentMetadataJobs(chapter: Chapter, generation: {restart
   if (!script) throw new Error('English script required for Metadata')
   const series = path.basename(path.dirname(dir)), chapterName = path.basename(dir)
   const chapterRevision = sha256(JSON.stringify([receipt.revision, generation]))
+  // Phones keep a rejected page's redo marker for good; naming the (finished) redo these pointers answer
+  // tells them the page is no longer rejected. Pending redos never reach here (geometrySnapshot throws).
+  const redos = new Map<string, string>()
+  for (const p of snapshot.pages) {
+    const redo = await readPageRedo(chapter.folderPath, p.page)
+    if (redo?.status === 'imported') redos.set(p.page, redo.revision)
+  }
   const jobs = snapshot.pages.map(p => {
     const payloadText = JSON.stringify({series,chapter:chapterName,chapterNumber:String(chapter.number),...p,...generation,
-      scriptSha256:sha256(script),chapterRevision,cutRevision:receipt.revision,renderer:METADATA_RENDERER,expectedPages:snapshot.pages.map(p=>p.page)})
+      scriptSha256:sha256(script),chapterRevision,cutRevision:receipt.revision,renderer:METADATA_RENDERER,expectedPages:snapshot.pages.map(p=>p.page),
+      ...(redos.has(p.page) ? {studioRedoRevision:redos.get(p.page)} : {})})
     return {schema:METADATA_JOB_SCHEMA,revision:sha256(payloadText),payloadText}
   })
   return {jobs, script, series, chapter:chapterName}

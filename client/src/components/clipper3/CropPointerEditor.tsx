@@ -18,7 +18,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
-import { Loader2, Pencil, Save, X } from 'lucide-react'
+import { Loader2, Pencil, Save, X, Plus } from 'lucide-react'
 import { clipper3Api, type Clipper3CropEntry, type Clipper3ImageCropFile, type Clipper3ImagePoints } from '@/lib/api'
 import { useToast } from '@/components/ui/use-toast'
 import { removeCropFromMetadata } from '@/lib/cropReviewSession'
@@ -85,7 +85,7 @@ const MIN_SIZE = 0.01
 export interface CropPointerEditorProps {
   /** Chapter preview supplies committed edits; all pages stay editable. */
   reviewMode?: boolean
-  onCommit?: (file: Clipper3ImageCropFile, removedCropId?: string) => void
+  onCommit?: (file: Clipper3ImageCropFile, removedCropId?: string, addedDescription?: string) => Clipper3ImageCropFile | void
   onInteractionChange?: (dragging: boolean) => void
   chapterId: string
   filename: string
@@ -166,6 +166,7 @@ export function CropPointerEditor({
   const [selectedCropId, setSelectedCropId] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [addCropY, setAddCropY] = useState(24)
 
   // Crops removed this editing session, oldest first. Staged rather than
   // written immediately so Cancel can discard them like any other edit; on
@@ -189,6 +190,7 @@ export function CropPointerEditor({
   }, [reviewMode, initialFile])
 
   useEffect(() => () => dragCleanup.current?.(), [])
+
 
   useEffect(() => {
     if (initialFile !== undefined) return
@@ -250,6 +252,27 @@ export function CropPointerEditor({
     setSelectedCropId(null)
     setDirty(true)
   }, [file, reviewMode, toast])
+
+  const addCrop = useCallback((bounds: Bounds) => {
+    if (!file) return
+    const entry: Clipper3CropEntry = boundsToEntry({
+      id: `manual-${crypto.randomUUID()}`,
+      reason: 'manual',
+      crop: { mode: 'rectangle', points: ['P1', 'P2', 'P3', 'P4'].map(id => ({ id, x: 0, y: 0 })) }
+    }, bounds)
+    const committed = onCommitRef.current?.({ ...file, crops: [...file.crops, entry] })
+    setSelectedCropId(committed?.crops.find(crop => crop.crop === entry.crop)?.id ?? entry.id)
+  }, [file])
+
+  const addSquareCrop = useCallback(() => {
+    // Equal pixel sides need different normalized spans on a tall page.
+    const side = Math.min(300, width / 2, height / 2)
+    const halfWidth = side / width / 2
+    const cropHeight = side / height
+    const centerY = addCropY / (height * zoom)
+    const top = Math.max(0, Math.min(1 - cropHeight, centerY - cropHeight / 2))
+    addCrop({ left: 0.5 - halfWidth, right: 0.5 + halfWidth, top, bottom: top + cropHeight })
+  }, [width, height, zoom, addCropY, addCrop])
 
   const updateCropBounds = useCallback((cropId: string, bounds: Bounds) => {
     const current = draftRef.current
@@ -327,7 +350,11 @@ export function CropPointerEditor({
     const onMouseUp = () => {
       cleanup()
       const draft = draftRef.current
-      if (reviewMode && draft && draft !== before) onCommitRef.current?.(draft)
+      if (reviewMode && draft && draft !== before) {
+        const selected = draft.crops.find(crop => crop.id === entry.id)
+        const committed = onCommitRef.current?.(draft)
+        if (committed) setSelectedCropId(committed.crops.find(crop => crop.crop === selected?.crop)?.id ?? null)
+      }
     }
 
     dragCleanup.current = cleanup
@@ -548,8 +575,17 @@ export function CropPointerEditor({
         {!floatingControls && inlineSaveCancel}
       </div>
       {floatingSaveCancel}
-
-      <div className="flex items-start gap-3">
+      <div className="relative flex items-start gap-3" onMouseMove={event => {
+        if (!reviewMode || dragRef.current || (event.target as HTMLElement).closest('button')) return
+        const top = event.currentTarget.getBoundingClientRect().top
+        setAddCropY(Math.max(16, Math.min(height * zoom - 16, event.clientY - top)))
+      }}>
+      {reviewMode && file && (
+        <Button size="sm" className="absolute right-2 z-40" style={{ top: addCropY, transform: 'translateY(-50%)' }}
+          onMouseDown={event => event.stopPropagation()} onClick={addSquareCrop}>
+          <Plus className="mr-1 h-3.5 w-3.5" />Add crop
+        </Button>
+      )}
       <div
         ref={boxRef}
         className="relative bg-neutral-950 rounded-sm overflow-hidden mx-auto"

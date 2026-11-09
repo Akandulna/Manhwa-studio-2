@@ -1,3 +1,4 @@
+import { cooperativeRequest, COOPERATIVE_PROTOCOL, type CooperativeRequest } from './cooperativeRequest'
 import { boundedBody } from './managedArtifactStorage'
 import { receiptContent, PRESENCE_CHECKPOINT_MS, staleReceipt } from './receiptState'
 /**
@@ -114,7 +115,7 @@ function tokenMatches(given: string | null, expected: string): boolean {
   return a.byteLength === b.byteLength && crypto.subtle.timingSafeEqual(a, b)
 }
 
-const FEATURES = ['metadata-automation/1', 'receipt-source-revision/1','youtube-automation/1','manager-batch/1','native-manager-coverage/1','account-audit-deadline/1','recovery-dispatch-hints/1']
+const FEATURES = [COOPERATIVE_PROTOCOL, 'metadata-automation/1', 'receipt-source-revision/1','youtube-automation/1','manager-batch/1','native-manager-coverage/1','account-audit-deadline/1','recovery-dispatch-hints/1']
 const pauses = new WeakMap<Env,{until:number}>()
 async function forwardRelay(request:Request,env:Env):Promise<Response> {
   const cached=pauses.get(env)
@@ -167,6 +168,8 @@ interface StoredRequest {
   /** Image Clipper's ChatGPT mode, model and effort, which the phone keeps for its later runs too. */
   chatGpt?: ChatGptSettings
   smallBatches?: boolean
+  editorWorkflow?: string
+  cooperation?: CooperativeRequest
 }
 
 /** What a phone socket carries across hibernation; `at` is when it connected. */
@@ -212,7 +215,7 @@ const START_ACTIONS = new Set(['metadata_start', 'clipper_start', 'narration_sta
 /** The runs that take `tabs`. */
 const TAB_ACTIONS = new Set(['metadata_start', 'clipper_start', 'editor_start', 'voiceover_start'])
 /** The runs that take `chapters`: a phone's share of a series split between phones (or a running one's new scope). */
-const CHAPTER_ACTIONS = new Set(['metadata_start', 'clipper_start', 'editor_start', 'voiceover_start'])
+const CHAPTER_ACTIONS = new Set(['metadata_start', 'clipper_start', 'narration_start', 'editor_start', 'voiceover_start'])
 /** The runs that take a `language`. */
 const LANGUAGE_ACTIONS = new Set(['editor_start', 'voiceover_start'])
 
@@ -638,9 +641,9 @@ export class Relay extends DurableObject<Env> {
 
   /** Saves a request and passes it to the phone it's for, or every phone. Null when it isn't a valid request. */
   private storeRequest(value: unknown): { request: StoredRequest; phones: number } | null {
-    const { id, requestedAt, action, device, series, tabs, chapters, ai, flow, language, profile, chatGpt, smallBatches } = (value ?? {}) as {
+    const { id, requestedAt, action, device, series, tabs, chapters, ai, flow, language, profile, chatGpt, smallBatches, editorWorkflow, cooperation } = (value ?? {}) as {
       id?: unknown; requestedAt?: unknown; action?: unknown; device?: unknown; series?: unknown; tabs?: unknown; chapters?: unknown
-      ai?: unknown; flow?: unknown; language?: unknown; profile?: unknown; chatGpt?: unknown; smallBatches?: unknown
+      ai?: unknown; flow?: unknown; language?: unknown; profile?: unknown; chatGpt?: unknown; smallBatches?: unknown; editorWorkflow?: unknown; cooperation?: unknown
     }
     if (typeof id !== 'string' || !id || id.length > 100) return null
     if (device !== undefined && device !== null && (typeof device !== 'string' || (device && !DEVICE_ID.test(device)))) return null
@@ -648,12 +651,21 @@ export class Relay extends DurableObject<Env> {
     if (typeof action === 'string' && ACTIONS.has(action)) request.action = action
     if (typeof device === 'string' && device) request.device = device
     const started = request.action ?? ''
+    if (cooperation !== undefined) {
+      const parsed = cooperativeRequest(cooperation, started, device, series)
+      if (!parsed) return null
+      request.cooperation = parsed
+    }
     if (START_ACTIONS.has(started)) {
       if (typeof series === 'string' && series.trim() && series.length <= 200) request.series = series.trim()
     }
     if (TAB_ACTIONS.has(started)) {
       if (typeof tabs === 'number' && Number.isInteger(tabs) && tabs >= 1 && tabs <= MAX_TABS) request.tabs = tabs
     }
+    // An explicit Narration range must never degrade into an unrestricted series start.
+    if (started === 'narration_start' && chapters !== undefined &&
+        (!Array.isArray(chapters) || !chapters.length || chapters.length > MAX_CHAPTERS ||
+         chapters.some(c => typeof c !== 'string' || !c || c.length > MAX_CHAPTER_NAME))) return null
     if (CHAPTER_ACTIONS.has(started) && Array.isArray(chapters)) {
       const names = chapters.filter((c): c is string => typeof c === 'string' && !!c && c.length <= MAX_CHAPTER_NAME)
       if (names.length > MAX_CHAPTERS) return null
@@ -661,7 +673,7 @@ export class Relay extends DurableObject<Env> {
     }
     if (started === 'metadata_start') {
       if (ai !== undefined && ai !== 'aistudio') return null
-      if (!request.series || !request.device || !request.chapters?.length) return null
+      if (!request.series || !request.device || !request.cooperation && !request.chapters?.length) return null
       request.ai = 'aistudio'
     }
     if (started === 'clipper_start') {
@@ -674,6 +686,10 @@ export class Relay extends DurableObject<Env> {
       }
     }
     if (started === 'editor_start') {
+      if (editorWorkflow !== undefined) {
+        if (!['scene-planner/1', 'bounded-scenes/1'].includes(String(editorWorkflow)) || smallBatches !== true) return null
+        request.editorWorkflow = editorWorkflow as string
+      }
       if (ai !== undefined) {
         if (ai !== 'chatgpt' && ai !== 'aistudio') return null
         request.ai = ai
@@ -695,7 +711,7 @@ export class Relay extends DurableObject<Env> {
       request.profile = profile
     }
     if (legacyRequestBlocked(this.sql, request.action, request.device ?? '')) throw new ManagedLegacyConflict()
-    const options = { ai: request.ai, flow: request.flow, language: request.language, profile: request.profile, chatGpt: request.chatGpt, smallBatches: request.smallBatches }
+    const options = { ai: request.ai, flow: request.flow, language: request.language, profile: request.profile, chatGpt: request.chatGpt, smallBatches: request.smallBatches, editorWorkflow: request.editorWorkflow, cooperation: request.cooperation }
     this.sql.exec(
       'INSERT INTO phone_requests (target, id, requested_at, action, series, tabs, chapters, options) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ' +
         'ON CONFLICT(target) DO UPDATE SET id = excluded.id, requested_at = excluded.requested_at, action = excluded.action, ' +
@@ -741,14 +757,20 @@ export class Relay extends DurableObject<Env> {
     }
     if (row.options) {
       try {
-        const { ai, flow, language, profile, chatGpt, smallBatches } =
-          JSON.parse(row.options) as Pick<StoredRequest, 'ai' | 'flow' | 'language' | 'profile' | 'chatGpt' | 'smallBatches'>
+        const { ai, flow, language, profile, chatGpt, smallBatches, editorWorkflow, cooperation } =
+          JSON.parse(row.options) as Pick<StoredRequest, 'ai' | 'flow' | 'language' | 'profile' | 'chatGpt' | 'smallBatches' | 'editorWorkflow' | 'cooperation'>
         if (ai) request.ai = ai
         if (flow) request.flow = flow
         if (language) request.language = language
         if (profile) request.profile = profile
         if (chatGpt) request.chatGpt = chatGpt
         if (typeof smallBatches === 'boolean') request.smallBatches = smallBatches
+        if (editorWorkflow) request.editorWorkflow = editorWorkflow
+        if (cooperation) {
+          const parsed = cooperativeRequest(cooperation, request.action, request.device, request.series)
+          if (!parsed) return null
+          request.cooperation = parsed
+        }
       } catch {
         // Written by storeRequest, so always JSON.
       }

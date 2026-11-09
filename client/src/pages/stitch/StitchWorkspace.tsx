@@ -103,6 +103,7 @@ export default function StitchWorkspace() {
   const [state, setState] = useState<StitchChapterState | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<'stitch' | 'undo' | 'discard' | null>(null)
+  const [restitching, setRestitching] = useState(false)
 
   const [target, setTarget] = useState(String(DEFAULT_TARGET))
   const [columnWidth, setColumnWidth] = useState(140)
@@ -132,6 +133,7 @@ export default function StitchWorkspace() {
   // Switching chapter keeps this component mounted: drop the old chapter's state.
   useEffect(() => {
     setState(null)
+    setRestitching(false)
     setLoading(true)
     setPreviewGroup(null)
   }, [id])
@@ -141,6 +143,7 @@ export default function StitchWorkspace() {
     try {
       const data = await stitchApi.getChapter(id)
       setState(data)
+      setRestitching(false)
       setProfiles(null)
       setEdges(null)
       setLayout({
@@ -166,6 +169,16 @@ export default function StitchWorkspace() {
   useEffect(() => {
     load()
   }, [load])
+
+  useEffect(() => {
+    if (!state || state.chapterId !== id || searchParams.get('again') !== '1') return
+    setRestitching(!!state.stitched)
+    setSearchParams(previous => {
+      const next = new URLSearchParams(previous)
+      next.delete('again')
+      return next
+    }, { replace: true })
+  }, [id, state, searchParams, setSearchParams])
 
   /** Apply a layout edit, keeping the previous layout for Undo. */
   const commit = (next: Partial<Layout>) => {
@@ -357,11 +370,11 @@ export default function StitchWorkspace() {
   // Opened with ?auto=1 (the library's Auto stitch button): plan straight away, once.
   const autoRequested = searchParams.get('auto') === '1'
   useEffect(() => {
-    if (!autoRequested || !state || state.record || state.pages.length === 0) return
+    if (!autoRequested || !state || state.chapterId !== id || (state.stitched && !restitching) || state.pages.length === 0) return
     setSearchParams({}, { replace: true })
     planAuto()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRequested, state])
+  }, [autoRequested, id, state, restitching])
 
   // ---- Selection ----
 
@@ -498,14 +511,14 @@ export default function StitchWorkspace() {
     try {
       if (kind === 'stitch') {
         const body = strip && cuts ? outputPieces(strip, cuts, dropped) : outputGroups(pages, groups, excluded)
-        const result = await stitchApi.stitch(id, body)
+        const result = await stitchApi.stitch(id, body, restitching)
         toast({
           title: 'Chapter stitched',
-          description: `${result.originalPages} pages → ${result.stitchedPages} pages. The originals are backed up until you delete them.`
+          description: `${result.originalPages} pages → ${result.stitchedPages} pages. The previous pages are backed up until you delete them.`
         })
       } else if (kind === 'undo') {
         await stitchApi.undo(id)
-        toast({ title: 'Stitch undone', description: 'The original pages are back.' })
+        toast({ title: 'Stitch undone', description: 'The previous pages are back.' })
       } else {
         await stitchApi.discardBackup(id)
         toast({ title: 'Originals deleted', description: 'The stitched pages are now the chapter’s pages.' })
@@ -542,6 +555,7 @@ export default function StitchWorkspace() {
   }
 
   const record = state.record
+  const stitched = state.stitched
   const thumb = (p: StitchPage) => stitchApi.thumbUrl(id, p.filename, String(p.bytes))
   const movingSet = new Set(dragging ?? [])
 
@@ -612,7 +626,7 @@ export default function StitchWorkspace() {
         </Card>
       )}
 
-      {record ? (
+      {stitched && !restitching ? (
         <>
           {/* Already stitched: show the result and the backup actions */}
           <Card className="mb-6 border-emerald-500/40 bg-emerald-500/5">
@@ -620,14 +634,26 @@ export default function StitchWorkspace() {
               <CheckCircle className="h-6 w-6 text-emerald-500 shrink-0" />
               <div className="flex-1 min-w-[16rem]">
                 <p className="font-medium">
-                  Stitched {record.originals.length} pages into {record.outputs.length}
-                  {record.excluded.length > 0 && ` (${record.excluded.length} dropped)`}
+                  {stitched.originalPages === null
+                    ? `Stitching complete · ${stitched.stitchedPages} pages`
+                    : `Stitched ${stitched.originalPages} pages into ${stitched.stitchedPages}`}
+                  {!!record?.excluded.length && ` (${record.excluded.length} dropped)`}
                 </p>
                 <p className="text-sm text-muted-foreground">
-                  {new Date(record.stitchedAt).toLocaleString()} · The originals ({formatBytes(state.backupBytes)}) are
-                  kept in a hidden backup inside the chapter folder until you delete them.
+                  {stitched.stitchedAt && `${new Date(stitched.stitchedAt).toLocaleString()} · `}
+                  {record
+                    ? `The originals (${formatBytes(state.backupBytes)}) are kept in a hidden backup inside the chapter folder until you delete them.`
+                    : 'Originals deleted. Stitching is complete; undo is no longer available.'}
                 </p>
               </div>
+              <Button
+                onClick={() => { setRestitching(true); void planAuto() }}
+                disabled={busy !== null || state.blockers.length > 0 || pages.length === 0}
+              >
+                <Sparkles className="h-4 w-4 mr-2" />
+                Stitch again
+              </Button>
+              {record && <>
               <Button variant="outline" onClick={() => run('undo')} disabled={busy !== null}>
                 {busy === 'undo' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RotateCcw className="h-4 w-4 mr-2" />}
                 Undo stitch
@@ -637,7 +663,7 @@ export default function StitchWorkspace() {
                 className="text-destructive hover:text-destructive"
                 disabled={busy !== null}
                 onClick={() => {
-                  if (confirm(`Delete the ${record.originals.length} original pages? The stitch can no longer be undone.`)) {
+                  if (confirm(`Delete the ${record.originals.length} saved pages${record.previousStitch?.hasBackup ? ' and earlier stitch backups' : ''}? The stitch can no longer be undone.`)) {
                     run('discard')
                   }
                 }}
@@ -645,6 +671,7 @@ export default function StitchWorkspace() {
                 {busy === 'discard' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Trash2 className="h-4 w-4 mr-2" />}
                 Delete originals
               </Button>
+              </>}
             </CardContent>
           </Card>
 
@@ -655,7 +682,7 @@ export default function StitchWorkspace() {
                 <div className="mb-2 text-xs">
                   <div className="font-medium">Page {i + 1}</div>
                   <div className="text-muted-foreground">
-                    {p.height.toLocaleString()} px · {record.outputs[i]?.sources.length ?? 1} img
+                    {p.height.toLocaleString()} px{record && ` · ${record.outputs[i]?.sources.length ?? 1} img`}
                   </div>
                 </div>
                 <PageThumb src={thumb(p)} page={p} width={columnWidth} />
@@ -665,6 +692,16 @@ export default function StitchWorkspace() {
         </>
       ) : (
         <>
+          {restitching && (
+            <Card className="mb-4">
+              <CardContent className="py-3 flex flex-wrap items-center gap-3">
+                <p className="flex-1 text-sm">Stitching again from the current pages. Your saved chapter stays unchanged until you stitch. Earlier backups will be kept.</p>
+                <Button variant="outline" size="sm" onClick={() => void load()} disabled={busy !== null}>
+                  Cancel
+                </Button>
+              </CardContent>
+            </Card>
+          )}
           {/* Toolbar */}
           <Card className="mb-4 sticky top-0 z-30">
             <CardContent className="py-4 flex flex-wrap items-end gap-6">
@@ -765,7 +802,7 @@ export default function StitchWorkspace() {
 
               <Button
                 onClick={() => run('stitch')}
-                disabled={busy !== null || overLimit > 0 || outputCount === 0 || state.blockers.length > 0}
+                disabled={busy !== null || measuring || overLimit > 0 || outputCount === 0 || state.blockers.length > 0}
               >
                 {busy === 'stitch' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Layers className="h-4 w-4 mr-2" />}
                 {busy === 'stitch' ? 'Stitching…' : `Stitch into ${outputCount} pages`}
@@ -1078,7 +1115,7 @@ export default function StitchWorkspace() {
       )}
 
       {/* While dragging: new-page targets that are always on screen */}
-      {dragging && !record && (
+      {dragging && !stitched && (
         <div
           data-drop-dock
           className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex gap-3 rounded-xl border bg-background/95 p-2 shadow-2xl backdrop-blur"

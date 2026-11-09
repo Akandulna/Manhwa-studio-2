@@ -1,0 +1,160 @@
+{
+  "schema_version": "crop-studio-review/1.0",
+  "job_id": "solo_leveling-ch010-page_003-0123456789ab",
+  "source_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "source_width": 800,
+  "source_height": 5000,
+  "page_stem": "page_003",
+  "review_revision": 1,
+  "created_at": "2026-11-07T10:01:00.000Z",
+  "updated_at": "2026-11-07T10:01:00.000Z",
+  "based_on": {
+    "kind": "chatgpt_import",
+    "response_sha256": "6c10196f2a61257a1b4ac0e4b88846ab520e4daea147ae3da6d6d62af55615ff"
+  },
+  "crops": [
+    {
+      "key": "candidate-01",
+      "origin": "chatgpt",
+      "reason": "framed_shot",
+      "bounds": {
+        "x0": 40,
+        "y0": 100,
+        "x1": 760,
+        "y1": 900
+      },
+      "description": "",
+      "description_status": "missing",
+      "disposition": "unreviewed",
+      "visual_evidence": "Visible border",
+      "gpt_flags": [
+        "boundary_uncertain"
+      ],
+      "unknown_flags": [
+        "weird_flag"
+      ],
+      "acknowledged": [],
+      "note": ""
+    },
+    {
+      "key": "candidate-02",
+      "origin": "chatgpt",
+      "reason": "framed_shot",
+      "bounds": {
+        "x0": 40,
+        "y0": 900,
+        "x1": 760,
+        "y1": 1500
+      },
+      "description": "",
+      "description_status": "missing",
+      "disposition": "unreviewed",
+      "visual_evidence": "Visible border",
+      "gpt_flags": [],
+      "unknown_flags": [],
+      "acknowledged": [],
+      "note": ""
+    },
+    {
+      "key": "candidate-03",
+      "origin": "chatgpt",
+      "reason": "tall_action",
+      "bounds": {
+        "x0": 0,
+        "y0": 2248,
+        "x1": 800,
+        "y1": 4196
+      },
+      "description": "",
+      "description_status": "missing",
+      "disposition": "unreviewed",
+      "visual_evidence": "Visible border",
+      "gpt_flags": [],
+      "unknown_flags": [],
+      "acknowledged": [],
+      "note": ""
+    },
+    {
+      "key": "candidate-04",
+      "origin": "chatgpt",
+      "reason": "framed_shot",
+      "bounds": {
+        "x0": 100,
+        "y0": 4396,
+        "x1": 140,
+        "y1": 4436
+      },
+      "description": "",
+      "description_status": "missing",
+      "disposition": "unreviewed",
+      "visual_evidence": "Visible border",
+      "gpt_flags": [],
+      "unknown_flags": [],
+      "acknowledged": [],
+      "note": ""
+    },
+    {
+      "key": "candidate-05",
+      "origin": "chatgpt",
+      "reason": "framed_shot",
+      "bounds": {
+        "x0": 100,
+        "y0": 4396,
+        "x1": 141,
+        "y1": 4436
+      },
+      "description": "",
+      "description_status": "missing",
+      "disposition": "unreviewed",
+      "visual_evidence": "Visible border",
+      "gpt_flags": [],
+      "unknown_flags": [],
+      "acknowledged": [],
+      "note": ""
+    },
+    {
+      "key": "candidate-06",
+      "origin": "chatgpt",
+      "reason": "framed_shot",
+      "bounds": {
+        "x0": 300,
+        "y0": 4596,
+        "x1": 700,
+        "y1": 4896
+      },
+      "description": "",
+      "description_status": "missing",
+      "disposition": "unreviewed",
+      "visual_evidence": "Visible border",
+      "gpt_flags": [],
+      "unknown_flags": [],
+      "acknowledged": [],
+      "note": ""
+    },
+    {
+      "key": "candidate-07",
+      "origin": "chatgpt",
+      "reason": "speech_bubble",
+      "bounds": {
+        "x0": 450,
+        "y0": 4646,
+        "x1": 700,
+        "y1": 4896
+      },
+      "description": "",
+      "description_status": "missing",
+      "disposition": "unreviewed",
+      "visual_evidence": "Visible border",
+      "gpt_flags": [],
+      "unknown_flags": [],
+      "acknowledged": [],
+      "note": ""
+    }
+  ],
+  "page": {
+    "sweep_done": false,
+    "no_eligible_artwork_confirmed": false,
+    "note": ""
+  },
+  "chatgpt_reviews": 0
+}

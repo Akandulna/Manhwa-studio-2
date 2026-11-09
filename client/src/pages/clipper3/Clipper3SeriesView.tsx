@@ -1,3 +1,5 @@
+import { canBulkCrop, clipperChapterParts } from '@/lib/clipperParts'
+import { CloudClipperPanel } from './CloudClipperPanel'
 /**
  * Clipper3SeriesView — Module 3 v3: Image Clipper 3.0
  *
@@ -16,7 +18,7 @@ import { CompletedBadge, PublishedBadge, completedRowClass, publishedRowClass } 
 import { PhoneCropsBadge } from '@/components/PhoneSyncBadge'
 import { usePhoneCrops } from '@/hooks/usePhoneCrops'
 import { PhoneRefreshButton } from '@/components/PhoneRefreshButton'
-import { useParams, useNavigate, Link } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -225,6 +227,10 @@ function ChoppedStatusBadge({ summary, cropping }: { summary: Clipper3ChapterSum
 export default function Clipper3SeriesView() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const selectedPart = Number(searchParams.get('part')) || null
+  const [startingCrop, setStartingCrop] = useState(false)
+  const [cropReport, setCropReport] = useState<{ chapterNumber: number; reason: string }[] | null>(null)
   const [chapters, setChapters] = useState<Clipper3Chapter[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -684,6 +690,53 @@ export default function Clipper3SeriesView() {
     () => chapters.filter(c => c.seriesId === id).sort((a, b) => a.number - b.number),
     [chapters, id]
   )
+  const chapterParts = useMemo(() => clipperChapterParts(seriesChapters), [seriesChapters])
+  const visibleParts = selectedPart ? chapterParts.filter(part => part.number === selectedPart) : chapterParts
+  const reviewedChapterIds = seriesChapters.filter(chapter =>
+    completedPart(chapter.id) === null && canBulkCrop(summaries[chapter.id])
+  ).map(chapter => chapter.id)
+  const cropActive = Object.values(summaries).some(summary => summary.cropping)
+
+  // The server owns the queue after navigation or a lost socket connection.
+  useEffect(() => {
+    if (!id || (!startingCrop && !cropActive)) return
+    let cancelled = false
+    const timer = window.setInterval(() => {
+      clipper3Api.getSeriesSummary(id).then(result => {
+        if (!cancelled) setSummaries(Object.fromEntries(result.chapters.map(chapter => [chapter.chapterId, chapter])))
+      }).catch(() => {})
+    }, 2000)
+    return () => { cancelled = true; window.clearInterval(timer) }
+  }, [id, startingCrop, cropActive])
+
+  const cropReviewed = async (chapterIds: string[]) => {
+    if (!id || startingCrop || chapterIds.length === 0) return
+    setStartingCrop(true)
+    setCropReport(null)
+    try {
+      const result = await clipper3Api.cropReviewed(id, chapterIds)
+      // Reflect accepted queue entries immediately, including if the refresh fails.
+      setSummaries(previous => {
+        const next = { ...previous }
+        for (const chapter of result.queued) {
+          if (next[chapter.chapterId]) next[chapter.chapterId] = { ...next[chapter.chapterId], cropping: true }
+        }
+        return next
+      })
+      if (result.skipped.length) setCropReport(result.skipped)
+      toast({
+        title: result.queued.length ? `Queued ${result.queued.length} reviewed chapter${result.queued.length === 1 ? '' : 's'}` : 'No chapters need cropping',
+        description: 'Chapters crop one at a time in the background. Review and page readiness are checked again before each cut.'
+      })
+      clipper3Api.getSeriesSummary(id)
+        .then(result => setSummaries(Object.fromEntries(result.chapters.map(chapter => [chapter.chapterId, chapter]))))
+        .catch(() => {})
+    } catch (err) {
+      toast({ title: 'Could not start cropping', description: err instanceof Error ? err.message : 'Failed to queue reviewed chapters', variant: 'destructive' })
+    } finally {
+      setStartingCrop(false)
+    }
+  }
   const seriesTitle = seriesChapters[0]?.seriesTitle ?? ''
 
   if (loading) {
@@ -733,7 +786,7 @@ export default function Clipper3SeriesView() {
 
   // Any run that writes the store locks every button that writes the store, so
   // two of them can never be started over the same files.
-  const busy = slicingAll || syncing || scanning || fetchingR2 || unsyncing || unsyncScanning
+  const busy = slicingAll || syncing || scanning || fetchingR2 || unsyncing || unsyncScanning || startingCrop || cropActive
 
   return (
     <div className="flex flex-col h-full">
@@ -768,6 +821,8 @@ export default function Clipper3SeriesView() {
               </div>
               <Progress value={progress} className="h-2" />
             </div>
+
+            <CloudClipperPanel seriesId={id!} chapters={seriesChapters.map(c => ({id:c.id,label:`Chapter ${c.number}`}))} onImported={() => { void clipper3Api.getSeriesSummary(id!).then(result => setSummaries(Object.fromEntries(result.chapters.map(c => [c.chapterId,c])))).catch(() => {}) }} />
 
             {/* Separate from Attach Progress: this counts pages sliced across
                 the whole series, not chapters that are fully attached. */}
@@ -833,7 +888,7 @@ export default function Clipper3SeriesView() {
 
           {/* Bulk slicing, so pages are cut into upload-sized parts without
               opening each chapter one at a time. */}
-          <div className="flex items-center gap-2 flex-shrink-0">
+          <div className="flex flex-wrap justify-end items-center gap-2 max-w-xl">
             {selecting ? (
               <>
                 <Button
@@ -879,6 +934,15 @@ export default function Clipper3SeriesView() {
               </>
             ) : (
               <>
+                <Button
+                  onClick={() => cropReviewed(reviewedChapterIds)}
+                  disabled={busy || reviewedChapterIds.length === 0}
+                  title="Crop all reviewed chapters in this series whose pages are fully attached and whose crops need updating"
+                >
+                  {startingCrop || cropActive ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Scissors className="h-4 w-4 mr-2" />}
+                  {startingCrop ? 'Queueing…' : cropActive ? 'Cropping…' : `Crop Images (${reviewedChapterIds.length})`}
+                </Button>
+
                 {/* Attaching already-made files is a read of the disk, so it
                     needs no chapter selection — every chapter is scanned and
                     the ones with nothing in Processed/ cost nothing. */}
@@ -948,8 +1012,31 @@ export default function Clipper3SeriesView() {
 
       {/* Chapter grid */}
       <ScrollArea className="flex-1">
-        <div className="p-6 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-          {seriesChapters.map(chapter => {
+        <div className="p-6 space-y-6">
+          <div className="flex flex-wrap gap-2" aria-label="Chapter parts">
+            <Button size="sm" variant={selectedPart === null ? 'default' : 'outline'} onClick={() => setSearchParams({})}>All chapters</Button>
+            {chapterParts.map(part => (
+              <Button key={part.number} size="sm" variant={selectedPart === part.number ? 'default' : 'outline'} onClick={() => setSearchParams({ part: String(part.number) })}>Part {part.number}</Button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">Crop Images processes reviewed chapters with every page attached. Chapters already cropped are skipped.</p>
+          {visibleParts.length === 0 && <p className="text-sm text-muted-foreground">No chapters in this part. Choose All chapters to see the series.</p>}
+          {visibleParts.map(part => {
+            const ready = part.chapters.filter(chapter => reviewedChapterIds.includes(chapter.id)).map(chapter => chapter.id)
+            return (
+              <section key={part.number} aria-labelledby={`clipper-part-${part.number}`}>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                  <div>
+                    <h2 id={`clipper-part-${part.number}`} className="font-semibold">Part {part.number}</h2>
+                    <p className="text-xs text-muted-foreground">Chapters {(part.number - 1) * 20 + 1}–{part.number * 20} · {part.chapters.length} chapters · {ready.length} ready to crop</p>
+                  </div>
+                  <Button size="sm" variant="outline" onClick={() => cropReviewed(ready)} disabled={busy || ready.length === 0}>
+                    <Scissors className="h-4 w-4 mr-2" />Crop Images ({ready.length})
+                    <span className="sr-only"> in Part {part.number}</span>
+                  </Button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+          {part.chapters.map(chapter => {
             const isSelected = selected.has(chapter.id)
             // A completed Part's pages and crops are deleted: shown, not opened.
             const completed = completedPart(chapter.id)
@@ -1041,8 +1128,26 @@ export default function Clipper3SeriesView() {
               </Link>
             )
           })}
+                </div>
+              </section>
+            )
+          })}
         </div>
       </ScrollArea>
+
+      <Dialog open={cropReport !== null} onOpenChange={open => !open && setCropReport(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Chapters not queued</DialogTitle>
+            <DialogDescription>These chapters changed or cannot be cropped yet. Other eligible chapters were queued.</DialogDescription>
+          </DialogHeader>
+          <ScrollArea className="max-h-[50vh]">
+            <div className="space-y-2 text-sm">
+              {cropReport?.map((chapter, index) => <p key={index}>Chapter {chapter.chapterNumber}: {chapter.reason}</p>)}
+            </div>
+          </ScrollArea>
+        </DialogContent>
+      </Dialog>
 
       {/* Step one's result: what was found, before anything is written. Pages
           are grouped by chapter and listed individually — the whole point of

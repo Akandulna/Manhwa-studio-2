@@ -12,11 +12,11 @@ import {hiddenLibrarySeriesIds} from '../services/libraryControls.js'
  *   GET  /phone/crops?seriesId=…&chapterId=…&fresh=1   which pages have crop JSON on the phone, and the page Auto-run is on
  *   GET  /phone/overview?fresh=1   all three receipts across every series, for the Sleeper Cells page
  *   POST /phone/request   ask the phone to write both receipts again ("Refresh from phone")
- *   POST /phone/automation { command: start|stop, kind?, seriesId?, tabs?, ai?, flow?, chatGpt?, language?, device?, split?, assignments?, after? }
+ *   POST /phone/automation { command: start|stop, kind?, seriesId?, tabs?, ai?, flow?, chatGpt?, language?, device?, split?, assignments?, devices?, after? }
  *                         — start a run (Image Clipper, narration, Editor 2.0, voiceover) on the phone through the relay, or stop it
  *                         (`after`: once what it's on is done). `split` with `assignments` ({ <phone id>: [chapter folders] }, as the
  *                         plan below was confirmed) sends each phone its share.
- *   POST /phone/automation/plan { kind, seriesId, language? } — a split's plan, sending nothing: which phone takes which
+ *   POST /phone/automation/plan { kind, seriesId, language?, devices?, chapters? (Metadata) } — a split's plan, sending nothing: which phone takes which
  *                         chapters, which keeps what it's on, and which are left alone (phoneSplit.ts)
  *   GET  /phone/screens   each phone's screen state and last screenshot (relay only)
  *   GET  /phone/screens/:device/:index   one screenshot image (JPEG, never cached)
@@ -41,6 +41,8 @@ import {hiddenLibrarySeriesIds} from '../services/libraryControls.js'
  * for a page that mounts mid-send or after it finished.
  */
 
+import { cleanupR2Voiceovers } from '../services/voiceoverCleanup.js'
+import { cleanupDonePartPages } from '../services/partDoneCleanup.js'
 import { Router, Request, Response } from 'express'
 import type { Server } from 'socket.io'
 import {
@@ -80,6 +82,11 @@ import { dropPhoneScreenshot, getPhoneScreens, phoneScreenshotImage, sendScreenC
 function isAssignments(value: unknown): value is Record<string, string[]> {
   return !!value && typeof value === 'object' && !Array.isArray(value) &&
     Object.values(value).every(list => Array.isArray(list) && list.every(c => typeof c === 'string' && !!c))
+}
+
+/** The phones picked for a split ("Selected devices"): two or more distinct phone ids. */
+function isDeviceList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length >= 2 && value.every(d => typeof d === 'string' && !!d) && new Set(value).size === value.length
 }
 
 function message(error: unknown, fallback: string): string {
@@ -200,7 +207,7 @@ export function initR2Routes(io: Server): Router {
 
   router.post('/phone/automation', async (req: Request, res: Response) => {
     try {
-      const { command, kind, seriesId, chapters, tabs, ai, flow, language, device, split, after, chatGpt, assignments, smallBatches } = req.body ?? {}
+      const { command, kind, seriesId, chapters, tabs, ai, flow, language, device, split, after, chatGpt, assignments, smallBatches, devices } = req.body ?? {}
       if (command !== 'start' && command !== 'stop') throw new Error('command must be start or stop')
       if (kind !== undefined && !PHONE_RUN_KINDS.includes(kind)) throw new Error(`kind must be one of ${PHONE_RUN_KINDS.join(', ')}`)
       if (ai !== undefined && ai !== 'chatgpt' && ai !== 'aistudio' && ai !== 'gemini') throw new Error('ai must be chatgpt, aistudio or gemini')
@@ -215,8 +222,9 @@ export function initR2Routes(io: Server): Router {
       if (split !== undefined && typeof split !== 'boolean') throw new Error('split must be true or false')
       if (device !== undefined && split) throw new Error('Pick one phone or split, not both')
       if (assignments !== undefined && (!split || !isAssignments(assignments))) throw new Error('assignments must go with split, as { <phone id>: [chapter folders] }')
+      if (devices !== undefined && (!split || !isDeviceList(devices))) throw new Error('devices must go with split, as a list of two or more phone ids')
       const choices = chatGpt === undefined || chatGpt === null ? undefined : parseChatGptSettings(chatGpt)
-      res.json(await sendAutomationCommand(command, { kind, seriesId, chapters, tabs, ai, flow, chatGpt: choices, language, device, split, after, assignments, smallBatches }))
+      res.json(await sendAutomationCommand(command, { kind, seriesId, chapters, tabs, ai, flow, chatGpt: choices, language, device, split, after, assignments, smallBatches, devices }))
     } catch (error) {
       console.error('Phone automation command failed:', error)
       res.status(400).json({ error: message(error, 'Could not reach the phone') })
@@ -230,12 +238,14 @@ export function initR2Routes(io: Server): Router {
    */
   router.post('/phone/automation/plan', async (req: Request, res: Response) => {
     try {
-      const { kind = 'clipper', seriesId, language = 'en' } = req.body ?? {}
+      const { kind = 'clipper', seriesId, language = 'en', devices, chapters } = req.body ?? {}
       if (!PHONE_RUN_KINDS.includes(kind)) throw new Error(`kind must be one of ${PHONE_RUN_KINDS.join(', ')}`)
       if (typeof seriesId !== 'string' || !seriesId) throw new Error('Pick a series to split between the phones')
       if (language !== 'en' && language !== 'hi') throw new Error('language must be en or hi')
+      if (devices !== undefined && !isDeviceList(devices)) throw new Error('devices must be a list of two or more phone ids')
+      if (chapters !== undefined && (!Array.isArray(chapters) || !chapters.length || chapters.some((c: unknown) => typeof c !== 'string' || !c))) throw new Error('chapters must be a nonempty list of chapter folders')
       if (!relayConfigured()) throw new Error('Splitting runs between the phones needs the phone relay (Settings → Cloudflare)')
-      res.json(await planSplit(kind, seriesId, language))
+      res.json(await planSplit(kind, seriesId, language, { devices, chapters: kind === 'metadata' || kind === 'voiceover' ? chapters : undefined }))
     } catch (error) {
       console.error('Phone automation command failed:', error)
       res.status(400).json({ error: message(error, 'Could not reach the phone') })
@@ -245,11 +255,15 @@ export function initR2Routes(io: Server): Router {
   /** Run automation's checklist: what `kind` needs of the series on the phone (phoneReadiness.ts). Editor 2.0's LISTs R2. */
   router.get('/phone/readiness', async (req: Request, res: Response) => {
     try {
-      const { kind, seriesId, language = 'en' } = req.query
+      const { kind, seriesId, language = 'en', part } = req.query
       if (typeof kind !== 'string' || !PHONE_RUN_KINDS.includes(kind as PhoneRunKind)) throw new Error(`kind must be one of ${PHONE_RUN_KINDS.join(', ')}`)
       if (typeof seriesId !== 'string' || !seriesId) throw new Error('seriesId is required')
       if (language !== 'en' && language !== 'hi') throw new Error('language must be en or hi')
-      res.json(await getRunReadiness(kind as PhoneRunKind, seriesId, language))
+      if (part !== undefined && ((kind !== 'narration' && kind !== 'voiceover') || typeof part !== 'string' ||
+          part !== 'all' && (!/^[1-9]\d*$/.test(part) || !Number.isSafeInteger(Number(part)) || Number(part) > 100000))) {
+        throw new Error('part must be a positive part number or all for Narration scripts or Voiceover')
+      }
+      res.json(await getRunReadiness(kind as PhoneRunKind, seriesId, language, part === undefined ? undefined : part === 'all' ? 'all' : Number(part)))
     } catch (error) {
       console.error('Phone run readiness failed:', error)
       res.status(400).json({ error: message(error, 'Could not check what the phone needs') })
@@ -353,6 +367,21 @@ export function initR2Routes(io: Server): Router {
       res.json({ ok: true, ...(await testRelay()) })
     } catch (error) {
       res.status(400).json({ ok: false, error: message(error, 'Could not reach the relay') })
+    }
+  })
+
+  /**
+   * R2 clean-up (Storage): done Parts' page zips (partDoneCleanup.ts), then voiceover zips already imported and
+   * aligned or of done Parts (voiceoverCleanup.ts). `dryRun` only lists.
+   */
+  router.post('/cleanup', async (req: Request, res: Response) => {
+    try {
+      const dryRun = req.body?.dryRun === true
+      const pages = await cleanupDonePartPages({ dryRun })
+      res.json({ pages, voiceover: await cleanupR2Voiceovers({ dryRun }) })
+    } catch (error) {
+      console.error('R2 cleanup failed:', error)
+      res.status(400).json({ error: message(error, 'Could not clean up R2') })
     }
   })
 

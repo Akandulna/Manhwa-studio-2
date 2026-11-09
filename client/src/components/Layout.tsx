@@ -11,6 +11,7 @@ import {
   Plus,
   Mic,
   Target,
+  FileJson,
   Clapperboard,
   Youtube,
   Wifi,
@@ -20,7 +21,8 @@ import {
   Smartphone,
   Layers,
   Users,
-  Activity
+  Activity,
+  Orbit
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
@@ -35,6 +37,10 @@ interface NavItem {
   label: string
   href: string
   badge?: number
+  /** Small second line under the label. */
+  hint?: string
+  /** Shown but not clickable (e.g. coming soon). */
+  disabled?: boolean
   /** A status dot on the icon (a bg-* class). */
   dot?: string
   dotTitle?: string
@@ -95,12 +101,23 @@ export default function Layout({ children }: LayoutProps) {
     }
   ]
 
-  // Module 3: Image Clipper items
+  // Module 3: Image Clipper — two clippers (SleeperCell, AI Engines) plus Metadata
   const clipperModuleItems: NavItem[] = [
     {
       icon: <Target className="h-5 w-5" />,
-      label: 'Image Clipper 3.0',
+      label: 'SleeperCell',
+      hint: 'Image Clipper 3.0',
       href: '/clipper3'
+    },
+    {
+      icon: <Orbit className="h-5 w-5" />,
+      label: 'AI Engines',
+      href: '/antigravity'
+    },
+    {
+      icon: <FileJson className="h-5 w-5" />,
+      label: 'Metadata',
+      href: '/metadata'
     }
   ]
 
@@ -143,23 +160,22 @@ export default function Layout({ children }: LayoutProps) {
 
   // Check if current path is in narration module
   const isInNarration = location.pathname.startsWith('/narration')
-  const isInClipper3 = location.pathname.startsWith('/clipper3')
   const isInEditor2 = location.pathname.startsWith('/editor2')
 
   // Renders a single nav link, collapsing to an icon-only button when needed.
-  const renderNavLink = (item: NavItem, active: boolean) => (
-    <Link
-      key={item.href}
-      to={item.href}
-      title={collapsed ? [item.label, item.dotTitle].filter(Boolean).join(' · ') : item.dotTitle}
-      className={cn(
-        "flex items-center gap-3 px-3 py-2 rounded-lg transition-colors",
-        collapsed && "justify-center px-0",
-        active
+  const renderNavLink = (item: NavItem, active: boolean) => {
+    const title = collapsed ? [item.label, item.hint, item.dotTitle].filter(Boolean).join(' · ') : item.dotTitle
+    const className = cn(
+      "flex items-center gap-3 px-3 py-2 rounded-lg transition-colors",
+      collapsed && "justify-center px-0",
+      item.disabled
+        ? "text-muted-foreground opacity-60 cursor-not-allowed"
+        : active
           ? "bg-primary text-primary-foreground"
           : "hover:bg-accent text-foreground"
-      )}
-    >
+    )
+    const body = (
+      <>
       <span className="relative flex-shrink-0">
         {item.icon}
         {item.dot && (
@@ -174,7 +190,10 @@ export default function Layout({ children }: LayoutProps) {
       </span>
       {!collapsed && (
         <>
-          <span className="flex-1">{item.label}</span>
+          <span className="flex-1 min-w-0">
+            <span className="block truncate">{item.label}</span>
+            {item.hint && <span className="block truncate text-xs opacity-70">{item.hint}</span>}
+          </span>
           {item.badge && (
             <Badge variant="secondary" className="ml-auto">
               {item.badge}
@@ -182,8 +201,21 @@ export default function Layout({ children }: LayoutProps) {
           )}
         </>
       )}
-    </Link>
-  )
+      </>
+    )
+    if (item.disabled) {
+      return (
+        <div key={item.href} title={title} aria-disabled="true" className={className}>
+          {body}
+        </div>
+      )
+    }
+    return (
+      <Link key={item.href} to={item.href} title={title} className={className}>
+        {body}
+      </Link>
+    )
+  }
 
   const renderSectionLabel = (label: string) =>
     !collapsed && (
@@ -260,7 +292,7 @@ export default function Layout({ children }: LayoutProps) {
           <div className="px-4 pb-4">
             {renderSectionLabel('IMAGE CLIPPER')}
             <nav className="space-y-2">
-              {clipperModuleItems.map((item) => renderNavLink(item, isInClipper3))}
+              {clipperModuleItems.map((item) => renderNavLink(item, location.pathname === item.href || location.pathname.startsWith(`${item.href}/`)))}
             </nav>
           </div>
 

@@ -410,6 +410,16 @@ function parseSeen(raw: unknown): Map<string, { at: number; left: PhoneLeft | nu
   return map
 }
 
+/** Told of every stored receipt (relay or Wi-Fi), e.g. so finished scripts can be fetched. Listeners must not throw. */
+type ReceiptListener = (kind: ReceiptKind, device: string, body: object) => void
+const receiptListeners: ReceiptListener[] = []
+export function onPhoneReceipt(listener: ReceiptListener): void { receiptListeners.push(listener) }
+function tellReceiptListeners(kind: ReceiptKind, device: string, body: object): void {
+  for (const listener of receiptListeners) {
+    try { listener(kind, device, body) } catch (error) { console.error('[relay] receipt listener failed:', error) }
+  }
+}
+
 export function receiveWifiReceipt(m: {device:string;kind:string;at:number;body:any;revision:number}):void {
  const body={...m.body,wifiStatus:{route:'wifi',revision:m.revision,observedAt:m.at}}
  if(m.kind==='process'){receiveDeviceProcess(body);return}
@@ -417,6 +427,7 @@ export function receiveWifiReceipt(m: {device:string;kind:string;at:number;body:
  if(m.kind==='screen'){const kinds=screens.get(m.device)??new Map();kinds.set('screen',{at:m.at,body});screens.set(m.device,kinds);io?.emit('phone:screen',{device:m.device,kind:m.kind});return}
  if(!KINDS.has(m.kind))return
  const kinds=receipts.get(m.device)??new Map();kinds.set(m.kind as ReceiptKind,{at:m.at,body});receipts.set(m.device,kinds);lastReceiptAt=m.at;io?.emit('phone:receipt',{kind:m.kind});notifySeriesProcessChanged()
+ tellReceiptListeners(m.kind as ReceiptKind,m.device,body)
 }
 function handle(text: string): void {
   if (text === 'pong') return
@@ -469,6 +480,7 @@ function handle(text: string): void {
       lastReceiptAt = at
       io?.emit('phone:receipt', { kind })
       notifySeriesProcessChanged()
+      tellReceiptListeners(kind as ReceiptKind, device, body)
       break
     }
     case 'forgotten': {

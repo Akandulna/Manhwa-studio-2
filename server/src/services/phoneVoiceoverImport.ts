@@ -486,7 +486,8 @@ export async function fetchPhoneVoiceover(
   chapterIds?: string[],
   io?: Server | null,
   language: NarrationLanguage = 'en',
-  onProgress?: VoiceoverFetchProgress
+  onProgress?: VoiceoverFetchProgress,
+  options: { requireMatchingScript?: boolean } = {}
 ): Promise<PhoneVoiceoverFetch> {
   const result: PhoneVoiceoverFetch = { configured: false, found: 0, fetched: [], upToDate: 0, unmatched: [], failed: [] }
   if (!getR2Config()) return result
@@ -540,6 +541,10 @@ export async function fetchPhoneVoiceover(
           .then(text => JSON.parse(text) as { sha256?: string }).catch((e: NodeJS.ErrnoException) => { if (e.code === 'ENOENT') return null; throw e })
         if (replacement?.sha256 && replacement.sha256 !== voiceover.scriptSha256) {
           throw new Error('The phone voiceover is from before the script replacement. Generate and upload the new voiceover first.')
+        }
+        // Automatic fetches attach only audio made from the script this chapter has here.
+        if (options.requireMatchingScript && (await scriptMatches(chapter.folderPath, voiceover.scriptSha256, language)) !== true) {
+          throw new Error('The phone voiceover was made from a different script than this chapter has here. Fetch it from Narration to decide.')
         }
         const resplit = await attachVoiceover(chapter.id, chapter.folderPath, voiceover, io, language)
         const marker = {

@@ -138,12 +138,17 @@ export function PartsPanel({ seriesId, onChanged }: { seriesId: string; onChange
       </h3>
       <p className="mt-1 text-xs text-muted-foreground">
         After saving a compressed video, choose its Part and delete working files to free space.
+        The compressed video is a checkpoint: once seen, you can delete it to free space and still clean later Parts.
         Source pages, audio, crops and JSON are removed locally. Scripts, timelines and all videos are kept.
         Confirm that the saved video covers the chapter range shown; its filename does not determine the Part.
         This works without R2. The separate Complete &amp; delete action also removes scripts and cloud files.
       </p>
       <p className="mt-2 break-words text-xs text-muted-foreground">
-        {data.compressedVideos.length ? `Compressed videos found: ${data.compressedVideos.join(', ')}` : 'No compressed video found. Add a nonempty video to compressed, Compressed or Compress inside a video folder, then Rescan.'}
+        {data.compressedVideos.length
+          ? `Compressed videos found: ${data.compressedVideos.join(', ')}`
+          : data.checkpointAt
+            ? `Checkpoint saved ${new Date(data.checkpointAt).toLocaleDateString()} from ${data.checkpointVideos.join(', ')} · the compressed video has been removed, which is fine.`
+            : 'No compressed video found. Add a nonempty video to compressed, Compressed or Compress inside a video folder, then Rescan.'}
       </p>
       {!data.r2Configured && (
         <p className="mt-2 flex items-center gap-2 rounded bg-amber-500/10 p-2 text-xs text-amber-600">
@@ -204,7 +209,7 @@ export function PartsPanel({ seriesId, onChanged }: { seriesId: string; onChange
 
               <div className="flex flex-wrap gap-2">
                 <Button variant="destructive" size="sm" onClick={() => open(part, true)}
-                  disabled={!data.compressedVideos.length || running !== null || part.workingBytes <= 0}>
+                  disabled={!data.checkpointAt || running !== null || part.workingBytes <= 0}>
                   {running === part.number ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                   Delete working files · {formatBytes(part.workingBytes)}
                 </Button>

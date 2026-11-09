@@ -1,0 +1,2 @@
+UNKNOWN_REVIEW_FLAG|candidates[0].review_flags|candidate-01: review flag "weird_flag" is not in the vocabulary; kept as a note only|candidate-01
+--

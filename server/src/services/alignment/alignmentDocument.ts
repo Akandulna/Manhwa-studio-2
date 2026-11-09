@@ -62,6 +62,7 @@ export async function writeAlignmentDocument(chapterId: string, language: Narrat
     where: { id: chapterId },
     select: {
       folderPath: true,
+      seriesId: true,
       audioSections: { where: { language }, select: { index: true, timelineScript: true } }
     }
   })
@@ -75,6 +76,8 @@ export async function writeAlignmentDocument(chapterId: string, language: Narrat
   await fs.writeFile(alignmentDocumentPath(chapter.folderPath, language), document, 'utf-8')
   // The chapter may now be ready for its timeline JSON: Editor 2.0 sends it to the phone.
   queueEditorPublish(chapterId)
+  // Imported and aligned: the phone's voiceover zip in R2 is no longer needed (voiceoverCleanup.ts).
+  void import('../voiceoverCleanup.js').then(m => m.scheduleVoiceoverCleanup(chapter.seriesId)).catch(() => {})
   return true
 }
 

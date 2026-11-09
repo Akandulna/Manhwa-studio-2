@@ -471,3 +471,222 @@ model Editor2Timeline {
 
   @@id([chapterId, language])
 }
+
+// ─── Studio AntiGravity: Google Drive connection (docs/PRD-antigravity-studio.md §4, §15) ───
+// Secrets never live here: the OAuth client secret and each refresh token sit
+// in the macOS Keychain, referenced by an opaque `secretRef`. The generic
+// Setting table is readable through GET /api/settings, so nothing from Drive
+// goes there either.
+
+// The imported Desktop-app OAuth client. One row ("default"); importing a new
+// client JSON replaces it.
+model DriveOAuthClient {
+  id         String   @id // "default"
+  clientId   String   // public client ID (…apps.googleusercontent.com)
+  projectId  String?
+  secretRef  String   // Keychain account holding the client secret
+  importedAt DateTime @default(now())
+}
+
+// One authorized Google account, unique per OAuth client + Google subject, so
+// switching accounts keeps the old account's row and folder mappings.
+model DriveConnection {
+  id            String    @id @default(uuid())
+  clientId      String
+  googleSubject String    // stable Google account ID (`sub`)
+  email         String    // verified display email
+  scopes        String    // granted scopes, space separated
+  secretRef     String    // Keychain account holding the refresh token
+  active        Boolean   @default(false) // the one connection new work uses
+  status        String    // connected | reconnect_required | disconnected | error
+  lastError     String?   // sanitized, user-facing
+  lastTestJson  String?   // sanitized result of the last Test connection
+  connectedAt   DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([clientId, googleSubject])
+}
+
+// Studio-owned Drive folders. IDs are authoritative; names are presentation.
+// `intentId` is a pre-generated Drive file ID saved before the create call,
+// so an uncertain create is reconciled by ID instead of creating a duplicate.
+model DriveFolderMapping {
+  id           String    @id @default(uuid())
+  connectionId String
+  kind         String    // root | series | chapters | chapter | page
+  entityKey    String    // stable library identity ("root" for the root)
+  folderId     String?   // set once Drive confirmed the folder
+  intentId     String?   // pre-generated ID of an in-flight create
+  parentId     String?
+  name         String
+  verifiedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([connectionId, kind, entityKey])
+  @@index([folderId])
+}
+
+// ─── Studio AntiGravity: prompt pack, runs, page jobs, attempts (PRD §9.1, §13, §15) ───
+
+// Immutable prompt versions. kind: crop_rules | analysis | review. The current
+// version per kind is the Setting "antigravityPromptCurrent" ({kind: id}).
+model AntigravityPromptVersion {
+  id        String   @id @default(uuid())
+  kind      String
+  content   String
+  sha256    String
+  origin    String   // e.g. "sleeper-cell v2 default", "edited in Studio"
+  createdAt DateTime @default(now())
+
+  @@index([kind, createdAt])
+}
+
+// One operator selection with pinned settings.
+model AntigravityRun {
+  id             String    @id @default(uuid())
+  seriesId       String
+  partNumber     Int
+  connectionId   String?   // Drive connection the inputs went to
+  engine         String    @default("antigravity") // antigravity (agy) | codex (ChatGPT through the Codex CLI)
+  kind           String    @default("clipper") // clipper (crop pointers) | metadata (crop descriptions + English-script links)
+  model          String
+  effort         String?
+  sandbox        Boolean   @default(true)
+  concurrency    Int       @default(1)
+  promptJson     String    // pinned prompt version ids + hashes
+  selectionJson  String    // [{chapterId, filename}] as requested
+  control        String    // draft | preparing | running | pause_requested | paused | stop_requested | stopped | completed | completed_with_errors | interrupted
+  idempotencyKey String    @unique
+  createdAt      DateTime  @default(now())
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  updatedAt      DateTime  @updatedAt
+}
+
+// The stable work unit: one original page + source generation + pinned profile.
+model AntigravityPageJob {
+  id                 String   @id @default(uuid())
+  runId              String
+  seriesId           String
+  chapterId          String
+  filename           String
+  kind               String   @default("clipper") // clipper | metadata (same page can have one of each)
+  pageIndex          Int
+  sourceSha256       String
+  width              Int
+  height             Int
+  idempotencyKey     String   @unique
+  stage              String   // pending … ready_for_human_review | needs_attention | failed | stale | cancelled | interrupted
+  manifestJson       String?  // slice handoff (no secrets, no local paths)
+  manifestSha256     String?
+  driveFolderId      String?
+  preexistingPointer String?  // sha256 of saved pointers when the job started, or "none"
+  currentAttemptId   String?
+  resultJson         String?  // final canonical pointer file
+  resultSha256       String?
+  importState        String?  // imported | conflict | skipped | failed
+  lastError          String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([runId])
+  @@index([chapterId, filename])
+}
+
+// One execution of a page job: its own workspace, conversation and MCP capability.
+model AntigravityAttempt {
+  id               String    @id @default(uuid())
+  jobId            String
+  number           Int
+  status           String    // active | completed | needs_attention | failed | cancelled | interrupted
+  stage            String    // analyzing | reviewing | validating | done
+  capabilityHash   String    // sha256 of the MCP bridge token; the token itself is never stored
+  conversationId   String?
+  workspace        String
+  cliVersion       String?
+  engine           String    @default("antigravity") // the CLI that owns this attempt's conversation
+  codexAccount     String?   // Codex engine: the Studio account (CODEX_HOME) whose ChatGPT sign-in runs this conversation
+  requestedModel   String
+  observedModel    String    @default("unknown")
+  pid              Int?
+  deliveredJson    String    @default("[]") // slice ids delivered through MCP this attempt
+  analysisJson     String?
+  analysisSha256   String?
+  reviewStateJson  String?
+  flow             String    @default("classic") // classic (one prompt) | steps (four-step flow; Gemini 3.8 Flash) | metadata
+  stepsStateJson   String?   // four-step flow: where the page is (review/steps.ts StepsState); metadata: accepted crop records (metadataFlow.ts)
+  reviewRounds     Int       @default(0)
+  submissions      Int       @default(0)
+  deniedActions    String?
+  error            String?
+  startedAt        DateTime  @default(now())
+  finishedAt       DateTime?
+
+  @@index([jobId])
+}
+
+// Drive inputs per page generation; the file ID is reserved before upload.
+model DriveInputFile {
+  id           String   @id @default(uuid())
+  connectionId String
+  jobId        String
+  sliceId      String   // s01… or handoff/prompt names
+  fileId       String
+  parentId     String
+  name         String
+  mime         String
+  bytes        Int
+  sha256       String
+  state        String   // reserved | uploaded | verified
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([jobId, sliceId])
+}
+
+// Bounded, append-only operational log.
+model AntigravityEvent {
+  seq       Int      @id @default(autoincrement())
+  runId     String?
+  jobId     String?
+  attemptId String?
+  type      String
+  message   String
+  at        DateTime @default(now())
+
+  @@index([runId, seq])
+  @@index([jobId, seq])
+}
+
+/// One R2 publication of one validated AntiGravity result (PRD §14, §15).
+/// Local import state stays on AntigravityPageJob; this row is the R2 target only.
+model AntigravityDelivery {
+  id             String    @id @default(uuid())
+  jobId          String
+  attemptId      String?
+  seriesId       String
+  chapterId      String
+  filename       String
+  sourceSha256   String
+  resultSha256   String
+  resultBytes    Int
+  /// "r2:<bucket>/<prefix>" — the resolved shared exchange root, recorded once.
+  destination    String
+  pointerKey     String
+  envelopeKey    String
+  envelopeSha256 String?
+  indexKey       String
+  indexRevision  Int?
+  /// pending | published | failed
+  state          String
+  tries          Int       @default(0)
+  error          String?
+  publishedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([resultSha256, destination])
+  @@index([jobId])
+  @@index([chapterId, destination])
+}

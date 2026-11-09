@@ -1,0 +1,6 @@
+MARKDOWN_FENCE_STRIPPED||The reply was wrapped in a Markdown code fence; the fence was removed|null
+UNKNOWN_KEY|redescribe_keys|redescribe_keys: "nope" is not one of the current crops; ignored|null
+--
+
+--
+true

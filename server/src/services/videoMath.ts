@@ -40,3 +40,21 @@ export function ensureFfmpegAvailable(caps: { ffmpegAvailable: boolean; error?: 
     throw new Error(caps.error || 'FFmpeg is not available — video export is disabled')
   }
 }
+
+/** Keep image motion intact while bounding the work in one single-threaded FFmpeg graph. */
+export function splitRenderBatches<T extends { duration: number }>(images: T[], maxDuration = 30): T[][] {
+  const batches: T[][] = []
+  let batch: T[] = []
+  let duration = 0
+  for (const image of images) {
+    if (batch.length && (batch.length >= 12 || duration + image.duration > maxDuration)) {
+      batches.push(batch)
+      batch = []
+      duration = 0
+    }
+    batch.push(image)
+    duration += image.duration
+  }
+  if (batch.length) batches.push(batch)
+  return batches
+}

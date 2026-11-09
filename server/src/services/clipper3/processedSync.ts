@@ -508,6 +508,8 @@ async function syncChapterProcessedLegacy(input: SyncChapterInput): Promise<Chap
           if(raw.sourceSha256!==sourceHash)throw new Error('Pointers belong to a different source image')
           if(raw.image?.filename!==image.filename||raw.image?.width!==image.width||raw.image?.height!==image.height||raw.coordinateSystem!=='normalized')throw new Error('Pointer image identity differs')
           const artifact=toArtifact(raw,image),crops=extractCrops(artifact)
+          // Keep the redo these pointers answer, as the full import below does; Metadata jobs and Editor rely on it.
+          if(redo?.status==='pending')(artifact as Clipper3ImageCropFile&{studioRedoRevision:string}).studioRedoRevision=redo.revision
           if(!Array.isArray(raw.crops)||crops.length!==raw.crops.length||new Set(crops.map(c=>c.id)).size!==crops.length)throw new Error('Invalid crop list')
           for(const c of crops)if(!['rectangle','perspective'].includes(c.crop.mode)||c.crop.points.some(p=>p.x<0||p.x>1||p.y<0||p.y>1))throw new Error('Crop outside source image')
           if(input.dryRun){record('ready','Pointers ready for manual review; Metadata follows cropping.',image.filename,crops.length);continue}
@@ -591,7 +593,7 @@ async function syncChapterProcessedLegacy(input: SyncChapterInput): Promise<Chap
     if (attached && applyStoryLinks && !replacingRejectedPage) {
       const current = await readImagePoints(input.folderPath, image.filename)
       if (!current?.file || cropsKey(extractCrops(current.file)) !== cropsKey(crops) || currentMeta == null || metadataKey(stripCropStory(currentMeta)) !== metadataKey(stripCropStory(metadataText))) {
-        rejectIncoming(input.storyLinksOnly ? 'Phone crops differ from Studio’s saved geometry or descriptions. Studio files were preserved. Use Reject JSON / Request redo on the page to replace it.' : 'Restart story linking cannot change approved crop geometry or visual descriptions. Review those changes separately.', crops.length)
+        rejectIncoming(input.storyLinksOnly ? 'Phone crops differ from Studio’s saved geometry or descriptions. Studio files were preserved. Use Reject on the page to replace it.' : 'Restart story linking cannot change approved crop geometry or visual descriptions. Review those changes separately.', crops.length)
         continue
       }
       if (metadataKey(currentMeta) === metadataKey(metadataText)) { record('skipped', 'Story links already current.', image.filename, crops.length); continue }

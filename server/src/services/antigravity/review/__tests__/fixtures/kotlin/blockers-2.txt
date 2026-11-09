@@ -1,0 +1,3 @@
+FINDING_UNACKNOWLEDGED|candidate-01: 4 flags not yet reviewed (TALL_ASPECT, PAGE_FRACTION, HEIGHT_OUTLIER, boundary_uncertain)|candidate-01
+FINDING_UNACKNOWLEDGED|candidate-03.a: 1 flag not yet reviewed (EDGE_ON_CONTENT)|candidate-03.a
+FINDING_UNACKNOWLEDGED|candidate-03.b: 2 flags not yet reviewed (SHARED_EDGE, EDGE_ON_CONTENT)|candidate-03.b

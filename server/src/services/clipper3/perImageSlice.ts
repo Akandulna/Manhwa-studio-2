@@ -38,12 +38,12 @@ export interface SliceRect {
  * 2048px slices and one of 1000px. The slices tile the full height with no gap
  * or overlap, and there is no cap on how many a very tall page produces.
  */
-export function computeSlices(width: number, height: number): SliceRect[] {
+export function computeSlices(width: number, height: number, sliceHeight: number = SLICE_HEIGHT): SliceRect[] {
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     return []
   }
-
-  const sliceHeight = SLICE_HEIGHT
+  // AntiGravity passes 2000 (its CLI scales images above 2000 px); Clipper 3.0 keeps the default.
+  if (!Number.isInteger(sliceHeight) || sliceHeight <= 0) return []
 
   const rects: SliceRect[] = []
   for (let top = 0, index = 1; top < height; top += sliceHeight, index++) {

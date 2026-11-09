@@ -110,8 +110,10 @@ export async function withUnmanagedCropWrite<T>(folder:string,filename:string,wo
  return withManagedChapterLock(folder,async()=>{await assertUnmanagedCrop(folder,filename);return work()})
 }
 
+// Whole-chapter work reads managed asset snapshots while cutting or importing Metadata.
+// Match those readers: acquire workspace before chapter so concurrent publication cannot invert them.
 export async function withUnmanagedCropChapter<T>(folder:string,work:()=>Promise<T>):Promise<T> {
- return withManagedChapterLock(folder,async()=>{await assertUnmanagedCropChapter(folder);return work()})
+ return withManagedCropWorkspaceLock(()=>withManagedChapterLock(folder,async()=>{await assertUnmanagedCropChapter(folder);return work()}))
 }
 
 /** Detect protected chapter scopes before any recursive deletion; never follow symlinks. */

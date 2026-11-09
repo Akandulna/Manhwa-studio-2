@@ -2,8 +2,16 @@ import type {ManagedRunBundle} from '../../../server/src/services/managedProduct
 import type {ProductionReconciliation} from '../../../server/src/services/managedProductionReconciliation'
 export type {ProductionReconciliation}
 import type { NarrationLanguage } from './narrationLanguage'
+import type { NarrationPartChoice, NarrationRunScope } from '../../../server/src/services/narrationRunScope'
+export type { NarrationPartChoice, NarrationRunScope }
 
 const API_BASE = '/api'
+import type { MetadataChapterStatus, MetadataLibrarySnapshot, MetadataSyncReport } from '../../../server/src/services/metadataLibraryModel'
+export type { MetadataLibrarySnapshot, MetadataChapterStatus } from '../../../server/src/services/metadataLibraryModel'
+export const metadataApi = {
+  library: () => fetchApi<MetadataLibrarySnapshot>('/metadata/library'),
+  sync: () => fetchApi<MetadataSyncReport>('/metadata/sync', { method: 'POST' })
+}
 import type { ProcessSnapshot } from '../../../server/src/services/seriesProcessModel'
 export type { ProcessSnapshot, ProcessSeries, ProcessPart, ProcessStage, StageCount } from '../../../server/src/services/seriesProcessModel'
 export const libraryProgressApi = { get: () => fetchApi<ProcessSnapshot>('/library/progress') }
@@ -120,6 +128,7 @@ export interface QuickValidationResult {
 export const seriesApi = {
   deleteEverywhere: (id: string) => fetchApi<{ deleting: boolean }>(`/series/${id}/delete-everywhere`, { method: 'POST' }),
   markPart: (id: string, part: number, done: boolean) => fetchApi(`/series/${id}/parts/${part}/completion`, { method: 'PUT', body: JSON.stringify({ done }) }),
+  markDone: (id: string, language: NarrationLanguage, done: boolean) => fetchApi<{ done: boolean }>(`/series/${id}/done`, { method: 'PUT', body: JSON.stringify({ done, language }) }),
   getAll: () => fetchApi<Series[]>('/series'),
   
   getById: (id: string) => fetchApi<Series>(`/series/${id}`),
@@ -353,6 +362,30 @@ export interface NarrationPhoneFetch {
   scripts?: { imported: number; aboutUpdated: boolean } | null
   voiceovers?: PhoneVoiceoverFetch | null
   error?: string
+  /** Started by Studio itself (finished chapters the phones sent), not by "Fetch from phone". */
+  automatic?: boolean
+}
+
+/** A chapter where a phone finished a different script than Studio has; never imported without your choice. */
+export interface PhoneScriptConflict {
+  chapterId: string
+  number: number
+  folder: string
+  /** Identifies this exact phone version when you choose. */
+  phoneSha256: string
+  device: string | null
+  phoneSavedAt: string | null
+  phoneScript: string
+  studioScript: string
+  studioStatus: string | null
+  /** What in Studio was made from Studio's script, and would need redoing with the phone's. */
+  affects: {
+    metadataPages: number
+    voiceoverSections: number
+    alignedSections: number
+    hinglish: boolean
+    timeline: boolean
+  }
 }
 
 export interface NarrationSeriesDetail {
@@ -432,6 +465,17 @@ export const narrationApi = {
   /** Reads R2 (the script zip and the voiceover listing) — only on a click. */
   previewPhone: (seriesId: string, lang: NarrationLanguage) =>
     fetchApi<NarrationPhonePreview>(`/narration/series/${seriesId}/phone/preview?lang=${lang}`, { method: 'POST' }),
+
+  /** Chapters where a phone has a different finished script (reads R2). */
+  getPhoneConflicts: (seriesId: string, lang: NarrationLanguage) =>
+    fetchApi<{ conflicts: PhoneScriptConflict[] }>(`/narration/series/${seriesId}/phone/conflicts?lang=${lang}`),
+
+  /** phone: import the phone's script · studio: keep Studio's and stop asking about this phone version. */
+  resolvePhoneConflict: (seriesId: string, lang: NarrationLanguage, body: { chapterId: string; phoneSha256: string; choice: 'phone' | 'studio' }) =>
+    fetchApi<{ imported?: number; kept?: boolean }>(`/narration/series/${seriesId}/phone/conflicts/resolve?lang=${lang}`, {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
 
   /** Starts the fetch; progress and the outcome arrive on `narration:fetch`. */
   fetchFromPhone: (
@@ -567,10 +611,10 @@ export interface StoredTimeline2 {
   updatedAt: number
 }
 
+/** The user's manual Done mark for a series in one language. */
 export interface Editor2Completion {
   done: boolean
-  /** Saved video paths relative to the series folder, in the selected language. */
-  compressedVideos: string[]
+  doneAt: string | null
 }
 
 export interface Editor2SeriesReadiness extends Editor2Completion {
@@ -1021,7 +1065,17 @@ export interface Clipper3Chapter {
   pageCount: number
 }
 
+export interface Clipper3BulkCropResult {
+  queued: { chapterId: string; chapterNumber: number }[]
+  skipped: { chapterId: string; chapterNumber: number; reason: string }[]
+}
+
 export const clipper3Api = {
+  cropReviewed: (seriesId: string, chapterIds?: string[]) =>
+    fetchApi<Clipper3BulkCropResult>(`/clipper3/series/${seriesId}/crop-reviewed`, {
+      method: 'POST', body: JSON.stringify({ chapterIds })
+    }),
+
   rejectPage: (chapterId: string, filename: string) => fetchApi<PageRedoRequest>(
     `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/reject`, { method: 'POST' }),
 
@@ -1235,8 +1289,14 @@ export interface StorageDeleteResult {
 export interface StorageVideoCleanupFolder {
   dir: '_video' | '_video2' | '_video2_hi'
   compressedVideos: string[]
+  /** When a compressed video was last seen; kept after the user deletes it. */
+  checkpointAt: string | null
+  checkpointVideos: string[]
   renderedFileCount: number
   renderedBytes: number
+  /** Renders written by the checkpoint — what Delete renders removes. */
+  coveredFileCount: number
+  coveredBytes: number
 }
 
 export interface StorageVideoFile {
@@ -1290,6 +1350,9 @@ export interface SeriesParts {
   seriesId: string
   title: string
   compressedVideos: string[]
+  /** When a compressed video was last seen in any video folder; kept after it is deleted. */
+  checkpointAt: string | null
+  checkpointVideos: string[]
   r2Configured: boolean
   parts: SeriesPart[]
 }
@@ -1867,6 +1930,8 @@ export interface PhoneOverviewWorking extends PhoneOverviewPlace {
   page: string
   since: string | null
   paused: boolean
+  /** The run on the page: Image Clipper's crop boxes or Metadata. Older servers leave it out (Image Clipper). */
+  process?: 'clipper' | 'metadata'
   /** The phone it's on: its id ("" for the old app, or the one phone R2 carries) and name; null when not known. */
   device: string | null
   phone: string | null
@@ -1947,6 +2012,8 @@ export type PhoneClipperFlow = 'classic' | 'steps'
 export interface PhoneAutomationOptions {
   kind?: PhoneRunKind
   seriesId?: string
+  /** Exact chapter folders for a single-device part selection. */
+  chapters?: string[]
   tabs?: number
   ai?: PhoneClipperAi
   /** Editor: match one audio section per request and resume accepted checkpoints. */
@@ -1959,6 +2026,8 @@ export interface PhoneAutomationOptions {
   split?: boolean
   /** A split as confirmed from its plan (planPhoneSplit): each phone's whole share, by device id, sent as it is. */
   assignments?: Record<string, string[]>
+  /** A split between the phones picked ("Selected devices"), not every startable phone. */
+  devices?: string[]
   /** A stop once the pages, chapter or splits the run is on are done ("Finish …, then stop" on the phone). */
   after?: boolean
 }
@@ -2077,6 +2146,8 @@ export interface PhoneOverview {
   recent: PhoneOverviewFinish[]
   /** True when there were more done pages than `recent` holds. */
   recentCapped: boolean
+  /** Seconds per Metadata page over the recent ones, timed by Studio; null before one finished (or from older servers). */
+  metadataAverageTook?: number | null
   /** Chapter zips the phone uploaded, newest first. */
   uploads: PhoneOverviewChapterZip[]
   profiles: PhoneUploadProfile[]
@@ -2144,7 +2215,12 @@ export interface PhoneRunReadiness {
   items: PhoneReadinessItem[]
   /** A send to the phones is going; progress comes as `phone-send:progress`. */
   sending: boolean
+  narrationScope?: NarrationRunScope
+  /** The voiceover's parts and the picked part's unfinished chapters (default: all of them). */
+  voiceoverScope?: NarrationRunScope
   metadataChapters?: {name:string;number:number}[]
+  /** Chapters Metadata can't run on yet, with why (Run automation scopes them to the part picked). */
+  metadataBlocked?: {id:string;name:string;number:number;reason:string}[]
 }
 
 /** The script zip the phone uploads once every chapter of a series is done ("Zip and upload to R2"). */
@@ -2177,6 +2253,9 @@ export interface PhoneImportChapter {
   review: string[] | null
   /** Hinglish only: converted from the English script this desktop has now (false: imports as stale). */
   sourceMatches: boolean | null
+  phoneSha256?: string
+  device?: string | null
+  reviewChanged?: boolean
 }
 
 export interface PhoneImportPreview {
@@ -2188,8 +2267,24 @@ export interface PhoneImportPreview {
   about: 'set' | 'replace' | 'keep' | 'same' | 'none'
 }
 
+export interface VoiceoverCleanupResult {
+  deleted: { key: string; bytes: number; reason: 'imported' | 'part-done' }[]
+  freedBytes: number
+  dryRun: boolean
+  skipped?: string
+}
+
+export interface R2CleanupResult {
+  pages: { cleared: { series: string; chapter: string; key: string; bytes: number }[]; freedBytes: number; warnings: string[]; skipped?: string }
+  voiceover: VoiceoverCleanupResult
+}
+
 export const r2Api = {
   getStatus: () => fetchApi<R2Status>('/r2/status'),
+
+  /** Done Parts' page zips, and voiceover zips already imported + aligned or of done Parts. `dryRun` only lists. */
+  cleanup: (dryRun = false) =>
+    fetchApi<R2CleanupResult>('/r2/cleanup', { method: 'POST', body: JSON.stringify({ dryRun }) }),
 
   /** From the server's copy of the phone's receipt; `fresh` re-reads it from R2 when there is no relay. */
   getPhoneSync: (fresh = false) =>
@@ -2239,12 +2334,12 @@ export const r2Api = {
     fetchApi<PhoneAutomationSent>('/r2/phone/automation', { method: 'POST', body: JSON.stringify({ command, ...options }) }),
 
   /** Split across the phones, step 1: which phone would take which chapters, sending nothing. */
-  planPhoneSplit: (kind: PhoneRunKind, seriesId: string, language: NarrationLanguage = 'en') =>
-    fetchApi<PhoneSplitPlan>('/r2/phone/automation/plan', { method: 'POST', body: JSON.stringify({ kind, seriesId, language }) }),
+  planPhoneSplit: (kind: PhoneRunKind, seriesId: string, language: NarrationLanguage = 'en', scope: { devices?: string[]; chapters?: string[] } = {}) =>
+    fetchApi<PhoneSplitPlan>('/r2/phone/automation/plan', { method: 'POST', body: JSON.stringify({ kind, seriesId, language, ...scope }) }),
 
   /** What `kind` needs of the series on the phone, and the fixes. Editor 2.0's costs one R2 LIST: ask on demand only. */
-  getRunReadiness: (kind: PhoneRunKind, seriesId: string, language: 'en' | 'hi' = 'en') =>
-    fetchApi<PhoneRunReadiness>(`/r2/phone/readiness?${new URLSearchParams({ kind, seriesId, language })}`),
+  getRunReadiness: (kind: PhoneRunKind, seriesId: string, language: 'en' | 'hi' = 'en', part?: NarrationPartChoice) =>
+    fetchApi<PhoneRunReadiness>(`/r2/phone/readiness?${new URLSearchParams({ kind, seriesId, language, ...(part === undefined ? {} : { part: String(part) }) })}`),
 
   /** One fix from that checklist; `prompt` (the Editor 2.0 prompt, kept in this browser) for send_prompt. */
   fixRunReadiness: (fix: { action: Exclude<PhoneReadinessFixAction, 'run_narration'>; seriesId: string; chapterIds?: string[]; prompt?: string }) =>
@@ -2363,8 +2458,15 @@ export interface StitchChapterRow {
   seriesId: string
   seriesTitle: string
   pageCount: number
-  /** Set while the originals are still backed up, so the stitch can be undone. */
-  stitched: { originalPages: number; stitchedAt: string } | null
+  /** Completion persists after deleting originals. */
+  stitched: StitchCompletion | null
+}
+
+export interface StitchCompletion {
+  originalPages: number | null
+  stitchedPages: number
+  stitchedAt: string | null
+  recoveredAt?: string
 }
 
 export interface StitchPage {
@@ -2380,6 +2482,7 @@ export interface StitchRecord {
   originals: string[]
   excluded: string[]
   outputs: { filename: string; sources: string[]; width: number; height: number; bytes: number }[]
+  previousStitch?: { completion: StitchCompletion; hasBackup: boolean }
 }
 
 /** One page's rows for Auto stitch: base64, one byte per row, 0 = blank. */
@@ -2417,6 +2520,7 @@ export interface StitchChapterState {
   /** Tallest page a multi-page group may produce. */
   maxHeight: number
   pages: StitchPage[]
+  stitched: StitchCompletion | null
   record: StitchRecord | null
   backupBytes: number
   blockers: string[]
@@ -2442,10 +2546,10 @@ export const stitchApi = {
     ),
 
   /** Each group is one output page: whole pages by name, cut pages as row pieces. */
-  stitch: (id: string, groups: (string | StitchPieceSpec)[][]) =>
+  stitch: (id: string, groups: (string | StitchPieceSpec)[][], restitch = false) =>
     fetchApi<{ originalPages: number; stitchedPages: number; excluded: number }>(`/stitch/chapters/${id}`, {
       method: 'POST',
-      body: JSON.stringify({ groups })
+      body: JSON.stringify({ groups, restitch })
     }),
 
   undo: (id: string) => fetchApi<{ ok: true }>(`/stitch/chapters/${id}/undo`, { method: 'POST' }),
@@ -2504,4 +2608,131 @@ export type { ManagerOverview }
 export const managersApi = {
   get: () => fetchApi<ManagerOverview>('/managers'),
   acknowledge: (incidentId: string, notificationId: string) => fetchApi('/managers/acknowledge', { method: 'POST', body: JSON.stringify({ incidentId, notificationId }) })
+}
+
+// ─── Studio AntiGravity: Google Drive connection (server/src/routes/googleDrive.ts) ───
+// Local-only routes: every mutation carries the Studio client header, and no
+// response ever contains a client secret, token or authorization code.
+import type { DriveStatus, ConnectRequestView } from '../../../server/src/services/googleDrive/service'
+import type { DriveTestResult } from '../../../server/src/services/googleDrive/files'
+export type { DriveStatus, ConnectRequestView, DriveTestResult }
+const studioMutation = (method: string, body?: unknown): RequestInit => ({
+  method,
+  headers: { 'X-Studio-Client': '1' },
+  ...(body !== undefined && { body: JSON.stringify(body) })
+})
+export const googleDriveApi = {
+  status: (check = false) => fetchApi<DriveStatus>(`/google-drive/status${check ? '?check=1' : ''}`),
+  importClient: (json: string) => fetchApi<{ client: DriveStatus['client'] }>('/google-drive/oauth-client', studioMutation('PUT', { json })),
+  connect: (loginHint?: string) => fetchApi<{ requestId: string; authUrl: string; opened: boolean }>('/google-drive/connect', studioMutation('POST', { loginHint })),
+  connectStatus: (requestId: string) => fetchApi<ConnectRequestView>(`/google-drive/connect/${encodeURIComponent(requestId)}`),
+  cancelConnect: (requestId: string) => fetchApi<ConnectRequestView>(`/google-drive/connect/${encodeURIComponent(requestId)}/cancel`, studioMutation('POST')),
+  ensureRoot: (repair = false) => fetchApi<{ folderId: string; url: string; created: boolean; duplicates: number }>('/google-drive/ensure-root', studioMutation('POST', { repair })),
+  test: () => fetchApi<DriveTestResult>('/google-drive/test', studioMutation('POST')),
+  disconnect: () => fetchApi<{ disconnected: boolean; revoked: boolean; message: string }>('/google-drive/disconnect', studioMutation('POST'))
+}
+
+// ─── Studio AntiGravity: local Antigravity CLI (server/src/routes/antigravity.ts) ───
+import type { AiEngine, AntigravitySettings, CodexConnectionView as CodexConnection, CodexSettings, ConnectionView as AntigravityConnection } from '../../../server/src/services/antigravity/settingsModel'
+import type { CompatibilityReport } from '../../../server/src/services/antigravity/compatibility'
+import type { CodexModel } from '../../../server/src/services/antigravity/codexCli'
+import type { CodexRateLimits } from '../../../server/src/services/antigravity/codexSession'
+import type { CodexAccountView } from '../../../server/src/services/antigravity/codexAccounts'
+export type { AiEngine, AntigravitySettings, AntigravityConnection, CodexAccountView, CodexConnection, CodexModel, CodexRateLimits, CodexSettings, CompatibilityReport }
+export const ENGINE_LABELS: Record<AiEngine, string> = { antigravity: 'Antigravity', codex: 'ChatGPT (Codex)' }
+/** ChatGPT through the local Codex CLI — the second AntiGravity engine (server/src/routes/antigravity.ts /codex/*). */
+export const codexApi = {
+  connection: () => fetchApi<CodexConnection>('/antigravity/codex/connection'),
+  saveSettings: (patch: Partial<CodexSettings>) => fetchApi<CodexSettings>('/antigravity/codex/settings', studioMutation('PUT', patch)),
+  check: () => fetchApi<CompatibilityReport>('/antigravity/codex/check', studioMutation('POST')),
+  cancelCheck: () => fetchApi<{ cancelled: boolean }>('/antigravity/codex/check/cancel', studioMutation('POST')),
+  signIn: () => fetchApi<{ opened: boolean; instructions: string }>('/antigravity/codex/sign-in', studioMutation('POST')),
+  accounts: () => fetchApi<CodexConnection['accounts']>('/antigravity/codex/accounts'),
+  addAccount: (label: string) => fetchApi<{ id: string }>('/antigravity/codex/accounts', studioMutation('POST', { label })),
+  updateAccount: (id: string, patch: { label?: string; enabled?: boolean; clearLimit?: boolean }) => fetchApi(`/antigravity/codex/accounts/${id}`, studioMutation('PATCH', patch)),
+  removeAccount: (id: string) => fetchApi<{ removed: boolean }>(`/antigravity/codex/accounts/${id}`, studioMutation('DELETE')),
+  reorderAccounts: (ids: string[]) => fetchApi('/antigravity/codex/accounts-order', studioMutation('PUT', { ids })),
+  setAutoSwitch: (on: boolean) => fetchApi('/antigravity/codex/accounts-auto-switch', studioMutation('PUT', { on })),
+  signInAccount: (id: string) => fetchApi<{ opened: boolean; instructions: string }>(`/antigravity/codex/accounts/${id}/sign-in`, studioMutation('POST'))
+}
+import type { AgyQuota } from '../../../server/src/services/antigravity/cli'
+export type { AgyQuota }
+/** GET /antigravity/usage: Google (agy, live, cached 2 min) and each ChatGPT account's last recorded Codex windows. */
+export interface AiUsageLimits {
+  google: { account: string | null; quota: AgyQuota | null; error: string | null; checkedAt: string | null }
+  codex: { autoSwitch: boolean; accounts: { id: string; label: string; enabled: boolean; limited: boolean; limitedUntil: string | null; limitReason: string | null; limits: CodexRateLimits | null }[] }
+}
+export const aiUsageApi = {
+  get: (refresh = false) => fetchApi<AiUsageLimits>(`/antigravity/usage${refresh ? '?refresh=1' : ''}`)
+}
+export const antigravityApi = {
+  connection: (refreshModels = false) => fetchApi<AntigravityConnection>(`/antigravity/connection${refreshModels ? '?refresh=1' : ''}`),
+  saveSettings: (patch: Partial<AntigravitySettings>) => fetchApi<AntigravitySettings>('/antigravity/settings', studioMutation('PUT', patch)),
+  check: () => fetchApi<CompatibilityReport>('/antigravity/check', studioMutation('POST')),
+  cancelCheck: () => fetchApi<{ cancelled: boolean }>('/antigravity/check/cancel', studioMutation('POST')),
+  signIn: () => fetchApi<{ opened: boolean; instructions: string }>('/antigravity/sign-in', studioMutation('POST'))
+}
+
+// ─── Studio AntiGravity: prompt pack, runs and page jobs ───
+export type AntigravityPromptKind = 'crop_rules' | 'analysis' | 'review'
+export interface AntigravityPrompt { kind: AntigravityPromptKind; id: string; sha256: string; origin: string; content: string }
+/** What an AntiGravity process does: crop pointers (Image Clipper) or crop descriptions + English-script links (Metadata). */
+export type AntigravityKind = 'clipper' | 'metadata' | 'editor'
+/** Timeline: how each chapter's Editor 2.0 timeline is made, and in which languages (pinned to the run). */
+export type AntigravityEditorMethod = 'oneshot' | 'batches'
+export interface AntigravityEditorOptions { method: AntigravityEditorMethod; languages: NarrationLanguage[] }
+/** One chapter's Timeline status in one language (Editor 2.0's checklist). */
+export interface EditorTimelineLanguageStatus { saved: boolean; processed: boolean; model: string | null; ready: boolean; missing: { label: string; detail: string }[] }
+export interface EditorTimelineChapterStatus { id: string; number: number; title: string | null; languages: Record<NarrationLanguage, EditorTimelineLanguageStatus> }
+export interface AntigravityJobView {
+  id: string; runId: string; chapterId: string; filename: string; pageIndex: number; stage: string; sourceSha256: string; kind?: AntigravityKind
+  width: number; height: number; driveFolderId: string | null; resultSha256: string | null; importState: string | null
+  lastError: string | null; updatedAt: string; pageStem: string
+  attempt?: AntigravityAttemptView | null; attempts?: AntigravityAttemptView[]; deliveries?: AntigravityDeliveryView[]
+}
+export interface AntigravityDeliveryView {
+  id: string; destination: string; state: string; resultSha256: string; pointerKey: string; indexKey: string
+  indexRevision: number | null; tries: number; error: string | null; publishedAt: string | null
+}
+export interface AntigravityFetchOutcome { listed: number; read: number; imported: number; already: number; ours: number; conflicts: number; stale: number; skipped: number; rejected: number; errors: string[] }
+export interface AntigravityAttemptView {
+  id: string; number: number; status: string; stage: string; conversationId: string | null; cliVersion: string | null; engine?: AiEngine; codexAccount?: string | null
+  requestedModel: string; observedModel: string; reviewRounds: number; delivered: string[]; analysisSha256: string | null
+  deniedActions: unknown; error: string | null; startedAt: string; finishedAt: string | null
+}
+export interface AntigravityRunDetail {
+  run: { id: string; seriesId: string; partNumber: number; kind?: AntigravityKind; engine?: AiEngine; model: string; effort: string | null; sandbox: boolean; concurrency: number; control: string; mode?: 'next' | 'pages'; createdAt: string; startedAt: string | null; finishedAt: string | null; promptJson: { ids: Record<string, string>; hashes: Record<string, string> } }
+  jobs: AntigravityJobView[]
+  events: { seq: number; type: string; message: string; at: string; jobId: string | null }[]
+}
+export interface AntigravityRunSummary { id: string; seriesId: string; partNumber: number; kind?: AntigravityKind; engine?: AiEngine; model: string; control: string; mode?: 'next' | 'pages'; createdAt: string; finishedAt: string | null; editor?: AntigravityEditorOptions }
+/** The one process: the live run (running, pausing, paused or stopping), else the most recent run. */
+export interface AntigravityCurrentProcess { live: boolean; run: AntigravityRunSummary | null }
+export interface AntigravityStartResult { runId: string | null; created: string[]; reused: string[]; skipped: { chapterId: string; filename: string; reason: string }[] }
+export const antigravityJobsApi = {
+  prompts: () => fetchApi<{ kinds: AntigravityPrompt[] }>('/antigravity/prompts'),
+  savePrompt: (kind: AntigravityPromptKind, content: string, origin?: string) => fetchApi<{ id: string; unchanged: boolean }>(`/antigravity/prompts/${kind}`, studioMutation('PUT', { content, origin })),
+  promptHistory: (kind: AntigravityPromptKind) => fetchApi<{ versions: { id: string; sha256: string; origin: string; createdAt: string }[]; defaultSha256: string }>(`/antigravity/prompts/${kind}/history`),
+  promptVersion: (id: string) => fetchApi<{ id: string; content: string; origin: string; sha256: string }>(`/antigravity/prompts/version/${id}`),
+  /** Start process: this part's next pending pages, in chapter order, until none is left (one process at a time). */
+  startNext: (seriesId: string, partNumber: number, kind: AntigravityKind = 'clipper', editor?: AntigravityEditorOptions) => fetchApi<AntigravityStartResult>('/antigravity/runs', studioMutation('POST', { seriesId, partNumber, mode: 'next', kind, editor })),
+  /** Selected pages only. With a live process on this part they join it; prepareOnly = Upload to Drive (slice + upload, no AI). */
+  startPages: (seriesId: string, partNumber: number, pages: { chapterId: string; filename: string }[], prepareOnly = false, kind: AntigravityKind = 'clipper', editor?: AntigravityEditorOptions) =>
+    fetchApi<AntigravityStartResult>('/antigravity/runs', studioMutation('POST', { seriesId, partNumber, pages, prepareOnly, kind, editor })),
+  current: () => fetchApi<AntigravityCurrentProcess>('/antigravity/runs/current'),
+  run: (id: string) => fetchApi<AntigravityRunDetail>(`/antigravity/runs/${id}`),
+  /** The 50 newest runs (GET /antigravity/runs), newest first. */
+  runs: () => fetchApi<AntigravityRunSummary[]>('/antigravity/runs'),
+  control: (id: string, action: 'pause' | 'resume' | 'stop') => fetchApi(`/antigravity/runs/${id}/${action}`, studioMutation('POST')),
+  retry: (jobId: string) => fetchApi<AntigravityJobView>(`/antigravity/jobs/${jobId}/retry`, studioMutation('POST')),
+  pageJobs: (chapterIds: string[], kind: AntigravityKind = 'clipper') => fetchApi<AntigravityJobView[]>('/antigravity/page-jobs', studioMutation('POST', { chapterIds, kind })),
+  /** Metadata status of one part's chapters (per page complete / pending / invalid, and why a chapter isn't ready). */
+  metadataStatus: (seriesId: string, partNumber: number) => fetchApi<{ chapters: MetadataChapterStatus[] }>('/antigravity/metadata/status', studioMutation('POST', { seriesId, partNumber })),
+  /** Timeline status of one part's chapters in English and Hindi (saved, and what Editor 2.0 still misses). */
+  editorStatus: (seriesId: string, partNumber: number) => fetchApi<{ chapters: EditorTimelineChapterStatus[] }>('/antigravity/editor/status', studioMutation('POST', { seriesId, partNumber })),
+  publish: (jobId: string) => fetchApi<AntigravityJobView>(`/antigravity/jobs/${jobId}/publish`, studioMutation('POST')),
+  reviewAgain: (jobId: string) => fetchApi<AntigravityJobView>(`/antigravity/jobs/${jobId}/review`, studioMutation('POST')),
+  reject: (jobId: string, body: { rerun: boolean; note?: string }) => fetchApi<AntigravityJobView>(`/antigravity/jobs/${jobId}/reject`, studioMutation('POST', body)),
+  fetchResults: (seriesId: string, chapterIds?: string[]) => fetchApi<AntigravityFetchOutcome>('/antigravity/results/fetch', studioMutation('POST', { seriesId, chapterIds })),
+  r2Status: () => fetchApi<{ configured: boolean }>('/antigravity/r2-status')
 }

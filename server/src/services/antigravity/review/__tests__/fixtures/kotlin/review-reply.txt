@@ -1,0 +1,12 @@
+```json
+{"schema_version":"clipper-review-geometry/1.0","job_id":"solo_leveling-ch010-page_003-0123456789ab","source_sha256":"0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF","review_revision":1,"coordinate_system":"slice_local_pixels",
+"crops":[
+ {"key":"candidate-01","from_keys":["candidate-02"],"reason":"Framed Shot!","top_left":{"slice_id":"slice-01","x":40,"y":100},"bottom_right":{"slice_id":"slice-01","x":760,"y":1600},"checks_reviewed":["HEIGHT_OUTLIER","EDGE_ON_CONTENT:bottom","gpt:boundary_uncertain"]},
+ {"key":null,"from_keys":["candidate-03"],"reason":"","top_left":{"slice_id":"slice-02","x":0,"y":200},"bottom_right":{"slice_id":"slice-02","x":800,"y":1200},"checks_reviewed":[]},
+ {"key":null,"from_keys":["candidate-03"],"top_left":{"slice_id":"slice-02","x":0,"y":1200},"bottom_right":{"slice_id":"slice-03","x":800,"y":100},"checks_reviewed":[]},
+ {"key":"candidate-04","top_left":{"slice_id":"slice-03","x":100,"y":300},"bottom_right":{"slice_id":"slice-03","x":140,"y":340},"checks_reviewed":["TINY","MOSTLY_BLANK","bogus","TINY"]},
+ {"key":"candidate-06","from_keys":["<key of the crop this was split from, or the keys merged into it; omit for a brand-new crop>"],"top_left":{"slice_id":"slice-03","x":300,"y":500},"bottom_right":{"slice_id":"slice-03","x":720,"y":800},"checks_reviewed":["HIGH_OVERLAP:candidate-06"]},
+ {"key":null,"reason":"new_or_split_part","top_left":{"slice_id":"slice-01","x":0,"y":1700},"bottom_right":{"slice_id":"slice-02","x":800,"y":52},"checks_reviewed":[]}
+],
+"removed_keys":["candidate-05","candidate-07"],"redescribe_keys":["candidate-04","nope"],"sweep_done":true,"page_has_no_artwork":false,"notes":"  Merged hair cut.  "}
+```

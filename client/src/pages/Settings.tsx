@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { settingsApi, Settings as SettingsType } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -16,8 +16,10 @@ import { archiveVersion, readHistory, type DocVersion } from '@/lib/docHistory'
 import { loadSavedEditorPrompt, phoneEditorApi } from '@/pages/editor2/phoneEditor'
 import StorageManager from '@/pages/storage/StorageManager'
 import YouTubeGuidelines from '@/components/settings/YouTubeGuidelines'
+import AntiGravitySettingsPanel from '@/pages/antigravity/AntiGravitySettings'
+import type { SettingsReturnState } from '@/pages/antigravity/shared'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, Save, RotateCcw, FolderOpen, Gauge, UserCircle, ImageIcon, Download, Wand2, FileText, Film, Moon, Sun, Monitor, Palette, Cloud, HardDrive } from 'lucide-react'
+import { Loader2, Save, RotateCcw, FolderOpen, Gauge, UserCircle, ImageIcon, Download, Wand2, FileText, Film, Moon, Sun, Monitor, Palette, Cloud, HardDrive, Orbit, ArrowLeft } from 'lucide-react'
 
 // Vertical sidebar tab: full-width, left-aligned, active state as a muted pill.
 const settingsTabTrigger =
@@ -29,6 +31,14 @@ export default function Settings() {
   const [searchParams, setSearchParams] = useSearchParams()
   const activeTab = searchParams.get('tab') || 'appearance'
   const { theme, resolvedTheme, setTheme } = useTheme()
+  // A page that opened Settings (e.g. every AntiGravity page) passes where it was;
+  // kept from the first render because switching tabs replaces the history entry.
+  const location = useLocation()
+  const navigate = useNavigate()
+  const [returnTo] = useState<SettingsReturnState | null>(() => {
+    const state = location.state as Partial<SettingsReturnState> | null
+    return state?.from ? { from: state.from, fromLabel: state.fromLabel || 'previous page' } : null
+  })
   const [settings, setSettings] = useState<SettingsType | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -122,14 +132,20 @@ export default function Settings() {
       <div className="p-6 border-b">
         <div className="flex items-center justify-between max-w-7xl mx-auto">
           <div>
+            {returnTo && (
+              <Button variant="ghost" size="sm" className="-ml-3 mb-1" onClick={() => navigate(returnTo.from)}>
+                <ArrowLeft className="h-4 w-4 mr-1.5" />
+                Back to {returnTo.fromLabel}
+              </Button>
+            )}
             <h1 className="text-3xl font-bold">Settings</h1>
             <p className="text-muted-foreground">
-              Appearance, downloads, Editor 2.0, YouTube guidelines, Cloudflare and storage
+              Appearance, downloads, Editor 2.0, YouTube guidelines, Cloudflare, AntiGravity and storage
             </p>
           </div>
 
           <div className="flex gap-2">
-            {activeTab !== 'youtube' && <>
+            {activeTab !== 'youtube' && activeTab !== 'antigravity' && <>
             <Button variant="outline" onClick={handleReset}>
               <RotateCcw className="h-4 w-4 mr-2" />
               Reset
@@ -176,6 +192,10 @@ export default function Settings() {
               <Cloud className="h-4 w-4" />
               <span>Cloudflare</span>
             </TabsTrigger>
+            <TabsTrigger value="antigravity" className={settingsTabTrigger}>
+              <Orbit className="h-4 w-4" />
+              <span>AntiGravity</span>
+            </TabsTrigger>
             <TabsTrigger value="storage" className={settingsTabTrigger}>
               <HardDrive className="h-4 w-4" />
               <span>Storage</span>
@@ -183,6 +203,9 @@ export default function Settings() {
           </TabsList>
 
           <div className="flex-1 min-w-0 overflow-auto">
+          <TabsContent value="antigravity" className="mt-0 p-6 max-w-4xl">
+            <AntiGravitySettingsPanel />
+          </TabsContent>
           <TabsContent value="youtube" className="mt-0 p-6 max-w-5xl">
             <YouTubeGuidelines />
           </TabsContent>

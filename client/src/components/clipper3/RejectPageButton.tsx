@@ -16,24 +16,24 @@ export function RejectPageButton({ chapterId, filename, redo, disabled, onChange
     setBusy(true)
     try {
       const result = await clipper3Api.rejectPage(chapterId, filename)
-      toast({ title: result.deliveryError ? 'Page rejected; delivery needs retry' : 'Page redo requested',
+      toast({ title: result.deliveryError ? 'Page rejected; phones not told yet' : 'Page rejected',
         description: result.deliveryError ?? 'Sleeper Cell will regenerate this page. Review it on the phone or in Studio, then Sync JSON.',
         variant: result.deliveryError ? 'destructive' : undefined })
       setOpen(false); onChanged()
     } catch (error) {
-      toast({ title: 'Could not request redo', description: error instanceof Error ? error.message : String(error), variant: 'destructive' })
+      toast({ title: 'Could not reject', description: error instanceof Error ? error.message : String(error), variant: 'destructive' })
     } finally { setBusy(false) }
   }
   return <span onClick={event => event.stopPropagation()} className="inline-flex items-center gap-2">
     {pending && <span className="text-xs text-muted-foreground">Awaiting regenerated JSON</span>}
     <Button size="sm" variant="outline" disabled={disabled || busy} onClick={() => setOpen(true)}>
       {busy ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="mr-1 h-3.5 w-3.5" />}
-      {pending ? 'Resend redo request' : 'Reject JSON / Request redo'}
+      {pending ? 'Resend' : 'Reject'}
     </Button>
     <Dialog open={open} onOpenChange={value => !busy && setOpen(value)}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{pending ? 'Resend page redo request?' : `Reject ${filename}?`}</DialogTitle>
+          <DialogTitle>{pending ? `Resend the rejection of ${filename}?` : `Reject ${filename}?`}</DialogTitle>
           <DialogDescription>
             {pending ? 'Resend the existing request. Work already regenerated for it will be preserved.' :
               'Back up this page’s crop JSON and rendered crops, then ask Sleeper Cell to detect fresh crops and generate new JSON for this page. Other pages keep their saved crops.'}
@@ -44,7 +44,7 @@ export function RejectPageButton({ chapterId, filename, redo, disabled, onChange
         {redo?.deliveryError && <p className="text-sm text-destructive">{redo.deliveryError}</p>}
         <DialogFooter>
           <Button variant="ghost" disabled={busy} onClick={() => setOpen(false)}>Cancel</Button>
-          <Button variant="destructive" disabled={busy} onClick={reject}>{busy ? 'Sending…' : pending ? 'Resend request' : 'Reject and request redo'}</Button>
+          <Button variant="destructive" disabled={busy} onClick={reject}>{busy ? 'Sending…' : pending ? 'Resend' : 'Reject'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -1,5 +1,6 @@
 import { youtubePhoneStatus, type YouTubePhoneActivity } from './youtubePhoneStatus.js'
 import { createLegacyR2S3Client } from './r2S3Client.js'
+import { metadataAverageTook } from './metadataPageTimes.js'
 import { parseAccountInventory, type PhoneAccountInventory } from './accountInventory.js'
 import { withSeriesActivity, recordPhoneActivity } from './seriesActivity.js'
 /**
@@ -31,6 +32,9 @@ import type { NarrationLanguage } from './narrationLanguage.js'
 import { mergeCropsReceipts, mergeScriptsReceipts, type PhoneReceipt } from './phoneReceipts.js'
 import { analyticsConfigured, getCloudflareMonthOps, invalidateAnalytics } from './r2Analytics.js'
 import { filterReplacedCropFacts } from './chapterPageReplacement.js'
+import { libraryControls } from './libraryControls.js'
+import { filterRestartedScriptFacts } from './currentScriptReceipts.js'
+import { voiceoverChapterScope } from './voiceoverChapterScope.js'
 
 // ============ Config ============
 
@@ -483,7 +487,9 @@ export async function getPhoneScripts(seriesId?: string, fresh = false): Promise
     return { configured: false, reportedAt: null, device: null, answers: null, series: {}, chapters: {}, hi: { series: {}, chapters: {} }, runs: [] }
   }
 
-  const receipt = mergeScriptsReceipts(list as PhoneReceipt<Record<string, unknown>>[]) as ScriptsReceipt
+  const controls = await libraryControls()
+  const current = list.map(r => ({ ...r, body: filterRestartedScriptFacts(r.body, controls) }))
+  const receipt = mergeScriptsReceipts(current as PhoneReceipt<Record<string, unknown>>[]) as ScriptsReceipt
   const phoneSeries = receipt.series && typeof receipt.series === 'object' ? receipt.series : {}
 
   const rows = await prisma.series.findMany({ select: { id: true, rootFolder: true } })
@@ -799,7 +805,7 @@ interface CropsReceipt {
   }>
 }
 
-interface CropsReceiptWorking { chapter?: string; page?: string; since?: string; paused?: boolean }
+interface CropsReceiptWorking { chapter?: string; page?: string; since?: string; paused?: boolean; process?: string }
 
 const PHONE_PAGE_STATES = new Set<string>(['done', 'in_progress', 'changed'])
 
@@ -1026,14 +1032,18 @@ function parseFinish(finish: unknown): PhonePageFinish | null {
   }
 }
 
+/** The run a working page belongs to; phone builds before Metadata sent no `process`, so those are Image Clipper's. */
+export type WorkingProcess = 'clipper' | 'metadata'
+
 /** A `working` entry by chapter folder, or null when malformed or stale (see WORKING_STALE_MS). */
 function parseWorking(working: unknown): {
-  chapter: string; page: string; since: string | null; paused: boolean; device: string | null; phone: string | null
+  chapter: string; page: string; since: string | null; paused: boolean; process: WorkingProcess; device: string | null; phone: string | null
 } | null {
   if (!isObject(working) || typeof working.page !== 'string' || !working.page || typeof working.chapter !== 'string') return null
   const since = typeof working.since === 'string' ? working.since : null
   if (since && Date.now() - Date.parse(since) > WORKING_STALE_MS) return null
-  return { chapter: working.chapter, page: working.page, since, paused: working.paused === true, ...phoneOf(working) }
+  const process: WorkingProcess = working.process === 'metadata' ? 'metadata' : 'clipper'
+  return { chapter: working.chapter, page: working.page, since, paused: working.paused === true, process, ...phoneOf(working) }
 }
 
 /** A series entry's pages in progress; older phone builds send only `working`. */
@@ -1056,6 +1066,8 @@ export interface PhoneOverviewWorking extends PhoneOverviewPlace {
   page: string
   since: string | null
   paused: boolean
+  /** What the phone's run is doing to the page: cutting crop boxes (Image Clipper) or writing its metadata. */
+  process: WorkingProcess
   /** The phone clipping it (see PhoneScriptRun). */
   device: string | null
   phone: string | null
@@ -1179,6 +1191,8 @@ export interface PhoneOverview {
   recent: PhoneOverviewFinish[]
   /** True when there were more done pages than `recent` holds. */
   recentCapped: boolean
+  /** Seconds per Metadata page over the recent ones, measured by Studio (see metadataPageTimes); null before one finished. */
+  metadataAverageTook: number | null
   /** Chapter zips the phone uploaded, newest first. */
   uploads: PhoneOverviewChapterZip[]
   profiles: PhoneUploadProfile[]
@@ -1200,7 +1214,7 @@ const OVERVIEW_UPLOADS = 30
 export async function getPhoneOverview(sync: PhoneSyncStatus | null, fresh = false): Promise<PhoneOverview> {
   const empty: PhoneOverview = {
     configured: false, device: null, phones: [], reportedAt: null, reported: { sync: null, scripts: null, crops: null },
-    answers: null, working: [], runs: [], series: [], recent: [], recentCapped: false, uploads: [], profiles: [], gemini: { speech: null, narration: null }, automation: null
+    answers: null, working: [], runs: [], series: [], recent: [], recentCapped: false, metadataAverageTook: null, uploads: [], profiles: [], gemini: { speech: null, narration: null }, automation: null
   }
   const [scripts, cropsList] = await Promise.all([
     getPhoneScripts(undefined, fresh).catch(() => null),
@@ -1226,7 +1240,7 @@ export async function getPhoneOverview(sync: PhoneSyncStatus | null, fresh = fal
     }
   }
 
-  const overview: PhoneOverview = { ...empty, configured: true }
+  const overview: PhoneOverview = { ...empty, configured: true, metadataAverageTook: metadataAverageTook() }
   overview.answers = crops.answers ?? null
   overview.profiles = parseUploadProfiles(crops.profiles)
   overview.gemini = { speech: parseGeminiUsage(crops.speech), narration: parseGeminiUsage(crops.narration) }
@@ -1257,6 +1271,7 @@ export async function getPhoneOverview(sync: PhoneSyncStatus | null, fresh = fal
         page: working.page,
         since: working.since,
         paused: working.paused,
+        process: working.process,
         device: working.device,
         phone: working.phone
       })
@@ -1434,6 +1449,8 @@ export interface PhoneAutomationOptions {
    * split is planned and sent at once.
    */
   assignments?: Record<string, string[]>
+  /** A split between the phones picked in Run automation ("Selected devices"), not every startable phone. */
+  devices?: string[]
   /** A stop: once the pages, chapter or splits the run is on are done, as the phone's "Finish …, then stop". */
   after?: boolean
 }
@@ -1482,7 +1499,7 @@ export async function sendAutomationCommand(
   if (device !== undefined && !relayPhones().some(p => p.id === device && p.id)) throw new Error('That phone is not known to the relay')
   const target = (sent: { phones: number }, chapters: string[] | null = null): PhoneAutomationTarget =>
     device ? { device, name: phoneName(device), chapters, reached: sent.phones > 0 } : { device: '*', name: 'Every phone', chapters, reached: sent.phones > 0 }
-  const runsOn = automationRuns(device)
+  const runsOn = options.split && options.devices ? options.devices.flatMap(d => automationRuns(d)) : automationRuns(device)
 
   if (command === 'stop') {
     if (options.after) {
@@ -1511,14 +1528,36 @@ export async function sendAutomationCommand(
     series = path.basename(row.rootFolder)
   }
   if(kind==='metadata') {
-    if(options.split)throw new Error('Assign approved Metadata chapters to one selected phone per start')
-    if(!device||!series||!options.chapters?.length)throw new Error('Metadata requires one phone and explicit approved chapters')
+    // Split: each selected phone gets its share of the approved chapters picked, as the confirmed plan says.
+    const picked = options.split ? Object.values(options.assignments ?? {}).flat() : options.chapters
+    if(options.split && !options.assignments)throw new Error('Plan the Metadata split first, then start it as planned')
+    if(!options.split && !device)throw new Error('Metadata requires one phone and explicit approved chapters')
+    if(!series||!picked?.length)throw new Error('Metadata requires explicit approved chapters')
     const {publishMetadataJobs}=await import('./clipper3/metadataSplit.js')
     const chapters=await prisma.chapter.findMany({where:{seriesId:options.seriesId},include:{series:{select:{title:true}}}})
-    for(const name of options.chapters) {
+    for(const name of picked) {
       const chapter=chapters.find(c=>path.basename(c.folderPath)===name)
       if(!chapter)throw new Error('Unknown Metadata chapter')
       await publishMetadataJobs(chapter, {notify:false})
+    }
+  }
+  // A bare series start used to replay retained Part 1 scripts on the phone.
+  // Resolve completion here, including starts from older Studio/phone clients.
+  let scopedChapters = options.chapters
+  const voiceScope = kind === 'voiceover' ? await voiceoverChapterScope(options.seriesId!) : null
+  if (voiceScope?.excluded.length) {
+    const excluded = new Set(voiceScope.excluded)
+    if (options.chapters?.some(c => excluded.has(c)) ||
+        Object.values(options.assignments ?? {}).some(chapters => chapters.some(c => excluded.has(c)))) {
+      throw new Error('The voiceover selection includes completed chapters. Check the chapter range again.')
+    }
+    if (!options.split && scopedChapters === undefined) {
+      scopedChapters = voiceScope.chapters.map(c => path.basename(c.folderPath))
+      if (!scopedChapters.length) throw new Error('No unfinished chapters remain for voiceover')
+      const capabilities = automationOf(device)
+      if (!capabilities.length || capabilities.some(a => !Array.isArray(a.chapterRuns) || !a.chapterRuns.includes('voiceover'))) {
+        throw new Error('Update Sleeper-Cell to skip completed voiceover chapters')
+      }
     }
   }
   const takesTabs = kind === 'clipper' || kind === 'metadata' || kind === 'editor' || kind === 'voiceover'
@@ -1535,7 +1574,7 @@ export async function sendAutomationCommand(
   }
   const args = {
     series,
-    ...(options.chapters ? { chapters: [...new Set(options.chapters)] } : {}),
+    ...(scopedChapters ? { chapters: [...new Set(scopedChapters)] } : {}),
     tabs: takesTabs ? options.tabs : undefined,
     ...(kind === 'clipper' ? { ai: options.ai, flow: options.ai ? (options.ai==='aistudio'?'steps' as const:'classic' as const) : undefined, chatGpt: options.chatGpt } : {}),
     ...(kind === 'metadata' ? {ai:'aistudio' as const} : {}),
@@ -1546,9 +1585,9 @@ export async function sendAutomationCommand(
   }
   if (!options.split) {
     if (kind === 'editor') assertEditorSettings(options, device === undefined ? relayPhones().map(p => p.id) : [device])
-    if (kind === 'narration' && series) assertNarrationFree(series, device)
+    if (kind === 'narration' && series) assertNarrationFree(series, device, scopedChapters)
     const sent = await sendPhoneRequest(START_ACTION[kind], { ...args, device })
-    return { ...sent, via: 'relay', targets: [target(sent, options.chapters ?? null)] }
+    return { ...sent, via: 'relay', targets: [target(sent, scopedChapters ?? null)] }
   }
 
   const split = await import('./phoneSplit.js')
@@ -1557,7 +1596,7 @@ export async function sendAutomationCommand(
   let assignments = options.assignments
   let numbers: Record<string, number> | undefined
   if (!assignments) {
-    const plan = await split.planSplit(kind, options.seriesId, options.language ?? 'en')
+    const plan = await split.planSplit(kind, options.seriesId, options.language ?? 'en', { devices: options.devices })
     numbers = plan.numbers
     assignments = Object.fromEntries(plan.targets.filter(t => t.action !== 'skip').map(t => [t.device, t.chapters]))
   }
@@ -1565,6 +1604,7 @@ export async function sendAutomationCommand(
   const given = new Set<string>()
   for (const [phone, chapters] of Object.entries(assignments)) {
     if (!known.has(phone)) throw new Error('A phone in the split is not known to the relay')
+    if (options.devices && !options.devices.includes(phone)) throw new Error('The split plan includes a phone that was not selected')
     if (!Array.isArray(chapters) || chapters.some(c => typeof c !== 'string' || !c)) throw new Error('Each phone’s share must be a list of chapter folders')
     for (const chapter of chapters) {
       if (given.has(chapter)) throw new Error(`${chapter} is in two phones’ shares`)
@@ -1599,12 +1639,19 @@ export async function sendAutomationCommand(
  * past WORKING_STALE_MS is dead). The phone running it may be started again (it just resumes). Without `device`,
  * the start goes to the one phone connected, or to every phone, when no phone may have it running.
  */
-function assertNarrationFree(series: string, device: string | undefined): void {
+function assertNarrationFree(series: string, device: string | undefined, chapters?: string[]): void {
   const connected = relayPhones().filter(p => p.connected)
   const target = device ?? (connected.length === 1 ? connected[0].id : null)
   for (const receipt of relayReceipts<{ runs?: unknown }>('scripts') ?? []) {
-    if (target !== null && receipt.device === target) continue
-    if (parseScriptRuns(receipt.body.runs).some(r => r.kind === 'narration' && r.series === series)) {
+    const runs = parseScriptRuns(receipt.body.runs).filter(r => r.kind === 'narration' && r.series === series)
+    if (target !== null && receipt.device === target) {
+      // Rescoping a paused phone retains its current chapter. It must not silently
+      // finish an earlier part when Studio promised only the selected range.
+      const outside = chapters && runs.flatMap(r => r.tabs).find(t => !chapters.includes(t.chapter))
+      if (outside) throw new Error(`Stop the current narration run on ${phoneName(receipt.device)} (${outside.chapter}) before switching parts.`)
+      continue
+    }
+    if (runs.length) {
       throw new Error(`${phoneName(receipt.device)} is already writing ${series}'s scripts. Stop it there first.`)
     }
   }

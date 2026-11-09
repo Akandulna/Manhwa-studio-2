@@ -3,7 +3,8 @@ import { WebSocketServer, type WebSocket } from 'ws'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'net'
 
-const local=vi.hoisted(()=>({hub:null as any}))
+const local=vi.hoisted(()=>({hub:null as any, controls: [] as any[], scopeChapters: null as any[] | null}))
+vi.mock('../libraryControls.js',()=>({libraryControls:async()=>local.controls}))
 vi.mock('../wifiStatus.js',()=>({wifiHub:()=>local.hub}))
 
 // R2 must not be touched while the relay is set up.
@@ -30,7 +31,7 @@ vi.mock('../../index.js', () => ({
           }
         : null)
     },
-    chapter: { findMany: async () => [{ id: 'c1', folderPath: 'Solo Hero/Chapter 001' }] }
+    chapter: { findMany: async () => local.scopeChapters ?? [{ id: 'c1', folderPath: 'Solo Hero/Chapter 001' }] }
   }
 }))
 vi.mock('../../utils/envFile.js', () => ({ writeEnvVars: async () => {} }))
@@ -136,6 +137,16 @@ describe('phone relay', () => {
     // Nothing from the phone yet for crops: empty, still not R2.
     expect((await getPhoneCrops('s1', undefined, true)).series).toEqual({})
     expect(send).not.toHaveBeenCalled()
+  })
+
+  it('does not report pre-restart script completion through the public status API', async () => {
+    local.controls = [{ folder: 'Solo Hero', restart: { at: 123, deviceId: 'note', done: true } }]
+    try {
+      const scripts = await getPhoneScripts('s1', true)
+      expect(scripts.series).toEqual({})
+      expect(scripts.chapters).toEqual({})
+      expect(scripts.hi).toEqual({ series: {}, chapters: {} })
+    } finally { local.controls = [] }
   })
 
   it('pushes a new receipt to the browser and answers from it', async () => {
@@ -307,7 +318,8 @@ describe('two phones', () => {
     expect(byId.aaaa1111).toMatchObject({ name: 'Honor · aaaa', connected: true, working: 1, automation: { remoteStart: true } })
     expect(byId.bbbb2222).toMatchObject({ name: 'Honor · bbbb', connected: true, working: 0 })
     expect(byId['']).toMatchObject({ name: 'Pixel (old app)', connected: false })
-    expect(overview.working).toEqual([expect.objectContaining({ page: 'p1.webp', device: 'aaaa1111', phone: 'Honor · aaaa' })])
+    // No "process" (builds before Metadata): Image Clipper's page.
+    expect(overview.working).toEqual([expect.objectContaining({ page: 'p1.webp', process: 'clipper', device: 'aaaa1111', phone: 'Honor · aaaa' })])
   })
 
   it('splits a series between the phones, unfinished chapters only, balanced by pages left', async () => {
@@ -459,6 +471,58 @@ describe('two phones', () => {
     await expect(sendAutomationCommand('start', { seriesId: 's1', device: 'aaaa1111', chapters: ['Another series chapter'] })).rejects.toThrow('not in this series')
     await expect(sendAutomationCommand('start', { seriesId: 's1', chapters: ['Chapter 001'] })).rejects.toThrow('needs one device and series')
     await expect(sendAutomationCommand('start', { seriesId: 's1', device: 'bbbb2222', chapters: ['Chapter 001'] })).rejects.toThrow('Update Sleeper-Cell')
+  })
+
+  it('starts Part 2 voiceover with Chapters 21–40 and refuses a stale completed-part selection', async () => {
+    desktop!.send(JSON.stringify(crops('aaaa1111', {}, { runs: ['voiceover'], chapterRuns: ['voiceover'] })))
+    await until(() => relayReceipts<any>('crops')?.some(r => r.device === 'aaaa1111' && r.body.automation?.chapterRuns?.includes('voiceover')) === true)
+    local.controls = [{ folder: 'Solo Hero', parts: { '1': { at: 100, deviceId: 'mac', done: true } } }]
+    local.scopeChapters = Array.from({ length: 40 }, (_, i) => ({ id: `c${i + 1}`, number: i + 1,
+      completedAt: null, folderPath: `Solo Hero/Chapter ${String(i + 1).padStart(3, '0')}` }))
+    try {
+      for (const language of ['en', 'hi'] as const) {
+        const sent = await sendAutomationCommand('start', { kind: 'voiceover', seriesId: 's1', device: 'aaaa1111', language, tabs: 2 })
+        await until(() => received.some(m => m.includes(sent.id)))
+        const request = JSON.parse(received.find(m => m.includes(sent.id))!)
+        expect(request).toMatchObject({ action: 'voiceover_start', device: 'aaaa1111', language, tabs: 2 })
+        expect(request.chapters).toEqual(local.scopeChapters.slice(20).map(c => c.folderPath.split('/').at(-1)))
+        expect(sent.targets[0].chapters).toEqual(request.chapters)
+      }
+      const before = received.length
+      await expect(sendAutomationCommand('start', { kind: 'voiceover', seriesId: 's1', device: 'aaaa1111', chapters: ['Chapter 001'] })).rejects.toThrow('completed chapters')
+      await expect(sendAutomationCommand('start', { kind: 'voiceover', seriesId: 's1', split: true, assignments: { aaaa1111: ['Chapter 001'] } })).rejects.toThrow('completed chapters')
+      local.controls[0].parts['2'] = { at: 100, deviceId: 'mac', done: true }
+      await expect(sendAutomationCommand('start', { kind: 'voiceover', seriesId: 's1', device: 'aaaa1111' })).rejects.toThrow('No unfinished chapters')
+      expect(received).toHaveLength(before)
+    } finally { local.controls = []; local.scopeChapters = null }
+  })
+
+  it('dispatches exactly Narration Part 2 to one phone and rejects empty/old-phone scopes', async () => {
+    desktop!.send(JSON.stringify(crops('aaaa1111', {}, { runs: ['narration'], chapterRuns: ['narration'] })))
+    desktop!.send(JSON.stringify(crops('bbbb2222', {}, { runs: ['narration'], chapterRuns: [] })))
+    await until(() => relayReceipts<any>('crops')?.some(r => r.device === 'aaaa1111' && r.body.automation?.chapterRuns?.includes('narration')) === true)
+    local.scopeChapters = Array.from({ length: 60 }, (_, i) => ({ id: `c${i + 1}`, number: i + 1,
+      folderPath: `Solo Hero/Chapter ${String(i + 1).padStart(3, '0')}` }))
+    try {
+      const chapters = local.scopeChapters.slice(20, 40).map(c => c.folderPath.split('/').at(-1))
+      const sent = await sendAutomationCommand('start', { kind: 'narration', seriesId: 's1', device: 'aaaa1111', chapters })
+      await until(() => received.some(m => m.includes(sent.id)))
+      expect(JSON.parse(received.find(m => m.includes(sent.id))!)).toMatchObject({ action: 'narration_start', device: 'aaaa1111', chapters })
+      expect(sent.targets[0].chapters).toEqual(chapters)
+      const before = received.length
+      await expect(sendAutomationCommand('start', { kind: 'narration', seriesId: 's1', device: 'aaaa1111', chapters: [] })).rejects.toThrow('Pick chapters')
+      await expect(sendAutomationCommand('start', { kind: 'narration', seriesId: 's1', device: 'bbbb2222', chapters })).rejects.toThrow('Update Sleeper-Cell')
+      expect(received).toHaveLength(before)
+      const paused = (runs: object[]) => ({ type: 'receipt', kind: 'scripts', device: 'aaaa1111', at: 99,
+        body: { updatedAt: new Date().toISOString(), series: {}, runs } })
+      desktop!.send(JSON.stringify(paused([{ kind: 'narration', series: 'Solo Hero', paused: true,
+        at: new Date().toISOString(), tabs: [{ chapter: 'Chapter 015', language: 'hi' }] }])))
+      await until(() => relayReceipts<any>('scripts')?.some(r => r.device === 'aaaa1111' && r.body.runs?.length) === true)
+      await expect(sendAutomationCommand('start', { kind: 'narration', seriesId: 's1', device: 'aaaa1111', chapters })).rejects.toThrow('Stop the current narration run')
+      expect(received).toHaveLength(before)
+      desktop!.send(JSON.stringify(paused([])))
+      await until(() => relayReceipts<any>('scripts')?.some(r => r.device === 'aaaa1111' && r.body.runs?.length === 0) === true)
+    } finally { local.scopeChapters = null }
   })
 
   it('drops a phone the relay forgot', async () => {

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  findUnique: vi.fn(), findMany: vi.fn(), sync: vi.fn(), reject: vi.fn(), publish: vi.fn(), autoCrop: vi.fn(),
+  findUnique: vi.fn(), findMany: vi.fn(), sync: vi.fn(), reject: vi.fn(), publish: vi.fn(), autoCrop: vi.fn(), reviewedCrop: vi.fn(),
   legacyPublish: vi.fn(), fetch: vi.fn(), manifest: vi.fn(), setReview: vi.fn(), readReview: vi.fn(), queueEditor: vi.fn(),
 }))
 vi.mock('../../../index.js', () => ({ prisma: { chapter: { findUnique: mocks.findUnique, findMany: mocks.findMany } } }))
@@ -11,7 +11,7 @@ vi.mock('../processedSync.js', () => ({ syncChapterProcessed: mocks.sync, unsync
 vi.mock('../pageRedo.js', () => ({ rejectPage: mocks.reject, publishPageRedo: mocks.publish, readPageRedo: vi.fn().mockResolvedValue(null) }))
 vi.mock('../studioCropCorrections.js', () => ({ createCorrectionTransport: mocks.legacyPublish, sendStudioCropCorrections: mocks.legacyPublish }))
 vi.mock('../chapterCrop.js', () => ({ onChapterCropped: vi.fn(), isChapterCropping: () => false,
-  queueAutoCrop: mocks.autoCrop, readChapterCropState: vi.fn(), runChapterCrop: vi.fn(), seriesSlug: () => 'series' }))
+  queueAutoCrop: mocks.autoCrop, queueReviewedCrop: mocks.reviewedCrop, readChapterCropState: vi.fn(), runChapterCrop: vi.fn(), seriesSlug: () => 'series' }))
 vi.mock('../../chapterManifest.js', () => ({ getChapterManifest: mocks.manifest }))
 vi.mock('../../phoneRelay.js', () => ({ relayPhones: () => [{ id: 'test-phone', connected: true }], sendPhoneRequest: vi.fn() }))
 vi.mock('../../phoneCropImport.js', () => ({ fetchPhoneCrops: mocks.fetch, publishAllCroppedMarkers: vi.fn(), publishChapterCropped: vi.fn(), publishChapterReviewed: vi.fn() }))
@@ -80,5 +80,35 @@ describe('review approval publishes Editor packages', () => {
     await handler(router, '/chapters/:id/review', 'put')({ params: { id: chapter.id }, body: { reviewed: true } }, res)
     expect(res.status).toHaveBeenCalledWith(500)
     expect(mocks.queueEditor).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('reviewed series crop API', () => {
+  it('scopes a part request to the series and excludes completed chapters', async () => {
+    const result = { queued: [{ chapterId: chapter.id, chapterNumber: 18 }], skipped: [] }
+    mocks.reviewedCrop.mockResolvedValueOnce(result)
+    const router = initClipper3Routes({ emit: vi.fn() } as any), res = response()
+    await handler(router, '/series/:seriesId/crop-reviewed')({ params: { seriesId: 'series' }, body: { chapterIds: [chapter.id] } }, res)
+    expect(mocks.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { seriesId: 'series', completedAt: null, id: { in: [chapter.id] } }, orderBy: { number: 'asc' }
+    }))
+    expect(mocks.reviewedCrop).toHaveBeenCalledWith(expect.anything(), [chapter])
+    expect(res.json).toHaveBeenCalledWith(result)
+  })
+
+  it.each([[], 'chapter', [null], ['']])('rejects malformed/empty selection without broadening it: %j', async chapterIds => {
+    const router = initClipper3Routes({ emit: vi.fn() } as any), res = response()
+    await handler(router, '/series/:seriesId/crop-reviewed')({ params: { seriesId: 'series' }, body: { chapterIds } }, res)
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(mocks.findMany).not.toHaveBeenCalled()
+    expect(mocks.reviewedCrop).not.toHaveBeenCalled()
+  })
+
+  it('allows the whole-series action while preserving the series boundary', async () => {
+    mocks.reviewedCrop.mockResolvedValueOnce({ queued: [], skipped: [] })
+    const router = initClipper3Routes({ emit: vi.fn() } as any), res = response()
+    await handler(router, '/series/:seriesId/crop-reviewed')({ params: { seriesId: 'series' }, body: {} }, res)
+    expect(mocks.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { seriesId: 'series', completedAt: null } }))
   })
 })

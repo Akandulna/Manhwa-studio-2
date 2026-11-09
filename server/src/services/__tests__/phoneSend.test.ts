@@ -285,6 +285,13 @@ describe('startPhoneSend', () => {
     return getSendJob()!
   }
 
+  it('prepares only explicitly selected chapters before sending from the origin', async () => {
+    libraryFlow.origin = true
+    await startPhoneSend([{ seriesId: 's1', chapterIds: ['c2'] }], io)
+    expect((await finished()).series[0]).toMatchObject({ state: 'done', chaptersSent: 1 })
+    expect(libraryFlow.prepare).toHaveBeenCalledWith('s1', ['c2'])
+  })
+
   it('does not publish raw pages when origin preparation fails', async () => {
     libraryFlow.origin = true
     libraryFlow.prepare.mockRejectedValueOnce(new Error('Preparation failed'))

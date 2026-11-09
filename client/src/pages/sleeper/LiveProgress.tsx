@@ -29,6 +29,7 @@ import {
   clock,
   HOUR,
   InfoTip,
+  isMetadata,
   Light,
   onPhone,
   pageLabel,
@@ -41,7 +42,7 @@ import {
 } from './sleeperShared'
 
 /** The average time per page is read over this many recent Auto-run pages. */
-const AVERAGE_OVER = 20
+export const AVERAGE_OVER = 20
 const RECENT_SHOWN = 10
 
 function WorkingRow({ working, averageTook, now }: { working: PhoneOverviewWorking; averageTook: number | null; now: number }) {
@@ -69,7 +70,14 @@ function WorkingRow({ working, averageTook, now }: { working: PhoneOverviewWorki
           {averageTook !== null && <span className="text-muted-foreground"> of ~{formatTook(averageTook)}</span>}
         </span>
       </div>
-      <Bar percent={percent} tone={working.paused || overdue ? 'warn' : 'primary'} />
+      {averageTook !== null
+        ? <Bar percent={percent} tone={working.paused || overdue ? 'warn' : 'primary'} />
+        : (
+          // No usual time to measure against yet: a bar that shows the page is going, not how far.
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-secondary" title="Timed once a page has finished">
+            <div className={cn('h-full w-full rounded-full', working.paused ? 'bg-amber-500/40' : 'animate-pulse bg-primary/40')} />
+          </div>
+        )}
     </div>
   )
 }
@@ -129,20 +137,62 @@ function RunSection({ run, now }: { run: PhoneOverviewRun; now: number }) {
   )
 }
 
-/** One busy phone: its Image Clipper pages and its runs. */
-function PhoneProgress({ phone, overview, several, averageTook, now }: {
+const WORKING_KIND = {
+  clipper: {
+    icon: ImageUp,
+    name: 'Image Clipper',
+    tip: 'One page per ChatGPT tab. A page still running after 45 minutes is taken as a dead run and dropped.'
+  },
+  metadata: {
+    icon: FileText,
+    name: 'Metadata',
+    tip: 'One page per AI Studio tab, writing the metadata for its reviewed crops. A page still running after 45 minutes is taken as a dead run and dropped.'
+  }
+} as const
+
+/**
+ * The pages one kind of page run is on, each timed against that run's usual time per page: Image Clipper's (from the
+ * phones' finished pages, with the ChatGPT account) or Metadata's (timed by Studio as the phones finish pages).
+ */
+function WorkingSection({ process, working, account, averageTook, now }: {
+  process: keyof typeof WORKING_KIND; working: PhoneOverviewWorking[]; account: string | null; averageTook: number | null; now: number
+}) {
+  const kind = WORKING_KIND[process]
+  const Icon = kind.icon
+  // Which series and chapters the open pages are in: "Monarch of Supreme Beings · Ch. 15, 16".
+  const places = new Map<string, Set<string>>()
+  for (const w of working) {
+    const chapters = places.get(w.series) ?? new Set<string>()
+    chapters.add(w.chapterNumber !== null ? String(w.chapterNumber) : w.chapter)
+    places.set(w.series, chapters)
+  }
+  return (
+    <div className="space-y-3">
+      <p className="flex items-center gap-2 text-sm">
+        <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+        <span className="font-medium">{kind.name}</span>
+        <span className="truncate text-muted-foreground">
+          · {[...places].map(([series, chapters]) => `${series} · Ch. ${[...chapters].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).join(', ')}`).join('; ')}
+        </span>
+        {account && <span className="ml-auto whitespace-nowrap text-xs text-muted-foreground">on {account}</span>}
+        <InfoTip text={kind.tip} className={account ? '' : 'ml-auto'} />
+      </p>
+      {working.map(w => (
+        <WorkingRow key={`${w.device ?? ''}/${w.series}/${w.chapter}/${w.page}`} working={w} averageTook={averageTook} now={now} />
+      ))}
+    </div>
+  )
+}
+
+/** One busy phone: its Image Clipper and Metadata pages and its runs. */
+export function PhoneProgress({ phone, overview, several, averageTook, now }: {
   phone: PhoneOverviewPhone; overview: PhoneOverview; several: boolean; averageTook: number | null; now: number
 }) {
   const activity = phoneActivity(overview, phone, several)
   const resume = activity.working.length ? null : phone.automation?.resume ?? null
   const live = activity.going.length > 0 && phone.connected !== false
-  // Which series and chapters the open pages are in: "Monarch of Supreme Beings · Ch. 15, 16".
-  const places = new Map<string, Set<string>>()
-  for (const w of activity.working) {
-    const chapters = places.get(w.series) ?? new Set<string>()
-    chapters.add(w.chapterNumber !== null ? String(w.chapterNumber) : w.chapter)
-    places.set(w.series, chapters)
-  }
+  const metadata = activity.working.filter(isMetadata)
+  const clipping = activity.working.filter(w => !isMetadata(w))
   const account = (overview.profiles ?? [])
     .filter(p => onPhone(p, phone, several))
     .map(p => uploadUsage(p, now))
@@ -170,22 +220,8 @@ function PhoneProgress({ phone, overview, several, averageTook, now }: {
             </span>
           </p>
         )}
-        {activity.working.length > 0 && (
-          <div className="space-y-3">
-            <p className="flex items-center gap-2 text-sm">
-              <ImageUp className="h-3.5 w-3.5 text-muted-foreground" />
-              <span className="font-medium">Image Clipper</span>
-              <span className="truncate text-muted-foreground">
-                · {[...places].map(([series, chapters]) => `${series} · Ch. ${[...chapters].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).join(', ')}`).join('; ')}
-              </span>
-              {account && <span className="ml-auto whitespace-nowrap text-xs text-muted-foreground">on {account}</span>}
-              <InfoTip text="One page per ChatGPT tab. A page still running after 45 minutes is taken as a dead run and dropped." className={account ? '' : 'ml-auto'} />
-            </p>
-            {activity.working.map(w => (
-              <WorkingRow key={`${w.device ?? ''}/${w.series}/${w.chapter}/${w.page}`} working={w} averageTook={averageTook} now={now} />
-            ))}
-          </div>
-        )}
+        {clipping.length > 0 && <WorkingSection process="clipper" working={clipping} account={account} averageTook={averageTook} now={now} />}
+        {metadata.length > 0 && <WorkingSection process="metadata" working={metadata} account={null} averageTook={overview.metadataAverageTook ?? null} now={now} />}
         {activity.runs.map(run => <RunSection key={`${run.device ?? ''}/${run.kind}`} run={run} now={now} />)}
       </CardContent>
     </Card>

@@ -83,7 +83,7 @@ export class CropReviewSession {
   get pending() { return this.dirty.size > 0 || this.running.size > 0 }
   get saving() { return this.running.size > 0 }
 
-  commit(filename: string, file: Clipper3ImageCropFile, removedCropId?: string) {
+  commit(filename: string, file: Clipper3ImageCropFile, removedCropId?: string, addedDescription = '') {
     const before = this.pages[filename]
     if (!before || JSON.stringify(before.file) === JSON.stringify(file)) return
     let metadata = before.metadata
@@ -94,6 +94,37 @@ export class CropReviewSession {
       })
       if (updated == null) throw new Error('This page’s metadata could not be read. Reload it before removing crops.')
       metadata = updated
+    }
+    const previousIds = new Set(before.file.crops.map(crop => crop.id))
+    const ordered = [...file.crops].sort((a, b) => {
+      const position = (crop: Clipper3CropEntry) => {
+        const points = crop.crop.points.filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
+        return { top: Math.min(...points.map(point => point.y)), left: Math.min(...points.map(point => point.x)) }
+      }
+      const first = position(a), second = position(b)
+      return first.top - second.top || first.left - second.left
+    })
+    const numberingChanged = ordered.length !== before.file.crops.length ||
+      ordered.some((crop, index) => crop.id !== before.file.crops[index]?.id)
+    if (numberingChanged) {
+      const numbered = ordered.map((crop, index) => ({ ...crop, id: `crop-${String(index + 1).padStart(2, '0')}` }))
+      if (metadata.trim()) {
+        let parsed: any
+        try { parsed = JSON.parse(metadata) } catch { /* handled below */ }
+        if (!Array.isArray(parsed?.crops)) throw new Error('This page’s metadata could not be read. Reload it before renumbering crops.')
+        const slug = seriesSlug(this.seriesTitle)
+        const stem = stemOf(filename)
+        // Look up by the OLD id before assigning numbers, so descriptions and
+        // script references move with their crop even when IDs exchange places.
+        const entries = new Map(parsed.crops.map((entry: any) => [entry.id, entry]))
+        metadata = JSON.stringify({ ...parsed, crops: ordered.map((crop, index) => ({
+          ...(entries.get(crop.id) as object ?? {}),
+          id: numbered[index].id,
+          ...(!previousIds.has(crop.id) ? { description: addedDescription.trim() } : {}),
+          exportedFilename: exportedFilenameFor(slug, stem, index, crop.reason)
+        })) }, null, 2)
+      }
+      file = { ...file, crops: numbered }
     }
     this.history.push({ filename, before })
     this.replace(filename, { file, metadata })

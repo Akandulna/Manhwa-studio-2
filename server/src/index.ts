@@ -1,3 +1,4 @@
+import { cloudClipperRoutes } from './routes/cloudClipper.js';
 import { configureRelayTraffic } from './services/relayTraffic.js'
 import {initManagedMaintenanceRoutes} from './routes/managedMaintenance.js';
 import express from 'express';
@@ -23,8 +24,14 @@ import { initR2Routes } from './routes/r2.js';
 import {initManagedPilotRoutes} from './routes/managedPilot.js';
 import { initStitchRoutes } from './routes/stitch.js';
 import { initPagePreviewRoutes } from './routes/pagePreview.js';
+import { initGoogleDriveRoutes } from './routes/googleDrive.js';
+import { initAntigravityRoutes } from './routes/antigravity.js';
 import { DownloadManager } from './services/downloadManager.js';
-import { startPhoneRelay, receiveWifiReceipt, sendPhoneRequest } from './services/phoneRelay.js';
+import { startPhoneRelay, receiveWifiReceipt, sendPhoneRequest, onPhoneReceipt } from './services/phoneRelay.js';
+import { startNarrationAutoSync } from './services/phoneNarrationAutoSync.js';
+import { startMetadataAutoSync, stopMetadataAutoSync } from './services/metadataLibrary.js';
+import { metadataRoutes } from './routes/metadata.js';
+import { recordMetadataReceipt } from './services/metadataPageTimes.js';
 import { installWifiStatus, wifiHub } from './services/wifiStatus.js';
 import { reconcileQuietly } from './services/diskReconcile.js';
 import { backfillAlignmentDocumentsQuietly } from './services/alignment/alignmentDocument.js';
@@ -63,7 +70,7 @@ app.use(express.json({ limit: '50mb' }));
 app.set('io', io);
 app.use(seriesActivityMiddleware(prisma));
 app.use((req, res, next) => {
-  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && /^\/api\/(series|manual|narration|clipper3|video2|storage|stitch|page-preview)(\/|$)/.test(req.path)) {
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && /^\/api\/(series|manual|narration|clipper3|clipper-cloud|video2|storage|stitch|page-preview)(\/|$)/.test(req.path)) {
     res.on('finish', () => { if (res.statusCode < 400) notifySeriesProcessChanged(true) });
   }
   next();
@@ -95,12 +102,16 @@ app.use('/api/youtube', createYouTubeRouter({
 }));
 app.use('/api/manual', manualRoutes);  // Manual upload mode
 app.use('/api/narration', initNarrationRoutes(io));  // Module 2: Narration — fetch phone scripts + voiceovers, align
+app.use('/api/clipper-cloud', cloudClipperRoutes());
 app.use('/api/clipper3', initClipper3Routes(io));  // Module 3: Image Clipper 3.0 — per-image crop JSONs, page-local coordinates
+app.use('/api/metadata', metadataRoutes());
 app.use('/api/video2', initVideoEditor2Routes(io));  // Module 4v2: Editor 2.0
 app.use('/api/storage', initStorageRoutes());        // Storage: local disk usage + reclaiming it
 app.use('/api/stitch', initStitchRoutes());          // Library: stitch a chapter's many short pages into a few tall ones
 app.use('/api/page-preview', initPagePreviewRoutes()); // Library: preview a chapter's pages and delete unwanted ones
 app.use('/api/r2', initR2Routes(io));                // Cloud backup: upload series folders to Cloudflare R2
+app.use('/api/google-drive', initGoogleDriveRoutes(prisma)); // Studio AntiGravity: Google Drive connection (local-only)
+app.use('/api/antigravity', initAntigravityRoutes(prisma, io));   // Studio AntiGravity: local CLI, models, settings (local-only)
 app.use('/api/managed-pilot',initManagedPilotRoutes(prisma));
 app.use('/api/managed-maintenance',initManagedMaintenanceRoutes(prisma));
 app.get('/api/managers', async (_req, res) => {
@@ -168,6 +179,10 @@ startManagerReporting(prisma, io);
 startLibrarySync(io);
 startSeriesProcess(io);
 startPhoneRelay(io);
+startNarrationAutoSync(io);
+startMetadataAutoSync(io);
+// Times the phones' Metadata pages for Live Progress (they report no finish times).
+onPhoneReceipt((kind, device, body) => { if (kind === 'crops') recordMetadataReceipt(device, body) });
 startProductionAutomation(io);
 void getSeriesProcess().catch(error => console.error('[process] initial scan:', error));
 void recordManagerStorage().catch(error => console.error('[managers] storage:', error));
@@ -181,9 +196,12 @@ const shutdown=async () => {
   shuttingDown=true;
   console.log('Shutting down...');
   wifiHub()?.close();
+  stopMetadataAutoSync();
   await stopProductionAutomation().catch(error=>console.error('[production] shutdown:',error));
   await downloadManager.shutdown();
   await flushSeriesActivity();
+  // Stop only Studio's own agy process groups; their pages become Interrupted.
+  await (await import('./routes/antigravity.js')).antigravityJobs()?.shutdown().catch(error=>console.error('[antigravity] shutdown:',error));
   await prisma.$disconnect();
   process.exit(0);
 };

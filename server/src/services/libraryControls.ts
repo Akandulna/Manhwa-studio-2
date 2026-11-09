@@ -25,6 +25,11 @@ export function saveLibraryControls(incoming: LibraryControl[]): Promise<boolean
       const prior = await libraryControl(control.folder)
       const merged = mergeControl(prior, control)
       if (JSON.stringify(prior) === JSON.stringify(merged)) continue
+      // A Part newly marked done: its R2 page zips and voiceovers go (partDoneCleanup.ts).
+      if (Object.entries(merged.parts ?? {}).some(([n, d]) => d.done && !prior.parts?.[n]?.done)) {
+        const folder = control.folder
+        void import('./partDoneCleanup.js').then(m => m.schedulePartDoneCleanup(folder)).catch(() => {})
+      }
       const key = PREFIX + control.folder, value = JSON.stringify(merged)
       await prisma.setting.upsert({ where: { key }, create: { key, value }, update: { value } })
       changed = true
@@ -45,7 +50,7 @@ export async function purgeDeletedLibrarySeries(): Promise<void> {
       for (const watermark of watermarks) await fs.rm(watermark.imagePath, { force: true })
       await fs.rm(path.resolve(process.env.DOWNLOAD_ROOT || './downloads', control.folder), { recursive: true, force: true })
       await prisma.series.delete({ where: { id: row.id } })
-      await prisma.setting.deleteMany({ where: { key: { in: [`libraryOwner:${row.id}`, `phoneAutoSend:${row.id}`, `phoneIndex:${row.id}`] } } })
+      await prisma.setting.deleteMany({ where: { key: { in: [`libraryOwner:${row.id}`, `phoneAutoSend:${row.id}`, `phoneIndex:${row.id}`, `compressedCheckpoint:${row.id}`] } } })
     }
     // A delayed writer may have recreated a folder after its database row was removed.
     await fs.rm(path.resolve(process.env.DOWNLOAD_ROOT || './downloads', control.folder), { recursive: true, force: true })

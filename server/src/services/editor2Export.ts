@@ -30,8 +30,8 @@ import {
   RESOLUTIONS,
   type VideoCapabilities
 } from './videoRender.js'
-import { ensureFfmpegAvailable, normalizePartDurations } from './videoMath.js'
-import { processTimelineJson, type PlanSection, type TimelinePlan } from './editor2Timeline.js'
+import { ensureFfmpegAvailable, normalizePartDurations, splitRenderBatches } from './videoMath.js'
+import { processTimelineJson, type PlanImage, type PlanSection, type TimelinePlan } from './editor2Timeline.js'
 import { prisma } from '../index.js'
 import { NarrationLanguage, video2FolderName } from './narrationLanguage.js'
 import { notifySeriesProcessChanged } from './seriesProcess.js'
@@ -60,9 +60,9 @@ const VT_QUALITY: Record<string, number> = {
 }
 
 /**
- * Sections of one chapter rendered at once. zoompan keeps each FFmpeg on about
- * one core, so a single render leaves most of the machine idle; three fit an
- * M1's four performance cores with the encoder offloaded to VideoToolbox.
+ * Image batches of one chapter rendered at once. This also fills the workers
+ * when a chapter has only one long voiceover section. Each graph retains its
+ * one-thread limit; parallel batches share this single chapter-wide budget.
  */
 const SECTION_CONCURRENCY = Math.max(1, parseInt(process.env.EXPORT_SECTION_CONCURRENCY || '', 10) || 3)
 
@@ -396,32 +396,16 @@ interface RenderOpts {
   preset: string
 }
 
-/**
- * Render one plan section to its own MP4: its images composited in order,
- * carried by that section's voiceover.
- *
- * A section is the natural render unit because it is the unit the timeline was
- * authored in — every timestamp in the JSON is relative to this section's own
- * audio file, which is therefore the master clock for exactly these images.
- */
-async function renderSection(
+/** Render a bounded image batch; section audio is muxed once after its batches finish. */
+async function renderImageBatch(
   rt: JobRuntime,
-  section: PlanSection,
+  normalized: PlanImage[],
   outFile: string,
   opts: RenderOpts,
   caps: VideoCapabilities,
   onOutTime: (sec: number) => void
 ): Promise<void> {
   const { res, fps } = opts
-
-  const images = section.slots.flatMap(slot => slot.images)
-  if (images.length === 0) {
-    throw new Error(`${section.label} has no images to show`)
-  }
-
-  // Stretch/squeeze the image durations so they sum to the audio exactly —
-  // rounding across many slots otherwise drifts against the voiceover.
-  const normalized = normalizePartDurations(images, section.audioDuration)
 
   const inputArgs: string[] = []
   const chunks: string[] = []
@@ -480,34 +464,38 @@ async function renderSection(
   const args = ['-hide_banner', '-nostats', '-progress', 'pipe:1',
     '-filter_threads', '1', '-filter_complex_threads', '1', ...inputArgs]
 
-  if (section.audioPath) {
-    args.push('-threads', '1', '-i', section.audioPath)
-  } else {
-    // A silent section still has to occupy its slot in the finished video.
-    args.push('-threads', '1', '-f', 'lavfi', '-t', section.audioDuration.toFixed(3), '-i', `anullsrc=r=${AUDIO_SAMPLE_RATE}:cl=stereo`)
-  }
-  const audioInputIndex = normalized.length
-
   args.push(
     '-filter_complex', filterComplex,
     '-map', '[vout]',
-    '-map', `${audioInputIndex}:a`,
     '-r', String(fps),
     ...videoCodecArgs(caps, opts.preset), '-pix_fmt', 'yuv420p',
-    '-c:a', 'aac', '-b:a', AUDIO_BITRATE, '-ar', String(AUDIO_SAMPLE_RATE),
-    '-threads:v', '1', '-threads:a', '1',
-    '-shortest',
+    '-threads:v', '1', '-an',
     '-y', outFile
   )
 
   await runFfmpeg(rt, args, onOutTime)
 }
 
-/**
- * Render one chapter's plan to a finished MP4: every section rendered —
- * SECTION_CONCURRENCY at a time — then concatenated in order without
- * re-encoding.
- */
+/** Join a section's video batches without re-encoding, and encode its voiceover once. */
+async function muxSection(
+  rt: JobRuntime,
+  section: PlanSection,
+  batchFiles: string[],
+  outFile: string,
+  listPath: string
+): Promise<void> {
+  await fs.writeFile(listPath, batchFiles.map(p => `file '${p.replace(/'/g, "'\\''")}'`).join('\n'))
+  const args = ['-hide_banner', '-nostats', '-f', 'concat', '-safe', '0', '-i', listPath]
+  if (section.audioPath) args.push('-threads', '1', '-i', section.audioPath)
+  else args.push('-threads', '1', '-f', 'lavfi', '-t', section.audioDuration.toFixed(3),
+    '-i', `anullsrc=r=${AUDIO_SAMPLE_RATE}:cl=stereo`)
+  args.push('-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy',
+    '-c:a', 'aac', '-b:a', AUDIO_BITRATE, '-ar', String(AUDIO_SAMPLE_RATE),
+    '-threads:a', '1', '-shortest', '-y', outFile)
+  await runFfmpeg(rt, args)
+}
+
+/** Render image batches with a shared worker limit, mux each section, then publish the chapter. */
 async function renderChapter(
   rt: JobRuntime,
   plan: TimelinePlan,
@@ -526,9 +514,21 @@ async function renderChapter(
   try {
     const partFiles = plan.sections.map((_, i) => path.join(tmpDir, `part_${String(i).padStart(4, '0')}.mp4`))
 
-    // Seconds rendered per section; their sum against the runtime is the
-    // chapter's progress, whichever sections happen to be running.
-    const rendered = plan.sections.map(() => 0)
+    // Normalize once for the whole section so batching cannot change an image's
+    // duration or restart its motion. Batch boundaries are always between images.
+    // Fill available workers even when there is just one section. Tiny chapters
+    // keep larger batches to avoid spending more time starting FFmpeg than rendering.
+    const batchSeconds = total >= 6 ? Math.min(30, total / SECTION_CONCURRENCY) : 30
+    const batches = plan.sections.flatMap((section, sectionIndex) => {
+      const images = section.slots.flatMap(slot => slot.images)
+      if (!images.length) throw new Error(`${section.label} has no images to show`)
+      return splitRenderBatches(normalizePartDurations(images, section.audioDuration), batchSeconds).map((images, i) => ({
+        sectionIndex, images,
+        duration: images.reduce((sum, image) => sum + image.duration, 0),
+        file: path.join(tmpDir, `batch_${sectionIndex}_${i}.mp4`)
+      }))
+    })
+    const rendered = batches.map(() => 0)
     const report = () => {
       const sum = rendered.reduce((s, sec) => s + sec, 0)
       onPercent(Math.min(99, (sum / total) * 100))
@@ -537,32 +537,37 @@ async function renderChapter(
     let next = 0
     let failure: Error | null = null
     const worker = async () => {
-      while (!failure && !rt.cancelled && next < plan.sections.length) {
+      while (!failure && !rt.cancelled && next < batches.length) {
         const i = next++
-        const section = plan.sections[i]
+        const batch = batches[i]
         try {
-          await renderSection(rt, section, partFiles[i], opts, caps, sec => {
-            rendered[i] = Math.min(sec, section.audioDuration)
+          await renderImageBatch(rt, batch.images, batch.file, opts, caps, sec => {
+            rendered[i] = Math.min(sec, batch.duration)
             report()
           })
         } catch (error) {
-          // The first failure decides the chapter; stop the sibling renders
-          // rather than finishing work that will be thrown away.
           if (!failure) {
             failure = error instanceof Error ? error : new Error(String(error))
             for (const proc of rt.procs) proc.kill('SIGKILL')
           }
           return
         }
-        rendered[i] = section.audioDuration
+        rendered[i] = batch.duration
         report()
       }
     }
     await Promise.all(
-      Array.from({ length: Math.min(SECTION_CONCURRENCY, plan.sections.length) }, worker)
+      Array.from({ length: Math.min(SECTION_CONCURRENCY, batches.length) }, worker)
     )
     if (rt.cancelled) throw new Error('cancelled')
     if (failure) throw failure
+
+    // Encode audio once per original section, avoiding AAC padding at every
+    // image-batch boundary. Video stays at the original resolution and quality.
+    for (let i = 0; i < plan.sections.length; i++) {
+      await muxSection(rt, plan.sections[i], batches.filter(batch => batch.sectionIndex === i).map(batch => batch.file),
+        partFiles[i], path.join(tmpDir, `section_${i}.txt`))
+    }
 
     const listPath = path.join(tmpDir, 'concat.txt')
     await fs.writeFile(listPath, partFiles.map(p => `file '${p.replace(/'/g, "'\\''")}'`).join('\n'))
@@ -592,8 +597,8 @@ async function renderChapter(
  * Start a batch export and return its job id immediately — rendering runs in
  * the background and is followed through the job status endpoint.
  *
- * Chapters render one at a time rather than in parallel: the sections inside a
- * chapter already render in parallel and fill the machine, so running several
+ * Chapters render one at a time rather than in parallel: the image batches
+ * inside a chapter already render in parallel and fill the machine, so running several
  * chapters would only trade a readable progress bar for contention.
  */
 export async function startBatchExport(

@@ -1,3 +1,4 @@
+import { DESCRIPTION_IDENTITY_POLICY } from './youtubeDescriptions.js'
 import fs from 'node:fs/promises'
 import sharp from 'sharp'
 import path from 'node:path'
@@ -39,6 +40,7 @@ export class YouTubeAutomation {
   if (!request || ('importedAt' in request && request.importedAt)) throw new YouTubeError('Choose a prepared prompt that has not been imported.', 409)
   if (kind === 'descriptions' && ('title' in request && request.title !== w.selectedTitle || !('outputVersion' in request) || request.outputVersion !== 2)) throw new YouTubeError('Prepare a new paired description prompt for the selected title.', 409)
   const slot=kind.startsWith('thumbnail_') ? input.slot : undefined
+  if (kind === 'descriptions' && (!('identityPolicy' in request) || request.identityPolicy !== DESCRIPTION_IDENTITY_POLICY)) throw new YouTubeError('Prepare a new description prompt that excludes the real manhwa name.', 409)
   if(kind.startsWith('thumbnail_') && (typeof slot!=='number'||!Number.isInteger(slot)||slot<0||slot>2||!('prompts' in request)||request.title!==w.selectedTitle))throw new YouTubeError('Choose a current thumbnail variation.',409)
   const all = await this.all(); const prior = all.find(j => j.seriesId === seriesId && j.requestId === input.requestId && j.kind === kind && (!kind.startsWith('thumbnail_')||j.slot===slot))
   if (prior) return prior // Repeated clicks never submit the prompt twice.

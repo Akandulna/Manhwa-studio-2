@@ -12,7 +12,7 @@ import os from 'os'
 import path from 'path'
 import sharp from 'sharp'
 import type { Server } from 'socket.io'
-import { queueAutoCrop, readChapterCropState, type CropChapter } from '../chapterCrop.js'
+import { queueAutoCrop, queueReviewedCrop, isChapterCropping, readChapterCropState, type CropChapter } from '../chapterCrop.js'
 import { setDesktopReview, writeChapterReview } from '../chapterReview.js'
 import { listOutputs, writeImageMetadata, writeImagePoints } from '../perImageStore.js'
 
@@ -157,5 +157,44 @@ describe('queueAutoCrop', () => {
     await setDesktopReview(FOLDER, true)
     expect(await queueAutoCrop(fakeIo().io, [CHAPTER])).toEqual([])
     expect(await listOutputs(FOLDER)).toEqual([])
+  })
+})
+
+
+describe('reviewed bulk cropping', () => {
+  it('cuts desktop-reviewed chapters once, leaving current crops unchanged on retry', async () => {
+    for (const page of PAGES) await attach(page)
+    await setDesktopReview(FOLDER, true)
+    const { io, done } = fakeIo()
+    expect((await queueReviewedCrop(io, [CHAPTER])).queued).toEqual([{ chapterId: 'ch1', chapterNumber: 1 }])
+    expect(await done).toMatchObject({ auto: false, images: 2, exported: 2, failed: 0 })
+    expect((await readChapterCropState(CHAPTER)).outputs.complete).toBe(true)
+    expect((await queueReviewedCrop(io, [CHAPTER])).queued).toEqual([])
+  })
+
+  it('skips unreviewed and partially attached chapters, including desktop reviews', async () => {
+    await attach(PAGES[0])
+    expect((await queueReviewedCrop(fakeIo().io, [CHAPTER])).queued).toEqual([])
+    await setDesktopReview(FOLDER, true)
+    const result = await queueReviewedCrop(fakeIo().io, [CHAPTER])
+    expect(result.queued).toEqual([])
+    expect(result.skipped).toHaveLength(1)
+    expect(isChapterCropping(CHAPTER.id)).toBe(false)
+    expect(await listOutputs(FOLDER)).toEqual([])
+  })
+
+  it('reserves chapters before asynchronous admission checks and shares the automatic queue', async () => {
+    for (const page of PAGES) await attach(page)
+    await phoneReview()
+    const { io, done } = fakeIo()
+    const results = await Promise.all([
+      queueReviewedCrop(io, [CHAPTER, CHAPTER]),
+      queueReviewedCrop(io, [CHAPTER]),
+      queueAutoCrop(io, [CHAPTER])
+    ])
+    expect(results[0]).toMatchObject({ queued: [{ chapterId: 'ch1' }], skipped: [{ chapterId: 'ch1' }] })
+    expect(results[1]).toMatchObject({ queued: [], skipped: [{ reason: 'Already queued or cropping' }] })
+    expect(results[2]).toEqual([])
+    expect(await done).toMatchObject({ failed: 0, auto: false })
   })
 })

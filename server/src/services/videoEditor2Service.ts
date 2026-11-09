@@ -1,4 +1,3 @@
-import {managedCropBindingCount} from './managedCropProjection.js'
 import {readManagedChapterAssets,assertManagedChapterRevision} from './managedChapterAssets.js'
 /**
  * Video Editor 2.0 Service — Module 4v2
@@ -25,7 +24,7 @@ import path from 'path'
 import { prisma } from '../index.js'
 import { alignmentFileName, type NarrationLanguage } from './narrationLanguage.js'
 import { getChapterManifest } from './chapterManifest.js'
-import { scanVideoCleanupFolder, videoDirsFor } from './storageService.js'
+import { libraryControl } from './libraryControls.js'
 import {
   chapterCropOutputs,
   expectedExportedFilenames,
@@ -260,15 +259,15 @@ async function buildChecklist(
 
 // ============ Editable chapters ============
 
-/** A saved compressed video is the series-level completion marker, even after render cleanup. */
+/**
+ * A series is Done only when the user marks it, separately per language. A
+ * compressed video is a storage cleanup checkpoint, not a completion marker.
+ */
 export async function getSeriesCompletion2(seriesId: string, language: NarrationLanguage = 'en') {
-  const series = await prisma.series.findUnique({ where: { id: seriesId }, select: { rootFolder: true,chapters:{select:{folderPath:true}} } })
-  if (!series) return { done: false, compressedVideos: [] as string[] }
-  // Compression/series publication has no managed revision receipt yet.
-  for(const chapter of series.chapters??[])if(await managedCropBindingCount(chapter.folderPath))return {done:false,compressedVideos:[] as string[]}
-  const folders = await Promise.all(videoDirsFor(language).map(dir => scanVideoCleanupFolder(series.rootFolder, dir)))
-  const compressedVideos = folders.flatMap(folder => folder.compressedVideos.map(file => `${folder.dir}/${file}`))
-  return { done: compressedVideos.length > 0, compressedVideos }
+  const series = await prisma.series.findUnique({ where: { id: seriesId }, select: { rootFolder: true } })
+  if (!series) return { done: false, doneAt: null as string | null }
+  const mark = (await libraryControl(path.basename(series.rootFolder))).seriesDone?.[language]
+  return mark?.done ? { done: true, doneAt: new Date(mark.at).toISOString() } : { done: false, doneAt: null as string | null }
 }
 
 /**

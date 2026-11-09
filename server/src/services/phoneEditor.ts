@@ -1,3 +1,4 @@
+import { retainedMetadataApproval } from './retainedMetadata.js'
 import { editorTimelineResetRevision } from './editorTimelineReset.js'
 import { editorFinalCrops } from './editorFinalCrops.js'
 import {readManagedChapterAssets,assertManagedChapterRevision} from './managedChapterAssets.js'
@@ -61,7 +62,8 @@ import { getOutputDir, getSourceFolderPath } from './clipper3/perImageStore.js'
 import { readEffectiveReview } from './clipper3/chapterReview.js'
 import { audioFolderName, NARRATION_LANGUAGES, type NarrationLanguage } from './narrationLanguage.js'
 import { getPublishedChapters } from './storageService.js'
-import { buildEditorWorkflow, validateWorkflowTimeline } from './editorWorkflow.js'
+import { buildEditorWorkflow } from './editorWorkflow.js'
+import { validateDeliveredWorkflowTimeline } from './editorTimelineImport.js'
 
 /** Inside the phone's prefix. Keep in step with FOLDER in EditorSync.kt. */
 export const EDITOR_FOLDER = 'editor/'
@@ -75,7 +77,7 @@ const TIMELINE_SCHEMA = /^sleeper-cell-editor-timeline\/1/
 const IMAGE_EXT = /\.(png|jpe?g|webp)$/i
 
 /** English keeps the plain names; Hinglish adds ".hi", as the phone's Language.suffix does. */
-function languageSuffix(language: NarrationLanguage): string {
+export function languageSuffix(language: NarrationLanguage): string {
   return language === 'en' ? '' : `.${language}`
 }
 
@@ -182,7 +184,6 @@ async function buildPackage(
   workflowMode: 'legacy' | 'staged' = 'legacy'
 ): Promise<BuiltPackage | { skip: string }> {
   const restartRevision = await requireSeriesRestartReady(seriesFolder)
-  if (restartRevision && !await chapterStoryLinksCurrent(process.env.DOWNLOAD_ROOT || './downloads', chapter.folderPath)) return { skip: 'link crop metadata to the current English script first' }
   const managed=await readManagedChapterAssets(chapter.folderPath)
   const [timeline, metadata] = await Promise.all([
     getChapterTimelineBundle(chapter.id, language),
@@ -190,6 +191,9 @@ async function buildPackage(
   ])
   if (!timeline?.text) return { skip: 'no script with timeline' }
   if (!metadata?.text) return { skip: 'no crop metadata' }
+  const retained = await retainedMetadataApproval(chapter, restartRevision, metadata.text)
+  if (restartRevision && !retained && !await chapterStoryLinksCurrent(process.env.DOWNLOAD_ROOT || './downloads', chapter.folderPath))
+    return { skip: 'link crop metadata to the current English script first' }
 
   const audioSections = await prisma.audioSection.findMany({
     where: { chapterId: chapter.id, language },
@@ -236,13 +240,28 @@ async function buildPackage(
     metadata: metadata.text,
     ...(workflowMode === 'staged' ? { workflow: buildEditorWorkflow(timeline.text, metadata.text, images, scriptSha256, sections) } : {})
   }
-  const delivery = { ...content, finalCropAuthority: await editorFinalCrops(chapter, language, metadata.text, images) }
+  const finalCropAuthority = await editorFinalCrops(chapter, language, metadata.text, images)
+  const delivery = { ...content, finalCropAuthority: { ...finalCropAuthority, ...(retained ? {retainedStoryLinks: retained} : {}) } }
   return {
     name: `${seriesFolder}/${chapterFolder}${languageSuffix(language)}${PACKAGE_SUFFIX}`,
     body: JSON.stringify({ ...delivery, sentAt: new Date().toISOString() }),
     sha256: createHash('sha256').update(JSON.stringify(content)).digest('hex'),
     deliverySha256: createHash('sha256').update(JSON.stringify(delivery)).digest('hex')
   }
+}
+
+/**
+ * The chapter's Editor package as the phone would get it (AntiGravity → Timeline makes its one-shot
+ * prompt and checks from it), or why there is none yet. Nothing is sent.
+ */
+export async function buildEditorPackage(chapterId: string, language: NarrationLanguage, workflowMode: 'legacy' | 'staged' = 'legacy') {
+  const chapter = await prisma.chapter.findUnique({
+    where: { id: chapterId },
+    select: { id: true, number: true, title: true, folderPath: true, series: { select: { rootFolder: true } } }
+  })
+  if (!chapter) throw new Error('Chapter not found')
+  const built = await buildPackage(path.basename(chapter.series.rootFolder), chapter, language, workflowMode)
+  return 'skip' in built ? built : { sha256: built.sha256, content: JSON.parse(built.body) as Record<string, unknown> }
 }
 
 async function putPackage(client: S3Client, config: R2Config, folders: string[], pkg: BuiltPackage): Promise<void> {
@@ -564,7 +583,9 @@ export async function getEditorReadiness(seriesId: string, language: NarrationLa
     if (!(await readEffectiveReview(chapter.folderPath)).reviewed) missing.push('crop review')
     try {
       const revision = await requireSeriesRestartReady(seriesFolder)
-      if (revision && !await chapterStoryLinksCurrent(process.env.DOWNLOAD_ROOT || './downloads', chapter.folderPath))
+      const metadata = await getChapterCropMetadataBundle(chapter.id)
+      const retained = metadata?.text ? await retainedMetadataApproval(chapter, revision, metadata.text) : null
+      if (revision && !retained && !await chapterStoryLinksCurrent(process.env.DOWNLOAD_ROOT || './downloads', chapter.folderPath))
         missing.push('current English script-to-crop links (Sync json)')
     } catch (error) { missing.push(errorMessage(error)) }
     if (missing.length) result.notReady.push({ ...ref, missing })
@@ -584,8 +605,10 @@ export interface EditorFetchResult {
   found: number
   imported: { chapterId: string; number: number; review: number; model: string | null }[]
   upToDate: number
-  /** Chapters whose paste here is newer than the phone's timeline, so it was kept. */
+  /** Chapters whose timeline here was kept: newer than the phone's, or made in Studio (a paste, an edit or AntiGravity). */
   kept: { chapterId: string; number: number }[]
+  /** Chapters a Studio AntiGravity Timeline job is making right now; the phone's timeline is not taken. */
+  inProgress: { chapterId: string; number: number }[]
   unmatched: string[]
   failed: { key: string; error: string }[]
 }
@@ -634,7 +657,7 @@ async function listTimelines(
  * timeline keeps its paste.
  */
 export async function fetchPhoneTimelines(seriesId: string, language: NarrationLanguage): Promise<EditorFetchResult> {
-  const result: EditorFetchResult = { configured: false, found: 0, imported: [], upToDate: 0, kept: [], unmatched: [], failed: [] }
+  const result: EditorFetchResult = { configured: false, found: 0, imported: [], upToDate: 0, kept: [], inProgress: [], unmatched: [], failed: [] }
   const config = getR2Config()
   if (!config) return result
   result.configured = true
@@ -648,6 +671,8 @@ export async function fetchPhoneTimelines(seriesId: string, language: NarrationL
   const byFolder = new Map(series.chapters.map(c => [path.basename(c.folderPath), c]))
   const listed = await listTimelines(client, config, path.basename(series.rootFolder), language)
   result.found = listed.length
+  // Chapters a Timeline job is making now (dynamic import: editorClaims imports this module).
+  const claims = listed.length ? await (await import('./editorClaims.js')).activeEditorClaims() : []
 
   for (const { key, chapterFolder } of listed) {
     const chapter = byFolder.get(chapterFolder)
@@ -668,6 +693,31 @@ export async function fetchPhoneTimelines(seriesId: string, language: NarrationL
 
       const where = { chapterId_language: { chapterId: chapter.id, language } }
       const existing = await prisma.editor2Timeline.findUnique({ where })
+      // Already holding this exact JSON: nothing to import, so the staged/reset
+      // checks below (meant for new timelines) must not report it as a failure.
+      // An invalidated row is empty, so it never matches here.
+      if (existing && existing.json.trim() && existing.json.trim() === json) {
+        // Backfill attribution for timelines imported before it was retained.
+        if (model && !existing.model) {
+          await prisma.editor2Timeline.upsert({
+            where,
+            create: { chapterId: chapter.id, language, json, model, processedJson: null, updatedAt: new Date() },
+            update: { model }
+          })
+        }
+        result.upToDate++
+        continue
+      }
+      // Studio's own work wins: never take a phone timeline while AntiGravity is making the chapter, nor over a
+      // timeline made here (a paste, an edit or AntiGravity). Clearing the chapter here lets a phone's in again.
+      if (claims.some(c => c.chapterId === chapter.id && c.language === language)) {
+        result.inProgress.push({ chapterId: chapter.id, number: chapter.number })
+        continue
+      }
+      if (existing?.json.trim() && await madeInStudio(chapter.id, language, existing.json)) {
+        result.kept.push({ chapterId: chapter.id, number: chapter.number })
+        continue
+      }
       const resetRevision = await editorTimelineResetRevision(prisma.setting, chapter.id, language)
       if (resetRevision && body.timelineResetRevision !== resetRevision) throw new Error('timeline is from before the Studio reset; make it again from the refreshed Editor package')
       const mode = (await readSentRecord(chapter.folderPath))[language]?.workflow
@@ -678,7 +728,7 @@ export async function fetchPhoneTimelines(seriesId: string, language: NarrationL
         const pkg = JSON.parse(current.body)
         currentWorkflowHash = pkg.workflow.sourceHash
         if (body.workflowHash !== currentWorkflowHash || body.packageSha256 !== timelinePackageSha256(pkg.timeline, pkg.metadata, pkg.scriptSha256, currentWorkflowHash, resetRevision)) throw new Error('staged timeline inputs or prompts changed; make it again from the current Editor package')
-        validateWorkflowTimeline(pkg.workflow, json)
+        validateDeliveredWorkflowTimeline(pkg.workflow, json, pkg.sections)
       }
       // A newer empty row is the invalidation left by replacement audio.
       // Never restore an old phone timeline over it, even if R2 still holds one.
@@ -690,18 +740,6 @@ export async function fetchPhoneTimelines(seriesId: string, language: NarrationL
         if (!timeline?.text || !metadata?.text || body.packageSha256 !== timelinePackageSha256(timeline.text, metadata.text, scriptSha256, currentWorkflowHash, resetRevision) || (existing && !existing.json.trim() && madeAt < existing.updatedAt.getTime())) {
           throw new Error(resetRevision ? 'timeline is from before the Studio reset; make it again from the refreshed Editor package' : 'timeline is from before the voiceover replacement; make it again from the new Editor package')
         }
-      }
-      if (existing && existing.json.trim() === json) {
-        // Backfill attribution for timelines imported before it was retained.
-        if (model && !existing.model) {
-          await prisma.editor2Timeline.upsert({
-            where,
-            create: { chapterId: chapter.id, language, json, model, processedJson: null, updatedAt: new Date() },
-            update: { model }
-          })
-        }
-        result.upToDate++
-        continue
       }
       if (existing && existing.json.trim() && existing.updatedAt.getTime() > madeAt) {
         result.kept.push({ chapterId: chapter.id, number: chapter.number })
@@ -727,6 +765,15 @@ export async function fetchPhoneTimelines(seriesId: string, language: NarrationL
   return result
 }
 
+
+/** True when this exact timeline was saved in Studio (paste, edit or AntiGravity), not imported from a phone. */
+async function madeInStudio(chapterId: string, language: NarrationLanguage, json: string): Promise<boolean> {
+  const row = await prisma.setting.findUnique({ where: { key: `editor2-phone-timeline-edit:${chapterId}:${language}` } })
+  if (!row) return false
+  try {
+    return (JSON.parse(row.value) as { jsonSha256?: string }).jsonSha256 === createHash('sha256').update(json).digest('hex')
+  } catch { return false }
+}
 
 class TimelinePublicationConflict extends Error {}
 
@@ -774,7 +821,7 @@ export async function publishSavedEditorTimelines(chapterIds: string[] | null): 
       if (!intent.sourceSha256 || intent.sourceSha256 !== pkg.sha256) throw new TimelinePublicationConflict('Editor inputs changed or were unavailable when saved; review and save the timeline again')
       const content = JSON.parse(pkg.body)
       if (content.workflow) {
-        try { validateWorkflowTimeline(content.workflow, row.json) }
+        try { validateDeliveredWorkflowTimeline(content.workflow, row.json, content.sections) }
         catch (error) { throw new TimelinePublicationConflict(errorMessage(error)) }
       }
       const body = JSON.stringify({

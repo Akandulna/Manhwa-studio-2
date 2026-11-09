@@ -108,6 +108,7 @@ export interface YouTubeDescriptionRequest {
   importedDescription: string | null
   importedHinglishDescription?: string | null
   outputVersion?: 2
+  identityPolicy?: 'no-series-name/1'
 }
 
 export interface YouTubeDescriptionVersion {

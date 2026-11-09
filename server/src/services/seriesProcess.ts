@@ -5,6 +5,7 @@ import {managedCropBindingCount} from './managedCropProjection.js'
 import {onManagedCropProjectionChange} from './managedCropEvents.js'
 import fs from 'fs/promises'
 import { recordSeriesFileActivity, recordPhoneActivity } from './seriesActivity.js'
+import { readStitchCompletion } from './stitchCompletion.js'
 import { recordLocalManagerChapter, recordLegacyManagerReceipt, managerChapterIdentity, managerCanDeclareRevision } from './managerReporting.js'
 import { watch, type FSWatcher } from 'fs'
 import path from 'path'
@@ -20,7 +21,6 @@ import { alignmentFileName, scriptFileName } from './narrationLanguage.js'
 import { relayReceipts } from './phoneRelay.js'
 import { createClient, getR2Config } from './r2Service.js'
 import { libraryDeviceId } from './librarySync.js'
-import { chapterStoryLinksCurrent } from './seriesRestartFiles.js'
 import { restartRevision, sameRestart, preservedRestartStages } from './seriesRestartModel.js'
 import { seriesRestartPending } from './seriesRestartGuard.js'
 import { libraryControl } from './libraryControls.js'
@@ -85,7 +85,7 @@ async function localStages(chapter: any, title: string, timelines: any[]): Promi
     const files = await getImageFiles(dir).catch(() => [])
     result.download = { state: chapter.status === 'done' && files.length > 0 ? 'done' : ['queued', 'downloading'].includes(chapter.status) ? 'active' : files.length ? 'partial' : 'pending', done: files.length, total: Math.max(files.length, chapter.pageCount ?? 0) }
     if (chapter.status === 'failed') result.download.state = 'failed'
-    const prepared = await content(path.join(dir, '.library-prepared.json')) > 0 || await content(path.join(dir, '.stitch-originals/stitch.json')) > 0
+    const prepared = await content(path.join(dir, '.library-prepared.json')) > 0 || !!(await readStitchCompletion(chapter.folderPath))
     if (prepared) result.cleanup = result.stitch = { state: 'done' }
     for (const language of ['en', 'hi'] as const) {
       const script = chapter.scripts.find((s: any) => s.language === language)
@@ -111,7 +111,10 @@ async function localStages(chapter: any, title: string, timelines: any[]): Promi
           try {
             const {requireCurrentSplitMetadata}=await import('./clipper3/metadataSplit.js')
             const split=await requireCurrentSplitMetadata({...chapter,series:{title}})
-            if(split || await chapterStoryLinksCurrent(root(),chapter.folderPath)) result.metadata = {state:'done',done:crops.totalImages,total:crops.totalImages}
+            // Legacy targets already passed crop-id/name/description validation. Saved visual
+            // metadata remains available after a script restart; current narrative links are
+            // checked separately when building an Editor package. Split jobs stay revision-bound.
+            result.metadata = stage(split ? crops.totalImages : crops.targets.length, crops.totalImages)
           } catch { result.metadata = {state:'pending',total:crops.totalImages} }
           result.crop = { state: crops.outputs.complete && crops.fullyAttached ? 'done' : isChapterCropping(chapter.id) ? 'active' : crops.chopped ? 'partial' : 'pending' }
         }
@@ -186,7 +189,6 @@ async function scan(): Promise<ProcessSnapshot> {
     for (const c of row.chapters) {
       const stages = await localStages(c, row.title, timelines.filter(t => t.chapterId === c.id))
       const replacement = await readPageReplacement(c.folderPath)
-      if (revision && !await chapterStoryLinksCurrent(root(), c.folderPath)) stages.metadata = { state: 'pending', total: c.pageCount ?? 0 }
       if (restarting) for (const key of PROCESS_STAGES) if (!preservedRestartStages.has(key)) stages[key] = { state: 'pending' }
       const local = structuredClone(stages)
       local.export_en = { state: !c.completedAt && en.has(c.number) ? 'done' : 'pending' }

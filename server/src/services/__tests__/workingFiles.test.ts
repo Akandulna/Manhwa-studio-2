@@ -3,7 +3,12 @@ import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import { workingFiles } from '../workingFiles.js'
+const settings = vi.hoisted(() => new Map<string, string>())
 vi.mock('../../index.js', () => ({ prisma: {
+  setting: {
+    findUnique: async ({ where }: any) => settings.has(where.key) ? { value: settings.get(where.key) } : null,
+    upsert: async ({ where, create }: any) => { settings.set(where.key, create.value) }
+  },
   series: { findUnique: async () => ({ id: 's', title: 'Demo', rootFolder: 'Demo', chapters: [
     { id: 'one', number: 1, title: null, folderPath: 'Demo/Chapter 001', completedAt: null, scripts: [{ isPartEnd: true }] },
     { id: 'two', number: 2, title: null, folderPath: 'Demo/Chapter 002', completedAt: null, scripts: [] }
@@ -14,6 +19,7 @@ const { cleanPartWorkingFiles } = await import('../partArchive.js')
 let root: string
 const previous = process.env.DOWNLOAD_ROOT
 beforeEach(async () => {
+  settings.clear()
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'working-files-'))
   process.env.DOWNLOAD_ROOT = root
 })
@@ -46,7 +52,7 @@ it('rejects outside paths and symlinked parents without touching their contents'
   expect(await fs.readFile(path.join(root, 'real/state.json'), 'utf8')).toBe('keep')
 })
 
-it('requires a fresh compressed copy and title, and cleans only the chosen Part', async () => {
+it('requires a compressed-video checkpoint and title, and cleans only the chosen Part', async () => {
   const series = path.join(root, 'Demo')
   for (const file of ['Chapter 001/page.jpg', 'Chapter 001/script.md', 'Chapter 002/page.jpg']) {
     await fs.mkdir(path.dirname(path.join(series, file)), { recursive: true })
@@ -60,6 +66,8 @@ it('requires a fresh compressed copy and title, and cleans only the chosen Part'
   expect(await fs.readFile(path.join(series, 'Chapter 001/script.md'), 'utf8')).toBe('data')
   expect(await fs.readFile(path.join(series, 'Chapter 002/page.jpg'), 'utf8')).toBe('data')
   expect(await fs.readFile(path.join(series, '_video2/Compressed/final.mp4'), 'utf8')).toBe('video')
+  // The checkpoint outlives the compressed video, so later cleanup still works.
   await fs.unlink(path.join(series, '_video2/Compressed/final.mp4'))
-  await expect(cleanPartWorkingFiles('s', 1, 'Demo')).rejects.toThrow('compressed video')
+  await fs.writeFile(path.join(series, 'Chapter 001/page.jpg'), 'data')
+  expect(await cleanPartWorkingFiles('s', 1, 'Demo')).toEqual({ freedBytes: 4, chapters: 1 })
 })

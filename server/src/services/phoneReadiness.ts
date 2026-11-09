@@ -19,6 +19,9 @@
  */
 
 import type { Server } from 'socket.io'
+import { libraryControls } from './libraryControls.js'
+import { narrationRunScope, type NarrationPartChoice, type NarrationRunScope } from './narrationRunScope.js'
+import { voiceoverChapterScope } from './voiceoverChapterScope.js'
 import { prisma } from '../index.js'
 import { getSendJob, getSeriesSendPlan, startPhoneSend, type PhoneSendChapter } from './phoneSend.js'
 import { getEditorReadiness, publishReadyEditorPackages, saveEditorPrompt } from './phoneEditor.js'
@@ -70,7 +73,12 @@ export interface PhoneRunReadiness {
   items: ReadinessItem[]
   /** A send to the phones is going (any series): its progress comes as `phone-send:progress`. */
   sending: boolean
+  narrationScope?: NarrationRunScope
+  /** The voiceover's parts and the picked part's unfinished chapters (default: all of them). */
+  voiceoverScope?: NarrationRunScope
   metadataChapters?: {name:string;number:number}[]
+  /** Chapters Metadata can't run on yet, with why: Studio scopes them to the part picked. */
+  metadataBlocked?: {id:string;name:string;number:number;reason:string}[]
 }
 
 function plural(n: number, word: string): string {
@@ -93,29 +101,38 @@ function doneHere(kind: PhoneRunKind, chapter: PhoneSendChapter): boolean {
 }
 
 /** Image Clipper's and Narration scripts': the chapters' pages on the phone. */
-async function pagesItems(kind: PhoneRunKind, seriesId: string): Promise<{ items: ReadinessItem[]; onPhone: number }> {
+async function pagesItems(kind: PhoneRunKind, seriesId: string, part?: NarrationPartChoice): Promise<{ items: ReadinessItem[]; onPhone: number; narrationScope?: NarrationRunScope }> {
   const plan = await getSeriesSendPlan(seriesId)
   if (!plan) throw new Error('Series not found')
   const work = kind === 'clipper' ? 'cropping' : 'a script'
-  const chapters = plan.chapters.filter(c => c.state !== 'cleared' && !doneHere(kind, c))
+  const scope = kind === 'narration' ? narrationRunScope(plan.chapters.map(c => ({
+    name: c.folder, number: c.number, complete: c.state === 'cleared' || doneHere(kind, c)
+  })), (await libraryControls()).find(c => c.folder === plan.folder), part) : undefined
+  const selected = scope ? new Set(scope.chapters) : null
+  const chapters = plan.chapters.filter(c => (!selected || selected.has(c.folder)) && c.state !== 'cleared' && !doneHere(kind, c))
   const onPhone = chapters.filter(c => c.state === 'on_phone')
   const onTheWay = chapters.filter(c => c.state === 'sent' || c.state === 'downloading')
   const toSend = chapters.filter(c => (c.state === 'new' || c.state === 'changed') && !c.needsStitch)
   const tooLong = chapters.filter(c => (c.state === 'new' || c.state === 'changed') && c.needsStitch)
-  const items: ReadinessItem[] = []
+  const items: ReadinessItem[] = scope ? [{
+    id: 'chapter-scope', label: 'Chapter range', state: scope.chapters.length ? 'note' : 'blocked',
+    detail: scope.part === 'all' ? `All chapters (${scope.chapters.length}).`
+      : `Part ${scope.part} · Chapters ${(scope.part - 1) * 20 + 1}–${scope.part * 20} only (${scope.chapters.length} chapters).`
+  }] : []
 
   if (chapters.length === 0) {
-    const anyPages = plan.chapters.length > 0
+    const anyPages = (scope?.chapters.length ?? plan.chapters.length) > 0
     items.push({
       id: 'pages',
       label: 'Chapters on the phone',
       state: anyPages ? 'ready' : 'blocked',
       detail: anyPages
         ? `No chapter needs ${work} on the phone: the rest are done here or cleared there.`
+        : scope && scope.part !== 'all' ? `No chapters in Part ${scope.part} are available. Download or send this part first.`
         : 'No chapter of this series has pages here yet. Download its chapters in the Library first.',
       ...(anyPages ? {} : { link: { to: `/series/${seriesId}`, label: 'Open the series' } })
     })
-    return { items, onPhone: 0 }
+    return { items, onPhone: 0, ...(scope ? { narrationScope: scope } : {}) }
   }
 
   if (toSend.length) {
@@ -152,7 +169,7 @@ async function pagesItems(kind: PhoneRunKind, seriesId: string): Promise<{ items
       link: { to: `/stitch/series/${seriesId}`, label: 'Open Page Stitcher' }
     })
   }
-  return { items, onPhone: onPhone.length }
+  return { items, onPhone: onPhone.length, ...(scope ? { narrationScope: scope } : {}) }
 }
 
 async function editorItems(seriesId: string, language: NarrationLanguage): Promise<{ items: ReadinessItem[]; canWork: boolean }> {
@@ -204,19 +221,25 @@ async function editorItems(seriesId: string, language: NarrationLanguage): Promi
   return { items, canWork: editor.up.length + editor.toSend.length > 0 }
 }
 
-async function voiceoverItems(seriesId: string, language: NarrationLanguage): Promise<{ items: ReadinessItem[]; canWork: boolean }> {
+async function voiceoverItems(seriesId: string, language: NarrationLanguage, part?: NarrationPartChoice): Promise<{ items: ReadinessItem[]; canWork: boolean; scope: NarrationRunScope }> {
   const scripts = await getPhoneScripts(seriesId)
-  const counts = language === 'hi' ? scripts.hi.series[seriesId] : scripts.series[seriesId]
-  const done = counts?.done ?? 0
-  const total = counts?.total ?? 0
-  const items: ReadinessItem[] = []
+  const scope = await voiceoverChapterScope(seriesId, part)
+  const facts = language === 'hi' ? scripts.hi.chapters : scripts.chapters
+  const done = scope.chapters.filter(c => ['done', 'needs_summary', 'review'].includes(facts[c.id]?.status)).length
+  const total = scope.chapters.length
+  const items: ReadinessItem[] = [{
+    id: 'chapter-scope', label: 'Chapter range', state: total ? 'note' : 'blocked',
+    detail: total ? `${scope.parts.part === 'all' ? '' : `Part ${scope.parts.part} · `}${chapterLabel(scope.chapters.map(c => c.number))}.${scope.excluded.length ? ` ${scope.parts.part === 'all' ? 'Completed parts are' : 'Completed parts and other parts are'} excluded.` : ''}`
+      : scope.parts.part === 'all' ? 'No unfinished chapters remain for voiceover.' : `No unfinished chapters remain for voiceover in Part ${scope.parts.part}.`
+  }]
+  if (!total) return { items, canWork: false, scope: scope.parts }
   const which = language === 'hi' ? 'Hinglish scripts' : 'Scripts'
   if (done === 0) {
     items.push({
       id: 'scripts',
       label: `${which} on the phone`,
       state: 'blocked',
-      detail: 'The phone has no script of this series to voice. Scripts reach it from its own Narration scripts run.',
+      detail: 'The phone has no script in this chapter range to voice. Run Narration scripts for these chapters first.',
       fix: { action: 'run_narration', label: 'Run Narration scripts first' }
     })
   } else {
@@ -231,21 +254,25 @@ async function voiceoverItems(seriesId: string, language: NarrationLanguage): Pr
     id: 'splits',
     label: 'Splits',
     state: 'note',
-    detail: 'Only chapters split on the phone (Voiceover → Generate splits) are voiced. Manhwa Studio can’t see the splits.'
+    detail: 'The run prepares missing splits for this chapter range, then voices splits without audio.'
   })
-  return { items, canWork: done > 0 }
+  return { items, canWork: done > 0, scope: scope.parts }
 }
 
-export async function getRunReadiness(kind: PhoneRunKind, seriesId: string, language: NarrationLanguage): Promise<PhoneRunReadiness> {
+export async function getRunReadiness(kind: PhoneRunKind, seriesId: string, language: NarrationLanguage, part?: NarrationPartChoice): Promise<PhoneRunReadiness> {
   let items: ReadinessItem[]
   let canWork: boolean
+  let narrationScope: NarrationRunScope | undefined
+  let voiceoverScope: NarrationRunScope | undefined
   const metadataChapters:{name:string;number:number}[]=[]
+  const metadataBlocked:NonNullable<PhoneRunReadiness['metadataBlocked']>=[]
   if (kind === 'clipper' || kind === 'narration') {
-    const pages = await pagesItems(kind, seriesId)
+    const pages = await pagesItems(kind, seriesId, part)
     items = pages.items
     canWork = pages.onPhone > 0
+    narrationScope = pages.narrationScope
   } else if (kind === 'metadata') {
-    const chapters = await prisma.chapter.findMany({where:{seriesId},include:{series:{select:{title:true}}}})
+    const chapters = await prisma.chapter.findMany({where:{seriesId},include:{series:{select:{title:true}}},orderBy:{number:'asc'}})
     const {currentMetadataJobs,metadataGenerations,requireCurrentSplitMetadata} = await import('./clipper3/metadataSplit.js')
     items = []
     let eligible = 0
@@ -256,7 +283,9 @@ export async function getRunReadiness(kind: PhoneRunKind, seriesId: string, lang
         eligible++
         metadataChapters.push({name:chapter.folderPath.split(/[\\/]/).pop()!,number:chapter.number})
       } catch (error) {
-        items.push({id:`metadata-${chapter.id}`,label:`Chapter ${chapter.number}`,state:'blocked',detail:error instanceof Error?error.message:String(error),link:{to:`/clipper3`,label:'Review and cut in Image Clipper'}})
+        const reason=error instanceof Error?error.message:String(error)
+        metadataBlocked.push({id:chapter.id,name:chapter.folderPath.split(/[\\/]/).pop()!,number:chapter.number,reason})
+        items.push({id:`metadata-${chapter.id}`,label:`Chapter ${chapter.number}`,state:'blocked',detail:reason,link:{to:`/clipper3`,label:'Review and cut in Image Clipper'}})
       }
     }
     items.unshift({id:'metadata-ready',label:'Reviewed and cut chapters',state:eligible?'ready':'blocked',detail:`${eligible} chapters eligible. Select one phone and explicit chapters; Metadata uses AI Studio. Synchronize original pages and the English script on that phone first.`})
@@ -264,7 +293,7 @@ export async function getRunReadiness(kind: PhoneRunKind, seriesId: string, lang
   } else if (kind === 'editor') {
     ({ items, canWork } = await editorItems(seriesId, language))
   } else {
-    ({ items, canWork } = await voiceoverItems(seriesId, language))
+    ({ items, canWork, scope: voiceoverScope } = await voiceoverItems(seriesId, language, part))
   }
   return {
     seriesId,
@@ -273,7 +302,9 @@ export async function getRunReadiness(kind: PhoneRunKind, seriesId: string, lang
     ready: items.every(i => i.state === 'ready' || i.state === 'note'),
     canWork,
     items,
-    ...(kind==='metadata'?{metadataChapters}:{}),
+    ...(kind==='metadata'?{metadataChapters,metadataBlocked}:{}),
+    ...(narrationScope ? { narrationScope } : {}),
+    ...(voiceoverScope ? { voiceoverScope } : {}),
     sending: getSendJob()?.state === 'running'
   }
 }

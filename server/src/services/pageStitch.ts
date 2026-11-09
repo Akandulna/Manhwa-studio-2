@@ -37,6 +37,7 @@ import { WEBP_MAX_DIMENSION } from './pageImageStore.js'
 import { getMetadataDir, getOutputDir, getPointsDir } from './clipper3/perImageStore.js'
 import { getSliceDir } from './clipper3/perImageSlice.js'
 import { zeroPad } from '../utils/urlPattern.js'
+import { clearStitchCompletion, completionFromRecord, readStitchCompletion, saveStitchCompletion, type StitchCompletion } from './stitchCompletion.js'
 
 /** Tallest stitched page allowed — libwebp's limit, so either format can encode it. */
 export const STITCH_MAX_HEIGHT = WEBP_MAX_DIMENSION
@@ -44,6 +45,7 @@ export const STITCH_MAX_HEIGHT = WEBP_MAX_DIMENSION
 const BACKUP_DIR = '.stitch-originals'
 const TEMP_DIR = '.stitch-tmp'
 const TRASH_DIR = '.stitch-undo'
+const PREVIOUS_DIR = '.stitch-previous'
 const RECORD_FILE = 'stitch.json'
 
 const JPEG_QUALITY = 92
@@ -109,10 +111,14 @@ export interface StitchRecord {
   }[]
   chapter: { pageCount: number | null; downloadedCount: number }
   pages: OriginalPageRow[]
+  /** Restitching keeps the preceding completion and, when present, its undo backup. */
+  previousStitch?: { completion: StitchCompletion; hasBackup: boolean }
 }
 
 export interface StitchState {
   pages: StitchPage[]
+  stitched: StitchCompletion | null
+  /** The undo record is absent once the originals have been deleted. */
   record: StitchRecord | null
   backupBytes: number
   /** Reasons the chapter cannot be stitched (or un-stitched) right now. */
@@ -201,6 +207,13 @@ async function clipperBlockers(folderPath: string): Promise<string[]> {
     : []
 }
 
+async function interruptedStitchBlockers(folderPath: string): Promise<string[]> {
+  const dir = chapterDir(folderPath)
+  return await exists(path.join(dir, PREVIOUS_DIR)) || await exists(path.join(dir, TRASH_DIR, '.previous'))
+    ? ['An earlier stitch was interrupted while moving its backup. Restore that backup before changing this chapter.']
+    : []
+}
+
 export interface ChapterNeighbour {
   id: string
   number: number
@@ -239,9 +252,10 @@ export async function getStitchState(chapter: ChapterRef): Promise<StitchState> 
     }
   }
 
-  const blockers = await clipperBlockers(chapter.folderPath)
+  const blockers = [...await clipperBlockers(chapter.folderPath), ...await interruptedStitchBlockers(chapter.folderPath)]
   if (chapter.status !== 'done') blockers.unshift('The chapter is not fully downloaded.')
-  return { pages, record, backupBytes, blockers }
+  const stitched = await readStitchCompletion(chapter.folderPath)
+  return { pages, stitched, record, backupBytes, blockers }
 }
 
 // ============ Planning ============
@@ -374,8 +388,7 @@ async function withLock<T>(chapterId: string, run: () => Promise<T>): Promise<T>
 }
 
 /** Move every name from one folder to another; returns what moved, for rollback. */
-async function moveAll(names: string[], from: string, to: string): Promise<string[]> {
-  const moved: string[] = []
+async function moveAll(names: string[], from: string, to: string, moved: string[] = []): Promise<string[]> {
   for (const name of names) {
     await fs.rename(path.join(from, name), path.join(to, name))
     moved.push(name)
@@ -384,17 +397,23 @@ async function moveAll(names: string[], from: string, to: string): Promise<strin
 }
 
 async function moveBack(names: string[], from: string, to: string): Promise<void> {
+  const failures: unknown[] = []
   for (const name of names) {
     await fs.rename(path.join(from, name), path.join(to, name)).catch(err => {
       console.error(`[stitch] rollback could not move ${name} back:`, err)
+      failures.push(err)
     })
   }
+  if (failures.length > 0) throw new AggregateError(failures, 'Could not restore all pages; their backups have been retained.')
 }
 
-async function stitchChapterLegacy(chapter: ChapterRef, groups: unknown): Promise<StitchRecord> {
+async function stitchChapterLegacy(chapter: ChapterRef, groups: unknown, restitch: boolean): Promise<StitchRecord> {
   return withLock(chapter.id, async () => {
     const state = await getStitchState(chapter)
-    if (state.record) throw new StitchError('This chapter is already stitched. Undo it first.', 409)
+    if (state.stitched && !restitch) throw new StitchError(state.record
+      ? 'This chapter is already stitched. Undo it first.'
+      : 'This chapter is already stitched and its originals have been deleted.', 409)
+    if (restitch && !state.stitched) throw new StitchError('The stitch status changed. Reload the chapter before stitching again.', 409)
     if (state.blockers.length > 0) throw new StitchError(state.blockers[0], 409)
 
     const outputs = planOutputs(state.pages, groups)
@@ -442,17 +461,34 @@ async function stitchChapterLegacy(chapter: ChapterRef, groups: unknown): Promis
         bytes: sizes[i]
       })),
       chapter: chapterRow,
-      pages: pageRows
+      pages: pageRows,
+      ...(state.stitched ? { previousStitch: { completion: state.stitched, hasBackup: !!state.record } } : {})
     }
 
     // 2. Swap: originals into the backup, stitched pages into the chapter.
-    let movedOut: string[] = []
-    let movedIn: string[] = []
+    const movedOut: string[] = []
+    const movedIn: string[] = []
+    // Keep the old backup outside render scratch space, including after a process crash.
+    const parkedBackup = path.join(dir, PREVIOUS_DIR)
+    const previousBackup = path.join(backup, '.previous')
+    let previousParked = false
+    let previousNested = false
+    let backupCreated = false
     try {
+      if (state.record) {
+        await fs.rename(backup, parkedBackup)
+        previousParked = true
+      }
       await fs.mkdir(backup)
-      movedOut = await moveAll(originals, dir, backup)
-      movedIn = await moveAll(written, temp, dir)
+      backupCreated = true
+      await moveAll(originals, dir, backup, movedOut)
+      await moveAll(written, temp, dir, movedIn)
+      if (previousParked) {
+        await fs.rename(parkedBackup, previousBackup)
+        previousNested = true
+      }
       await fs.writeFile(path.join(backup, RECORD_FILE), JSON.stringify(record, null, 2))
+      await saveStitchCompletion(chapter.folderPath, completionFromRecord(record))
 
       await prisma.$transaction([
         prisma.page.deleteMany({ where: { chapterId: chapter.id } }),
@@ -473,7 +509,17 @@ async function stitchChapterLegacy(chapter: ChapterRef, groups: unknown): Promis
     } catch (error) {
       for (const name of movedIn) await fs.unlink(path.join(dir, name)).catch(() => {})
       await moveBack(movedOut, backup, dir)
-      await fs.rm(backup, { recursive: true, force: true })
+      if (previousNested) {
+        await fs.rename(previousBackup, parkedBackup)
+        previousNested = false
+      }
+      if (backupCreated) await fs.rm(backup, { recursive: true, force: true })
+      if (previousParked) {
+        await fs.rename(parkedBackup, backup)
+        previousParked = false
+      }
+      if (state.stitched) await saveStitchCompletion(chapter.folderPath, state.stitched)
+      else await clearStitchCompletion(chapter.folderPath)
       throw error
     } finally {
       await fs.rm(temp, { recursive: true, force: true })
@@ -488,11 +534,16 @@ async function undoStitchLegacy(chapter: ChapterRef): Promise<void> {
   return withLock(chapter.id, async () => {
     const record = await readRecord(chapter.folderPath)
     if (!record) throw new StitchError('This chapter has no stitch to undo', 404)
-    const blockers = await clipperBlockers(chapter.folderPath)
+    const blockers = [...await clipperBlockers(chapter.folderPath), ...await interruptedStitchBlockers(chapter.folderPath)]
     if (blockers.length > 0) throw new StitchError(blockers[0], 409)
 
     const dir = chapterDir(chapter.folderPath)
     const backup = backupDir(chapter.folderPath)
+    const completion = await readStitchCompletion(chapter.folderPath)
+    const previousBackup = path.join(backup, '.previous')
+    if (record.previousStitch?.hasBackup && !(await exists(path.join(previousBackup, RECORD_FILE)))) {
+      throw new StitchError('The preceding stitch backup is missing; the stitch cannot be undone', 409)
+    }
     for (const name of record.originals) {
       if (!(await exists(path.join(backup, name)))) {
         throw new StitchError(`The backup is missing ${name}; the stitch cannot be undone`, 409)
@@ -504,13 +555,21 @@ async function undoStitchLegacy(chapter: ChapterRef): Promise<void> {
     await fs.rm(trash, { recursive: true, force: true })
     await fs.mkdir(trash)
     const present = (await getImageFiles(dir)).filter(name => record.outputs.some(o => o.filename === name))
-    let parked: string[] = []
-    let restored: string[] = []
+    const parked: string[] = []
+    const restored: string[] = []
+    const parkedBackup = path.join(trash, '.previous')
+    let previousParked = false
     try {
-      parked = await moveAll(present, dir, trash)
+      await moveAll(present, dir, trash, parked)
       const clash = (await getImageFiles(dir)).find(name => record.originals.includes(name))
       if (clash) throw new StitchError(`${clash} is already in the chapter folder; move it out and retry`, 409)
-      restored = await moveAll(record.originals, backup, dir)
+      await moveAll(record.originals, backup, dir, restored)
+      if (record.previousStitch?.hasBackup) {
+        await fs.rename(previousBackup, parkedBackup)
+        previousParked = true
+      }
+      if (record.previousStitch) await saveStitchCompletion(chapter.folderPath, record.previousStitch.completion)
+      else await clearStitchCompletion(chapter.folderPath)
 
       await prisma.$transaction([
         prisma.page.deleteMany({ where: { chapterId: chapter.id } }),
@@ -518,28 +577,38 @@ async function undoStitchLegacy(chapter: ChapterRef): Promise<void> {
         prisma.chapter.update({ where: { id: chapter.id }, data: record.chapter })
       ])
     } catch (error) {
+      if (previousParked) {
+        await fs.rename(parkedBackup, previousBackup)
+        previousParked = false
+      }
       await moveBack(restored, dir, backup)
       await moveBack(parked, trash, dir)
+      if (completion) await saveStitchCompletion(chapter.folderPath, completion)
       await fs.rm(trash, { recursive: true, force: true })
       throw error
     }
 
-    await fs.rm(trash, { recursive: true, force: true })
     await fs.rm(backup, { recursive: true, force: true })
+    if (previousParked) await fs.rename(parkedBackup, backup)
+    await fs.rm(trash, { recursive: true, force: true })
     console.log(`[stitch] ${chapter.folderPath}: undone, ${record.originals.length} pages restored`)
   })
 }
 
-/** Keep the stitch for good: drop the originals and their record. */
+/** Keep the stitch for good: drop the undo backup, retain completion. */
 async function discardBackupLegacy(chapter: ChapterRef): Promise<void> {
   return withLock(chapter.id, async () => {
-    if (!(await readRecord(chapter.folderPath))) throw new StitchError('This chapter has no stitch backup', 404)
+    const blockers = await interruptedStitchBlockers(chapter.folderPath)
+    if (blockers.length > 0) throw new StitchError(blockers[0], 409)
+    const record = await readRecord(chapter.folderPath)
+    if (!record) throw new StitchError('This chapter has no stitch backup', 404)
+    await saveStitchCompletion(chapter.folderPath, completionFromRecord(record))
     await fs.rm(backupDir(chapter.folderPath), { recursive: true, force: true })
   })
 }
 
-export async function stitchChapter(chapter: ChapterRef, groups: unknown):Promise<StitchRecord> {
- return withUnmanagedCropChapter(chapter.folderPath,()=>stitchChapterLegacy(chapter,groups))
+export async function stitchChapter(chapter: ChapterRef, groups: unknown, restitch = false):Promise<StitchRecord> {
+ return withUnmanagedCropChapter(chapter.folderPath,()=>stitchChapterLegacy(chapter,groups,restitch))
 }
 
 export async function undoStitch(chapter: ChapterRef):Promise<void> {

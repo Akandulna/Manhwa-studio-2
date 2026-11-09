@@ -30,6 +30,12 @@ describe('shared library actions', () => {
     expect(await libraryControl('Demo')).toMatchObject({ deleted: d(4), parts: { 1: d(3, false), 2: d(1) } })
     expect(mergeControl({ folder: 'Demo', parts: { 1: d(2) } }, { folder: 'Demo', parts: { 1: d(2, false) } }).parts?.[1].done).toBe(false)
   })
+  it('merges per-language series Done marks and rejects unknown languages', async () => {
+    await saveLibraryControls([{ folder: 'Demo', seriesDone: { en: d(2) } }])
+    await saveLibraryControls([{ folder: 'Demo', seriesDone: { en: d(1, false), hi: d(3) } }])
+    expect((await libraryControl('Demo')).seriesDone).toEqual({ en: d(2), hi: d(3) })
+    expect(validControls([{ folder: 'Demo', seriesDone: { fr: d(1) } }])).toBe(false)
+  })
   it('rejects malformed and unsafe actions before storing them', async () => {
     for (const c of [{ folder: '../Demo', deleted: d(1) }, { folder: 'Demo', parts: { '-1': d(1) } }, { folder: 'Demo', deleted: d(1, false) }]) {
       expect(validControls([c])).toBe(false)
