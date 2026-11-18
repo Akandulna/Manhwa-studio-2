@@ -63,13 +63,13 @@ export function RunDetail({ runId, seriesTitleOf }: { runId: string; seriesTitle
   }, [detail, now])
 
   // Metadata and Timeline: saved in Studio, no review rounds or R2 columns. A Timeline job is one chapter + language.
-  const metadata = detail?.run.kind === 'metadata' || detail?.run.kind === 'editor'
-  const timeline = detail?.run.kind === 'editor'
+  const metadata = detail?.run.kind === 'metadata' || detail?.run.kind === 'editor' || detail?.run.kind === 'narration'
+  const timeline = detail?.run.kind === 'editor' || detail?.run.kind === 'narration'
   const pageTable = (list: AntigravityRunDetail['jobs']) => !detail ? null : (
         <table className="w-full text-sm">
           <thead className="text-left text-xs text-muted-foreground">
             {metadata
-              ? <tr><th className="py-1.5">{timeline ? 'Timeline' : 'Page'}</th><th>Stage</th><th title={timeline ? 'The chapter\'s timeline conversation, every turn' : 'The page\'s Metadata conversation, all batches'}>AI time</th><th>Attempt / conversation</th><th>Result</th><th /></tr>
+              ? <tr><th className="py-1.5">{detail?.run.kind === 'narration' ? 'Script' : timeline ? 'Timeline' : 'Page'}</th><th>Stage</th><th title={timeline ? 'The chapter\'s timeline conversation, every turn' : 'The page\'s Metadata conversation, all batches'}>AI time</th><th>Attempt / conversation</th><th>Result</th><th /></tr>
               : <tr><th className="py-1.5">Page</th><th>Stage</th><th title="Analysis + review by the AI. Slicing and the Drive upload are not counted.">AI time</th><th>Attempt / conversation</th><th>Review rounds</th><th>Result</th><th>R2</th><th /></tr>}
           </thead>
           <tbody>
@@ -95,8 +95,9 @@ export function RunDetail({ runId, seriesTitleOf }: { runId: string; seriesTitle
                     {attempt ? (
                       <>
                         <div>#{attempt.number} · {attempt.status}</div>
-                        <div className="font-mono text-muted-foreground" title={attempt.engine === 'codex' ? 'Codex thread (codex exec resume <id>)' : 'Antigravity conversation'}>{attempt.conversationId ?? 'no conversation yet'}</div>
+                        <div className="font-mono text-muted-foreground" title={attempt.engine === 'codex' ? 'Codex thread (codex exec resume <id>)' : attempt.engine === 'claude' ? 'Claude Code session (claude --resume <id>, from the attempt workspace)' : 'Antigravity conversation'}>{attempt.conversationId ?? 'no conversation yet'}</div>
                         {attempt.engine === 'codex' && attempt.observedModel !== 'unknown' && <div className="text-muted-foreground">Codex session model: {attempt.observedModel}</div>}
+                        {attempt.engine === 'claude' && attempt.observedModel !== 'unknown' && <div className="text-muted-foreground">Claude served model: {attempt.observedModel}</div>}
                         {!metadata && <div className="text-muted-foreground">slices delivered: {attempt.delivered.length}</div>}
                       </>
                     ) : <span className="text-muted-foreground">—</span>}
@@ -154,8 +155,8 @@ export function RunDetail({ runId, seriesTitleOf }: { runId: string; seriesTitle
           <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
             <Badge variant={live ? 'secondary' : run.control === 'completed' ? 'success' : run.control === 'paused' ? 'warning' : 'outline'}>{run.control.replace(/_/g, ' ')}</Badge>
             <Badge variant="outline">{ENGINE_LABELS[run.engine ?? 'antigravity']}</Badge>
-            <span>Requested model {run.model}{run.effort ? ` (${run.effort})` : ''}{run.engine === 'codex' ? ' · session model recorded per attempt' : ' · served model not reported by the CLI'}</span>
-            <span>· {run.concurrency} page{run.concurrency === 1 ? '' : 's'} at a time{run.sandbox ? ' · sandbox' : ''}</span>
+            <span>Requested model {run.model}{run.effort ? ` (${run.effort})` : ''}{run.engine === 'codex' || run.engine === 'claude' ? ' · served model recorded per attempt' : ' · served model not reported by the CLI'}</span>
+            <span>· {run.concurrency} {run.kind === 'narration' ? 'notes conversation' : 'page'}{run.concurrency === 1 ? '' : 's'} at a time{run.sandbox ? ' · sandbox' : ''}</span>
           </div>
           {metadata ? (
             <div className="text-xs text-muted-foreground">
@@ -174,9 +175,12 @@ export function RunDetail({ runId, seriesTitleOf }: { runId: string; seriesTitle
         <div className="flex gap-2">
           {live && run.control !== 'pause_requested' && <Button variant="outline" size="sm" disabled={busy} onClick={() => act(() => antigravityJobsApi.control(run.id, 'pause'))} title="Stop dispatching new pages; pages in progress finish"><Pause className="mr-2 h-4 w-4" /> Pause</Button>}
           {['paused', 'pause_requested', 'interrupted'].includes(run.control) && <Button variant="outline" size="sm" disabled={busy} onClick={() => act(() => antigravityJobsApi.control(run.id, 'resume'))}><Play className="mr-2 h-4 w-4" /> Resume</Button>}
-          {live && <Button variant="destructive" size="sm" disabled={busy} onClick={() => window.confirm('Stop this run? In-flight pages are cancelled and cannot commit late results.') && act(() => antigravityJobsApi.control(run.id, 'stop'))}><Square className="mr-2 h-4 w-4" /> Stop</Button>}
+          {live && <Button variant="destructive" size="sm" disabled={busy} title="No new pages start; the page in progress finishes and saves, then the run stops" onClick={() => window.confirm('Stop this run? No new pages start; the page in progress finishes and saves first, then the run stops.') && act(() => antigravityJobsApi.control(run.id, 'stop'))}><Square className="mr-2 h-4 w-4" /> Stop</Button>}
+          {run.control === 'stop_requested' && <Button variant="outline" size="sm" disabled={busy} title="Take back the stop; the run carries on" onClick={() => act(() => antigravityJobsApi.control(run.id, 'resume'))}><Play className="mr-2 h-4 w-4" /> Keep running</Button>}
+          {run.control === 'stop_requested' && <Button variant="destructive" size="sm" disabled={busy} title="Cancel the page in progress now; it cannot commit a late result" onClick={() => window.confirm('Stop now? In-flight pages are cancelled and cannot commit late results.') && act(() => antigravityJobsApi.control(run.id, 'stop-now'))}><Square className="mr-2 h-4 w-4" /> Stop now</Button>}
         </div>
       </header>
+      {run.control === 'stop_requested' && <div className="rounded-md border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-sm">Stopping: no new pages start; the page in progress finishes its work and saves first, then the run stops. Stop now cancels it instead.</div>}
       {run.control === 'pause_requested' && <div className="rounded-md border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-sm">Pausing: no new pages start; pages in progress finish their analysis, review and import first.</div>}
       {run.control === 'paused' && (() => {
         const reason = [...events].reverse().find(e => e.message.startsWith('Run paused:'))

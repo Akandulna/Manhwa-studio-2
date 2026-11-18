@@ -25,7 +25,8 @@ import { usePhoneOverview } from '@/hooks/usePhoneOverview'
 import { usePhoneRelay } from '@/hooks/usePhoneRelay'
 import { usePhoneScreens } from '@/hooks/usePhoneScreens'
 import {
-  r2Api, type PhoneAutomationOptions, type PhoneBattery, type PhoneOverview, type PhoneOverviewPhone, type PhoneScreen, type RelayStatus
+  r2Api, type PhoneAutomationOptions, type PhoneBattery, type PhoneOverview, type PhoneOverviewPhone, type PhoneScreen, type PhoneStartReport,
+  type PhoneStartState, type RelayStatus
 } from '@/lib/api'
 import { uploadUsage } from '@/lib/uploadUsage'
 import { cn } from '@/lib/utils'
@@ -51,6 +52,33 @@ import { stopAllChoice, stopChoice, StopRunDialog } from './StopRun'
 type Command = 'start' | 'stop'
 /** Sends a start or stop; resolves true once the relay took it. */
 type Send = (command: Command, options: PhoneAutomationOptions, to: string | null) => Promise<boolean>
+
+const START_STATE: Record<PhoneStartState, string> = {
+  received: 'received',
+  checking: 'checking the other phones',
+  waking: 'waking the phone',
+  started: 'started',
+  delayed: 'delayed',
+  refused: 'did not start'
+}
+
+/** What became of the last start sent to the phone: where it got to, and why it stopped there. */
+function LastStart({ report, now }: { report: PhoneStartReport; now: number }) {
+  const name = report.kind === 'youtube' ? 'YouTube' : AUTOMATION_NAME[report.kind] ?? report.kind
+  const tone = report.state === 'refused' ? 'text-red-500' : report.state === 'delayed' ? 'text-amber-500' : 'text-muted-foreground'
+  return (
+    <p className={cn('flex items-start gap-1.5 text-sm', tone)}>
+      {report.state === 'refused' || report.state === 'delayed'
+        ? <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+        : <Play className="mt-0.5 h-4 w-4 flex-shrink-0" />}
+      <span>
+        Last start: <span className="font-medium">{name}</span>{report.series ? <> · {report.series}</> : null}
+        {' — '}{START_STATE[report.state]} {ago(report.at, now)}
+        {report.reason && <span className="block text-xs">{report.reason}</span>}
+      </span>
+    </p>
+  )
+}
 
 /** At or under this, not charging, a phone that went quiet most likely ran out of battery. */
 const DEAD_LEVEL = 5
@@ -253,6 +281,7 @@ function PhoneCard({ phone, overview, relay, screen, screens, several, startable
               </dl>
             )
             : <p className="text-sm text-muted-foreground">Not reported by this Sleeper-Cell build.</p>}
+          {automation?.lastStart && <LastStart report={automation.lastStart} now={now} />}
           {resume && (
             <p className="flex items-center gap-1.5 text-sm text-amber-500">
               <Clock className="h-4 w-4 flex-shrink-0" />

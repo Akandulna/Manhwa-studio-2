@@ -8,7 +8,7 @@ import type { PrismaClient } from '@prisma/client'
 import crypto from 'node:crypto'
 
 export type ConnectionStatus = 'connected' | 'reconnect_required' | 'disconnected' | 'error'
-export type FolderKind = 'root' | 'series' | 'chapters' | 'chapter' | 'page'
+export type FolderKind = 'root' | 'series' | 'chapters' | 'chapter' | 'page' | 'gemini'
 
 export interface DriveClientRecord {
   clientId: string

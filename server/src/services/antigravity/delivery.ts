@@ -32,6 +32,8 @@ export interface PageBox {
 export interface FinalCropInput {
   reason: string
   bounds: PageBox
+  /** Sideways art: the quarter turn that stands the cut crop upright. Absent = upright. */
+  rotate?: 90 | -90
 }
 
 export const ROW_TOLERANCE_PX = 12
@@ -103,7 +105,9 @@ export function buildPointerFile(crops: FinalCropInput[], image: { filename: str
             { id: 'P3', x: x1, y: y1 },
             { id: 'P4', x: x0, y: y1 }
           ]
-        }
+        },
+        // Same as the phone's PageExport: only turned crops carry the key.
+        ...(c.rotate === 90 || c.rotate === -90 ? { rotate: c.rotate } : {})
       }
     }),
     workflow: 'clipper-geometry/1' as const,

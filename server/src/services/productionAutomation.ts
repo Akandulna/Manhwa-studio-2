@@ -28,7 +28,7 @@ import { ProductionRunner } from './productionRunner.js'
 import { productionChapters, productionDevices, productionShares, stagesDone, type ProductionJob, type ProductionStep } from './productionAutomationModel.js'
 import { getSeriesProcess, notifySeriesProcessChanged } from './seriesProcess.js'
 import type { ProcessStage } from './seriesProcessModel.js'
-import { getPhoneOverview, getR2Config, sendAutomationCommand, type PhoneRunKind } from './r2Service.js'
+import { getPhoneOverview, getR2Config, sendAutomationCommand, type PhoneRunKind, type PhoneStartReport, type PhoneStartState } from './r2Service.js'
 import { relayReceipts, relayStatus, sendPhoneRequest } from './phoneRelay.js'
 import { getSendJob, getSeriesSendPlan, startPhoneSend } from './phoneSend.js'
 import { sendProfileCommand } from './phoneProfiles.js'
@@ -112,6 +112,22 @@ async function ensurePages(job: ProductionJob, signal: AbortSignal, chapterIds: 
   await waitFor(signal, async () => hasPages(), 'The chosen phone has not downloaded the required chapters. Check Phone Status, then resume.')
 }
 
+/** A run gone quiet this long after it was seen going has stopped. */
+const STOPPED_MS = 120_000
+/** How long a start may take before the run is first seen going, or a start in progress may say nothing new. */
+const START_GRACE_MS = 10 * 60_000
+const START_PROGRESS = new Set<PhoneStartState>(['received', 'checking', 'waking', 'delayed'])
+
+/**
+ * The phone's report on this start: by its request id, else (a start that went through a handoff between phones,
+ * which sends its own request) the same kind of run reported since it was sent. Phone clocks drift a little.
+ */
+function startReportFor(report: PhoneStartReport | null | undefined, request: string, kind: PhoneRunKind, sentAt: number): PhoneStartReport | null {
+  if (!report) return null
+  if (report.request === request) return report
+  return report.kind === kind && Date.parse(report.at) >= sentAt - 60_000 ? report : null
+}
+
 type Report = (message: string, command?: ProductionJob['command']) => Promise<void>
 async function stopCommandPhones(job: ProductionJob) {
   if (!job.command) return
@@ -180,15 +196,34 @@ async function runPhone(job: ProductionJob, signal: AbortSignal, report: Report,
         if (runSignal.aborted) await sendAutomationCommand('stop', { device: target.device })
         runSignal.throwIfAborted()
         if (!sent.phones) throw new Error(`${target.device} disconnected while starting. Check its run before resuming.`)
-        let lastActive = Date.now()
+        const sentAt = Date.now()
+        let lastActive = sentAt
+        // Until the run is first seen going, the phone may still be checking the other phones, waking and opening
+        // (minutes, not seconds); after that, going quiet for STOPPED_MS means it stopped.
+        let seenRunning = false
+        let reportKey = ''
+        let reportChangedAt = sentAt
         await waitFor(runSignal, async () => {
           const data = await overview()
           const phone = data.phones.find(p => p.id === target.device)
-          if (!phone?.connected || busy(data, target.device) || phone.automation?.resume) lastActive = Date.now()
+          const report = startReportFor(phone?.automation?.lastStart, sent.id, kind, sentAt)
+          if (report?.state === 'refused') throw new Error(`${label} did not start on ${phone?.name ?? target.device}: ${report.reason ?? 'refused'}. Fix it there, then resume.`)
+          const key = report ? `${report.state}|${report.at}` : ''
+          if (key !== reportKey) { reportKey = key; reportChangedAt = Date.now() }
+          // A start still on its way (the phone says so, and said something new lately) counts as activity.
+          const starting = !!report && START_PROGRESS.has(report.state) && Date.now() - reportChangedAt < START_GRACE_MS
+          const running = busy(data, target.device)
+          if (running) seenRunning = true
+          if (!phone?.connected || running || phone.automation?.resume || starting) lastActive = Date.now()
           const current = productionChapters(await series(job.seriesId)).filter(c => chapters.some(assigned => assigned.id === c.id))
           const done = current.length === 0 || stagesDone(current, keys)
-          if (done && phone?.connected && !busy(data, target.device)) return true
-          if (!done && Date.now() - lastActive > 120_000) throw new Error(`${label} stopped early on ${phone?.name ?? target.device}. Check its limits or errors, then resume.`)
+          if (done && phone?.connected && !running) return true
+          const quiet = seenRunning ? STOPPED_MS : START_GRACE_MS
+          if (!done && Date.now() - lastActive > quiet) {
+            throw new Error(seenRunning
+              ? `${label} stopped early on ${phone?.name ?? target.device}. Check its limits or errors, then resume.`
+              : `${label} has not started on ${phone?.name ?? target.device} after ${Math.round(START_GRACE_MS / 60_000)} minutes. Check Phone Status, then resume.`)
+          }
           return false
         }, 'The phone run has not finished. Check Phone Status and resume when ready.', 24 * 60 * 60_000)
       } catch (error) { firstError ??= error; controller.abort(); throw error }

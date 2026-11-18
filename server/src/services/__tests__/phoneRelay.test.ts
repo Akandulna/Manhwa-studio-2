@@ -157,6 +157,22 @@ describe('phone relay', () => {
     expect((await getPhoneCrops('s1')).series).toEqual({ s1: { done: 4, total: 9 } })
   })
 
+  it('maps a prohibited-content handoff to the Narration chapter without claiming script completion', async () => {
+    emitted.length = 0
+    desktop!.send(JSON.stringify({ type: 'receipt', kind: 'scripts', at: 99, body: { device: 'Pixel', series: { 'Solo Hero': {
+      total: 3, done: 0, chapters: {}, blocked: [{ id: 'blocked-c1', chapter: 'Chapter 001', language: 'hi',
+        failedAt: '2026-11-11T00:00:00Z', stage: 'Final narration review', reason: 'Prohibited content',
+        sourceSha256: 'a'.repeat(64), conversationUrl: 'https://aistudio.google.com/prompts/example' }]
+    } } } }))
+    await until(() => emitted.some(e => e.event === 'phone:receipt'))
+    const result = await getPhoneScripts('s1', true)
+    expect(result.blocked).toMatchObject([{ id: 'blocked-c1', chapterId: 'c1', seriesId: 's1', language: 'hi' }])
+    expect(result.hi.chapters).toEqual({})
+    expect(result.series.s1.done).toBe(0)
+    local.controls = [{ folder: 'Solo Hero', restart: { at: 123, deviceId: 'note', done: true } }]
+    try { expect((await getPhoneScripts('s1', true)).blocked).toBeUndefined() } finally { local.controls = [] }
+  })
+
   it('sends "Refresh from phone" over the socket', async () => {
     const request = await requestPhoneUpdate()
     expect(request).toMatchObject({ via: 'relay', phones: 1 })
@@ -196,10 +212,39 @@ describe('phone relay', () => {
     expect((await getPhoneOverview(null)).automation).toEqual({
       wakeMode: 'dedicated', resumeAfterLimit: true, remoteStart: true,
       resume: { seriesId: 's1', series: 'Solo Hero', tabs: 2, at: '2026-10-02T15:40:00.000Z' },
-      runs: ['clipper'], clipper: null, editor: null, chapterRuns: [], rescope: false, stopAfter: false, clipperStopping: false
+      runs: ['clipper'], clipper: null, editor: null, chapterRuns: [], rescope: false, stopAfter: false, clipperStopping: false,
+      lastStart: null, reportMs: null
     })
     await expect(sendAutomationCommand('start', { kind: 'editor', seriesId: 's1' })).rejects.toThrow('this build can only start Image Clipper')
     await expect(sendAutomationCommand('stop', { after: true })).rejects.toThrow('this build can only stop it now')
+  })
+
+  it('reads what became of the last start and how long the receipt took', async () => {
+    emitted.length = 0
+    desktop!.send(JSON.stringify({
+      type: 'receipt', kind: 'crops', at: 5, body: {
+        series: {},
+        buildMs: { series: 900, metadata: 40, total: 1000 },
+        automation: {
+          wakeMode: 'personal', remoteStart: true,
+          lastStart: { request: 'r1', kind: 'voiceover', series: 'Solo Hero', state: 'refused', reason: 'The other phones did not answer in time', at: '2026-11-14T11:00:00.000Z' }
+        }
+      }
+    }))
+    await until(() => emitted.some(e => e.event === 'phone:receipt'))
+    const automation = (await getPhoneOverview(null)).automation
+    expect(automation?.lastStart).toEqual({
+      request: 'r1', kind: 'voiceover', seriesId: 's1', series: 'Solo Hero', state: 'refused',
+      reason: 'The other phones did not answer in time', at: '2026-11-14T11:00:00.000Z'
+    })
+    expect(automation?.reportMs).toBe(1000)
+
+    emitted.length = 0
+    desktop!.send(JSON.stringify({
+      type: 'receipt', kind: 'crops', at: 6, body: { series: {}, automation: { lastStart: { kind: 'voiceover', state: 'lost', at: '2026-11-14T11:00:00.000Z' } } }
+    }))
+    await until(() => emitted.some(e => e.event === 'phone:receipt'))
+    expect((await getPhoneOverview(null)).automation?.lastStart).toBeNull()
   })
 
   it('rejects explicit Editor choices on old receipts instead of silently using ChatGPT', async () => {

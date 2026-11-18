@@ -6,6 +6,7 @@ import {onManagedCropProjectionChange} from './managedCropEvents.js'
 import fs from 'fs/promises'
 import { recordSeriesFileActivity, recordPhoneActivity } from './seriesActivity.js'
 import { readStitchCompletion } from './stitchCompletion.js'
+import { isStitching, onStitchActivityChange } from './stitchActivity.js'
 import { recordLocalManagerChapter, recordLegacyManagerReceipt, managerChapterIdentity, managerCanDeclareRevision } from './managerReporting.js'
 import { watch, type FSWatcher } from 'fs'
 import path from 'path'
@@ -73,7 +74,7 @@ export function notifySeriesProcessChanged(invalidateFiles = false): void {
 
 async function localStages(chapter: any, title: string, timelines: any[]): Promise<ChapterStages> {
   const managed=await managedCropBindingCount(chapter.folderPath)>0
-  const hash = JSON.stringify([chapter, timelines])
+  const hash = JSON.stringify([chapter, timelines, isStitching(chapter.folderPath)])
   const generation = generations.get(chapter.folderPath) ?? 0
   const previous = cache.get(chapter.id)
   if (!managed && previous?.hash === hash && previous.generation === generation) return structuredClone(previous.stages)
@@ -87,6 +88,7 @@ async function localStages(chapter: any, title: string, timelines: any[]): Promi
     if (chapter.status === 'failed') result.download.state = 'failed'
     const prepared = await content(path.join(dir, '.library-prepared.json')) > 0 || !!(await readStitchCompletion(chapter.folderPath))
     if (prepared) result.cleanup = result.stitch = { state: 'done' }
+    else if (isStitching(chapter.folderPath)) result.cleanup = result.stitch = { state: 'active' }
     for (const language of ['en', 'hi'] as const) {
       const script = chapter.scripts.find((s: any) => s.language === language)
       const scriptExists = await content(script?.scriptPath ? path.isAbsolute(script.scriptPath) ? script.scriptPath : path.resolve(script.scriptPath) : path.join(dir, scriptFileName(language))) > 0
@@ -284,3 +286,5 @@ export function startSeriesProcess(socket: Server): void {
 
 // Immutable publication can live outside DOWNLOAD_ROOT, beyond the filesystem watcher.
 onManagedCropProjectionChange(()=>notifySeriesProcessChanged(true))
+// Auto preparation and manual stitches flip a chapter's stitch stage to active and back.
+onStitchActivityChange(()=>notifySeriesProcessChanged())

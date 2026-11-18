@@ -21,12 +21,15 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const serverDir = path.resolve(here, '../../../..')
 const FAKE_AGY = path.join(here, 'fixtures', 'fake-agy.mjs')
 const FAKE_CODEX = path.join(here, 'fixtures', 'fake-codex.mjs')
+const FAKE_CLAUDE = path.join(here, 'fixtures', 'fake-claude.mjs')
 const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'ag-jobs-'))
 const dbUrl = `file:${path.join(tmp, 'test.db')}`
 process.env.DOWNLOAD_ROOT = path.join(tmp, 'library')
 process.env.FAKE_AGY_PLAN = path.join(tmp, 'plan.json')
 process.env.FAKE_AGY_LOG = path.join(tmp, 'agy.log')
 process.env.CODEX_HOME = path.join(tmp, 'codex-home')
+process.env.CLAUDE_CONFIG_DIR = path.join(tmp, 'claude-home')
+const claudeUsage: unknown[][] = []
 
 type Jobs = import('../jobs.js').AntigravityJobs
 let accounts: import('../codexAccounts.js').CodexAccountStore
@@ -89,9 +92,11 @@ const runDone = (runId: string) => until(`run ${runId} to finish`, async () => {
 }, 30_000)
 
 beforeAll(async () => {
+  await fs.writeFile(path.join(tmp, 'test.db'), '')
   execFileSync('npx', ['prisma', 'db', 'push', '--skip-generate'], { cwd: serverDir, env: { ...process.env, DATABASE_URL: dbUrl }, stdio: 'ignore' })
   await fs.chmod(FAKE_AGY, 0o755)
   await fs.chmod(FAKE_CODEX, 0o755)
+  await fs.chmod(FAKE_CLAUDE, 0o755)
   prisma = new PrismaClient({ datasources: { db: { url: dbUrl } } })
 
   const series = await prisma.series.create({ data: { title: 'Series A', sourceSite: 'test', rootFolder: 'Series A' } })
@@ -133,6 +138,8 @@ beforeAll(async () => {
     attemptRoot: path.join(tmp, 'attempts'),
     codexHome: process.env.CODEX_HOME,
     codexAccounts: accounts,
+    claudeConfigDir: process.env.CLAUDE_CONFIG_DIR,
+    claudeUsage: { record: async limits => void claudeUsage.push(limits) },
     settings: async () => ({ model: 'fake-model', modelLabel: 'Fake', effort: null, sandbox: false, concurrency: 2, pageTimeoutMinutes: 2, executable: FAKE_AGY, cliVersion: 'fake-1', ...settingsOver } as any),
     prompts: () => prompts.pack(),
     pinnedPrompts: async ids => {
@@ -231,7 +238,7 @@ describe('AntiGravity jobs end to end (Phase 6)', () => {
     await writePlan({ page_003: { hang: true } })
     const start = await jobs.start({ seriesId, partNumber: 1, pages: pages(1, 'page_003'), prepareOnly: false })
     const job = await until('page_003 to be analyzing', async () => (await (await jobFor(start.runId!, 'page_003'))).stage === 'analyzing' && (await agyLog()).some(e => e.stem === 'page_003') ? jobFor(start.runId!, 'page_003') : null)
-    await jobs.control(start.runId!, 'stop')
+    await jobs.control(start.runId!, 'stop-now')
     const after = await until('page_003 cancelled', async () => { const j = await jobFor(start.runId!, 'page_003'); return j.stage === 'cancelled' ? j : null })
     const attempt = await prisma.antigravityAttempt.findUniqueOrThrow({ where: { id: after.currentAttemptId! } })
     expect(attempt.status).toBe('cancelled')
@@ -242,6 +249,27 @@ describe('AntiGravity jobs end to end (Phase 6)', () => {
     const late = await jobs.call(token, { tool: 'submit_analysis', arguments: { json: '{}' }, conversationId: attempt.conversationId })
     expect(late).toMatchObject({ isError: true })
     expect((await jobFor(start.runId!, 'page_003')).stage).toBe('cancelled')
+  }, 30_000)
+
+  it('Stop lets the page in progress finish and save, starts nothing new, then stops the run', async () => {
+    const all = [[1, 'page_001'], [2, 'page_004']] as const
+    for (const [chapter, stem] of all) await fs.rm(path.join(process.env.DOWNLOAD_ROOT!, `Series A/Chapter 00${chapter}/crop_points3/${stem}.json`), { force: true })
+    await writePlan({ page_001: { delayMs: 1500 }, page_004: { delayMs: 1500 } })
+    settingsOver = { concurrency: 1 }
+    const start = await jobs.start({ seriesId, partNumber: 1, pages: [...pages(1, 'page_001'), ...pages(2, 'page_004')], prepareOnly: false })
+    const [chapter, stem] = await until('a page to be analyzing', async () => {
+      for (const entry of all) if ((await jobFor(start.runId!, entry[1])).stage === 'analyzing') return entry
+      return null
+    })
+    const other = all.find(e => e[1] !== stem)!
+    expect((await jobs.control(start.runId!, 'stop')).control).toBe('stop_requested')
+    const run = await runDone(start.runId!)
+    expect(run.control).toBe('stopped')
+    expect((await jobFor(start.runId!, stem)).stage).toBe('ready_for_human_review')
+    expect(await savedTop(chapter, stem)).toBe(cropBox(stem).y0)
+    expect(['prepared', 'cancelled']).toContain((await jobFor(start.runId!, other[1])).stage)
+    expect((await agyLog()).filter(e => e.stem === other[1])).toEqual([])
+    expect(await savedTop(other[0], other[1])).toBeNull()
   }, 30_000)
 
   it('retries R2 delivery without another AI request', async () => {
@@ -273,7 +301,7 @@ describe('AntiGravity jobs end to end (Phase 6)', () => {
     expect((await agyLog()).filter(e => e.stem === 'page_006')).toEqual([])
     const events = await prisma.antigravityEvent.findMany({ where: { runId: start.runId! } })
     expect(events.some(e => /quota is used up/.test(e.message))).toBe(true)
-    await jobs.control(start.runId!, 'stop')
+    await jobs.control(start.runId!, 'stop-now')
     expect((await jobFor(start.runId!, 'page_006')).stage).toBe('cancelled')
   }, 30_000)
 
@@ -512,7 +540,7 @@ describe('AntiGravity jobs end to end (Phase 6)', () => {
 
   it('moves a page to the next ChatGPT account when one reaches its Codex limit, and finishes there', async () => {
     // The previous test leaves its run paused on this part; a new Start would join it (one process at a time).
-    for (const r of await prisma.antigravityRun.findMany({ where: { control: { in: ['running', 'preparing', 'pause_requested', 'paused', 'stop_requested'] } } })) await jobs.control(r.id, 'stop')
+    for (const r of await prisma.antigravityRun.findMany({ where: { control: { in: ['running', 'preparing', 'pause_requested', 'paused', 'stop_requested'] } } })) await jobs.control(r.id, 'stop-now')
     await accounts.update('default', { clearLimit: true })
     const second = await accounts.add('Second account')
     const folderPath = 'Series A/Chapter 005'
@@ -539,9 +567,67 @@ describe('AntiGravity jobs end to end (Phase 6)', () => {
     expect(events.map(e => e.message).join('\n')).toMatch(/"ChatGPT app \(this Mac\)" reached its Codex limit[\s\S]*Continuing on ChatGPT account "Second account"/)
   }, 40_000)
 
+  it('runs a page through the Claude (Claude Code) engine: locked-down turns, review resumes the same session, evidence recorded', async () => {
+    for (const r of await prisma.antigravityRun.findMany({ where: { control: { in: ['running', 'preparing', 'pause_requested', 'paused', 'stop_requested'] } } })) await jobs.control(r.id, 'stop-now')
+    const folderPath = 'Series A/Chapter 006'
+    await makePage(folderPath, 'page_005')
+    const chapter = await prisma.chapter.create({ data: { seriesId, number: 6, folderPath, status: 'done' } })
+    await writePlan({})
+    settingsOver = { engine: 'claude', executable: FAKE_CLAUDE, model: 'claude-fake-5', effort: 'high', sandbox: true }
+    const start = await jobs.start({ seriesId, partNumber: 1, pages: [{ chapterId: chapter.id, filename: 'page_005.png' }], prepareOnly: false })
+    const run = await runDone(start.runId!)
+    expect(run.engine).toBe('claude')
+    expect(run.control).toBe('completed')
+    const job = await jobFor(start.runId!, 'page_005')
+    expect([job.stage, job.lastError]).toEqual(['ready_for_human_review', null])
+    expect(await savedTop(6, 'page_005')).toBe(cropBox('page_005').y0)
+    expect(published).toContain(job.id)
+
+    const attempt = await prisma.antigravityAttempt.findFirstOrThrow({ where: { jobId: job.id } })
+    expect(attempt.engine).toBe('claude')
+    expect(attempt.codexAccount).toBeNull()
+    expect(attempt.requestedModel).toBe('claude-fake-5')
+    expect(attempt.observedModel).toBe('claude-fake-5') // named in Claude Code's stream
+    expect(attempt.reviewRounds).toBeGreaterThan(0)
+
+    // Analysis, then the review as `claude --resume <same session>` from the same workspace.
+    const log = (await agyLog()).filter(e => e.engine === 'claude' && e.event === 'start')
+    expect(log.map(e => [e.turn, e.conv])).toEqual([['analysis', attempt.conversationId], ['review', attempt.conversationId]])
+    const token = await fs.readFile(path.join(path.dirname(attempt.workspace), 'capability.token'), 'utf8')
+    for (const name of ['capability.token', 'claude-mcp.json']) expect((await fs.stat(path.join(path.dirname(attempt.workspace), name))).mode & 0o777).toBe(0o600)
+    expect(await fs.readFile(path.join(path.dirname(attempt.workspace), 'claude-mcp.json'), 'utf8')).not.toContain(token)
+    for (const entry of log) {
+      expect(entry.argv).not.toContain(token)
+      for (const needle of ['--setting-sources  --tools  --strict-mcp-config', '--allowedTools mcp__studio', '--permission-mode dontAsk', '--disable-slash-commands', '--effort high']) expect(entry.argv).toContain(needle)
+    }
+    await expect(fs.access(path.join(attempt.workspace, '.agents', 'mcp_config.json'))).rejects.toThrow()
+
+    const tools = await prisma.antigravityEvent.findMany({ where: { attemptId: attempt.id, type: { in: ['tools', 'tools_unexpected'] } } })
+    expect(tools.at(-1)?.type).toBe('tools')
+    expect(tools.at(-1)?.message).toMatch(/fetch_slice×\d.*submit_analysis×1.*submit_review×1.*nothing unexpected.*model claude-fake-5.*Claude limits: five hour allowed/)
+    expect(claudeUsage.flat()).toContainEqual(expect.objectContaining({ type: 'five_hour', status: 'allowed' }))
+  }, 30_000)
+
+  it('pauses a Claude run when the Claude plan\'s usage limit is reached', async () => {
+    for (const r of await prisma.antigravityRun.findMany({ where: { control: { in: ['running', 'preparing', 'pause_requested', 'paused', 'stop_requested'] } } })) await jobs.control(r.id, 'stop-now')
+    const folderPath = 'Series A/Chapter 007'
+    await makePage(folderPath, 'page_006')
+    const chapter = await prisma.chapter.create({ data: { seriesId, number: 7, folderPath, status: 'done' } })
+    await writePlan({ page_006: { providerError: "You've hit your limit · resets 6pm" } })
+    settingsOver = { engine: 'claude', executable: FAKE_CLAUDE, model: 'claude-fake-5', concurrency: 1 }
+    const start = await jobs.start({ seriesId, partNumber: 1, pages: [{ chapterId: chapter.id, filename: 'page_006.png' }], prepareOnly: false })
+    const run = await runDone(start.runId!)
+    expect(run.control).toBe('paused')
+    await until('page_006 interrupted', async () => (await jobFor(start.runId!, 'page_006')).stage === 'interrupted')
+    const events = await prisma.antigravityEvent.findMany({ where: { runId: start.runId!, type: 'run' } })
+    expect(events.map(e => e.message).join(' ')).toMatch(/Claude Code reports the Claude plan's usage limit is reached \(resets /)
+    expect(claudeUsage.flat()).toContainEqual(expect.objectContaining({ type: 'five_hour', status: 'rejected' }))
+    await jobs.control(start.runId!, 'stop-now')
+  }, 30_000)
+
   it('Start process takes the part\'s next pending pages in chapter order, the parallel limit at a time, one process at a time', async () => {
     // Earlier tests may leave a paused run holding the single process slot.
-    for (const r of await prisma.antigravityRun.findMany({ where: { control: { in: ['running', 'preparing', 'pause_requested', 'paused', 'stop_requested'] } } })) await jobs.control(r.id, 'stop')
+    for (const r of await prisma.antigravityRun.findMany({ where: { control: { in: ['running', 'preparing', 'pause_requested', 'paused', 'stop_requested'] } } })) await jobs.control(r.id, 'stop-now')
     await writePlan({ page_001: { delayMs: 1500 } })
     const series = await prisma.series.create({ data: { title: 'Series B', sourceSite: 'test', rootFolder: 'Series B' } })
     const make = async (number: number, stems: string[]) => {
@@ -585,7 +671,7 @@ describe('AntiGravity jobs end to end (Phase 6)', () => {
   }, 40_000)
 
   it('ticked pages keep the one-process rule: they join this part\'s live process, and wait for another part\'s', async () => {
-    for (const r of await prisma.antigravityRun.findMany({ where: { control: { in: ['running', 'preparing', 'pause_requested', 'paused', 'stop_requested'] } } })) await jobs.control(r.id, 'stop')
+    for (const r of await prisma.antigravityRun.findMany({ where: { control: { in: ['running', 'preparing', 'pause_requested', 'paused', 'stop_requested'] } } })) await jobs.control(r.id, 'stop-now')
     await writePlan({ page_001: { delayMs: 1500 } })
     const series = await prisma.series.create({ data: { title: 'Series D', sourceSite: 'test', rootFolder: 'Series D' } })
     const make = async (number: number, stems: string[]) => {
@@ -611,7 +697,7 @@ describe('AntiGravity jobs end to end (Phase 6)', () => {
   }, 40_000)
 
   it('runs a Gemini 3.8 Flash page through the four-step prompts (find, corners, inspect, review) in one conversation, then delivers', async () => {
-    for (const r of await prisma.antigravityRun.findMany({ where: { control: { in: ['running', 'preparing', 'pause_requested', 'paused', 'stop_requested'] } } })) await jobs.control(r.id, 'stop')
+    for (const r of await prisma.antigravityRun.findMany({ where: { control: { in: ['running', 'preparing', 'pause_requested', 'paused', 'stop_requested'] } } })) await jobs.control(r.id, 'stop-now')
     settingsOver = { engine: 'antigravity', model: 'gemini-3.8-flash-high', modelLabel: 'Gemini 3.8 Flash (High)' }
     await writePlan({})
     const series = await prisma.series.create({ data: { title: 'Series C', sourceSite: 'test', rootFolder: 'Series C' } })

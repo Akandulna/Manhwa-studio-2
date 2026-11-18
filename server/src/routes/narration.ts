@@ -16,6 +16,10 @@ import { withSeriesActivity } from '../services/seriesActivity.js'
  *                                          the script zip if new, one or two LISTs)
  *   POST /series/:id/phone/fetch?lang=     { scriptsEtag?, scriptChapterIds, voiceoverChapterIds } — start
  *                                          the fetch; progress on `narration:fetch`, alignment on `alignment:*`
+ *   POST /chapters/:id/voiceover/manual?lang=  multipart `file`: one audio file as the chapter's whole
+ *                                          voiceover, then aligned like a fetched one
+ *   POST /chapters/:id/voiceover/reset?lang=   removes the chapter's voiceover in this language here, in R2
+ *                                          and (when they next check) on the phones; see voiceoverReset.ts
  *   POST /chapters/:id/align?lang=         align a chapter's unaligned sections again (or write its
  *                                          missing document), in the background
  *
@@ -23,17 +27,20 @@ import { withSeriesActivity } from '../services/seriesActivity.js'
  */
 
 import { Router, Request, Response } from 'express'
+import multer from 'multer'
 import fs from 'fs/promises'
 import path from 'path'
 import type { Server } from 'socket.io'
 import { prisma } from '../index.js'
+import { chapterManualPrompts, manualCorrectionPrompt } from '../services/narrationManualPrompts.js'
+import { removeManualSlices } from '../services/narrationManualSlices.js'
 import { importPhoneScripts, phoneScriptFiles, previewPhoneScripts, type PhoneImportResult } from '../services/phoneScriptImport.js'
 import { keepStudioVersion, narrationSeriesOpened, openConflicts, scheduleNarrationAutoSync } from '../services/phoneNarrationAutoSync.js'
 import { listMetadataImageStems } from '../services/clipper3/perImageStore.js'
 import {
   fetchPhoneVoiceover,
   previewPhoneVoiceover,
-  voiceoverFetchedAt,
+  voiceoverOrigin,
   type PhoneVoiceoverFetch
 } from '../services/phoneVoiceoverImport.js'
 import { getR2Config } from '../services/r2Service.js'
@@ -42,7 +49,11 @@ import { alignChapter, alignSection, alignmentProgress, checkAlignmentAvailable,
 import { resetSectionAlignment } from '../services/alignment/resetAlignment.js'
 import { hasAlignmentDocument, writeAlignmentDocument } from '../services/alignment/alignmentDocument.js'
 import { NarrationLanguage, requestLanguage } from '../services/narrationLanguage.js'
+import { addManualVoiceover, ManualVoiceoverError, MAX_MANUAL_VOICEOVER_BYTES } from '../services/manualVoiceover.js'
+import { resetChapterVoiceover, VoiceoverResetError } from '../services/voiceoverReset.js'
 import { getReplacementScript, replaceChapterScript, scriptReplacementBusy, ScriptReplacementError } from '../services/scriptReplacement.js'
+import { clearChapterScripts } from '../services/scriptClear.js'
+import { getPublishedChapters } from '../services/storageService.js'
 
 const router = Router()
 
@@ -216,9 +227,9 @@ router.get('/series/:id', async (req: Request, res: Response) => {
     const counts = await sectionCounts(language, { seriesId: series.id, status: 'done' })
     const chapters = await Promise.all(series.chapters.map(async c => {
       const sections = counts.get(c.id) ?? NO_SECTIONS
-      const [documentWritten, fetchedAt] = await Promise.all([
+      const [documentWritten, origin] = await Promise.all([
         hasAlignmentDocument(c.folderPath, language),
-        voiceoverFetchedAt(c.folderPath, language)
+        voiceoverOrigin(c.folderPath, language)
       ])
       return {
         id: c.id,
@@ -230,7 +241,8 @@ router.get('/series/:id', async (req: Request, res: Response) => {
         aligning: pendingAlignments(c.id, language) > 0 || alignRuns.has(`${c.id}:${language}`),
         alignmentProgress: alignmentProgress(c.id, language),
         documentWritten,
-        fetchedAt
+        fetchedAt: origin.at,
+        voiceoverManual: origin.manual
       }
     }))
 
@@ -341,13 +353,76 @@ router.post('/series/:id/phone/conflicts/resolve', async (req: Request, res: Res
       await keepStudioVersion(chapterId, language, phoneSha256)
       return res.json({ kept: true })
     }
-    const result = await importPhoneScripts(seriesId, preview.zip.etag, [chapterId], language, { about: 'fill' })
+    // You saw both texts: a script Studio replaced earlier doesn't block the phone's.
+    const result = await importPhoneScripts(seriesId, preview.zip.etag, [chapterId], language, { about: 'fill', overStudioReplacement: true })
     // A Hinglish script converted from the new English may now be importable.
     if (language === 'en') scheduleNarrationAutoSync(seriesId, 2_000)
     res.json({ imported: result.imported })
   } catch (error) {
     console.error('[narration] resolving phone version failed:', error)
     res.status(400).json({ error: message(error, 'Could not apply your choice') })
+  }
+})
+
+// ============ Clear scripts ============
+
+/**
+ * The chapters with a script in Studio (either language) that Clear scripts
+ * could clear, with what the phones have finished for each (null per language
+ * when R2 can't be read), so chapters the phones no longer have stand out.
+ */
+router.get('/series/:id/scripts/clearable', async (req: Request, res: Response) => {
+  try {
+    const seriesId = req.params.id
+    const chapters = await prisma.chapter.findMany({
+      where: { seriesId, status: 'done', completedAt: null },
+      select: { id: true, number: true, title: true, scripts: { select: { language: true, status: true } },
+        _count: { select: { audioSections: true } } },
+      orderBy: { number: 'asc' }
+    })
+    const scripted = chapters.filter(c => c.scripts.some(s => SCRIPT_WRITTEN.includes(s.status)))
+    const phone: Partial<Record<NarrationLanguage, Set<string> | null>> = {}
+    const published: Partial<Record<NarrationLanguage, Record<string, unknown>>> = {}
+    for (const language of ['en', 'hi'] as const) {
+      phone[language] = !getR2Config() ? null : await previewPhoneScripts(seriesId, language).then(
+        preview => new Set(preview?.chapters.map(c => c.chapterId) ?? []),
+        error => { console.warn(`[narration] clearable: phone ${language} scripts unreadable:`, message(error, 'R2')); return null })
+      published[language] = (await getPublishedChapters(seriesId, language)).chapters
+    }
+    res.json({
+      chapters: scripted.map(c => ({
+        chapterId: c.id,
+        number: c.number,
+        title: c.title,
+        en: c.scripts.some(s => s.language === 'en' && SCRIPT_WRITTEN.includes(s.status)),
+        hi: c.scripts.some(s => s.language === 'hi' && SCRIPT_WRITTEN.includes(s.status)),
+        voiceoverSections: c._count.audioSections,
+        published: !!published.en?.[c.id] || !!published.hi?.[c.id],
+        phoneEn: phone.en ? phone.en.has(c.id) : null,
+        phoneHi: phone.hi ? phone.hi.has(c.id) : null
+      }))
+    })
+  } catch (error) {
+    console.error('[narration] clearable chapters failed:', error)
+    res.status(400).json({ error: message(error, 'Could not list the chapters') })
+  }
+})
+
+/** Clears the ticked chapters' English and Hinglish scripts and what was made from them (see scriptClear.ts). */
+router.post('/series/:id/scripts/clear', async (req: Request, res: Response) => {
+  try {
+    const seriesId = req.params.id
+    const chapterIds = Array.isArray(req.body?.chapterIds) ? req.body.chapterIds.filter((id: unknown): id is string => typeof id === 'string') : []
+    if (fetchJobs.has(`${seriesId}:en`) || fetchJobs.has(`${seriesId}:hi`)) return res.status(409).json({ error: 'Wait for the phone fetch to finish' })
+    if (chapterIds.some((id: string) => alignRuns.has(`${id}:en`) || alignRuns.has(`${id}:hi`))) {
+      return res.status(409).json({ error: 'Wait for the chapter’s alignment to finish' })
+    }
+    const result = await clearChapterScripts(seriesId, chapterIds)
+    for (const { chapterId } of result.cleared) for (const language of ['en', 'hi'] as const) io?.emit('narration:script-replaced', { chapterId, language })
+    res.json(result)
+  } catch (error) {
+    console.error('[narration] clearing scripts failed:', error)
+    res.status(error instanceof ScriptReplacementError ? error.status : 400).json({ error: message(error, 'Could not clear the scripts') })
   }
 })
 
@@ -424,6 +499,25 @@ router.get('/chapters/:id/script', async (req: Request, res: Response) => {
   catch (error) { res.status(error instanceof ScriptReplacementError ? error.status : 500).json({ error: message(error, 'Could not read script') }) }
 })
 
+// Copyable prompts for ordinary script replacement and prohibited-content manual completion.
+router.get('/chapters/:id/script/manual-prompts', async (req: Request, res: Response) => {
+  try {
+    const language = requestLanguage(req)
+    res.json({ ...(await chapterManualPrompts(req.params.id, language)), correctionTemplate: manualCorrectionPrompt('{error}', language) })
+  } catch (error) { res.status((error as { status?: number }).status ?? 400).json({ error: message(error, 'Could not build the prompts') }) }
+})
+
+// English only: cuts the pages into ≤2,000 px pieces in a temporary folder (first prompt copy) and returns the prompts listing them.
+router.post('/chapters/:id/script/manual-slices', async (req: Request, res: Response) => {
+  try {
+    if (requestLanguage(req) !== 'en') return res.status(400).json({ error: 'Only English prompts attach pages' })
+    res.json({ ...(await chapterManualPrompts(req.params.id, 'en', { slice: true })), correctionTemplate: manualCorrectionPrompt('{error}', 'en') })
+  } catch (error) {
+    console.error('[narration] cutting pages for the manual prompts failed:', error)
+    res.status((error as { status?: number }).status ?? 400).json({ error: message(error, 'Could not cut the pages') })
+  }
+})
+
 router.post('/chapters/:id/script/replace', async (req: Request, res: Response) => {
   try {
     const language = requestLanguage(req)
@@ -433,9 +527,79 @@ router.post('/chapters/:id/script/replace', async (req: Request, res: Response) 
       return res.status(409).json({ error: 'Wait for this chapter’s fetch or alignment to finish' })
     }
     const result = await replaceChapterScript(req.params.id, language, req.body ?? {})
+    // The pasted script is saved, so the manual prompts' sliced pages are done with.
+    if (language === 'en') await removeManualSlices(req.params.id).catch(error => console.error('[narration] removing the sliced pages failed:', error))
     io?.emit('narration:script-replaced', { chapterId: req.params.id, language })
     res.json(result)
   } catch (error) { res.status(error instanceof ScriptReplacementError ? error.status : 500).json({ error: message(error, 'Could not replace script') }) }
+})
+
+// ============ Manual voiceover ============
+
+const voiceoverUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_MANUAL_VOICEOVER_BYTES, files: 1, fields: 2 } })
+
+/**
+ * Attaches one audio file, chosen by hand, as the whole chapter's voiceover in
+ * this language (see manualVoiceover.ts), and queues it for alignment.
+ */
+router.post('/chapters/:id/voiceover/manual', (req: Request, res: Response) => {
+  voiceoverUpload.single('file')(req, res, async (uploadError: unknown) => {
+    if (uploadError) {
+      const tooBig = uploadError instanceof multer.MulterError && uploadError.code === 'LIMIT_FILE_SIZE'
+      return res.status(400).json({ error: tooBig ? 'The audio file is larger than 512 MB.' : message(uploadError, 'Upload failed') })
+    }
+    const language = requestLanguage(req)
+    const chapterId = req.params.id
+    const key = `${chapterId}:${language}`
+    try {
+      if (!req.file) return res.status(400).json({ error: 'Choose an audio file' })
+      const chapter = await prisma.chapter.findUnique({ where: { id: chapterId }, select: { seriesId: true } })
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+      if (fetchJobs.has(`${chapter.seriesId}:${language}`)) return res.status(409).json({ error: 'Wait for the phone fetch to finish' })
+      if (alignRuns.has(key) || pendingAlignments(chapterId, language) > 0 || scriptReplacementBusy(chapterId)) {
+        return res.status(409).json({ error: 'Wait for this chapter’s alignment or script replacement to finish' })
+      }
+      alignRuns.add(key)
+      try {
+        // Browsers send UTF-8 names that multer reads as latin1.
+        const name = Buffer.from(req.file.originalname, 'latin1').toString('utf-8')
+        const result = await addManualVoiceover(chapterId, language, { name, data: req.file.buffer }, io)
+        res.json(result)
+      } finally {
+        alignRuns.delete(key)
+      }
+    } catch (error) {
+      console.error('[narration] manual voiceover failed:', error)
+      res.status(error instanceof ManualVoiceoverError ? error.status : 400).json({ error: message(error, 'Could not add the voiceover') })
+    }
+  })
+})
+
+/**
+ * Removes the chapter's voiceover in this language from Studio (backed up),
+ * R2 and the phones, so it can be voiced again (see voiceoverReset.ts).
+ */
+router.post('/chapters/:id/voiceover/reset', async (req: Request, res: Response) => {
+  const language = requestLanguage(req)
+  const chapterId = req.params.id
+  const key = `${chapterId}:${language}`
+  try {
+    const chapter = await prisma.chapter.findUnique({ where: { id: chapterId }, select: { seriesId: true } })
+    if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+    if (fetchJobs.has(`${chapter.seriesId}:${language}`)) return res.status(409).json({ error: 'Wait for the phone fetch to finish' })
+    if (alignRuns.has(key) || pendingAlignments(chapterId, language) > 0 || scriptReplacementBusy(chapterId)) {
+      return res.status(409).json({ error: 'Wait for this chapter’s alignment or script replacement to finish' })
+    }
+    alignRuns.add(key)
+    try {
+      res.json(await resetChapterVoiceover(chapterId, language))
+    } finally {
+      alignRuns.delete(key)
+    }
+  } catch (error) {
+    console.error('[narration] voiceover reset failed:', error)
+    res.status(error instanceof VoiceoverResetError ? error.status : 500).json({ error: message(error, 'Could not reset the voiceover') })
+  }
 })
 
 /**

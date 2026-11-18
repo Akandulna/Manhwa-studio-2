@@ -59,6 +59,7 @@ import { readZip } from '../utils/zipReader.js'
 import { createClient, getR2Config, isNotFound, phoneFolders } from './r2Service.js'
 import { sameRestart } from './seriesRestartModel.js'
 import { getPublishedChapters } from './storageService.js'
+import { savedBeforeClear, scriptsClearedAt } from './scriptClear.js'
 import { scriptFileName, type NarrationLanguage } from './narrationLanguage.js'
 
 /** Folder the phone uploads script zips to, inside its R2 prefix. Keep in step with FOLDER in ScriptUpload.kt. */
@@ -515,6 +516,7 @@ async function buildPreview(
   await requireSeriesRestartReady(path.basename(series.rootFolder), parsed.restartRevision, true)
   const published = (await getPublishedChapters(seriesId, language)).chapters
   const byFolder = new Map(series.chapters.map(c => [path.basename(c.folderPath), c]))
+  const cleared = await scriptsClearedAt(series.chapters.map(c => c.id))
 
   const chapters: PhoneImportChapter[] = []
   const unmatched: string[] = []
@@ -524,6 +526,8 @@ async function buildPreview(
       unmatched.push(phone.folder)
       continue
     }
+    // Cleared in Studio after a phone saved this: it is the old script, not on offer.
+    if (savedBeforeClear(cleared.get(chapter.id), phone.savedAt)) continue
     const script = chapter.scripts.find(s => s.language === language)
     const current = await readScript(script?.scriptPath)
     const same =
@@ -630,6 +634,12 @@ export interface PhoneImportOptions {
    * fill (automatic imports): only set when the series has none.
    */
   about?: 'replace' | 'fill'
+  /**
+   * You compared both texts and chose the phone's (Narration's "Use phone's
+   * version"): a script Studio replaced earlier no longer blocks it; its
+   * replacement marker is dropped (its backup folder stays).
+   */
+  overStudioReplacement?: boolean
 }
 
 /**
@@ -665,13 +675,18 @@ export async function importPhoneScripts(
     recordManagerTransfer({ seriesId,chapterId:chapter.id,stage:`script_${language}`,phase:'cloud',objectVersion:zip.etag })
     try {
       const scriptPath = path.join(getFullFolderPath(chapter.folderPath), scriptFileName(language))
-      const replacement = await fs.readFile(path.join(path.dirname(scriptPath), `.script-replacement${language === 'hi' ? '.hi' : ''}.json`), 'utf-8')
+      const markerPath = path.join(path.dirname(scriptPath), `.script-replacement${language === 'hi' ? '.hi' : ''}.json`)
+      const replacement = await fs.readFile(markerPath, 'utf-8')
         .then(text => JSON.parse(text)).catch((e: NodeJS.ErrnoException) => { if (e.code === 'ENOENT') return null; throw e })
+      let dropMarker = false
       if (replacement) {
-        const current = await fs.readFile(scriptPath, 'utf-8')
-        if (current.trim() !== phone.script.trim()) throw new Error(`Chapter ${chapter.number}: the phone still has a different script. Sync the replacement to Sleeper-Cell first.`)
-        // Preserve the exact replacement bytes: its audio and revision hashes use them.
-        continue
+        const current = await fs.readFile(scriptPath, 'utf-8').catch((e: NodeJS.ErrnoException) => { if (e.code === 'ENOENT') return null; throw e })
+        if (current !== null && current.trim() === phone.script.trim()) {
+          // Preserve the exact replacement bytes: its audio and revision hashes use them.
+          continue
+        }
+        if (!options.overStudioReplacement) throw new Error(`Chapter ${chapter.number}: the phone still has a different script. Sync the replacement to Sleeper-Cell first.`)
+        dropMarker = true
       }
       await fs.writeFile(scriptPath, phone.script + '\n', 'utf-8')
       if (language === 'en') {
@@ -698,6 +713,8 @@ export async function importPhoneScripts(
         update: data,
         create: { chapterId: chapter.id, language, ...data }
       })
+      // The phone's script is this chapter's now; a stale marker would also refuse its voiceover.
+      if (dropMarker) await fs.rm(markerPath, { force: true })
       imported++
       recordManagerTransfer({ seriesId,chapterId:chapter.id,stage:`script_${language}`,phase:'imported',objectVersion:zip.etag })
     } catch (error) {

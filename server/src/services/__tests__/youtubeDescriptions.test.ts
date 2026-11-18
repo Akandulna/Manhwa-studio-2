@@ -32,9 +32,9 @@ describe('description workflow', () => {
   const docs = await store.guidelines();await store.replace('description', Buffer.from('Write short factual English descriptions. Avoid invented timestamps.'), 'instructions.txt', docs.description.id)
   const updated = await store.prepareDescription('a', 'Test Hunter', { expectedRevision: s.titles.revision, reuse: true });expect(updated.descriptions.requests).toHaveLength(2);expect(updated.descriptions.requests[0].prompt).toBe(req.prompt)
  })
- it('prepares two distinct English-worded descriptions with a natural in Hindi mention', async () => {
+ it('prepares two distinct descriptions with a Hinglish hook and a natural in Hindi mention', async () => {
   const s = await selected();const req = s.descriptions.requests[0]
-  expect(req.outputVersion).toBe(2);expect(req.prompt).toContain('hinglishDescription');expect(req.prompt).toContain('Both descriptions are written in English');expect(req.prompt).toContain('in Hindi');expect(req.prompt).toContain(`${req.title} - Hindi`)
+  expect(req.outputVersion).toBe(2);expect(req.prompt).toContain('hinglishDescription');expect(req.prompt).toContain('hook in natural Hinglish written in Roman script');expect(req.prompt).toContain('in Hindi');expect(req.prompt).toContain(`${req.title} - Hindi`)
   const parsed = parseDescriptionPair(JSON.stringify(payload(s)),req,'a');expect(parsed.english).toBe(payload(s).description);expect(parsed.hinglish).toBe(payload(s).hinglishDescription)
   for (const value of [undefined,'No language mention here.',payload(s).description + ' in Hindi']) expect(() => validateHinglishDescription(value,payload(s).description)).toThrow()
  })

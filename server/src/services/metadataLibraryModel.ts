@@ -37,3 +37,28 @@ export interface MetadataLibrarySnapshot {
   sync: MetadataSyncReport
   series: MetadataSeriesStatus[]
 }
+
+/** POST /api/metadata/series/:id/reset-stale (metadataReset.ts). */
+export interface MetadataResetChapter {
+  chapterId: string
+  number: number
+  /** Studio pages whose saved metadata was moved aside. */
+  studioPages: string[]
+  /** R2 result objects deleted (all folders). */
+  r2Results: number
+  /** Job files republished because they had changed (phones pick these up). */
+  republished: boolean
+  /** Why the chapter was left alone, when it was. */
+  skipped?: string
+}
+
+export interface MetadataResetResult {
+  seriesId: string
+  title: string
+  resetAt: string
+  chapters: MetadataResetChapter[]
+  studioPages: number
+  r2Results: number
+  republished: number
+  phonesAsked: boolean
+}

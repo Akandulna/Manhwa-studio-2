@@ -1,0 +1,819 @@
+{
+  "schema": "manhwa-shorts-edit-plan/1",
+  "title": "A Noble Killed Him… Then He Woke Up as a Duke’s Son",
+  "series": "Reincarnated as the Grand Duke's Third Son",
+  "language": "en",
+  "duration_seconds": 40,
+  "fps": 30,
+  "total_frames": 1200,
+  "resolution": {
+    "width": 1080,
+    "height": 1920
+  },
+  "aspect_ratio": "9:16",
+  "purpose": "Curiosity-driven teaser for the full recap, with the duel outcome withheld.",
+  "source_scope": {
+    "available_chapters": "001–020",
+    "timeline_records_analyzed": 40,
+    "languages": [
+      "en",
+      "hi"
+    ],
+    "story_read_in": "en",
+    "note": "Complete locally available arc; no claims about later chapters."
+  },
+  "voiceover": {
+    "text": "A noble killed this mercenary. Now he's waking up as one. Fifteen years before his own death. Meet Lucian, the Grand Duke's overlooked third son. But inside? Jake remembers the future. He recreates an elixir from his old life and discovers this body hides monstrous talent. Even the legendary Sword Saint is shocked. Then his brother challenges him with a real blade. He thinks he's bullying the same weak boy. He's actually facing a battle-hardened mercenary captain who already knows what dying feels like. Still want that duel? Watch the full recap.",
+    "word_count": 92,
+    "average_words_per_minute": 138.0,
+    "status": "Script only; new recording required. Timings are planned, not speech-aligned.",
+    "direction": "Direct and urgent. Stress killed, fifteen years, Sword Saint, and real blade. Smirk on the final question.",
+    "recording_window_seconds": [
+      0.1,
+      39.3
+    ]
+  },
+  "layout": {
+    "foreground": "Use manual portrait framing per shot; default contain over a blurred duplicate background.",
+    "caption_safe_box_pixels": {
+      "left": 90,
+      "top": 250,
+      "right": 900,
+      "bottom": 1530
+    },
+    "caption_style": "Bold white with dark outline; highlight only one key phrase in gold. Maximum two lines.",
+    "note": "Retain original artwork and source marks. Avoid stretching; preview each tall crop at phone size."
+  },
+  "sound": {
+    "music": "Tense instrumental bed; build from the elixir to the duel.",
+    "voice_priority": "Keep music and effects below intelligible narration.",
+    "cues": [
+      {
+        "time_seconds": 0,
+        "cue": "Low impact"
+      },
+      {
+        "time_seconds": 5,
+        "cue": "Reverse whoosh"
+      },
+      {
+        "time_seconds": 15,
+        "cue": "Glass chime"
+      },
+      {
+        "time_seconds": 18,
+        "cue": "Energy swell"
+      },
+      {
+        "time_seconds": 24,
+        "cue": "Sword draw"
+      },
+      {
+        "time_seconds": 36.8,
+        "cue": "Music stop"
+      },
+      {
+        "time_seconds": 37,
+        "cue": "Quiet tension tail under CTA"
+      }
+    ]
+  },
+  "sections": [
+    {
+      "section": "Section 1",
+      "timelines": [
+        {
+          "id": "S01",
+          "timeline": "00:00.00 - 00:02.50",
+          "start_seconds": 0,
+          "end_seconds": 2.5,
+          "duration_seconds": 2.5,
+          "start_frame": 0,
+          "end_frame_exclusive": 75,
+          "selectedImages": [
+            "ch001_reincarnated_as_the_grand_duke_s_third_s_page_020_03_illustrated_shot.png"
+          ],
+          "narration": "A noble killed this mercenary.",
+          "on_screen_text": "KILLED BY A NOBLE",
+          "edit_note": "Impact hit; fast push toward the commander.",
+          "motion": {
+            "effect": "zoom-in",
+            "intensity": 0.06
+          },
+          "source": {
+            "chapter": 1,
+            "page": 20,
+            "crop_id": "crop-03",
+            "original_filename": "reincarnated_as_the_grand_duke_s_third_s_page_020_03_illustrated_shot.png",
+            "original_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 001/crops3/reincarnated_as_the_grand_duke_s_third_s_page_020_03_illustrated_shot.png",
+            "original_english_timeline_occurrences": [
+              {
+                "section": "Section 1",
+                "timeline": "05:00.80 - 05:12.14",
+                "scriptRefs": [
+                  "P0015"
+                ]
+              }
+            ],
+            "description": "A red-haired man in silver armor and a blue cape stands with his eyes closed and a sword at his waist.",
+            "story_context": "The commander stands calmly with his eyes closed as Jake attacks.",
+            "script_evidence": [
+              {
+                "id": "P0015",
+                "text": "Stunned, the commander chuckles and agrees that this is true leadership. Covering his face, he wishes Jake had been his liege instead of Crawford. Jake charges forward with teeth bared, swinging his sword in a bright arc, while the commander stands calmly with his eyes closed, silently asking Jake not to forgive him."
+              }
+            ]
+          }
+        },
+        {
+          "id": "S02",
+          "timeline": "00:02.50 - 00:05.00",
+          "start_seconds": 2.5,
+          "end_seconds": 5,
+          "duration_seconds": 2.5,
+          "start_frame": 75,
+          "end_frame_exclusive": 150,
+          "selectedImages": [
+            "ch002_reincarnated_as_the_grand_duke_s_third_s_page_005_01_illustrated_shot.png"
+          ],
+          "narration": "Now he's waking up as one.",
+          "on_screen_text": "REBORN AS A NOBLE",
+          "edit_note": "Hard cut from armored commander to the new face; frame the upper portrait in this tall crop.",
+          "motion": {
+            "effect": "zoom-out",
+            "intensity": 0.06
+          },
+          "source": {
+            "chapter": 2,
+            "page": 5,
+            "crop_id": "crop-01",
+            "original_filename": "reincarnated_as_the_grand_duke_s_third_s_page_005_01_illustrated_shot.png",
+            "original_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 002/crops3/reincarnated_as_the_grand_duke_s_third_s_page_005_01_illustrated_shot.png",
+            "original_english_timeline_occurrences": [
+              {
+                "section": "Section 1",
+                "timeline": "01:05.08 - 01:11.68",
+                "scriptRefs": [
+                  "P0005"
+                ]
+              }
+            ],
+            "description": "A blond, golden-eyed young man in a loose white shirt looks at his reflection in a tall mirror amid flowers and sparkles.",
+            "story_context": "Jake examines his new face in the mirror and notices its blond hair and golden eyes.",
+            "script_evidence": [
+              {
+                "id": "P0005",
+                "text": "Before a full-length mirror, Jake examines his reflection—blond hair, golden eyes, and a killer face. As the servant watches nearby, Jake notes that nobility radiates from him in waves. This body definitely belongs to a noble."
+              }
+            ]
+          }
+        },
+        {
+          "id": "S03",
+          "timeline": "00:05.00 - 00:08.00",
+          "start_seconds": 5,
+          "end_seconds": 8,
+          "duration_seconds": 3,
+          "start_frame": 150,
+          "end_frame_exclusive": 240,
+          "selectedImages": [
+            "ch002_reincarnated_as_the_grand_duke_s_third_s_page_007_01_illustrated_shot.png"
+          ],
+          "narration": "Fifteen years before his own death.",
+          "on_screen_text": "15 YEARS EARLIER",
+          "edit_note": "Reverse whoosh over the clock; keep the clock and Lucian visible.",
+          "motion": {
+            "effect": "pan-up",
+            "intensity": 0.06
+          },
+          "source": {
+            "chapter": 2,
+            "page": 7,
+            "crop_id": "crop-01",
+            "original_filename": "reincarnated_as_the_grand_duke_s_third_s_page_007_01_illustrated_shot.png",
+            "original_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 002/crops3/reincarnated_as_the_grand_duke_s_third_s_page_007_01_illustrated_shot.png",
+            "original_english_timeline_occurrences": [
+              {
+                "section": "Section 1",
+                "timeline": "01:40.01 - 01:44.79",
+                "scriptRefs": [
+                  "P0007"
+                ]
+              }
+            ],
+            "description": "A barefoot blond man stands over a glowing clock face surrounded by dark, swirling shapes.",
+            "story_context": "Jake realizes he has returned fifteen years into the past.",
+            "script_evidence": [
+              {
+                "id": "P0007",
+                "text": "That is fifteen years before the day he died, meaning he has returned to the past. Deciding there will be no end to it if he gets surprised at everything, Jake tells Hans he understands. Narrowing his eyes, he resolves to focus on what needs to be done and asks personal servant Hans another question."
+              }
+            ]
+          }
+        },
+        {
+          "id": "S04",
+          "timeline": "00:08.00 - 00:12.00",
+          "start_seconds": 8,
+          "end_seconds": 12,
+          "duration_seconds": 4,
+          "start_frame": 240,
+          "end_frame_exclusive": 360,
+          "selectedImages": [
+            "ch002_reincarnated_as_the_grand_duke_s_third_s_page_013_04_illustrated_shot.png"
+          ],
+          "narration": "Meet Lucian, the Grand Duke's overlooked third son.",
+          "on_screen_text": "THE OVERLOOKED THIRD SON",
+          "edit_note": "Hold on the golden eyes; confident slow push.",
+          "motion": {
+            "effect": "zoom-in",
+            "intensity": 0.06
+          },
+          "source": {
+            "chapter": 2,
+            "page": 13,
+            "crop_id": "crop-04",
+            "original_filename": "reincarnated_as_the_grand_duke_s_third_s_page_013_04_illustrated_shot.png",
+            "original_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 002/crops3/reincarnated_as_the_grand_duke_s_third_s_page_013_04_illustrated_shot.png",
+            "original_english_timeline_occurrences": [
+              {
+                "section": "Section 1",
+                "timeline": "03:28.75 - 03:34.43",
+                "scriptRefs": [
+                  "P0013"
+                ]
+              }
+            ],
+            "description": "A blond, golden-eyed man in a white shirt smiles faintly in bright light.",
+            "story_context": "On the sunlit balcony, Jake smiles faintly and vows to show how high he will climb.",
+            "script_evidence": [
+              {
+                "id": "P0013",
+                "text": "Leaving his scarred mercenary past behind, Jake throws open the tall glass doors and steps onto the sunlit balcony with arms spread wide. Smiling faintly, he vows to show them just how high he will climb and how he will live."
+              }
+            ]
+          }
+        },
+        {
+          "id": "S05",
+          "timeline": "00:12.00 - 00:15.00",
+          "start_seconds": 12,
+          "end_seconds": 15,
+          "duration_seconds": 3,
+          "start_frame": 360,
+          "end_frame_exclusive": 450,
+          "selectedImages": [
+            "ch002_reincarnated_as_the_grand_duke_s_third_s_page_013_01_illustrated_shot.png"
+          ],
+          "narration": "But inside? Jake remembers the future.",
+          "on_screen_text": "HE KNOWS THE FUTURE",
+          "edit_note": "Let the fractured old/new identities fill the frame.",
+          "motion": {
+            "effect": "zoom-out",
+            "intensity": 0.06
+          },
+          "source": {
+            "chapter": 2,
+            "page": 13,
+            "crop_id": "crop-01",
+            "original_filename": "reincarnated_as_the_grand_duke_s_third_s_page_013_01_illustrated_shot.png",
+            "original_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 002/crops3/reincarnated_as_the_grand_duke_s_third_s_page_013_01_illustrated_shot.png",
+            "original_english_timeline_occurrences": [
+              {
+                "section": "Section 1",
+                "timeline": "03:19.65 - 03:28.75",
+                "scriptRefs": [
+                  "P0013"
+                ]
+              }
+            ],
+            "description": "A fractured image combines a scarred dark-haired man in dark clothing with a blond, golden-eyed man in a white shirt amid flying shards.",
+            "story_context": "Jake leaves his scarred mercenary past behind as he embraces his new life.",
+            "script_evidence": [
+              {
+                "id": "P0013",
+                "text": "Leaving his scarred mercenary past behind, Jake throws open the tall glass doors and steps onto the sunlit balcony with arms spread wide. Smiling faintly, he vows to show them just how high he will climb and how he will live."
+              }
+            ]
+          }
+        },
+        {
+          "id": "S06",
+          "timeline": "00:15.00 - 00:18.00",
+          "start_seconds": 15,
+          "end_seconds": 18,
+          "duration_seconds": 3,
+          "start_frame": 450,
+          "end_frame_exclusive": 540,
+          "selectedImages": [
+            "ch004_reincarnated_as_the_grand_duke_s_third_s_page_016_02_object_closeup.png"
+          ],
+          "narration": "He recreates an elixir from his old life...",
+          "on_screen_text": "A LOST ELIXIR",
+          "edit_note": "Glass chime; frame the red vial, then accelerate the music pulse.",
+          "motion": {
+            "effect": "zoom-in",
+            "intensity": 0.06
+          },
+          "source": {
+            "chapter": 4,
+            "page": 16,
+            "crop_id": "crop-02",
+            "original_filename": "reincarnated_as_the_grand_duke_s_third_s_page_016_02_object_closeup.png",
+            "original_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 004/crops3/reincarnated_as_the_grand_duke_s_third_s_page_016_02_object_closeup.png",
+            "original_english_timeline_occurrences": [
+              {
+                "section": "Section 1",
+                "timeline": "03:16.69 - 03:25.84",
+                "scriptRefs": [
+                  "P0012"
+                ]
+              }
+            ],
+            "description": "A hand holds up a small gold-trimmed vial containing glowing red liquid.",
+            "story_context": "Jake holds up his mass-produced version of Nectar and considers it suitable for strengthening his weakened body.",
+            "script_evidence": [
+              {
+                "id": "P0012",
+                "text": "Holding up his small vial, Jake admits his mass-produced version falls far short of the original, yet nothing is better for raising up a body this broken. Pulling open his collar, he tells Lucian to count himself lucky."
+              }
+            ]
+          }
+        },
+        {
+          "id": "S07",
+          "timeline": "00:18.00 - 00:20.50",
+          "start_seconds": 18,
+          "end_seconds": 20.5,
+          "duration_seconds": 2.5,
+          "start_frame": 540,
+          "end_frame_exclusive": 615,
+          "selectedImages": [
+            "ch004_reincarnated_as_the_grand_duke_s_third_s_page_020_01_figure_shot_audited_continuous.png"
+          ],
+          "narration": "...and discovers this body hides monstrous talent.",
+          "on_screen_text": "HIDDEN GENIUS",
+          "edit_note": "Energy swell; show the glowing body and mana pathways.",
+          "motion": {
+            "effect": "pan-up",
+            "intensity": 0.06
+          },
+          "source": {
+            "chapter": 4,
+            "page": 20,
+            "crop_id": "crop-01",
+            "original_filename": "reincarnated_as_the_grand_duke_s_third_s_page_020_01_figure_shot_audited_continuous.png",
+            "original_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 004/crops3/reincarnated_as_the_grand_duke_s_third_s_page_020_01_figure_shot_audited_continuous.png",
+            "original_english_timeline_occurrences": [
+              {
+                "section": "Section 1",
+                "timeline": "04:01.28 - 04:06.16",
+                "scriptRefs": [
+                  "P0015"
+                ]
+              }
+            ],
+            "description": "A glowing blond figure floats with clenched fists as golden strands branch from a bright point in the chest throughout the body.",
+            "story_context": "Jake uses Nectar to forcibly widen the body's blocked paths.",
+            "script_evidence": [
+              {
+                "id": "P0015",
+                "text": "Jake uses Nectar to forcibly widen the body's blocked paths. Yet, as golden energy branches from his chest, he is stunned to feel no resistance or pain. The mana spreads unhindered as if finding its rightful place, even though a newborn usually has impurities blocking circulation."
+              }
+            ]
+          }
+        },
+        {
+          "id": "S08",
+          "timeline": "00:20.50 - 00:24.00",
+          "start_seconds": 20.5,
+          "end_seconds": 24,
+          "duration_seconds": 3.5,
+          "start_frame": 615,
+          "end_frame_exclusive": 720,
+          "selectedImages": [
+            "ch016_reincarnated_as_the_grand_duke_s_third_s_page_017_04_face_closeup_audited_continuous.png"
+          ],
+          "narration": "Even the legendary Sword Saint is shocked.",
+          "on_screen_text": "EVEN THE SWORD SAINT?!",
+          "edit_note": "Cut to Eisen reacting; brief music dip gives the reveal room.",
+          "motion": {
+            "effect": "zoom-in",
+            "intensity": 0.06
+          },
+          "source": {
+            "chapter": 16,
+            "page": 17,
+            "crop_id": "crop-04",
+            "original_filename": "reincarnated_as_the_grand_duke_s_third_s_page_017_04_face_closeup_audited_continuous.png",
+            "original_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 016/crops3/reincarnated_as_the_grand_duke_s_third_s_page_017_04_face_closeup_audited_continuous.png",
+            "original_english_timeline_occurrences": [
+              {
+                "section": "Section 1",
+                "timeline": "03:57.34 - 04:05.90",
+                "scriptRefs": [
+                  "P0014"
+                ]
+              }
+            ],
+            "description": "An older white-haired, bearded man stares wide-eyed in bright blue-white light.",
+            "story_context": "Eisen's eyes widen in shock as the mana surges upward.",
+            "script_evidence": [
+              {
+                "id": "P0014",
+                "text": "Glowing blue mana flows from Eisen's fingers into Lucian's palm and up his wrist. As the particles surge upward, Eisen's eyes widen in shock and he touches his mustache, bathed in sudden blue-white light."
+              }
+            ]
+          }
+        },
+        {
+          "id": "S09",
+          "timeline": "00:24.00 - 00:27.00",
+          "start_seconds": 24,
+          "end_seconds": 27,
+          "duration_seconds": 3,
+          "start_frame": 720,
+          "end_frame_exclusive": 810,
+          "selectedImages": [
+            "ch020_reincarnated_as_the_grand_duke_s_third_s_page_008_03_illustrated_shot.png"
+          ],
+          "narration": "Then his brother challenges him with a real blade.",
+          "on_screen_text": "A REAL BLADE",
+          "edit_note": "Metal draw sound on the cut; focus on the hilt and blade.",
+          "motion": {
+            "effect": "pan-up",
+            "intensity": 0.06
+          },
+          "source": {
+            "chapter": 20,
+            "page": 8,
+            "crop_id": "crop-03",
+            "original_filename": "reincarnated_as_the_grand_duke_s_third_s_page_008_03_illustrated_shot.png",
+            "original_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 020/crops3/reincarnated_as_the_grand_duke_s_third_s_page_008_03_illustrated_shot.png",
+            "original_english_timeline_occurrences": [
+              {
+                "section": "Section 1",
+                "timeline": "02:07.35 - 02:15.71",
+                "scriptRefs": [
+                  "P0005"
+                ]
+              }
+            ],
+            "description": "A person in green holds a sword hilt and dark scabbard beneath a speech bubble.",
+            "story_context": "The spar begins as the opponents draw their swords on Eisen's signal.",
+            "script_evidence": [
+              {
+                "id": "P0005",
+                "text": "Out in the courtyard before a grand white building, they face each other across a circular ring with Eisen between them. Eisen reminds them this is a spar to verify their training, telling Lucian to learn and Joshua to take responsibility as the senior so neither shames House Valdec. On Eisen's signal, they draw their swords, and Joshua seethes at Lucian acting like an older brother just for being born slightly earlier."
+              }
+            ]
+          }
+        },
+        {
+          "id": "S10",
+          "timeline": "00:27.00 - 00:30.00",
+          "start_seconds": 27,
+          "end_seconds": 30,
+          "duration_seconds": 3,
+          "start_frame": 810,
+          "end_frame_exclusive": 900,
+          "selectedImages": [
+            "ch020_reincarnated_as_the_grand_duke_s_third_s_page_011_03_illustrated_shot.png"
+          ],
+          "narration": "He thinks he's bullying the same weak boy.",
+          "on_screen_text": "HE PICKED THE WRONG BROTHER",
+          "edit_note": "Keep Joshua's smug face visible; build tension.",
+          "motion": {
+            "effect": "zoom-in",
+            "intensity": 0.06
+          },
+          "source": {
+            "chapter": 20,
+            "page": 11,
+            "crop_id": "crop-03",
+            "original_filename": "reincarnated_as_the_grand_duke_s_third_s_page_011_03_illustrated_shot.png",
+            "original_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 020/crops3/reincarnated_as_the_grand_duke_s_third_s_page_011_03_illustrated_shot.png",
+            "original_english_timeline_occurrences": [
+              {
+                "section": "Section 1",
+                "timeline": "02:55.99 - 03:05.89",
+                "scriptRefs": [
+                  "P0008"
+                ]
+              }
+            ],
+            "description": "An orange-haired young man in a green jacket and pink necktie smiles sideways with a sword raised beside him in a courtyard.",
+            "story_context": "Joshua mocks Lucian's caution and offers him a wooden sword if he is scared.",
+            "script_evidence": [
+              {
+                "id": "P0008",
+                "text": "Viewing Joshua as shrewd yet still an inexperienced child, Lucian intends to hold back within reason. Joshua smirks, mocking Lucian's cautious glances and offering a wooden sword if he is scared, noting real-blade accidents only happen when levels are matched. Grinning, Lucian agrees wood would be best if Joshua wants to avoid getting hurt, retracting his restraint. Deciding a disobedient brother needs a beating, he calls him youngest, making Joshua's eyes widen in fury."
+              }
+            ]
+          }
+        },
+        {
+          "id": "S11",
+          "timeline": "00:30.00 - 00:33.00",
+          "start_seconds": 30,
+          "end_seconds": 33,
+          "duration_seconds": 3,
+          "start_frame": 900,
+          "end_frame_exclusive": 990,
+          "selectedImages": [
+            "ch020_reincarnated_as_the_grand_duke_s_third_s_page_010_02_illustrated_shot.png"
+          ],
+          "narration": "He's actually facing a battle-hardened mercenary captain...",
+          "on_screen_text": "A MERCENARY INSIDE",
+          "edit_note": "Low bass hit; old-life Jake portrait confirms the identity reversal.",
+          "motion": {
+            "effect": "zoom-in",
+            "intensity": 0.06
+          },
+          "source": {
+            "chapter": 20,
+            "page": 10,
+            "crop_id": "crop-02",
+            "original_filename": "reincarnated_as_the_grand_duke_s_third_s_page_010_02_illustrated_shot.png",
+            "original_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 020/crops3/reincarnated_as_the_grand_duke_s_third_s_page_010_02_illustrated_shot.png",
+            "original_english_timeline_occurrences": [
+              {
+                "section": "Section 1",
+                "timeline": "02:38.15 - 02:49.27",
+                "scriptRefs": [
+                  "P0007"
+                ]
+              }
+            ],
+            "description": "A dark-haired, red-eyed man in a dark cloak smiles beneath a red shadow, with a pendant hanging at his chest.",
+            "story_context": "Lucian reflects that in his past life he would have used despicable tricks to win.",
+            "script_evidence": [
+              {
+                "id": "P0007",
+                "text": "Appreciating the cool, heavy longsword, Lucian reflects that two months have passed. In his past life he would have used despicable tricks to win, but today he fights as the third young master and knows Eisen, watching with crossed arms, would recognize his former sword forms."
+              }
+            ]
+          }
+        },
+        {
+          "id": "S12",
+          "timeline": "00:33.00 - 00:35.50",
+          "start_seconds": 33,
+          "end_seconds": 35.5,
+          "duration_seconds": 2.5,
+          "start_frame": 990,
+          "end_frame_exclusive": 1065,
+          "selectedImages": [
+            "ch020_reincarnated_as_the_grand_duke_s_third_s_page_013_02_framed_swordsman.png"
+          ],
+          "narration": "...who already knows what dying feels like.",
+          "on_screen_text": "ONE DEATH WAS ENOUGH",
+          "edit_note": "Match cut back to Lucian's ready stance; accelerate the push.",
+          "motion": {
+            "effect": "zoom-out",
+            "intensity": 0.06
+          },
+          "source": {
+            "chapter": 20,
+            "page": 13,
+            "crop_id": "crop-02",
+            "original_filename": "reincarnated_as_the_grand_duke_s_third_s_page_013_02_framed_swordsman.png",
+            "original_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 020/crops3/reincarnated_as_the_grand_duke_s_third_s_page_013_02_framed_swordsman.png",
+            "original_english_timeline_occurrences": [
+              {
+                "section": "Section 1",
+                "timeline": "03:22.76 - 03:32.92",
+                "scriptRefs": [
+                  "P0009"
+                ]
+              }
+            ],
+            "description": "A blond swordsman in dark red clothing crouches with both hands gripping a sword in a courtyard.",
+            "story_context": "Lucian takes a ready stance as Joshua charges.",
+            "script_evidence": [
+              {
+                "id": "P0009",
+                "text": "Joshua charges forward, shouting that Lucian will regret those words. Taking a ready stance, Lucian knows fighting under restrictions will not be easy: Joshua learned from the Sword Saint, while Lucian spent most of his mana sparring with Eisen earlier. Still, Joshua's lack of experience shows in how easily he fell for a light provocation."
+              }
+            ]
+          }
+        },
+        {
+          "id": "S13",
+          "timeline": "00:35.50 - 00:37.00",
+          "start_seconds": 35.5,
+          "end_seconds": 37,
+          "duration_seconds": 1.5,
+          "start_frame": 1065,
+          "end_frame_exclusive": 1110,
+          "selectedImages": [
+            "ch020_reincarnated_as_the_grand_duke_s_third_s_page_014_05_sword_clash_audited_continuous.png"
+          ],
+          "narration": "Still want that duel?",
+          "on_screen_text": "STILL WANT THAT DUEL?",
+          "edit_note": "Show the raised blade before impact; stop the music at 36.8 seconds.",
+          "motion": {
+            "effect": "zoom-in",
+            "intensity": 0.06
+          },
+          "source": {
+            "chapter": 20,
+            "page": 14,
+            "crop_id": "crop-05",
+            "original_filename": "reincarnated_as_the_grand_duke_s_third_s_page_014_05_sword_clash_audited_continuous.png",
+            "original_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 020/crops3/reincarnated_as_the_grand_duke_s_third_s_page_014_05_sword_clash_audited_continuous.png",
+            "original_english_timeline_occurrences": [
+              {
+                "section": "Section 1",
+                "timeline": "03:47.98 - 03:56.50",
+                "scriptRefs": [
+                  "P0010"
+                ]
+              }
+            ],
+            "description": "A blond figure holds a sword overhead with both hands while a wide-eyed figure in green looks up.",
+            "story_context": "Lucian raises his sword with both hands and plunges toward Joshua, who looks up in shock.",
+            "script_evidence": [
+              {
+                "id": "P0010",
+                "text": "Blue mana flames flare around Lucian's back boot as he applies Eisen's lessons on concentrating power and mana control, launching himself through the air toward Joshua. Determined to seize Joshua's split-second opening, Lucian raises his sword overhead with both hands and plunges down as Joshua looks up in shock."
+              }
+            ]
+          }
+        },
+        {
+          "id": "S14",
+          "timeline": "00:37.00 - 00:40.00",
+          "start_seconds": 37,
+          "end_seconds": 40,
+          "duration_seconds": 3,
+          "start_frame": 1110,
+          "end_frame_exclusive": 1200,
+          "selectedImages": [
+            "ch020_reincarnated_as_the_grand_duke_s_third_s_page_015_04_framed_action_audited_continuous.png"
+          ],
+          "narration": "Watch the full recap.",
+          "on_screen_text": "WATCH THE FULL RECAP",
+          "edit_note": "Hard cut to Lucian's fierce grin; freeze before contact. No impact or winner.",
+          "motion": {
+            "effect": "zoom-in",
+            "intensity": 0.06
+          },
+          "source": {
+            "chapter": 20,
+            "page": 15,
+            "crop_id": "crop-04",
+            "original_filename": "reincarnated_as_the_grand_duke_s_third_s_page_015_04_framed_action_audited_continuous.png",
+            "original_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 020/crops3/reincarnated_as_the_grand_duke_s_third_s_page_015_04_framed_action_audited_continuous.png",
+            "original_english_timeline_occurrences": [
+              {
+                "section": "Section 1",
+                "timeline": "04:01.66 - 04:08.78",
+                "scriptRefs": [
+                  "P0011"
+                ]
+              }
+            ],
+            "description": "A blond, golden-eyed young man in red grins fiercely as motion lines surround him.",
+            "story_context": "Lucian lunges in with a fierce grin and warns Joshua to block.",
+            "script_evidence": [
+              {
+                "id": "P0011",
+                "text": "Eisen watches intently, while two men in the pillared hall gape in alarm. Lunging in with a fierce grin, Lucian tells Joshua to grit his teeth and block or bite his tongue off. Someone shouts for the youngest as a massive white strike arcs down, erupting in a blinding burst of impact that knocks Joshua back."
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "assets": [
+    {
+      "filename": "ch001_reincarnated_as_the_grand_duke_s_third_s_page_020_03_illustrated_shot.png",
+      "path": "crops3/ch001_reincarnated_as_the_grand_duke_s_third_s_page_020_03_illustrated_shot.png",
+      "width": 800,
+      "height": 1625,
+      "sha256": "6fac16ab3ecce3ecfd2f0b0a842f3369433f3e1e6ef08b7176cc3051e62b8c23",
+      "source_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 001/crops3/reincarnated_as_the_grand_duke_s_third_s_page_020_03_illustrated_shot.png"
+    },
+    {
+      "filename": "ch002_reincarnated_as_the_grand_duke_s_third_s_page_005_01_illustrated_shot.png",
+      "path": "crops3/ch002_reincarnated_as_the_grand_duke_s_third_s_page_005_01_illustrated_shot.png",
+      "width": 800,
+      "height": 3650,
+      "sha256": "1f84e937de7198a3980557ab505a8f2a49cc6d3c56fabc4a49fa15a851e8ae69",
+      "source_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 002/crops3/reincarnated_as_the_grand_duke_s_third_s_page_005_01_illustrated_shot.png"
+    },
+    {
+      "filename": "ch002_reincarnated_as_the_grand_duke_s_third_s_page_007_01_illustrated_shot.png",
+      "path": "crops3/ch002_reincarnated_as_the_grand_duke_s_third_s_page_007_01_illustrated_shot.png",
+      "width": 638,
+      "height": 1561,
+      "sha256": "ad2bc3b81a5cf0debdeb979fe0ff432865172a6300ccbf27e12d59d2c8d1ad79",
+      "source_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 002/crops3/reincarnated_as_the_grand_duke_s_third_s_page_007_01_illustrated_shot.png"
+    },
+    {
+      "filename": "ch002_reincarnated_as_the_grand_duke_s_third_s_page_013_04_illustrated_shot.png",
+      "path": "crops3/ch002_reincarnated_as_the_grand_duke_s_third_s_page_013_04_illustrated_shot.png",
+      "width": 800,
+      "height": 1629,
+      "sha256": "19a46e38e321374a7608cb7ad494900a34a8a03c92027d964c9ec36dd10da9b3",
+      "source_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 002/crops3/reincarnated_as_the_grand_duke_s_third_s_page_013_04_illustrated_shot.png"
+    },
+    {
+      "filename": "ch002_reincarnated_as_the_grand_duke_s_third_s_page_013_01_illustrated_shot.png",
+      "path": "crops3/ch002_reincarnated_as_the_grand_duke_s_third_s_page_013_01_illustrated_shot.png",
+      "width": 800,
+      "height": 1840,
+      "sha256": "ec9304412a8fa4c1d5d34ebf62067435531c3bac47e2dda57b17c32110d50451",
+      "source_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 002/crops3/reincarnated_as_the_grand_duke_s_third_s_page_013_01_illustrated_shot.png"
+    },
+    {
+      "filename": "ch004_reincarnated_as_the_grand_duke_s_third_s_page_016_02_object_closeup.png",
+      "path": "crops3/ch004_reincarnated_as_the_grand_duke_s_third_s_page_016_02_object_closeup.png",
+      "width": 673,
+      "height": 1067,
+      "sha256": "218b05bf6d8f448819537c40f0a0cc1df0ddca0cf8c37b8470b275248f8ba475",
+      "source_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 004/crops3/reincarnated_as_the_grand_duke_s_third_s_page_016_02_object_closeup.png"
+    },
+    {
+      "filename": "ch004_reincarnated_as_the_grand_duke_s_third_s_page_020_01_figure_shot_audited_continuous.png",
+      "path": "crops3/ch004_reincarnated_as_the_grand_duke_s_third_s_page_020_01_figure_shot_audited_continuous.png",
+      "width": 660,
+      "height": 2160,
+      "sha256": "c7e551055b855176edf560ec974d60afcf94323fe1a7ce6a761b851582ef55ec",
+      "source_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 004/crops3/reincarnated_as_the_grand_duke_s_third_s_page_020_01_figure_shot_audited_continuous.png"
+    },
+    {
+      "filename": "ch016_reincarnated_as_the_grand_duke_s_third_s_page_017_04_face_closeup_audited_continuous.png",
+      "path": "crops3/ch016_reincarnated_as_the_grand_duke_s_third_s_page_017_04_face_closeup_audited_continuous.png",
+      "width": 800,
+      "height": 1744,
+      "sha256": "3db3f15fb351606dcad30d940bb682e3287da603f627b98ccf51d83b3adcec40",
+      "source_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 016/crops3/reincarnated_as_the_grand_duke_s_third_s_page_017_04_face_closeup_audited_continuous.png"
+    },
+    {
+      "filename": "ch020_reincarnated_as_the_grand_duke_s_third_s_page_008_03_illustrated_shot.png",
+      "path": "crops3/ch020_reincarnated_as_the_grand_duke_s_third_s_page_008_03_illustrated_shot.png",
+      "width": 700,
+      "height": 814,
+      "sha256": "67e194e0d97509c06c53b24e8a72281e5202eeea97ec24d56b3b886991187d8d",
+      "source_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 020/crops3/reincarnated_as_the_grand_duke_s_third_s_page_008_03_illustrated_shot.png"
+    },
+    {
+      "filename": "ch020_reincarnated_as_the_grand_duke_s_third_s_page_011_03_illustrated_shot.png",
+      "path": "crops3/ch020_reincarnated_as_the_grand_duke_s_third_s_page_011_03_illustrated_shot.png",
+      "width": 700,
+      "height": 851,
+      "sha256": "8e99794236a41b31a34090cde1e2d434d7817ee72e69d5a911768e4bf71b9f87",
+      "source_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 020/crops3/reincarnated_as_the_grand_duke_s_third_s_page_011_03_illustrated_shot.png"
+    },
+    {
+      "filename": "ch020_reincarnated_as_the_grand_duke_s_third_s_page_010_02_illustrated_shot.png",
+      "path": "crops3/ch020_reincarnated_as_the_grand_duke_s_third_s_page_010_02_illustrated_shot.png",
+      "width": 700,
+      "height": 1642,
+      "sha256": "f92c6eb47b49bd8b2ac0f981dcd54efb22fc216717786c27159e31273754f4cd",
+      "source_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 020/crops3/reincarnated_as_the_grand_duke_s_third_s_page_010_02_illustrated_shot.png"
+    },
+    {
+      "filename": "ch020_reincarnated_as_the_grand_duke_s_third_s_page_013_02_framed_swordsman.png",
+      "path": "crops3/ch020_reincarnated_as_the_grand_duke_s_third_s_page_013_02_framed_swordsman.png",
+      "width": 700,
+      "height": 1307,
+      "sha256": "b46e3c7ed89e248ce5618a421aedce9e2ef32f57e50e5e1985d672374df4b6e6",
+      "source_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 020/crops3/reincarnated_as_the_grand_duke_s_third_s_page_013_02_framed_swordsman.png"
+    },
+    {
+      "filename": "ch020_reincarnated_as_the_grand_duke_s_third_s_page_014_05_sword_clash_audited_continuous.png",
+      "path": "crops3/ch020_reincarnated_as_the_grand_duke_s_third_s_page_014_05_sword_clash_audited_continuous.png",
+      "width": 700,
+      "height": 1969,
+      "sha256": "fd840acc8bab7725d7e19d0978422c872cd940da6f143b8b65c906aba63d3897",
+      "source_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 020/crops3/reincarnated_as_the_grand_duke_s_third_s_page_014_05_sword_clash_audited_continuous.png"
+    },
+    {
+      "filename": "ch020_reincarnated_as_the_grand_duke_s_third_s_page_015_04_framed_action_audited_continuous.png",
+      "path": "crops3/ch020_reincarnated_as_the_grand_duke_s_third_s_page_015_04_framed_action_audited_continuous.png",
+      "width": 700,
+      "height": 1402,
+      "sha256": "5b19219bc3408f1c0eb1d440c953496e459e98ab202c3ec05b943aecd255bfa3",
+      "source_path": "server/downloads/Reincarnated as the Grand Duke's Third Son/Chapter 020/crops3/reincarnated_as_the_grand_duke_s_third_s_page_015_04_framed_action_audited_continuous.png"
+    }
+  ],
+  "integration": {
+    "editor2_file": "grand-duke-40s.editor2.json",
+    "requirements": [
+      "Separate teaser workspace/chapter using the bundled crops3 files.",
+      "One new English voice section; record and fit the supplied narration to the 40-second edit.",
+      "The existing Editor 2 parser reads only section/timeline/image fields; captions, motion, sound, and vertical framing in this plan require separate application."
+    ],
+    "important": "Do not paste into a full-recap chapter expecting a 40-second result. Studio uses that chapter's audio duration. This is an edit plan, not a rendered video or an automatic Resolve project."
+  },
+  "publishing": {
+    "suggested_title": "A Noble Killed Him… Then He Woke Up as a Duke’s Son",
+    "cta": "Watch the full recap.",
+    "setup": "Attach the matching full recap as the Short's related video when publishing.",
+    "spoiler_boundary": "End before the Chapter 020 impact and its outcome."
+  }
+}

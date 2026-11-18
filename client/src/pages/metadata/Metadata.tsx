@@ -1,15 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { AlertTriangle, ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, Clock, FileJson, Loader2, RefreshCw } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, Clock, Eraser, FileJson, Loader2, RefreshCw } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useMetadataLibrary } from '@/hooks/useMetadataLibrary'
 import { useSeriesOrder } from '@/hooks/useSeriesOrder'
 import { clipperChapterParts } from '@/lib/clipperParts'
-import { clipper3Api, type MetadataChapterStatus } from '@/lib/api'
+import { clipper3Api, metadataApi, type MetadataChapterStatus, type MetadataResetResult } from '@/lib/api'
 
 function counts(chapters: MetadataChapterStatus[]) {
   return { complete: chapters.filter(c => c.state === 'complete').length,
@@ -24,8 +24,8 @@ function Status({ chapter }: { chapter: MetadataChapterStatus }) {
   return <Badge variant="outline" className="gap-1 text-muted-foreground"><Clock className="h-3 w-3" />Pending</Badge>
 }
 
-function Header({ data, title = 'Metadata', back }: {
-  data: ReturnType<typeof useMetadataLibrary>; title?: string; back?: string
+function Header({ data, title = 'Metadata', back, actions }: {
+  data: ReturnType<typeof useMetadataLibrary>; title?: string; back?: string; actions?: ReactNode
 }) {
   return <>
     {back && <Button asChild variant="ghost" size="sm" className="mb-3"><Link to={back}><ArrowLeft className="h-4 w-4 mr-2" />Back</Link></Button>}
@@ -38,9 +38,12 @@ function Header({ data, title = 'Metadata', back }: {
           {data.snapshot.sync.checkedAt && ` Last checked ${new Date(data.snapshot.sync.checkedAt).toLocaleTimeString()}.`}
         </p>}
       </div>
-      <Button variant="outline" onClick={() => { void data.sync() }} disabled={data.fetching || data.snapshot?.configured === false}>
-        <RefreshCw className={`h-4 w-4 mr-2 ${data.fetching ? 'animate-spin' : ''}`} />Fetch metadata
-      </Button>
+      <div className="flex flex-wrap gap-2">
+        {actions}
+        <Button variant="outline" onClick={() => { void data.sync() }} disabled={data.fetching || data.snapshot?.configured === false}>
+          <RefreshCw className={`h-4 w-4 mr-2 ${data.fetching ? 'animate-spin' : ''}`} />Fetch metadata
+        </Button>
+      </div>
     </div>
     {data.error && <div role="alert" className="border border-destructive/30 bg-destructive/10 text-destructive rounded-md p-3 mb-4">{data.error}</div>}
     {data.snapshot && !data.snapshot.configured && <p className="rounded-md border p-3 mb-4 text-sm text-muted-foreground">
@@ -99,6 +102,61 @@ export function MetadataLibrary() {
   </div>
 }
 
+/** Series-wide: stale metadata out of Studio and R2, current jobs back out to the phones. */
+function ResetStaleMetadata({ seriesId, title, chapters, configured, onDone }: {
+  seriesId: string; title: string; chapters: MetadataChapterStatus[]; configured: boolean; onDone: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [result, setResult] = useState<MetadataResetResult | null>(null)
+  const stale = chapters.map(c => ({ number: c.number, pages: c.pages.filter(p => p.state === 'invalid').length })).filter(c => c.pages)
+  async function reset() {
+    setBusy(true); setError(null)
+    try { setResult(await metadataApi.resetStale(seriesId)); onDone() }
+    catch (e) { setError(e instanceof Error ? e.message : 'Could not reset stale metadata') }
+    finally { setBusy(false) }
+  }
+  return <>
+    <Button variant="outline" onClick={() => { setResult(null); setError(null); setOpen(true) }} disabled={!configured}
+      title={configured ? undefined : 'Configure Cloudflare R2 first'}>
+      <Eraser className="h-4 w-4 mr-2" />Reset stale metadata
+    </Button>
+    <Dialog open={open} onOpenChange={next => { if (!busy) setOpen(next) }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Reset stale metadata · {title}</DialogTitle>
+          <DialogDescription>Metadata made for an older cut or English script, in Studio, R2 and the Sleeper Cells.</DialogDescription>
+        </DialogHeader>
+        {!result ? <div className="space-y-3 text-sm">
+          {stale.length
+            ? <p>Stale in Studio: {stale.reduce((n, c) => n + c.pages, 0)} pages in chapters {stale.map(c => c.number).join(', ')}.</p>
+            : <p>No stale pages saved in Studio. R2 and the phones are still checked.</p>}
+          <ul className="list-disc pl-5 space-y-1 text-muted-foreground">
+            <li>R2: old Metadata results for this series are deleted.</li>
+            <li>Studio: stale page files move to each chapter's <code>.metadata-resets/</code> folder (not deleted).</li>
+            <li>Phones: current jobs are republished and phones asked to sync; their old results stop counting as done. The cut is unchanged, so phones reuse their crop descriptions and only redo the script links.</li>
+            <li>Pages whose metadata is still current are not touched.</li>
+          </ul>
+          {error && <p role="alert" className="text-destructive">{error}</p>}
+        </div> : <div className="space-y-2 text-sm" role="status">
+          <p>Moved aside in Studio: {result.studioPages} pages · deleted from R2: {result.r2Results} results · republished: {result.republished} chapters.</p>
+          <p className="text-muted-foreground">{result.phonesAsked ? 'Phones were asked to sync.' : 'Phones could not be asked now; they pick up the new jobs on their next sync.'}</p>
+          {result.chapters.filter(c => c.skipped).map(c => <p key={c.chapterId} className="text-amber-600">Chapter {c.number} left alone: {c.skipped}</p>)}
+        </div>}
+        <DialogFooter>
+          {!result ? <>
+            <Button variant="ghost" onClick={() => setOpen(false)} disabled={busy}>Cancel</Button>
+            <Button variant="destructive" onClick={() => { void reset() }} disabled={busy}>
+              {busy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Eraser className="h-4 w-4 mr-2" />}Reset stale metadata
+            </Button>
+          </> : <Button onClick={() => setOpen(false)}>Close</Button>}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  </>
+}
+
 export function MetadataSeries() {
   const { id } = useParams()
   const [search] = useSearchParams()
@@ -109,7 +167,9 @@ export function MetadataSeries() {
   const selected = selection === null || selection === 'all' ? null : Number(selection)
   const shown = selected === null ? parts : parts.filter(p => p.number === selected)
   return <div className="p-4 md:p-6">
-    <Header data={data} title={series ? `${series.title} · Metadata` : 'Metadata'} back="/metadata" />
+    <Header data={data} title={series ? `${series.title} · Metadata` : 'Metadata'} back="/metadata"
+      actions={series && <ResetStaleMetadata seriesId={series.id} title={series.title} chapters={series.chapters}
+        configured={data.snapshot?.configured !== false} onDone={() => { void data.reload() }} />} />
     {!data.snapshot && !data.error && <Loading />}
     {data.snapshot && !series && <p>This series has no downloaded chapters available for Metadata.</p>}
     {series && <>

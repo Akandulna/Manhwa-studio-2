@@ -104,6 +104,8 @@ export function createYouTubeRouter(options: { seriesExists: (id: string) => Pro
   }))
   router.post('/series/:seriesId/automation/jobs/:jobId/check',handle(async(req,res)=>res.json(await automation.check(req.params.seriesId,req.params.jobId))))
 
+  router.post('/series/:seriesId/automation/jobs/:jobId/cancel',handle(async(req,res)=>res.json(await automation.cancel(req.params.seriesId,req.params.jobId))))
+  router.post('/series/:seriesId/automation/jobs/:jobId/retry',handle(async(req,res)=>res.json(await automation.retry(req.params.seriesId,req.params.jobId,req.body??{}))))
   router.post('/series/:seriesId/automation/jobs/:jobId/retry-image',handle(async(req,res)=>res.json(await automation.retryImageTransfer(req.params.seriesId,req.params.jobId))))
 
   const chapterFor = async (seriesId: string, chapterId: string) => {

@@ -8,10 +8,12 @@ import type { CodexAccount, CodexModel } from './codexCli.js'
 import type { CodexRateLimits } from './codexSession.js'
 import type { CodexAccountView } from './codexAccounts.js'
 import type { CompatibilityReport } from './compatibility.js'
+import type { ClaudeAccount, ClaudeModel, ClaudeRateLimit, ClaudeUsage } from './claudeCli.js'
 
-/** Which local CLI runs AntiGravity jobs: Google Antigravity (agy) or ChatGPT through Codex. */
-export type AiEngine = 'antigravity' | 'codex'
-export const ENGINE_LABELS: Record<AiEngine, string> = { antigravity: 'Antigravity', codex: 'ChatGPT (Codex)' }
+/** Which local CLI runs AntiGravity jobs: Google Antigravity (agy), ChatGPT through Codex, or Claude through Claude Code. */
+export type AiEngine = 'antigravity' | 'codex' | 'claude'
+export const AI_ENGINES: readonly AiEngine[] = ['antigravity', 'codex', 'claude']
+export const ENGINE_LABELS: Record<AiEngine, string> = { antigravity: 'Antigravity', codex: 'ChatGPT (Codex)', claude: 'Claude (Claude Code)' }
 
 export interface AntigravitySettings {
   /** The engine new runs use. Each run pins the engine it started with. */
@@ -58,8 +60,8 @@ export function sanitizeSettings(input: unknown, current: AntigravitySettings): 
   const body = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>
   const next = { ...current }
   if ('engine' in body) {
-    if (body.engine !== 'antigravity' && body.engine !== 'codex') throw new Error('Unknown engine.')
-    next.engine = body.engine
+    if (!AI_ENGINES.includes(body.engine as AiEngine)) throw new Error('Unknown engine.')
+    next.engine = body.engine as AiEngine
   }
   if ('executablePath' in body) {
     const p = body.executablePath
@@ -172,5 +174,70 @@ export function codexProofStatus(report: CompatibilityReport | null, installatio
   if (!report.ok) return { valid: false, note: 'The last Codex compatibility test failed.' }
   if (report.cliVersion !== installation.version) return { valid: false, note: `codex changed from ${report.cliVersion ?? '?'} to ${installation.version ?? '?'} (the ChatGPT app updates it); run the test again.` }
   if (!settings.model || report.model !== settings.model) return { valid: false, note: 'The selected Codex model differs from the tested one; run the test again.' }
+  return { valid: true, note: null }
+}
+
+
+// ─── Claude (Claude Code) engine ───
+
+export interface ClaudeSettings {
+  /** Absolute path to claude when auto-detection (~/.local/bin, PATH, Homebrew) fails. */
+  executablePath: string | null
+  model: string | null
+  modelLabel: string | null
+  effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null
+}
+
+export const DEFAULT_CLAUDE_SETTINGS: ClaudeSettings = { executablePath: null, model: null, modelLabel: null, effort: null }
+
+export interface ClaudeConnectionView {
+  installation: AgyInstallation
+  account: ClaudeAccount | null
+  settings: ClaudeSettings
+  report: CompatibilityReport | null
+  proofValid: boolean
+  proofNote: string | null
+  checkRunning: boolean
+  models: ClaudeModel[]
+  /** Window status as Claude Code last reported it during a Studio turn (allowed / limit reached). */
+  rateLimits: ClaudeRateLimit[]
+  /** Percentages from Claude Code's /usage (cached 2 min; null when it could not be read). */
+  usage: ClaudeUsage | null
+  usageError: string | null
+}
+
+export function sanitizeClaudeSettings(input: unknown, current: ClaudeSettings): ClaudeSettings {
+  const body = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>
+  const next = { ...current }
+  if ('executablePath' in body) {
+    const p = body.executablePath
+    next.executablePath = typeof p === 'string' && p.trim() ? p.trim() : null
+    if (next.executablePath && (!next.executablePath.startsWith('/') || next.executablePath.length > 500)) throw new Error('The claude path must be an absolute path.')
+  }
+  if ('model' in body) {
+    const m = body.model
+    if (m !== null && (typeof m !== 'string' || !/^[\w.:-]{1,128}$/.test(m))) throw new Error('Choose a model from the list.')
+    next.model = (m as string | null) ?? null
+    next.modelLabel = typeof body.modelLabel === 'string' ? body.modelLabel.slice(0, 120) : null
+  }
+  if ('effort' in body) {
+    if (body.effort !== null && !EFFORTS.has(String(body.effort))) throw new Error('Unknown reasoning level.')
+    next.effort = (body.effort as ClaudeSettings['effort']) ?? null
+  }
+  return next
+}
+
+/** "2.1.178" → "2.1": Claude Code ships patch releases almost daily; a new minor version needs a new test. */
+export const minorVersion = (version: string | null | undefined) => (version ? /^(\d+\.\d+)/.exec(version)?.[1] ?? version : null)
+
+export function claudeProofStatus(report: CompatibilityReport | null, installation: AgyInstallation, settings: ClaudeSettings, account: ClaudeAccount | null): { valid: boolean; note: string | null } {
+  if (account && !account.signedIn) return { valid: false, note: 'Sign in to Claude Code with your Claude account (Pro or Max).' }
+  if (!report) return { valid: false, note: 'Run the Claude compatibility test once before processing.' }
+  if (!report.ok) return { valid: false, note: 'The last Claude compatibility test failed.' }
+  if (minorVersion(report.cliVersion) !== minorVersion(installation.version)) return { valid: false, note: `Claude Code changed from ${report.cliVersion ?? '?'} to ${installation.version ?? '?'}; run the test again.` }
+  if (!settings.model || report.model !== settings.model) return { valid: false, note: 'The selected Claude model differs from the tested one; run the test again.' }
+  if (report.account && account?.email && report.account.toLowerCase() !== account.email.toLowerCase()) {
+    return { valid: false, note: `Claude Code is now signed in as ${account.email} (tested with ${report.account}); run the test again.` }
+  }
   return { valid: true, note: null }
 }

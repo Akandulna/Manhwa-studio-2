@@ -17,10 +17,12 @@ function descriptionRequest(seriesId: string, action: string, body: unknown, met
 }
 
 export const youtubeApi = {
-  automationPhones: () => request<{id:string;name:string;ready:boolean;reason:string;thumbnailPreparation?:boolean;thumbnailGeneration?:boolean}[]>('/automation/phones'),
+  automationPhones: () => request<{id:string;name:string;ready:boolean;reason:string;thumbnailPreparation?:boolean;thumbnailGeneration?:boolean;aiStudioText?:boolean}[]>('/automation/phones'),
   automationLatest: (id:string,kind:'titles'|'descriptions'|'thumbnail_prepare'|'thumbnail_generate',requestId:string,slot?:number) => request<YouTubeJob|null>(`/series/${encodeURIComponent(id)}/automation/${kind}/latest?requestId=${encodeURIComponent(requestId)}${slot===undefined?'':`&slot=${slot}`}`),
   automationStart: (id:string,kind:'titles'|'descriptions'|'thumbnail_prepare'|'thumbnail_generate',requestId:string,device:string,expectedRevision:number,slot?:number) => request<YouTubeJob>(`/series/${encodeURIComponent(id)}/automation/${kind}/start`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requestId,device,expectedRevision,slot})}),
   automationRetryImage: (id:string,jobId:string) => request<YouTubeJob>(`/series/${encodeURIComponent(id)}/automation/jobs/${encodeURIComponent(jobId)}/retry-image`,{method:'POST'}),
+  automationCancel: (id:string,jobId:string) => request<YouTubeJob>(`/series/${encodeURIComponent(id)}/automation/jobs/${encodeURIComponent(jobId)}/cancel`,{method:'POST'}),
+  automationRetry: (id:string,jobId:string,device:string,expectedRevision:number) => request<YouTubeJob>(`/series/${encodeURIComponent(id)}/automation/jobs/${encodeURIComponent(jobId)}/retry`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device,expectedRevision})}),
   automationCheck: (id:string,jobId:string) => request<YouTubeJob>(`/series/${encodeURIComponent(id)}/automation/jobs/${encodeURIComponent(jobId)}/check`,{method:'POST'}),
   libraryStatuses: (seriesIds: string[]) => request<Record<string, YouTubeLibraryStatus>>('/library/status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ seriesIds }) }),
   setSeriesDone: (seriesId: string, done: boolean, expectedRevision: number) => request<YouTubeLibraryStatus>(`/series/${encodeURIComponent(seriesId)}/done`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ done, expectedRevision }) }),

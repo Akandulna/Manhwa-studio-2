@@ -93,6 +93,7 @@ const metadataOf = async (chapter: (typeof chapters)[number], filename: string) 
 }
 
 beforeAll(async () => {
+  await fs.writeFile(path.join(tmp, 'test.db'), '')
   execFileSync('npx', ['prisma', 'db', 'push', '--skip-generate'], { cwd: serverDir, env: { ...process.env, DATABASE_URL: dbUrl }, stdio: 'ignore' })
   await fs.chmod(FAKE_AGY, 0o755)
   prisma = new PrismaClient({ datasources: { db: { url: dbUrl } } })
@@ -132,9 +133,18 @@ beforeAll(async () => {
     cliHome: path.join(tmp, 'agy-home'),
     settings: async () => ({ engine: 'antigravity', model: 'fake-model', modelLabel: 'Fake', effort: null, sandbox: false, concurrency: 2, pageTimeoutMinutes: 2, executable: FAKE_AGY, cliVersion: 'fake-1' } as any),
     prompts: () => prompts.pack(),
-    publisher: { publish: async () => { throw new Error('Metadata must not publish to R2') } } as any
+    publisher: { publish: async () => { throw new Error('Metadata must not publish to R2') } } as any,
+    // Recreate only: the result + new job go to R2 and phones are asked to sync.
+    publishMetadata: async chapter => {
+      published.push(chapter.id)
+      if (publishFails) throw new Error('R2 is down')
+      return { queued: 3, results: 1 }
+    }
   })
 }, 60_000)
+
+const published: string[] = []
+let publishFails = false
 
 beforeEach(async () => {
   await fs.rm(process.env.FAKE_AGY_LOG!, { force: true })
@@ -202,6 +212,41 @@ describe('AntiGravity Metadata', () => {
     expect(out.created).toEqual([])
     expect(out.skipped.map(s => s.reason)).toEqual(['Metadata already saved.', expect.stringMatching(/review/i)])
   })
+
+  it('Recreate makes a saved page again under a new job revision, keeps the old file, and sends it to R2/phones (Retry after a failed send)', async () => {
+    const { currentMetadataJobs, metadataGenerations, requireCurrentSplitMetadata } = await import('../../clipper3/metadataSplit.js')
+    const revisions = async () => new Map((await currentMetadataJobs(chapters[0], await metadataGenerations(chapters[0]))).jobs.map(j => [JSON.parse(j.payloadText).page as string, j.revision]))
+    const before = await revisions()
+    const old = (await metadataOf(chapters[0], 'page_003.png'))!
+    published.length = 0
+    publishFails = true
+    const start = await jobs.start({ seriesId, partNumber: 1, kind: 'metadata', prepareOnly: false, recreate: true, pages: [{ chapterId: chapters[0].id, filename: 'page_003.png' }] })
+    expect(start.created).toHaveLength(1)
+    await runDone(start.runId!)
+    let job = await jobFor(start.runId!, 'page_003.png')
+    // Saved in Studio; the R2 send failed and waits for Retry.
+    expect(job.stage).toBe('publish_failed')
+    expect(job.lastError).toMatch(/saved in Studio.*R2 is down/)
+    const after = await revisions()
+    expect(after.get('page_003.png')).not.toBe(before.get('page_003.png'))
+    // Only the recreated page's job changed.
+    expect(after.get('page_001.png')).toBe(before.get('page_001.png'))
+    expect(after.get('page_002.png')).toBe(before.get('page_002.png'))
+    const saved = JSON.parse((await metadataOf(chapters[0], 'page_003.png'))!)
+    expect(saved.metadataJob.revision).toBe(after.get('page_003.png'))
+    expect(saved.storyLinking.inputRevision).toBe(after.get('page_003.png'))
+    await expect(requireCurrentSplitMetadata(chapters[0])).resolves.toBe(true)
+    const resets = path.join(process.env.DOWNLOAD_ROOT!, chapters[0].folderPath, '.metadata-resets')
+    const [backup] = await fs.readdir(resets)
+    const kept = await fs.readdir(path.join(resets, backup))
+    expect(await fs.readFile(path.join(resets, backup, kept[0]), 'utf8')).toBe(old)
+
+    publishFails = false
+    await jobs.retry(job.id)
+    job = await jobFor(start.runId!, 'page_003.png')
+    expect(job.stage).toBe('done')
+    expect(published).toEqual([chapters[0].id, chapters[0].id])
+  }, 30_000)
 
   it('a changed English script makes the saved Metadata stale; the next run describes those pages again', async () => {
     await fs.writeFile(path.join(process.env.DOWNLOAD_ROOT!, chapters[0].folderPath, 'script.md'), `${SCRIPT}\n\nThe sword glows.`)

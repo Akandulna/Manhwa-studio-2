@@ -151,7 +151,7 @@ export function blockers(stateJson: string, h: EngineHandoff, luma: LumaPage): s
 }
 
 export function finalCrops(stateJson: string) {
-  return state(stateJson).crops.map(c => ({ reason: c.reason, bounds: { x0: c.bounds.x0, y0: c.bounds.y0, x1: c.bounds.x1, y1: c.bounds.y1 } }))
+  return state(stateJson).crops.map(c => ({ reason: c.reason, bounds: { x0: c.bounds.x0, y0: c.bounds.y0, x1: c.bounds.x1, y1: c.bounds.y1 }, ...(c.rotate ? { rotate: c.rotate } : {}) }))
 }
 
 export function jobContextText(h: EngineHandoff, stage: string): string {

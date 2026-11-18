@@ -50,6 +50,8 @@ export interface AgyTurnResult {
   stderrTail: string
   timedOut: boolean
   cancelled: boolean
+  /** Studio stopped the turn because the agent showed no activity for too long (set by the job runner). */
+  stalled?: boolean
   pid: number | null
   durationMs: number
 }

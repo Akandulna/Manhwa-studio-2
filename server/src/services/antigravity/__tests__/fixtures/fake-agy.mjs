@@ -8,6 +8,7 @@
  * ({ "<page stem>": { box, delayMs, hang, review, providerError } }); every turn
  * is logged to FAKE_AGY_LOG.
  */
+import { fakeNarration } from './fake-narration.mjs'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -39,6 +40,11 @@ const size = /Original page: (\d+)×(\d+) px/.exec(context)
 const slices = [...context.matchAll(/ {2}(s\d+): (\d+)×(\d+) px, original page y=(\d+)\.\.(\d+)/g)].map(m => ({ id: m[1], y0: Number(m[4]), y1: Number(m[5]) }))
 const plan = JSON.parse(fs.readFileSync(process.env.FAKE_AGY_PLAN, 'utf8'))[stem] ?? {}
 log({ stem, event: 'start', turn: resumed ? 'review' : 'analysis' })
+
+if (await fakeNarration({ context, prompt: arg('--print') ?? '', call, log, conv })) {
+  envelope({})
+  process.exit(0)
+}
 
 if (plan.providerError) {
   log({ stem, event: 'end' })

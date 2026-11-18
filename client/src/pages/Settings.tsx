@@ -17,9 +17,11 @@ import { loadSavedEditorPrompt, phoneEditorApi } from '@/pages/editor2/phoneEdit
 import StorageManager from '@/pages/storage/StorageManager'
 import YouTubeGuidelines from '@/components/settings/YouTubeGuidelines'
 import AntiGravitySettingsPanel from '@/pages/antigravity/AntiGravitySettings'
+import AgentSettings from '@/components/settings/AgentSettings'
+import GeminiMcpConnectorCard from '@/components/geminiMcp/GeminiMcpConnectorCard'
 import type { SettingsReturnState } from '@/pages/antigravity/shared'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, Save, RotateCcw, FolderOpen, Gauge, UserCircle, ImageIcon, Download, Wand2, FileText, Film, Moon, Sun, Monitor, Palette, Cloud, HardDrive, Orbit, ArrowLeft } from 'lucide-react'
+import { Loader2, Save, RotateCcw, FolderOpen, Gauge, UserCircle, ImageIcon, Download, Wand2, FileText, Film, Moon, Sun, Monitor, Palette, Cloud, HardDrive, Orbit, ArrowLeft, Sparkles, Bot } from 'lucide-react'
 
 // Vertical sidebar tab: full-width, left-aligned, active state as a muted pill.
 const settingsTabTrigger =
@@ -140,12 +142,12 @@ export default function Settings() {
             )}
             <h1 className="text-3xl font-bold">Settings</h1>
             <p className="text-muted-foreground">
-              Appearance, downloads, Editor 2.0, YouTube guidelines, Cloudflare, AntiGravity and storage
+              Appearance, downloads, Editor 2.0, YouTube guidelines, Cloudflare, AntiGravity, Gemini MCP and storage
             </p>
           </div>
 
           <div className="flex gap-2">
-            {activeTab !== 'youtube' && activeTab !== 'antigravity' && <>
+            {activeTab !== 'youtube' && activeTab !== 'antigravity' && activeTab !== 'gemini-mcp' && activeTab !== 'agent' && <>
             <Button variant="outline" onClick={handleReset}>
               <RotateCcw className="h-4 w-4 mr-2" />
               Reset
@@ -196,6 +198,14 @@ export default function Settings() {
               <Orbit className="h-4 w-4" />
               <span>AntiGravity</span>
             </TabsTrigger>
+            <TabsTrigger value="agent" className={settingsTabTrigger}>
+              <Bot className="h-4 w-4" />
+              <span>Agent</span>
+            </TabsTrigger>
+            <TabsTrigger value="gemini-mcp" className={settingsTabTrigger}>
+              <Sparkles className="h-4 w-4" />
+              <span>Gemini MCP</span>
+            </TabsTrigger>
             <TabsTrigger value="storage" className={settingsTabTrigger}>
               <HardDrive className="h-4 w-4" />
               <span>Storage</span>
@@ -205,6 +215,12 @@ export default function Settings() {
           <div className="flex-1 min-w-0 overflow-auto">
           <TabsContent value="antigravity" className="mt-0 p-6 max-w-4xl">
             <AntiGravitySettingsPanel />
+          </TabsContent>
+          <TabsContent value="agent" className="mt-0 p-6 max-w-4xl">
+            <AgentSettings />
+          </TabsContent>
+          <TabsContent value="gemini-mcp" className="mt-0 p-6 max-w-4xl">
+            <GeminiMcpConnectorCard />
           </TabsContent>
           <TabsContent value="youtube" className="mt-0 p-6 max-w-5xl">
             <YouTubeGuidelines />

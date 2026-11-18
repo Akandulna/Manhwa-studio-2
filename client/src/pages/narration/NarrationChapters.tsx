@@ -8,6 +8,8 @@
  * Every attached voiceover is aligned by itself, and once a chapter's sections
  * all have their timeline the alignment document (script-timeline.md, or
  * script-timeline.hi.md) is written to the chapter folder for Editor 2.0.
+ * "Add voiceover" attaches an audio file of your own as the chapter's whole
+ * voiceover instead (see AddVoiceoverDialog), aligned the same way.
  *
  * Each row shows where a chapter stands: script, sections with audio, sections
  * aligned and the document. "Align again" picks up an alignment that failed or
@@ -23,10 +25,12 @@ import {
   DownloadCloud,
   FileCheck,
   FileText,
+  FileAudio,
   FolderOpen,
   Loader2,
   RefreshCw,
   Replace,
+  Trash2,
   Volume2,
   Waves
 } from 'lucide-react'
@@ -55,7 +59,11 @@ import { PhoneRefreshButton } from '@/components/PhoneRefreshButton'
 import { PhoneFetchDialog, type PhoneFetchSelection } from '@/components/narration/PhoneFetchDialog'
 import { PhoneVersionsDialog } from '@/components/narration/PhoneVersionsDialog'
 import { ReplaceScriptDialog } from '@/components/narration/ReplaceScriptDialog'
+import { GeminiProcessButton } from '@/components/geminiMcp/GeminiProcessButton'
+import { ClearScriptsDialog } from '@/components/narration/ClearScriptsDialog'
 import { ResetAlignmentDialog } from '@/components/narration/ResetAlignmentDialog'
+import { AddVoiceoverDialog } from '@/components/narration/AddVoiceoverDialog'
+import { ResetVoiceoverDialog } from '@/components/narration/ResetVoiceoverDialog'
 import { AlignmentProgressStatus } from '@/components/narration/AlignmentProgressStatus'
 import { cn } from '@/lib/utils'
 import { CLIPPER_PART_SIZE, clipperChapterParts } from '@/lib/clipperParts'
@@ -176,10 +184,14 @@ export default function NarrationChapters() {
   // Chapters whose "Align again" was just asked for, until the reload shows them aligning.
   const [aligningNow, setAligningNow] = useState<Set<string>>(new Set())
   const [replacing, setReplacing] = useState<NarrationChapter | null>(null)
+  const [resolvedManualBlocks, setResolvedManualBlocks] = useState<Set<string>>(new Set())
   const [resettingAlignment, setResettingAlignment] = useState<NarrationChapter | null>(null)
+  const [addingVoiceover, setAddingVoiceover] = useState<NarrationChapter | null>(null)
+  const [resettingVoiceover, setResettingVoiceover] = useState<NarrationChapter | null>(null)
   // Chapters where a phone finished a different script; they wait for your choice.
   const [conflicts, setConflicts] = useState<PhoneScriptConflict[]>([])
   const [versionsOpen, setVersionsOpen] = useState(false)
+  const [clearOpen, setClearOpen] = useState(false)
 
   // Rendered or completed chapters in this language.
   const { isPublished, completedPart } = usePublishedChapters(id, language)
@@ -214,6 +226,7 @@ export default function NarrationChapters() {
     setLastFetch(null)
     setReplacing(null)
     setResettingAlignment(null)
+    setAddingVoiceover(null)
     setConflicts([])
     loadSeries()
     loadConflicts()
@@ -433,6 +446,11 @@ export default function NarrationChapters() {
             <FolderOpen className="h-4 w-4 mr-2" />
             Open folder
           </Button>
+          <Button variant="outline" onClick={() => setClearOpen(true)} disabled={fetching}
+            title="Remove chapters' English and Hinglish scripts and voiceovers from Studio (e.g. ones the phones cleared), backed up first">
+            <Trash2 className="h-4 w-4 mr-2" />
+            Clear scripts
+          </Button>
           <Button
             onClick={handlePreview}
             disabled={previewing || fetching}
@@ -553,6 +571,7 @@ export default function NarrationChapters() {
           const canAlign = !aligning && chapter.withAudio > 0 &&
             (chapter.aligned < chapter.withAudio || (allAligned && !chapter.documentWritten))
           const phoneScript = phoneScripts?.chapters[chapter.id]
+          const blocked = phoneScriptsReceipt.status?.blocked?.find(b => b.chapterId === chapter.id && b.language === language && !resolvedManualBlocks.has(b.id))
           return (
             <div
               key={chapter.id}
@@ -565,6 +584,7 @@ export default function NarrationChapters() {
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="font-medium shrink-0">Chapter {chapter.number}</span>
                   {chapter.title && <span className="text-sm text-muted-foreground truncate">- {chapter.title}</span>}
+                  {blocked && completed === null && <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-400" title={`${blocked.reason} · ${blocked.stage}`}>Prohibited content · Needs manual completion</span>}
                   {completed === null && isPublished(chapter.id) && <PublishedBadge />}
                 </div>
               </div>
@@ -594,7 +614,7 @@ export default function NarrationChapters() {
                     done={chapter.withAudio}
                     total={chapter.sections}
                     title={chapter.fetchedAt
-                      ? `Sections with audio — fetched from the phone ${new Date(chapter.fetchedAt).toLocaleString()}`
+                      ? `Sections with audio — ${chapter.voiceoverManual ? 'added by hand' : 'fetched from the phone'} ${new Date(chapter.fetchedAt).toLocaleString()}`
                       : 'Sections with audio'}
                   />
 
@@ -629,10 +649,20 @@ export default function NarrationChapters() {
                       onClick={() => setResettingAlignment(chapter)} title="Back up and rebuild one audio section’s timestamps">
                       <RefreshCw className="h-4 w-4 mr-1" />Reset alignment
                     </Button>}
+                    <Button variant="outline" size="sm" onClick={() => setAddingVoiceover(chapter)} disabled={aligning || !!fetchRun}
+                      title={chapter.hasScript ? 'Attach your own audio file as this chapter’s whole voiceover' : 'Add the script first'}>
+                      <FileAudio className="h-4 w-4 mr-1" />{chapter.withAudio > 0 ? 'Replace voiceover' : 'Add voiceover'}
+                    </Button>
+                    {(chapter.hasScript || chapter.sections > 0) && <Button variant="outline" size="sm"
+                      onClick={() => setResettingVoiceover(chapter)} disabled={aligning || !!fetchRun}
+                      title="Remove this chapter’s voiceover here, in R2 and on the phones, so it is voiced again">
+                      <Trash2 className="h-4 w-4 mr-1" />Reset voiceover
+                    </Button>}
                     <Button variant="outline" size="sm" onClick={() => setReplacing(chapter)} disabled={aligning || !!fetchRun}
                       title="Replace this language’s script and prepare a new voiceover and timeline">
-                      <Replace className="h-4 w-4 mr-1" />Replace
+                      <Replace className="h-4 w-4 mr-1" />{blocked ? 'Continue manually' : 'Replace'}
                     </Button>
+                    {blocked && <GeminiProcessButton chapter={chapter} language={language} disabled={aligning || !!fetchRun} />}
                     {canAlign && (
                       <Button
                         variant="outline"
@@ -673,8 +703,21 @@ export default function NarrationChapters() {
         onCancel={() => setPreview(null)}
         onConfirm={handleFetch}
       />
-      {replacing && <ReplaceScriptDialog key={`${replacing.id}:${language}`} chapter={replacing} language={language}
-        onClose={() => setReplacing(null)} onSaved={() => { void loadSeries() }} />}
+      {clearOpen && id && <ClearScriptsDialog seriesId={id} onClose={() => setClearOpen(false)}
+        onCleared={() => { void loadSeries(); void loadConflicts() }} />}
+      {replacing && <ReplaceScriptDialog recovery={phoneScriptsReceipt.status?.blocked?.find(b => b.chapterId === replacing?.id && b.language === language)} key={`${replacing.id}:${language}`} chapter={replacing} language={language}
+        onClose={() => setReplacing(null)} onSaved={() => {
+          const block = phoneScriptsReceipt.status?.blocked?.find(b => b.chapterId === replacing.id && b.language === language)
+          if (block) setResolvedManualBlocks(previous => new Set(previous).add(block.id))
+          void loadSeries()
+        }} />}
+      {addingVoiceover && <AddVoiceoverDialog key={`${addingVoiceover.id}:${language}`} chapter={addingVoiceover} language={language}
+        onClose={() => setAddingVoiceover(null)} onAdded={() => {
+          setAligningNow(previous => new Set(previous).add(addingVoiceover.id))
+          void loadSeries()
+        }} />}
+      {resettingVoiceover && <ResetVoiceoverDialog key={`${resettingVoiceover.id}:${language}`} chapter={resettingVoiceover} language={language}
+        onClose={() => setResettingVoiceover(null)} onReset={() => { void loadSeries() }} />}
       {resettingAlignment && <ResetAlignmentDialog key={`${resettingAlignment.id}:${language}`} chapter={resettingAlignment} language={language}
         onClose={() => setResettingAlignment(null)} onStarted={() => {
           setAligningNow(previous => new Set(previous).add(resettingAlignment.id))

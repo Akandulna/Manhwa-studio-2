@@ -4,7 +4,7 @@
  * Every current crop must come back kept, changed, split, merged or removed; a check counts as reviewed
  * only when ChatGPT names its token for a box it didn't move. Pure.
  */
-import { boundsFromSliceCorners, normalizeReason, stripMarkdownFence, type IssueSink } from './analysisImport.js'
+import { boundsFromSliceCorners, normalizeReason, parseRotation, stripMarkdownFence, type IssueSink } from './analysisImport.js'
 import { GAP_ARTWORK_INK } from './cropAudit.js'
 import { describe, isBlank, javaDoubleToString, JsonArray, JsonNumber, JsonObject, ktTrim, parseJson, stringify, toPlain, wholeNumber, type JsonValue } from './json.js'
 import {
@@ -45,6 +45,7 @@ export function seed(analysis: ImportedAnalysis, now: string): ReviewState {
       unknownFlags: [...c.unknownFlags],
       acknowledged: [],
       note: '',
+      ...(c.rotate ? { rotate: c.rotate } : {}),
     })),
     page: { sweepDone: false, noEligibleArtworkConfirmed: false, note: '' },
     chatgptReviews: 0,
@@ -148,6 +149,8 @@ export type CurrentCrop = {
   top_left: SliceCorner
   bottom_right: SliceCorner
   size_px: string
+  /** Only on a crop drawn sideways (90 / -90), so upright pages list exactly as before. */
+  rotate?: 90 | -90
   description: string
   checks: { token: string; what: string }[]
 }
@@ -163,6 +166,7 @@ export function currentCrops(state: ReviewState, reviewItems: ReviewItem[], slic
       top_left: { ...topLeft },
       bottom_right: { ...bottomRight },
       size_px: `${boxWidth(crop.bounds)}×${boxHeight(crop.bounds)}`,
+      ...(crop.rotate ? { rotate: crop.rotate } : {}),
       description: crop.description,
       checks: reviewItems.filter((it) => it.key === crop.key).map((it) => ({ token: it.token, what: it.message })),
     }
@@ -305,6 +309,9 @@ export function applyReply(
     const label = key ?? `new crop #${index + 1}`
     if (key !== null) account(key, `crops[${index}].key`, `${at}.key`)
     const bounds = boundsFromSliceCorners(raw, at, label, handoff, sliceById, error)
+    if (parseRotation(raw.value('rotate')) === undefined) {
+      error('GPT_JSON_INVALID', `${at}.rotate`, `${label}: rotate must be 90, -90 or 0 (got ${describe(raw.value('rotate'))})`, null)
+    }
     drafts.push({ raw, at, key, from, bounds })
   })
 
@@ -378,8 +385,12 @@ export function applyReply(
         else status = base.descriptionStatus
       }
       const tokens = tokensByKey.get(d.key)
+      // Left out = unchanged; 0 or null = upright again.
+      const { rotate: _baseRotate, ...unturned } = base
+      const rotate = d.raw.value('rotate') === undefined ? base.rotate : parseRotation(d.raw.value('rotate'))
       crops.push({
-        ...base,
+        ...unturned,
+        ...(rotate ? { rotate } : {}),
         bounds,
         reason: reasonRaw.length > 0 ? reasonRaw : base.reason,
         description: geometryOnly ? base.description : description,
@@ -397,6 +408,8 @@ export function applyReply(
         key = nextOperatorKey(taken)
       }
       taken.add(key)
+      // A split part is drawn like its parent unless the reply says otherwise.
+      const rotate = d.raw.value('rotate') === undefined ? parent?.rotate : parseRotation(d.raw.value('rotate'))
       crops.push({
         key,
         origin: 'operator',
@@ -412,6 +425,7 @@ export function applyReply(
         note: parent !== null
           ? `Split by ChatGPT review from ${parent.key}`
           : d.from.length > 1 ? `Merged by ChatGPT review from ${d.from.join(', ')}` : 'Added by ChatGPT review',
+        ...(rotate ? { rotate } : {}),
       })
     }
   }
@@ -475,6 +489,8 @@ export function toJson(state: ReviewState): string {
       unknown_flags: c.unknownFlags,
       acknowledged: c.acknowledged,
       note: c.note,
+      // Only when set, so an upright page's file stays byte-identical to the phone's.
+      ...(c.rotate ? { rotate: c.rotate } : {}),
     })),
     page: {
       sweep_done: state.page.sweepDone,
@@ -563,6 +579,7 @@ export function parseState(text: string): ReviewState | null {
           unknownFlags: stringItems(item.value('unknown_flags')),
           acknowledged: stringItems(item.value('acknowledged')),
           note: optString(item, 'note'),
+          ...(parseRotation(item.value('rotate')) ? { rotate: parseRotation(item.value('rotate'))! } : {}),
         }
       }),
       page: { sweepDone: optBoolean(page, 'sweep_done'), noEligibleArtworkConfirmed: optBoolean(page, 'no_eligible_artwork_confirmed'), note: optString(page, 'note') },

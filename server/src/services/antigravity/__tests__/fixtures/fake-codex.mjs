@@ -7,6 +7,7 @@
  * events, and writes a session record under $CODEX_HOME/sessions like Codex.
  * Shares FAKE_AGY_PLAN / FAKE_AGY_LOG with fake-agy.mjs; log entries carry engine "codex".
  */
+import { fakeNarration } from './fake-narration.mjs'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -73,6 +74,11 @@ if (plan.providerError && (!plan.providerErrorOnHome || home.endsWith(plan.provi
   log({ stem, event: 'end' })
   emit({ type: 'turn.failed', error: { message: plan.providerError } })
   process.exit(1)
+}
+
+if (await fakeNarration({ context, prompt, call, log })) {
+  emit({ type: 'turn.completed', usage: { input_tokens: 10, output_tokens: 5 } })
+  process.exit(0)
 }
 
 const corner = (x, y, end) => {

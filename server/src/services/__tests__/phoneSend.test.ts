@@ -289,7 +289,7 @@ describe('startPhoneSend', () => {
     libraryFlow.origin = true
     await startPhoneSend([{ seriesId: 's1', chapterIds: ['c2'] }], io)
     expect((await finished()).series[0]).toMatchObject({ state: 'done', chaptersSent: 1 })
-    expect(libraryFlow.prepare).toHaveBeenCalledWith('s1', ['c2'])
+    expect(libraryFlow.prepare).toHaveBeenCalledWith('s1', ['c2'], expect.any(Function))
   })
 
   it('does not publish raw pages when origin preparation fails', async () => {

@@ -3,7 +3,7 @@ import { useSeriesOrder } from '@/hooks/useSeriesOrder'
  * Run automation — Phone Status's one way to start a run on a phone, in two
  * steps: which automation (Image Clipper, Narration scripts, Editor 2.0
  * timelines, Voiceover), then how (its series, the profile it starts in, and
- * the choices that run has: ChatGPT or Gemini, one prompt or four steps, ChatGPT's mode, model and
+ * the choices that run has: ChatGPT or AI Studio, Classic or four steps (AI Studio only), ChatGPT's mode, model and
  * effort on plans that have them (PhoneProfile.tsx), tabs, language, one phone
  * or split between them). Image Clipper, Metadata, Editor 2.0 and the voiceover can be
  * split between phones (never the narration scripts: each chapter's prompt goes
@@ -70,7 +70,7 @@ interface Automation {
   /** The choices step 2 offers besides the series: tabs at once, with what each tab works on. */
   tabs?: { unit: string }
   language?: boolean
-  /** Image Clipper's: ChatGPT or Gemini, one prompt or four steps. */
+  /** Image Clipper's: ChatGPT or AI Studio, Classic or four steps (AI Studio only). */
   clipper?: boolean
   /** Its series' chapters can be shared out between the phones. */
   split?: boolean
@@ -155,6 +155,9 @@ const FLOW_CHOICES: Choice<PhoneClipperFlow>[] = [
   { value: 'classic', label: 'Classic', hint: 'Find shots and place corners, then inspect crops and audit annotated pages.' },
   { value: 'steps', label: '4 steps', hint: 'Find shots, place corners, inspect actual crops, then audit annotated pages.' }
 ]
+/** ChatGPT always clips in Classic; AI Studio takes either method. */
+const flowChoicesFor = (ai: PhoneClipperAi) => ai === 'chatgpt' ? FLOW_CHOICES.filter(c => c.value === 'classic') : FLOW_CHOICES
+const flowFor = (ai: PhoneClipperAi, flow: PhoneClipperFlow): PhoneClipperFlow => ai === 'chatgpt' ? 'classic' : flow
 
 const LANGUAGE_CHOICES: Choice<NarrationLanguage>[] = NARRATION_LANGUAGES.map(language => ({ value: language, label: LANGUAGE_LABEL[language] }))
 
@@ -414,8 +417,8 @@ export function ClipperSettings({ phone, profiles, relay, screen, now, value, on
 }) {
   const supportsSettings = !!phone.automation?.clipper
   return <div className="space-y-4">
-    <Choices label="AI" choices={AI_CHOICES} value={value.ai} onChange={ai => onChange({ ...value, ai })} disabled={supportsSettings ? undefined : 'Update Sleeper-Cell to configure Image Clipping.'} />
-    <Choices label="Method" choices={FLOW_CHOICES.filter(c=>c.value===(value.ai==='chatgpt'?'classic':'steps'))} value={value.ai==='chatgpt'?'classic':'steps'} onChange={flow => onChange({ ...value, flow })} disabled={supportsSettings ? undefined : 'Update Sleeper-Cell to configure Image Clipping.'} />
+    <Choices label="AI" choices={AI_CHOICES} value={value.ai} onChange={ai => onChange({ ...value, ai, flow: ai === 'chatgpt' ? 'classic' : value.ai === 'chatgpt' ? 'steps' : value.flow })} disabled={supportsSettings ? undefined : 'Update Sleeper-Cell to configure Image Clipping.'} />
+    <Choices label="Method" choices={flowChoicesFor(value.ai)} value={flowFor(value.ai, value.flow)} onChange={flow => onChange({ ...value, flow })} disabled={supportsSettings ? undefined : 'Update Sleeper-Cell to configure Image Clipping.'} />
     {value.ai === 'chatgpt' && phone.automation?.clipper?.chatGpt && <ChatGptChoices phone={phone} profiles={profiles} relay={relay} screen={screen} now={now} value={value.chatGpt} onChange={chatGpt => onChange({ ...value, chatGpt })} />}
     <TabChoices value={value.tabs} onChange={tabs => onChange({ ...value, tabs })} each={false} unit="page" />
   </div>
@@ -498,6 +501,8 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
   const [kind, setKind] = useState<PhoneRunKind | null>(null)
   const [picked, setPicked] = useState<Partial<Record<PhoneRunKind, string>>>({})
   const [ai, setAi] = useState<PhoneClipperAi>(last?.ai==='gemini'?'aistudio':last?.ai ?? 'chatgpt')
+  // AI Studio's method; a phone that last ran ChatGPT reports Classic, so AI Studio starts on 4 steps then.
+  const [aiStudioFlow, setAiStudioFlow] = useState<PhoneClipperFlow>(last?.ai !== 'chatgpt' && last?.flow === 'classic' ? 'classic' : 'steps')
   const [clipTabs, setClipTabs] = useState(last?.tabs ?? resume?.tabs ?? DEFAULT_TABS)
   const [voiceTabs, setVoiceTabs] = useState(DEFAULT_TABS)
   const [editorTabs, setEditorTabs] = useState(editorLast?.tabs ?? 1)
@@ -657,7 +662,7 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
       ...(voiceoverPartChapters && !splitting ? { device: phone.id, chapters: voiceoverPartChapters } : {}),
       seriesId: seriesId || undefined,
       ...(automation.tabs && !(kind === 'editor' && tabsBlocked) ? { tabs } : {}),
-      ...(automation.clipper && choosesHow ? { ai, flow:ai==='chatgpt'?'classic' as const:'steps' as const } : {}),
+      ...(automation.clipper && choosesHow ? { ai, flow: flowFor(ai, aiStudioFlow) } : {}),
       ...(automation.clipper && choosesChatGpt && ai === 'chatgpt'
         ? { chatGpt: hasChoices(profiles.find(p => p.selected) ?? null) === false ? NO_CHATGPT_CHOICES : chatGpt }
         : {}),
@@ -812,9 +817,9 @@ export function RunAutomationDialog({ open, onOpenChange, phone, overview, sever
                   />
                   <Choices
                     label="Method"
-                    choices={FLOW_CHOICES.filter(c=>c.value===(ai==='chatgpt'?'classic':'steps'))}
-                    value={ai==='chatgpt'?'classic':'steps'}
-                    onChange={() => {}}
+                    choices={flowChoicesFor(ai)}
+                    value={flowFor(ai, aiStudioFlow)}
+                    onChange={setAiStudioFlow}
                     disabled={choosesHow ? undefined : 'Same for the method: 1 step or 4 steps as last picked on the phone.'}
                   />
                   {ai === 'chatgpt' && (choosesChatGpt

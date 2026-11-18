@@ -95,6 +95,8 @@ export default function NarrationLibrary() {
                   <div className="flex items-center gap-2 min-w-0">
                     <h3 className="font-semibold truncate">{s.title}</h3>
                     <SeriesCompletedBadge parts={seriesCompletedParts(s.id)} />
+                    {phoneScripts?.blocked?.some(b => b.seriesId === s.id && b.language === language) &&
+                      <Badge variant="outline" className="border-amber-500 text-amber-700 dark:text-amber-400">Needs manual completion</Badge>}
                   </div>
                   <div className="flex items-center gap-1 text-xs text-muted-foreground">
                     <Globe className="h-3 w-3 shrink-0" />

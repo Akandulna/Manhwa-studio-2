@@ -15,7 +15,7 @@ import { AutomationFlow } from '../sleeper/RunAutomation'
 import { AntiGravityTopBar, partRange, useSeriesScope } from './shared'
 
 export const WORKFLOW_NODES: Record<PhoneRunKind, { label: string; does: string; icon: typeof Mic; active: boolean }> = {
-  narration: { label: 'Narration scripts', does: 'Writes each chapter’s script, then its Hindi retelling', icon: PenLine, active: false },
+  narration: { label: 'Narration scripts', does: 'Writes each chapter’s English script from its pages, read in labelled pieces', icon: PenLine, active: true },
   voiceover: { label: 'Voiceover', does: 'Voices every split without audio', icon: Mic, active: false },
   clipper: { label: 'Image Clipper', does: 'Crops every page left in this part', icon: Scissors, active: true },
   metadata: { label: 'Metadata', does: 'Creates descriptions and English-script links from reviewed crops', icon: PenLine, active: true },
@@ -23,7 +23,7 @@ export const WORKFLOW_NODES: Record<PhoneRunKind, { label: string; does: string;
 }
 
 /** Where an active node opens, under the part. */
-const NODE_PATH: Partial<Record<PhoneRunKind, string>> = { clipper: 'image-clipper', metadata: 'metadata', editor: 'timeline' }
+const NODE_PATH: Partial<Record<PhoneRunKind, string>> = { clipper: 'image-clipper', metadata: 'metadata', editor: 'timeline', narration: 'narration' }
 
 export default function AntiGravityWorkflow() {
   const { seriesId, partNumber } = useParams()
@@ -38,7 +38,7 @@ export default function AntiGravityWorkflow() {
       <AntiGravityTopBar crumbs={[{ label: 'AntiGravity', to: '/antigravity' }, { label: title, to: `/antigravity/series/${seriesId}` }, { label: `Part ${part}` }]} />
       <header>
         <h1 className="text-2xl font-semibold">{title} · Part {part}</h1>
-        <p className="text-sm text-muted-foreground">Chapters {first}–{last}. Choose a module. Image Clipper, Metadata and Editor 2.0 timelines run through AntiGravity.</p>
+        <p className="text-sm text-muted-foreground">Chapters {first}–{last}. Choose a module. Narration scripts, Image Clipper, Metadata and Editor 2.0 timelines run through AntiGravity.</p>
       </header>
 
       <div className="max-w-3xl" aria-label="Workflow">

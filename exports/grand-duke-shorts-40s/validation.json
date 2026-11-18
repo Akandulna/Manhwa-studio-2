@@ -1,0 +1,15 @@
+{
+  "json_valid": true,
+  "shots": 14,
+  "duration_seconds": 40,
+  "frames": 1200,
+  "gaps": 0,
+  "overlaps": 0,
+  "selected_assets_verified": 14,
+  "selected_assets_found_in_original_timelines": 14,
+  "source_timeline_records_checked": 40,
+  "source_missing_images": 0,
+  "narration_words": 92,
+  "voiceover_recorded": false,
+  "rendered_video": false
+}

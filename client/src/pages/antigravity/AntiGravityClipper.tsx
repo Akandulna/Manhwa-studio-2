@@ -314,9 +314,10 @@ export default function AntiGravityClipper() {
     } finally { setBusy(false) }
   }
 
-  const controlProcess = async (action: 'pause' | 'resume' | 'stop') => {
+  const controlProcess = async (action: 'pause' | 'resume' | 'stop' | 'stop-now') => {
     if (!process) return
-    if (action === 'stop' && !window.confirm('Stop this process? Pages in progress are cancelled and cannot commit late results. Pages already finished stay.')) return
+    if (action === 'stop' && !window.confirm('Stop this process? No new pages start; the page in progress finishes and saves first, then the process stops.')) return
+    if (action === 'stop-now' && !window.confirm('Stop now? Pages in progress are cancelled and cannot commit late results. Pages already finished stay.')) return
     setBusy(true)
     try { await antigravityJobsApi.control(process.id, action); reloadProcess(); void loadJobs() } catch (e) {
       toast({ title: 'AntiGravity', description: (e as Error).message, variant: 'destructive' })
@@ -350,7 +351,7 @@ export default function AntiGravityClipper() {
     const n = chapterCounts(c.id, scope.summaries.get(c.id), jobs)
     return { done: acc.done + n.done, total: acc.total + n.total, waiting: acc.waiting + n.waiting, pending: acc.pending + n.pending }
   }, { done: 0, total: 0, waiting: 0, pending: 0 })
-  const stateLabel: Record<string, string> = { running: 'Running', preparing: 'Running', pause_requested: 'Pausing…', paused: 'Paused', stop_requested: 'Stopping…' }
+  const stateLabel: Record<string, string> = { running: 'Running', preparing: 'Running', pause_requested: 'Pausing…', paused: 'Paused', stop_requested: 'Stopping after the current page…' }
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 p-6">
@@ -408,7 +409,9 @@ export default function AntiGravityClipper() {
               <>
                 {['running', 'preparing'].includes(process.control) && <Button variant="outline" size="sm" disabled={busy} onClick={() => void controlProcess('pause')} title="No new pages start; pages in progress finish"><Pause className="mr-2 h-4 w-4" /> Pause</Button>}
                 {['paused', 'pause_requested'].includes(process.control) && <Button variant="outline" size="sm" disabled={busy} onClick={() => void controlProcess('resume')}><Play className="mr-2 h-4 w-4" /> Resume</Button>}
-                {process.control !== 'stop_requested' && <Button variant="destructive" size="sm" disabled={busy} onClick={() => void controlProcess('stop')}><Square className="mr-2 h-4 w-4" /> Stop</Button>}
+                {process.control !== 'stop_requested' && <Button variant="destructive" size="sm" disabled={busy} onClick={() => void controlProcess('stop')} title="No new pages start; the page in progress finishes and saves, then the process stops"><Square className="mr-2 h-4 w-4" /> Stop</Button>}
+                {process.control === 'stop_requested' && <Button variant="outline" size="sm" disabled={busy} onClick={() => void controlProcess('resume')} title="Take back the stop; the process carries on"><Play className="mr-2 h-4 w-4" /> Keep running</Button>}
+                {process.control === 'stop_requested' && <Button variant="destructive" size="sm" disabled={busy} onClick={() => void controlProcess('stop-now')} title="Cancel the page in progress now; it cannot save a late result"><Square className="mr-2 h-4 w-4" /> Stop now</Button>}
               </>
             ) : (
               <Button
@@ -436,7 +439,7 @@ export default function AntiGravityClipper() {
         </div>
         {processElsewhere && process && (
           <div className="flex flex-wrap items-center gap-2 rounded-md border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-xs">
-            <AlertTriangle className="h-3.5 w-3.5 shrink-0" /> {process.kind === 'metadata' ? 'A Metadata process' : process.kind === 'editor' ? 'A Timeline process' : 'A process'} is {process.control === 'paused' ? 'paused' : 'running'} on {process.seriesId === seriesId && process.partNumber === part ? 'this part' : `another part (Part ${process.partNumber})`}. One process at a time: let it finish or stop it first.
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" /> {process.kind === 'metadata' ? 'A Metadata process' : process.kind === 'editor' ? 'A Timeline process' : process.kind === 'narration' ? 'A Narration process' : 'A process'} is {process.control === 'paused' ? 'paused' : 'running'} on {process.seriesId === seriesId && process.partNumber === part ? 'this part' : `another part (Part ${process.partNumber})`}. One process at a time: let it finish or stop it first.
             <Link to="/antigravity/runs" className="underline">Open Running processes</Link>
           </div>
         )}

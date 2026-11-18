@@ -233,6 +233,8 @@ export function mergeScriptsReceipts(list: PhoneReceipt<Obj>[]): Obj {
       done: Object.values(chapters).filter(c => (c as Obj).status === 'done').length,
       chapters
     }
+    const blocked = entries.flatMap(e => Array.isArray(e.blocked) ? e.blocked : [])
+    if (blocked.length) merged.blocked = blocked
     const uploadedAt = newest(entries.map(e => e.uploadedAt))
     if (uploadedAt) merged.uploadedAt = uploadedAt
     const hinglish = entries.map(e => e.hi).filter(isObject)

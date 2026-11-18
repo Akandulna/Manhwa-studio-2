@@ -105,6 +105,25 @@ export interface Clipper3CropEntry {
     mode: 'rectangle' | 'perspective'
     points: Clipper3Point[]
   }
+  /**
+   * The art is drawn sideways: turn the cut crop this many degrees to stand it upright.
+   * 90 = clockwise (the art's top points left), -90 = counter-clockwise (its top points right).
+   * Absent when the crop is already upright — no other angle exists.
+   */
+  rotate?: CropRotation
+}
+
+export type CropRotation = 90 | -90
+
+/** A crop's turn, or 0 for upright. Anything but exactly 90 or -90 counts as upright. */
+export function cropRotation(entry: { rotate?: unknown } | null | undefined): 0 | CropRotation {
+  const value = entry?.rotate
+  return value === 90 || value === -90 ? value : 0
+}
+
+/** The cut file's size: a quarter turn swaps width and height. */
+export function rotatedSize(width: number, height: number, rotation: 0 | CropRotation): { width: number; height: number } {
+  return rotation === 0 ? { width, height } : { width: height, height: width }
 }
 
 /** One image's artifact. `image` describes that single source file. */
@@ -133,14 +152,21 @@ export interface Clipper3ImageCropFile {
  */
 export function extractCrops(file: Clipper3ImageCropFile | null): Clipper3CropEntry[] {
   if (!file || !Array.isArray(file.crops)) return []
-  return file.crops.filter(
-    entry =>
-      entry &&
-      entry.crop &&
-      Array.isArray(entry.crop.points) &&
-      entry.crop.points.length === 4 &&
-      entry.crop.points.every(p => Number.isFinite(p?.x) && Number.isFinite(p?.y))
-  )
+  return file.crops
+    .filter(
+      entry =>
+        entry &&
+        entry.crop &&
+        Array.isArray(entry.crop.points) &&
+        entry.crop.points.length === 4 &&
+        entry.crop.points.every(p => Number.isFinite(p?.x) && Number.isFinite(p?.y))
+    )
+    .map(entry => {
+      // Only 90 / -90 are turns; any other value (0, 180, "90", null) is dropped so it can't reach a cut.
+      if (!('rotate' in entry) || cropRotation(entry) !== 0) return entry
+      const { rotate: _ignored, ...upright } = entry
+      return upright
+    })
 }
 
 /** An explicit empty crop list is a finished page that needs no cuts. */

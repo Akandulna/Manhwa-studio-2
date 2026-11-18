@@ -7,11 +7,15 @@
  *
  * Like Image Clipper: Start process takes the part's next page without valid Metadata, in chapter order;
  * ticked pages run alone or join this part's Metadata process. One AntiGravity process at a time.
+ *
+ * Recreate: with "Include saved pages" on, pages that already have Metadata can be ticked too. They are made
+ * again; the new Metadata replaces the old one in Studio (old file kept in .metadata-resets/), on R2 and on the
+ * phones (new job revision, so each phone drops its old result and takes Studio's on its next sync).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, useParams } from 'react-router-dom'
-import { Activity, AlertTriangle, ChevronDown, ChevronRight, Eye, Loader2, MessageSquareMore, Pause, Play, RotateCcw, Square, X } from 'lucide-react'
+import { Activity, AlertTriangle, ChevronDown, ChevronRight, Eye, Loader2, MessageSquareMore, Pause, Play, RefreshCw, RotateCcw, Square, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -35,10 +39,10 @@ export function friendlyReason(reason: string | undefined | null): string | unde
 }
 
 /** Why a page can't be ticked (or Start process won't take it), or null. */
-export function metadataBlockReason(chapter: MetadataChapterStatus | undefined, page: MetadataPage, job?: AntigravityJobView | null): string | null {
+export function metadataBlockReason(chapter: MetadataChapterStatus | undefined, page: MetadataPage, job?: AntigravityJobView | null, includeSaved = false): string | null {
   if (job && ACTIVE_JOB.has(job.stage)) return 'Processing now'
   if (!chapter?.ready) return friendlyReason(chapter?.reason) ?? 'Chapter not ready for Metadata'
-  if (page.state === 'complete') return 'Metadata saved'
+  if (page.state === 'complete' && !includeSaved) return 'Metadata saved (turn on "Include saved pages" to recreate it)'
   return null
 }
 
@@ -74,6 +78,7 @@ export default function AntiGravityMetadata() {
   const [jobs, setJobs] = useState<Map<string, AntigravityJobView>>(new Map())
   const [busy, setBusy] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [includeSaved, setIncludeSaved] = useState(false)
   const lastTick = useRef<{ chapterId: string; index: number } | null>(null)
   const { current, reload: reloadProcess } = useCurrentProcess()
   const { socket } = useSocket()
@@ -114,19 +119,20 @@ export default function AntiGravityMetadata() {
 
   const tickable = (chapterId: string) => {
     const s = status.get(chapterId)
-    return (s?.pages ?? []).filter(p => !metadataBlockReason(s, p, jobs.get(key(chapterId, p.filename))))
+    return (s?.pages ?? []).filter(p => !metadataBlockReason(s, p, jobs.get(key(chapterId, p.filename)), includeSaved))
   }
   const selectedPages = useMemo(() => {
-    const out: { chapterId: string; filename: string }[] = []
-    for (const chapter of chapters) for (const p of tickable(chapter.id)) if (selected.has(key(chapter.id, p.filename))) out.push({ chapterId: chapter.id, filename: p.filename })
+    const out: { chapterId: string; filename: string; saved: boolean }[] = []
+    for (const chapter of chapters) for (const p of tickable(chapter.id)) if (selected.has(key(chapter.id, p.filename))) out.push({ chapterId: chapter.id, filename: p.filename, saved: p.state === 'complete' })
     return out
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, chapters, status, jobs])
+  }, [selected, chapters, status, jobs, includeSaved])
+  const recreateCount = selectedPages.filter(p => p.saved).length
 
   const tickChapter = (chapterId: string, on: boolean) => {
     if (!on) { setSelected(prev => new Set([...prev].filter(k => !k.startsWith(`${chapterId}|`)))); return }
     const add = tickable(chapterId)
-    if (add.length === 0) { toast({ title: 'Nothing to tick in this chapter', description: friendlyReason(status.get(chapterId)?.reason) ?? 'Every page has Metadata or is processing now.' }); return }
+    if (add.length === 0) { toast({ title: 'Nothing to tick in this chapter', description: friendlyReason(status.get(chapterId)?.reason) ?? (includeSaved ? 'Every page is processing now.' : 'Every page has Metadata or is processing now. Turn on "Include saved pages" to recreate saved Metadata.') }); return }
     setSelected(prev => new Set([...prev, ...add.map(p => key(chapterId, p.filename))]))
   }
   const tickPage = (chapterId: string, pages: MetadataPage[], index: number, shift: boolean) => {
@@ -169,13 +175,16 @@ export default function AntiGravityMetadata() {
     const n = selectedPages.length
     if (n === 0) return
     const what = `${n} ticked page${n === 1 ? '' : 's'}`
-    const message = processHere
-      ? [`Add ${what} to the running Metadata process on Part ${part}?`, `They run on that process's engine and model (${process ? `${ENGINE_LABELS[process.engine ?? 'antigravity']} · ${process.model}` : ''}).`].join('\n\n')
-      : [`Make Metadata for ${what} of ${title} · Part ${part}?`, `One conversation per page, ${readiness.concurrency} at a time.`, engineLine].join('\n\n')
+    const recreateNote = recreateCount > 0
+      ? `Recreate: ${recreateCount} of them already ${recreateCount === 1 ? 'has' : 'have'} Metadata. ${recreateCount === 1 ? 'It is' : 'They are'} made again and the new Metadata replaces the old in Studio (old file kept in .metadata-resets), on R2 and on the phones (they take it on their next sync). Editor packages are re-sent with it.`
+      : ''
+    const message = (processHere
+      ? [`Add ${what} to the running Metadata process on Part ${part}?`, `They run on that process's engine and model (${process ? `${ENGINE_LABELS[process.engine ?? 'antigravity']} · ${process.model}` : ''}).`, recreateNote]
+      : [`${recreateCount > 0 ? 'Make / recreate' : 'Make'} Metadata for ${what} of ${title} · Part ${part}?`, `One conversation per page, ${readiness.concurrency} at a time.`, engineLine, recreateNote]).filter(Boolean).join('\n\n')
     if (!window.confirm(message)) return
     setBusy(true)
     try {
-      const out = await antigravityJobsApi.startPages(seriesId!, part, selectedPages, false, 'metadata')
+      const out = await antigravityJobsApi.startPages(seriesId!, part, selectedPages.map(({ chapterId, filename }) => ({ chapterId, filename })), false, 'metadata', undefined, recreateCount > 0)
       const total = out.created.length + out.reused.length
       toast({
         title: total === 0 ? 'No ticked page could start' : `${total} page${total === 1 ? '' : 's'} ${processHere ? 'added to the process' : 'started'}`,
@@ -190,9 +199,10 @@ export default function AntiGravityMetadata() {
     } finally { setBusy(false) }
   }
 
-  const controlProcess = async (action: 'pause' | 'resume' | 'stop') => {
+  const controlProcess = async (action: 'pause' | 'resume' | 'stop' | 'stop-now') => {
     if (!process) return
-    if (action === 'stop' && !window.confirm('Stop this Metadata process? Pages in progress are cancelled and cannot save late results. Pages already saved stay.')) return
+    if (action === 'stop' && !window.confirm('Stop this Metadata process? No new pages start; the page in progress finishes and saves first, then the process stops.')) return
+    if (action === 'stop-now' && !window.confirm('Stop now? Pages in progress are cancelled and cannot save late results. Pages already saved stay.')) return
     setBusy(true)
     try { await antigravityJobsApi.control(process.id, action); reloadProcess(); void loadJobs() } catch (e) {
       toast({ title: 'AntiGravity', description: (e as Error).message, variant: 'destructive' })
@@ -206,7 +216,7 @@ export default function AntiGravityMetadata() {
   if (!Number.isInteger(part) || part < 1) return <Navigate to={`/antigravity/series/${seriesId}`} replace />
   const { first, last } = partRange(part)
   const totals = [...status.values()].reduce((acc, c) => ({ done: acc.done + c.done, total: acc.total + c.total, ready: acc.ready + (c.ready ? 1 : 0) }), { done: 0, total: 0, ready: 0 })
-  const stateLabel: Record<string, string> = { running: 'Running', preparing: 'Running', pause_requested: 'Pausing…', paused: 'Paused', stop_requested: 'Stopping…' }
+  const stateLabel: Record<string, string> = { running: 'Running', preparing: 'Running', pause_requested: 'Pausing…', paused: 'Paused', stop_requested: 'Stopping after the current page…' }
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 p-6">
@@ -242,14 +252,16 @@ export default function AntiGravityMetadata() {
                 title={processElsewhere ? 'Another process is running. One process at a time.' : processHere ? 'Queue the ticked pages in the running Metadata process' : blockers.join('\n') || `Make Metadata for the ticked pages only, ${readiness.concurrency} at a time`}
                 onClick={() => void startSelected()}
               >
-                {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />} {processHere ? `Add ${selectedPages.length} to process` : `Start ${selectedPages.length} selected`}
+                {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : recreateCount > 0 ? <RefreshCw className="mr-2 h-4 w-4" /> : <Play className="mr-2 h-4 w-4" />} {processHere ? `Add ${selectedPages.length} to process` : `Start ${selectedPages.length} selected`}{recreateCount > 0 ? ` (${recreateCount} recreate)` : ''}
               </Button>
             )}
             {processHere && process ? (
               <>
                 {process.control === 'running' && <Button variant="outline" size="sm" disabled={busy} onClick={() => void controlProcess('pause')} title="No new pages start; pages in progress finish"><Pause className="mr-2 h-4 w-4" /> Pause</Button>}
                 {['paused', 'pause_requested'].includes(process.control) && <Button variant="outline" size="sm" disabled={busy} onClick={() => void controlProcess('resume')}><Play className="mr-2 h-4 w-4" /> Resume</Button>}
-                {process.control !== 'stop_requested' && <Button variant="destructive" size="sm" disabled={busy} onClick={() => void controlProcess('stop')}><Square className="mr-2 h-4 w-4" /> Stop</Button>}
+                {process.control !== 'stop_requested' && <Button variant="destructive" size="sm" disabled={busy} onClick={() => void controlProcess('stop')} title="No new pages start; the page in progress finishes and saves, then the process stops"><Square className="mr-2 h-4 w-4" /> Stop</Button>}
+                {process.control === 'stop_requested' && <Button variant="outline" size="sm" disabled={busy} onClick={() => void controlProcess('resume')} title="Take back the stop; the process carries on"><Play className="mr-2 h-4 w-4" /> Keep running</Button>}
+                {process.control === 'stop_requested' && <Button variant="destructive" size="sm" disabled={busy} onClick={() => void controlProcess('stop-now')} title="Cancel the page in progress now; it cannot save a late result"><Square className="mr-2 h-4 w-4" /> Stop now</Button>}
               </>
             ) : (
               <Button
@@ -273,14 +285,18 @@ export default function AntiGravityMetadata() {
           ) : (
             <span>Tick chapters or pages to process only those (Shift-click ticks a range), or Start process for the whole part.</span>
           )}
+          <label className="ml-auto flex cursor-pointer items-center gap-1.5" title="Lets you tick pages that already have Metadata. They are made again and the new Metadata replaces the old one in Studio, on R2 and on the phones.">
+            <Checkbox checked={includeSaved} disabled={busy} onCheckedChange={v => setIncludeSaved(v === true)} aria-label="Include saved pages (recreate their Metadata)" />
+            <span className={cn(includeSaved && 'font-medium text-foreground')}>Include saved pages (recreate)</span>
+          </label>
         </div>
         {processElsewhere && process && (
           <div className="flex flex-wrap items-center gap-2 rounded-md border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-xs">
-            <AlertTriangle className="h-3.5 w-3.5 shrink-0" /> {process.kind === 'metadata' ? 'A Metadata process' : process.kind === 'editor' ? 'A Timeline process' : 'An Image Clipper process'} is {process.control === 'paused' ? 'paused' : 'running'} on {process.seriesId === seriesId && process.partNumber === part ? 'this part' : `another part (Part ${process.partNumber})`}. One process at a time: let it finish or stop it first.
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" /> {process.kind === 'metadata' ? 'A Metadata process' : process.kind === 'editor' ? 'A Timeline process' : process.kind === 'narration' ? 'A Narration process' : 'An Image Clipper process'} is {process.control === 'paused' ? 'paused' : 'running'} on {process.seriesId === seriesId && process.partNumber === part ? 'this part' : `another part (Part ${process.partNumber})`}. One process at a time: let it finish or stop it first.
             <Link to="/antigravity/runs" className="underline">Open Running processes</Link>
           </div>
         )}
-        <div className="text-xs text-muted-foreground">{engineLine} · Parallel pages: {readiness.concurrency} · No Google Drive or R2 needed · Change them in Settings → AntiGravity</div>
+        <div className="text-xs text-muted-foreground">{engineLine} · Parallel pages: {readiness.concurrency} · No Google Drive needed; R2 only for recreating saved pages · Change them in Settings → AntiGravity</div>
         {blockers.length > 0 && (
           <ul className="space-y-1 rounded-md border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-xs">
             {blockers.map(b => <li key={b} className="flex items-start gap-1.5"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {b}</li>)}
@@ -309,8 +325,8 @@ export default function AntiGravityMetadata() {
                   checked={tickState}
                   disabled={busy || !s || canTick.length === 0}
                   onCheckedChange={() => tickChapter(chapter.id, tickState === false)}
-                  aria-label={`Tick every page of ${chapterLabel(chapter)} without Metadata`}
-                  title={canTick.length === 0 ? (s?.ready ? 'Nothing to tick: every page has Metadata or is processing now' : friendlyReason(s?.reason) ?? 'Not ready') : tickState === true ? 'Untick this chapter' : 'Tick every page without Metadata'}
+                  aria-label={includeSaved ? `Tick every page of ${chapterLabel(chapter)}` : `Tick every page of ${chapterLabel(chapter)} without Metadata`}
+                  title={canTick.length === 0 ? (s?.ready ? (includeSaved ? 'Nothing to tick: every page is processing now' : 'Nothing to tick: every page has Metadata or is processing now') : friendlyReason(s?.reason) ?? 'Not ready') : tickState === true ? 'Untick this chapter' : includeSaved ? 'Tick every page (saved ones are recreated)' : 'Tick every page without Metadata'}
                 />
                 <button type="button" className="flex flex-1 items-center gap-2 text-left" onClick={() => setOpen(prev => { const next = new Set(prev); next.has(chapter.id) ? next.delete(chapter.id) : next.add(chapter.id); return next })} aria-expanded={isOpen}>
                   {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
@@ -338,7 +354,7 @@ export default function AntiGravityMetadata() {
                         {s.pages.map((page, index) => {
                           const k = key(chapter.id, page.filename)
                           const job = jobs.get(k)
-                          const blocked = metadataBlockReason(s, page, job)
+                          const blocked = metadataBlockReason(s, page, job, includeSaved)
                           const isTicked = !blocked && selected.has(k)
                           const attempt = job?.attempt
                           return (
@@ -357,7 +373,7 @@ export default function AntiGravityMetadata() {
                                   <img src={clipper3Api.getImageUrl(chapter.id, page.filename)} alt="" loading="lazy" className="h-12 w-9 shrink-0 rounded border object-cover object-top" />
                                   <div>
                                     <div className="font-mono text-xs">{page.filename}</div>
-                                    <div className="text-xs text-muted-foreground">#{index + 1}{blocked && blocked !== 'Metadata saved' && blocked !== 'Processing now' && s.ready ? ` · ${blocked}` : ''}</div>
+                                    <div className="text-xs text-muted-foreground">#{index + 1}{blocked && page.state !== 'complete' && blocked !== 'Processing now' && s.ready ? ` · ${blocked}` : ''}</div>
                                   </div>
                                 </div>
                               </td>

@@ -8,11 +8,13 @@ import archiver from 'archiver'
 // Chapter zips as Sleeper-Cell's VoiceoverUpload.kt uploads them, at the bucket root (the phone's prefix differs).
 const zips = new Map<string, Buffer>()
 const etags = new Map<string, string>()
+const modified = new Map<string, Date>()
+let settingRows: { key: string; value: string }[] = []
 const send = vi.fn(async (command: { constructor: { name: string }; input: { Key?: string; Prefix?: string } }) => {
   if (command.constructor.name === 'ListObjectsV2Command') {
     const prefix = command.input.Prefix!
     const contents = [...zips].filter(([key]) => key.startsWith(prefix))
-      .map(([key, body]) => ({ Key: key, ETag: `"${etags.get(key)}"`, Size: body.length }))
+      .map(([key, body]) => ({ Key: key, ETag: `"${etags.get(key)}"`, Size: body.length, LastModified: modified.get(key) }))
     return { Contents: contents, IsTruncated: false }
   }
   if (command.constructor.name === 'GetObjectCommand') {
@@ -38,7 +40,7 @@ let nextId = 0
 const forChapter = (where: any) => (row: any) => row.chapterId === where.chapterId && row.language === where.language
 vi.mock('../../index.js', () => ({
   prisma: {
-    setting: { findUnique: async () => null },
+    setting: { findUnique: async () => null, findMany: async ({ where }: any) => settingRows.filter(r => where.key.in.includes(r.key)) },
     series: {
       findUnique: async () => ({
         rootFolder: 'Solo Hero',
@@ -129,6 +131,8 @@ beforeEach(async () => {
   process.env.DOWNLOAD_ROOT = root
   zips.clear()
   etags.clear()
+  modified.clear()
+  settingRows = []
   send.mockClear()
   sections = []
   files = []
@@ -326,6 +330,20 @@ describe('fetchPhoneVoiceover', () => {
     expect((await previewPhoneVoiceover('s4')).chapters.map(c => c.state)).toEqual(['same'])
     etags.set('voiceover/Solo Hero/Chapter 009.zip', 'p9b')
     expect((await previewPhoneVoiceover('s4')).chapters.map(c => c.state)).toEqual(['changed'])
+  })
+
+  it('ignores a zip uploaded before the chapter\'s voiceover was reset in this language', async () => {
+    const key = 'voiceover/Solo Hero/Chapter 009.zip'
+    zips.set(key, await chapterZip('Chapter 009', ['One.']))
+    etags.set(key, 'p9')
+    modified.set(key, new Date('2026-11-13T09:00:00Z'))
+    settingRows = [{ key: 'voiceoverReset:c9:en', value: '2026-11-13T10:00:00.000Z' }]
+    expect((await previewPhoneVoiceover('s5')).chapters).toEqual([])
+    expect((await fetchPhoneVoiceover('s5', ['c9'])).fetched).toEqual([])
+    // Hinglish was not reset; a new English upload after the reset comes in again.
+    expect((await previewPhoneVoiceover('s5', 'hi')).chapters).toEqual([])
+    modified.set(key, new Date('2026-11-13T11:00:00Z'))
+    expect((await previewPhoneVoiceover('s5')).chapters.map(c => [c.number, c.state])).toEqual([[9, 'new']])
   })
 
   it('leaves the chapter as it was when a file isn\'t audio', async () => {

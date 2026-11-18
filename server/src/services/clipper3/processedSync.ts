@@ -65,6 +65,7 @@ import {
   writeImageMetadata,
   canonicalizeExportedFilenames,
   writeImagePoints,
+  cropRotation,
   type Clipper3CropEntry,
   type Clipper3ImageCropFile
 } from './perImageStore.js'
@@ -137,7 +138,9 @@ function cropsKey(crops: Clipper3CropEntry[]): string {
     id: c.id,
     reason: c.reason ?? '',
     mode: c.crop.mode,
-    points: c.crop.points.map(p => ({ id: p.id, x: p.x, y: p.y }))
+    points: c.crop.points.map(p => ({ id: p.id, x: p.x, y: p.y })),
+    // Only turned crops carry the key, so keys of upright pages are unchanged.
+    ...(cropRotation(c) ? { rotate: cropRotation(c) } : {})
   })))
 }
 
@@ -513,6 +516,7 @@ async function syncChapterProcessedLegacy(input: SyncChapterInput): Promise<Chap
           if(!Array.isArray(raw.crops)||crops.length!==raw.crops.length||new Set(crops.map(c=>c.id)).size!==crops.length)throw new Error('Invalid crop list')
           for(const c of crops)if(!['rectangle','perspective'].includes(c.crop.mode)||c.crop.points.some(p=>p.x<0||p.x>1||p.y<0||p.y>1))throw new Error('Crop outside source image')
           if(input.dryRun){record('ready','Pointers ready for manual review; Metadata follows cropping.',image.filename,crops.length);continue}
+          artifact.crops=crops // the reader's normalized copy (a bad "rotate" value is dropped)
           await writeImagePoints(input.folderPath,image.filename,artifact)
           if(redo?.status==='pending')await finishPageRedo(input.folderPath,redo)
           record('imported','Pointers imported; awaiting manual review and crop.',image.filename,crops.length)

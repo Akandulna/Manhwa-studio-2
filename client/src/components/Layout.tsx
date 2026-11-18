@@ -3,6 +3,8 @@ import { Link, useLocation } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { useSocket } from '@/lib/socket'
 import { usePhoneRelay } from '@/hooks/usePhoneRelay'
+import { useAgentStatus } from '@/hooks/useAgentStatus'
+import { Switch } from '@/components/ui/switch'
 import ManagerNotifications from '@/components/ManagerNotifications'
 import {
   Library,
@@ -22,11 +24,14 @@ import {
   Layers,
   Users,
   Activity,
-  Orbit
+  Orbit,
+  Sparkles,
+  Bot
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { AgentNotifier } from '@/components/AgentNotifier'
 
 interface LayoutProps {
   children: React.ReactNode
@@ -52,6 +57,8 @@ export default function Layout({ children }: LayoutProps) {
   const location = useLocation()
   const { isConnected, queueStatus } = useSocket()
   const relay = usePhoneRelay()
+  const agent = useAgentStatus()
+  const agentOn = agent.status?.settings.enabled ?? false
 
   const [collapsed, setCollapsed] = useState<boolean>(
     () => localStorage.getItem(SIDEBAR_STORAGE_KEY) === 'true'
@@ -92,6 +99,27 @@ export default function Layout({ children }: LayoutProps) {
     }
   ]
 
+  // Processor: the AI Engines (AntiGravity) workspace
+  const processorModuleItems: NavItem[] = [
+    {
+      icon: <Orbit className="h-5 w-5" />,
+      label: 'AI Engines',
+      href: '/antigravity'
+    },
+    {
+      icon: <Sparkles className="h-5 w-5" />,
+      label: 'Gemini MCP',
+      href: '/gemini-mcp'
+    },
+    {
+      icon: <Smartphone className="h-5 w-5" />,
+      label: 'Sleeper-Cell',
+      hint: 'Coming Soon',
+      href: '/processor/sleeper-cell',
+      disabled: true
+    }
+  ]
+
   // Narration Studio module items
   const narrationModuleItems: NavItem[] = [
     {
@@ -101,18 +129,12 @@ export default function Layout({ children }: LayoutProps) {
     }
   ]
 
-  // Module 3: Image Clipper — two clippers (SleeperCell, AI Engines) plus Metadata
+  // Module 3: Image Clipper — Image Clipper 3.0 plus Metadata
   const clipperModuleItems: NavItem[] = [
     {
       icon: <Target className="h-5 w-5" />,
-      label: 'SleeperCell',
-      hint: 'Image Clipper 3.0',
+      label: 'Image Clipper 3.0',
       href: '/clipper3'
-    },
-    {
-      icon: <Orbit className="h-5 w-5" />,
-      label: 'AI Engines',
-      href: '/antigravity'
     },
     {
       icon: <FileJson className="h-5 w-5" />,
@@ -127,6 +149,11 @@ export default function Layout({ children }: LayoutProps) {
       icon: <Clapperboard className="h-5 w-5" />,
       label: 'Editor 2.0',
       href: '/editor2'
+    },
+    {
+      icon: <Youtube className="h-5 w-5" />,
+      label: 'Shorts',
+      href: '/shorts'
     }
   ]
 
@@ -160,7 +187,6 @@ export default function Layout({ children }: LayoutProps) {
 
   // Check if current path is in narration module
   const isInNarration = location.pathname.startsWith('/narration')
-  const isInEditor2 = location.pathname.startsWith('/editor2')
 
   // Renders a single nav link, collapsing to an icon-only button when needed.
   const renderNavLink = (item: NavItem, active: boolean) => {
@@ -259,6 +285,35 @@ export default function Layout({ children }: LayoutProps) {
 
         <Separator />
 
+        {/* Studio Agent: top of the menu, with its on/off switch */}
+        <div className={cn('flex items-center gap-2 p-3', collapsed && 'flex-col')}>
+          <Link
+            to="/agent"
+            title={collapsed ? `${agent.status?.settings.name ?? 'Agent'} · ${agentOn ? 'on' : 'off'}` : undefined}
+            className={cn(
+              'flex min-w-0 flex-1 items-center gap-3 rounded-lg px-3 py-2 transition-colors',
+              collapsed && 'justify-center px-2',
+              location.pathname === '/agent' ? 'bg-primary text-primary-foreground' : 'hover:bg-accent text-foreground'
+            )}
+          >
+            <span className="relative flex-shrink-0">
+              <Bot className="h-5 w-5" />
+              <span className={cn('absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-card', agentOn ? 'bg-emerald-500' : 'bg-muted-foreground/60')} />
+            </span>
+            {!collapsed && <span className="truncate">{agent.status?.settings.name ?? 'Agent'}</span>}
+          </Link>
+          <Switch
+            checked={agentOn}
+            disabled={!agent.status}
+            onCheckedChange={v => void agent.setEnabled(v).catch(() => undefined)}
+            aria-label="Agent on or off"
+            title={agentOn ? 'Agent is on' : 'Agent is off'}
+            className="scale-90"
+          />
+        </div>
+
+        <Separator />
+
         {/* Modules Navigation */}
         <ScrollArea className="flex-1">
           {/* Library & Downloader */}
@@ -273,6 +328,16 @@ export default function Layout({ children }: LayoutProps) {
                     !isInNarration
                 )
               )}
+            </nav>
+          </div>
+
+          <Separator className="my-2" />
+
+          {/* Processor */}
+          <div className="px-4 pb-4">
+            {renderSectionLabel('PROCESSOR')}
+            <nav className="space-y-2">
+              {processorModuleItems.map((item) => renderNavLink(item, location.pathname === item.href || location.pathname.startsWith(`${item.href}/`)))}
             </nav>
           </div>
 
@@ -302,7 +367,7 @@ export default function Layout({ children }: LayoutProps) {
           <div className="px-4 pb-4">
             {renderSectionLabel('VIDEO EDITOR')}
             <nav className="space-y-2">
-              {editorModuleItems.map((item) => renderNavLink(item, isInEditor2))}
+              {editorModuleItems.map((item) => renderNavLink(item, location.pathname === item.href || location.pathname.startsWith(`${item.href}/`)))}
             </nav>
           </div>
 
@@ -370,9 +435,10 @@ export default function Layout({ children }: LayoutProps) {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-auto">
+      <main className="flex min-h-0 flex-1 flex-col overflow-auto">
         <ManagerNotifications />
-        <div className="h-full">
+        <div className="min-h-0 flex-1">
+          <AgentNotifier />
           {children}
         </div>
       </main>

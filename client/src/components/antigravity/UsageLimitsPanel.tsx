@@ -1,19 +1,23 @@
 /**
- * Usage limits for both AntiGravity engines, shown on Running processes.
+ * Usage limits for the AntiGravity engines, shown on Running processes.
  *
  *   Google (Antigravity): live from `agy /usage` (the server caches it for
  *     two minutes; Refresh forces a new read). Bars show what is left.
  *   ChatGPT (Codex): each account's 5-hour and weekly windows as Codex last
  *     recorded them in its session files (updated after every Codex turn).
+ *   Claude (Claude Code): live from `claude -p "/usage"` (no model turn; the
+ *     server caches it for two minutes), plus "limit reached" as Claude Code
+ *     reported it during Studio's last Claude turn.
  *
  * Refreshes on mount, on Refresh, and (debounced) on local AntiGravity
  * progress events. Nothing here touches R2.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Gauge, Loader2, RefreshCw } from 'lucide-react'
+import { ChevronRight, Gauge, Loader2, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { aiUsageApi, type AiUsageLimits, type CodexRateLimits } from '@/lib/api'
+import { claudeLimitText, claudeWindowLabel } from './ClaudeCard'
 import { useSocket } from '@/lib/socket'
 import { cn } from '@/lib/utils'
 
@@ -48,11 +52,46 @@ function CodexWindow({ label, window }: { label: string; window: CodexRateLimits
   return <LeftBar label={label} left={100 - window.usedPercent} resetsAt={window.resetsAt} />
 }
 
+type EngineKey = 'google' | 'codex' | 'claude'
+/** Which engine sections are collapsed, kept on this Mac across visits. */
+const COLLAPSED_KEY = 'antigravity.usageLimits.collapsed'
+const readCollapsed = (): Record<EngineKey, boolean> => {
+  try { return { google: false, codex: false, claude: false, ...JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? '{}') } } catch { return { google: false, codex: false, claude: false } }
+}
+
+/** The tightest window of an engine (least left), shown in its header while collapsed. */
+const tightest = (lefts: number[]) => (lefts.length ? Math.max(0, Math.min(100, Math.round(Math.min(...lefts)))) : null)
+
+/** One engine's limits; the header toggles it. */
+function EngineSection({ title, collapsed, onToggle, badge, summary, first, children }: {
+  title: string; collapsed: boolean; onToggle: () => void; badge?: React.ReactNode; summary: { left: number | null; alert?: string | null }; first?: boolean; children: React.ReactNode
+}) {
+  const tone = summary.alert || (summary.left !== null && summary.left <= 10) ? 'text-destructive' : summary.left !== null && summary.left <= 30 ? 'text-yellow-600 dark:text-yellow-400' : 'text-muted-foreground'
+  return (
+    <div className={cn('space-y-2', !first && 'border-t pt-3')}>
+      <button type="button" onClick={onToggle} aria-expanded={!collapsed} className="flex w-full items-center gap-1.5 text-left">
+        <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform', !collapsed && 'rotate-90')} />
+        <span className="min-w-0 flex-1 truncate text-sm font-medium">{title}</span>
+        {collapsed
+          ? <span className={cn('shrink-0 text-[11px] tabular-nums', tone)}>{summary.alert ?? (summary.left !== null ? `${summary.left}% left` : '—')}</span>
+          : badge}
+      </button>
+      {!collapsed && <div className="space-y-2 pl-5">{children}</div>}
+    </div>
+  )
+}
+
 export function UsageLimitsPanel() {
   const { socket } = useSocket()
   const [data, setData] = useState<AiUsageLimits | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [collapsed, setCollapsed] = useState(readCollapsed)
+  const toggle = (key: EngineKey) => setCollapsed(c => {
+    const next = { ...c, [key]: !c[key] }
+    try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify(next)) } catch { /* private mode */ }
+    return next
+  })
 
   const load = useCallback(async (refresh: boolean) => {
     setLoading(true)
@@ -80,6 +119,24 @@ export function UsageLimitsPanel() {
 
   const google = data?.google
   const codex = data?.codex.accounts ?? []
+  const claudeLimits = data?.claude?.limits ?? []
+  const claudeUsage = data?.claude?.usage ?? null
+  const claudeRefused = claudeLimits.filter(l => l.status === 'rejected' && (!l.resetsAt || Date.parse(l.resetsAt) > Date.now()))
+  const googleSummary = {
+    left: tightest(google?.quota?.groups.flatMap(g => g.buckets.map(b => (b.remainingFraction ?? 0) * 100)) ?? []),
+    alert: google?.error ? 'error' : null
+  }
+  const codexUsable = codex.filter(a => a.enabled)
+  const codexSummary = {
+    // Pages go to the next usable account, so the best account's tightest window is what is left to work with.
+    left: (() => { const per = codexUsable.filter(a => !a.limited).map(a => tightest([a.limits?.primary, a.limits?.secondary].filter(Boolean).map(w => 100 - w!.usedPercent))).filter((v): v is number => v !== null); return per.length ? Math.max(...per) : null })(),
+    alert: codexUsable.length && codexUsable.every(a => a.limited) ? 'all limited' : null
+  }
+  const claudeSummary = {
+    left: tightest(claudeUsage?.windows.map(w => 100 - w.usedPercent) ?? []),
+    alert: claudeRefused.length ? 'limit reached' : data?.claude?.error && !claudeUsage ? 'error' : null
+  }
+  const live = (at: string | null | undefined) => at ? <span className="shrink-0 text-[10px] text-muted-foreground" title={new Date(at).toLocaleString()}>live</span> : null
 
   return (
     <section className="space-y-2" aria-label="Usage limits">
@@ -94,11 +151,7 @@ export function UsageLimitsPanel() {
 
       {data && (
         <div className="space-y-3 rounded-md border p-3">
-          <div className="space-y-2">
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="text-sm font-medium">Google · Antigravity</span>
-              {google?.checkedAt && <span className="shrink-0 text-[10px] text-muted-foreground" title={new Date(google.checkedAt).toLocaleString()}>live</span>}
-            </div>
+          <EngineSection first title="Google · Antigravity" collapsed={collapsed.google} onToggle={() => toggle('google')} badge={live(google?.checkedAt)} summary={googleSummary}>
             {google?.account && <div className="truncate text-[11px] text-muted-foreground" title={google.account}>{google.account}</div>}
             {google?.quota?.groups.map(group => (
               <div key={group.name} className="space-y-1.5">
@@ -115,10 +168,9 @@ export function UsageLimitsPanel() {
             ))}
             {google?.quota && google.quota.groups.length === 0 && <div className="text-xs text-muted-foreground">agy reported no limits.</div>}
             {google?.error && <div className="text-xs text-destructive">{google.error}</div>}
-          </div>
+          </EngineSection>
 
-          <div className="space-y-2 border-t pt-3">
-            <span className="text-sm font-medium">ChatGPT · Codex</span>
+          <EngineSection title="ChatGPT · Codex" collapsed={collapsed.codex} onToggle={() => toggle('codex')} summary={codexSummary}>
             {codex.map(a => (
               <div key={a.id} className={cn('space-y-1.5', !a.enabled && 'opacity-60')}>
                 <div className="flex items-baseline justify-between gap-2 text-[11px]">
@@ -137,7 +189,18 @@ export function UsageLimitsPanel() {
                 )}
               </div>
             ))}
-          </div>
+          </EngineSection>
+
+          <EngineSection title="Claude · Claude Code" collapsed={collapsed.claude} onToggle={() => toggle('claude')} badge={live(claudeUsage?.at)} summary={claudeSummary}>
+            {claudeUsage?.windows.map(w => <LeftBar key={w.label} label={w.label} left={100 - w.usedPercent} resetsAt={w.resetsAt} />)}
+            {claudeRefused.map(l => (
+              <div key={l.type} className="text-[11px] text-destructive">{claudeWindowLabel(l.type)}: {claudeLimitText(l)}</div>
+            ))}
+            {!claudeUsage && !data.claude?.error && (claudeLimits.length
+              ? claudeLimits.map(l => <div key={l.type} className="flex justify-between gap-2 text-[11px]"><span className="text-muted-foreground">{claudeWindowLabel(l.type)}</span><span>{claudeLimitText(l)}</span></div>)
+              : <div className="text-[11px] text-muted-foreground">No usage read yet.</div>)}
+            {data.claude?.error && <div className="text-xs text-destructive">{data.claude.error}</div>}
+          </EngineSection>
         </div>
       )}
     </section>

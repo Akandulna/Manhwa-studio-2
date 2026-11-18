@@ -208,6 +208,33 @@ describe('four-step flow end to end', () => {
     ])
   })
 
+  it('carries a sideways crop\'s rotate from step 2 into the assembled analysis and the review', () => {
+    let stored: { steps: string | null; review: string | null } = { steps: null, review: null }
+    stored = step(stored, inventory([shot('shot-01', ['s01', 'top'], ['s01', 'bottom']), shot('shot-02', ['s02', 'top'], ['s02', 'bottom'])])).stored
+    expect(steps.geometryPrompt(steps.parseSteps(stored.steps)!, handoff())).toContain('- rotate: only on sideways art. SIDEWAYS ART:')
+    const bad = step(stored, geometry([
+      { ...candidate('candidate-01', ['shot-01'], ['s01', 50, 100], ['s01', 750, 1500]), rotate: 180 },
+      candidate('candidate-02', ['shot-02'], ['s02', 50, 152], ['s02', 750, 1752]),
+    ]))
+    expect(bad.out.ok).toBe(false)
+    expect(bad.out.reply).toContain('rotate must be 90, -90 or left out')
+    let r = step(stored, geometry([
+      { ...candidate('candidate-01', ['shot-01'], ['s01', 50, 100], ['s01', 750, 1500]), rotate: -90 },
+      candidate('candidate-02', ['shot-02'], ['s02', 50, 152], ['s02', 750, 1752]),
+    ]))
+    expect(r.out.ok).toBe(true)
+    stored = r.stored
+    expect(steps.parseSteps(stored.steps)!.placed.map(p => p.rotate)).toEqual([-90, undefined])
+    r = step(stored, inspections([['candidate-01', null], ['candidate-02', null]]))
+    if (!r.out.ok) throw new Error(r.out.reply)
+    expect(parseAnalysis(r.out.analysisJson!, handoff(), true).analysis!.candidates.map(c => c.rotate)).toEqual([-90, undefined])
+    const review = parseState(r.stored.review!)!
+    expect(review.crops.map(c => c.rotate)).toEqual([-90, undefined])
+    const prompt = steps.reviewStepPrompt(review, [], audit(800, 5000, auditInput(review).crops, luma), handoff())
+    expect(prompt).toContain('"rotate": -90')
+    expect(prompt.trimEnd().endsWith('or "rotate": 0 when a listed crop is actually upright.')).toBe(true)
+  })
+
   it('a page with no artwork goes straight from step 2 to review', () => {
     let r = step({ steps: null, review: null }, inventory([], { page_has_no_artwork: true }))
     expect(r.out.ok).toBe(true)

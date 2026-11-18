@@ -1,5 +1,6 @@
 import { cloudClipperRoutes } from './routes/cloudClipper.js';
 import { configureRelayTraffic } from './services/relayTraffic.js'
+import { initAgentRoutes } from './routes/agent.js';
 import {initManagedMaintenanceRoutes} from './routes/managedMaintenance.js';
 import express from 'express';
 import cors from 'cors';
@@ -19,12 +20,14 @@ import manualRoutes from './routes/manual.js';
 import { initNarrationRoutes } from './routes/narration.js';
 import { initClipper3Routes } from './routes/clipper3.js';
 import { initVideoEditor2Routes } from './routes/videoEditor2.js';
+import { createShortsRouter } from './routes/shorts.js';
 import { initStorageRoutes } from './routes/storage.js';
 import { initR2Routes } from './routes/r2.js';
 import {initManagedPilotRoutes} from './routes/managedPilot.js';
 import { initStitchRoutes } from './routes/stitch.js';
 import { initPagePreviewRoutes } from './routes/pagePreview.js';
 import { initGoogleDriveRoutes } from './routes/googleDrive.js';
+import { initGeminiMcpRoutes } from './routes/geminiMcp.js';
 import { initAntigravityRoutes } from './routes/antigravity.js';
 import { DownloadManager } from './services/downloadManager.js';
 import { startPhoneRelay, receiveWifiReceipt, sendPhoneRequest, onPhoneReceipt } from './services/phoneRelay.js';
@@ -106,12 +109,15 @@ app.use('/api/clipper-cloud', cloudClipperRoutes());
 app.use('/api/clipper3', initClipper3Routes(io));  // Module 3: Image Clipper 3.0 — per-image crop JSONs, page-local coordinates
 app.use('/api/metadata', metadataRoutes());
 app.use('/api/video2', initVideoEditor2Routes(io));  // Module 4v2: Editor 2.0
+app.use('/api/shorts', createShortsRouter());
 app.use('/api/storage', initStorageRoutes());        // Storage: local disk usage + reclaiming it
 app.use('/api/stitch', initStitchRoutes());          // Library: stitch a chapter's many short pages into a few tall ones
 app.use('/api/page-preview', initPagePreviewRoutes()); // Library: preview a chapter's pages and delete unwanted ones
 app.use('/api/r2', initR2Routes(io));                // Cloud backup: upload series folders to Cloudflare R2
 app.use('/api/google-drive', initGoogleDriveRoutes(prisma)); // Studio AntiGravity: Google Drive connection (local-only)
 app.use('/api/antigravity', initAntigravityRoutes(prisma, io));   // Studio AntiGravity: local CLI, models, settings (local-only)
+app.use('/api/agent', initAgentRoutes(prisma, io));                    // Studio Agent: chat + library actions through a local CLI AI engine
+app.use('/api/gemini-mcp', initGeminiMcpRoutes(prisma));         // Gemini MCP: connector for the Gemini Mac app (docs/PRD-gemini-app-narration.md)
 app.use('/api/managed-pilot',initManagedPilotRoutes(prisma));
 app.use('/api/managed-maintenance',initManagedMaintenanceRoutes(prisma));
 app.get('/api/managers', async (_req, res) => {

@@ -18,8 +18,8 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
-import { Loader2, Pencil, Save, X, Plus } from 'lucide-react'
-import { clipper3Api, type Clipper3CropEntry, type Clipper3ImageCropFile, type Clipper3ImagePoints } from '@/lib/api'
+import { Loader2, Pencil, Save, X, Plus, ArrowDownToLine, RotateCw, RotateCcw } from 'lucide-react'
+import { clipper3Api, type Clipper3CropEntry, type Clipper3ImageCropFile, type Clipper3ImagePoints, type Clipper3TopSuggestion } from '@/lib/api'
 import { useToast } from '@/components/ui/use-toast'
 import { removeCropFromMetadata } from '@/lib/cropReviewSession'
 
@@ -75,9 +75,62 @@ function boundsToEntry(entry: Clipper3CropEntry, bounds: Bounds): Clipper3CropEn
   }
 }
 
+/** The same crop with its turn set; null = upright (the key is dropped, not stored as 0). */
+export function withRotation(entry: Clipper3CropEntry, rotate: 90 | -90 | null): Clipper3CropEntry {
+  const { rotate: _previous, ...upright } = entry
+  return rotate ? { ...upright, rotate } : upright
+}
+
+const ROTATE_ACCENT = '#38bdf8'
+const UPRIGHT_PREVIEW_PX = 180
+
+/**
+ * The crop as Crop Sections will save it: its region of the page, turned upright.
+ * Drawn from the page image with CSS, so it costs nothing and follows every drag.
+ */
+function UprightPreview({ src, pageWidth, pageHeight, bounds, rotate }: {
+  src: string; pageWidth: number; pageHeight: number; bounds: Bounds; rotate: 90 | -90
+}) {
+  const w = (bounds.right - bounds.left) * pageWidth
+  const h = (bounds.bottom - bounds.top) * pageHeight
+  if (w < 1 || h < 1) return null
+  // Turned, the crop is h wide and w tall.
+  const scale = Math.min(UPRIGHT_PREVIEW_PX / h, UPRIGHT_PREVIEW_PX / w)
+  return (
+    <div
+      className="rounded border shadow-lg"
+      style={{ position: 'relative', width: h * scale, height: w * scale, overflow: 'hidden', background: '#0a0a0a', borderColor: ROTATE_ACCENT }}
+    >
+      <div
+        style={{
+          position: 'absolute',
+          width: w * scale,
+          height: h * scale,
+          left: (h - w) * scale / 2,
+          top: (w - h) * scale / 2,
+          transform: `rotate(${rotate}deg)`,
+          backgroundImage: `url("${src}")`,
+          backgroundSize: `${pageWidth * scale}px ${pageHeight * scale}px`,
+          backgroundPosition: `${-bounds.left * pageWidth * scale}px ${-bounds.top * pageHeight * scale}px`,
+          backgroundRepeat: 'no-repeat'
+        }}
+      />
+    </div>
+  )
+}
+
 type DragMode =
   | { kind: 'move'; startX: number; startY: number; origin: Bounds }
   | { kind: 'resize'; handle: 'nw' | 'ne' | 'sw' | 'se'; startX: number; startY: number; origin: Bounds }
+
+const SUGGEST_ACCENT = '#22c55e'
+/** A suggestion belongs to the crop still sitting where it was measured. */
+const SAME_EDGE = 1e-6
+
+/** The suggestion for this crop, if its top and left edges have not moved since it was made. */
+export function topSuggestionFor(bounds: { top: number; left: number }, suggestions?: Clipper3TopSuggestion[]): Clipper3TopSuggestion | undefined {
+  return suggestions?.find(s => Math.abs(s.top - bounds.top) < SAME_EDGE && Math.abs(s.left - bounds.left) < SAME_EDGE)
+}
 
 const CLAMP01 = (n: number) => Math.min(1, Math.max(0, n))
 const MIN_SIZE = 0.01
@@ -130,6 +183,14 @@ export interface CropPointerEditorProps {
    * constrained, is unaffected.
    */
   showMetadataRail?: boolean
+  /**
+   * Review mode only: crops whose top edge looks one step too high. Each is
+   * drawn as a marked strip with "Move top here"; accepting goes through
+   * onCommit like a drag, so it autosaves and can be undone.
+   */
+  topSuggestions?: Clipper3TopSuggestion[]
+  /** The user said a suggestion is wrong; the caller stops passing it. */
+  onDismissTopSuggestion?: (suggestion: Clipper3TopSuggestion) => void
 }
 
 /** One crop's entry from the metadata document, as far as the rail reads it. */
@@ -157,7 +218,9 @@ export function CropPointerEditor({
   hideInlineTrigger = false,
   editRequest = 0,
   metadataByCropId,
-  showMetadataRail = false
+  showMetadataRail = false,
+  topSuggestions,
+  onDismissTopSuggestion
 }: CropPointerEditorProps) {
   const { toast } = useToast()
   const [file, setFile] = useState<Clipper3ImageCropFile | null>(initialFile ?? null)
@@ -252,6 +315,31 @@ export function CropPointerEditor({
     setSelectedCropId(null)
     setDirty(true)
   }, [file, reviewMode, toast])
+
+  /** Accepts a top suggestion: only that crop's top edge moves. */
+  const applyTopSuggestion = useCallback((entry: Clipper3CropEntry, bounds: Bounds, suggestion: Clipper3TopSuggestion) => {
+    if (!file || suggestion.suggestedTop >= bounds.bottom - MIN_SIZE) return
+    const moved = boundsToEntry(entry, { ...bounds, top: suggestion.suggestedTop })
+    const committed = onCommitRef.current?.({ ...file, crops: file.crops.map(crop => (crop.id === entry.id ? moved : crop)) })
+    if (committed) setSelectedCropId(committed.crops.find(crop => crop.crop === moved.crop)?.id ?? null)
+  }, [file])
+
+  /** Sets or clears a crop's turn (sideways-drawn art); geometry is untouched. */
+  const setRotation = useCallback((cropId: string, rotate: 90 | -90 | null) => {
+    if (!file) return
+    const target = file.crops.find(c => c.id === cropId)
+    if (!target) return
+    const turned = withRotation(target, rotate)
+    const next = { ...file, crops: file.crops.map(c => (c.id === cropId ? turned : c)) }
+    if (reviewMode) {
+      const committed = onCommitRef.current?.(next)
+      if (committed) setSelectedCropId(committed.crops.find(crop => crop.crop === turned.crop)?.id ?? null)
+      return
+    }
+    draftRef.current = next
+    setFile(next)
+    setDirty(true)
+  }, [file, reviewMode])
 
   const addCrop = useCallback((bounds: Bounds) => {
     if (!file) return
@@ -610,6 +698,9 @@ export function CropPointerEditor({
           if (!bounds) return null
           const isSelected = editing && selectedCropId === entry.id
           const color = isSelected ? SELECTED_ACCENT : (editing ? ACCENT : idleAccent)
+          const suggestion = reviewMode ? topSuggestionFor(bounds, topSuggestions) : undefined
+          // Share of the crop's height the suggestion would cut off its top.
+          const suggestedCut = suggestion ? (suggestion.suggestedTop - bounds.top) / (bounds.bottom - bounds.top) : 0
 
           return (
             <div key={entry.id}>
@@ -643,8 +734,96 @@ export function CropPointerEditor({
                   }}
                 >
                   <span>{entry.id}</span>
+                  {entry.rotate && (
+                    <span
+                      className="flex items-center gap-0.5 rounded px-0.5 font-semibold"
+                      style={{ background: ROTATE_ACCENT, color: '#0a0a0a' }}
+                      title={entry.rotate === 90 ? 'Drawn sideways: Crop Sections turns it 90° clockwise' : 'Drawn sideways: Crop Sections turns it 90° counter-clockwise'}
+                    >
+                      {entry.rotate === 90 ? <RotateCw className="h-2.5 w-2.5" /> : <RotateCcw className="h-2.5 w-2.5" />}
+                      90°
+                    </span>
+                  )}
                   {entry.reason && <span className="opacity-80">{entry.reason}</span>}
                 </div>
+
+                {/* Sideways art: turn buttons (clicking the active one makes the crop upright again),
+                    and the crop as it will be saved. Beside the remove button, same click rules. */}
+                {isSelected && (
+                  <div
+                    className="absolute flex items-center gap-1"
+                    style={{ top: 2, right: 24, zIndex: 31 }}
+                    onMouseDown={(e) => { e.stopPropagation(); e.preventDefault() }}
+                  >
+                    {([[-90, RotateCcw, 'counter-clockwise (the art\'s top points right)'], [90, RotateCw, 'clockwise (the art\'s top points left)']] as const).map(([angle, Icon, how]) => {
+                      const active = entry.rotate === angle
+                      return (
+                        <button
+                          key={angle}
+                          title={active ? 'Upright again: cut without turning' : `Drawn sideways — turn the cut crop 90° ${how}`}
+                          onClick={(e) => { e.stopPropagation(); setRotation(entry.id, active ? null : angle) }}
+                          style={{
+                            width: 18, height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            background: active ? ROTATE_ACCENT : 'rgba(24,24,27,0.9)', color: active ? '#0a0a0a' : '#fafafa',
+                            border: `1px solid ${active ? '#0a0a0a' : ROTATE_ACCENT}`, borderRadius: 3, cursor: 'pointer', lineHeight: 1
+                          }}
+                        >
+                          <Icon className="h-3 w-3" />
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+                {isSelected && entry.rotate && (
+                  <div className="absolute" style={{ left: 4, bottom: 4, zIndex: 31, pointerEvents: 'none' }}>
+                    <UprightPreview
+                      src={clipper3Api.getImageUrl(chapterId, filename)}
+                      pageWidth={width}
+                      pageHeight={height}
+                      bounds={bounds}
+                      rotate={entry.rotate}
+                    />
+                  </div>
+                )}
+
+                {suggestion && suggestedCut > 0 && suggestedCut < 1 && (
+                  <>
+                    {/* The strip that would be cut off, then the proposed top. */}
+                    <div
+                      style={{
+                        position: 'absolute', left: 0, right: 0, top: 0, height: `${suggestedCut * 100}%`,
+                        background: `repeating-linear-gradient(135deg, ${SUGGEST_ACCENT}55 0 8px, transparent 8px 16px)`,
+                        borderBottom: `2px dashed ${SUGGEST_ACCENT}`,
+                        pointerEvents: 'none'
+                      }}
+                    />
+                    {/* data-top-suggestion: the preview's "tops to check" button scrolls to these, one after another. */}
+                    <div
+                      data-top-suggestion
+                      className="absolute flex items-center gap-1"
+                      style={{ top: `${suggestedCut * 100}%`, left: '50%', transform: 'translate(-50%, -50%)', zIndex: 32 }}
+                      onMouseDown={(e) => { e.stopPropagation(); e.preventDefault() }}
+                    >
+                      <button
+                        className="flex items-center gap-1 rounded px-2 py-1 text-[11px] font-semibold whitespace-nowrap shadow"
+                        style={{ background: SUGGEST_ACCENT, color: '#0a0a0a', border: '1px solid #0a0a0a', cursor: 'pointer' }}
+                        title={`This top looks ${suggestion.movePx} px too high. Moves only the top edge down to the dashed line; Undo restores it.`}
+                        onClick={(e) => { e.stopPropagation(); applyTopSuggestion(entry, bounds, suggestion) }}
+                      >
+                        <ArrowDownToLine className="h-3 w-3" />
+                        Move top here
+                      </button>
+                      <button
+                        className="flex items-center justify-center rounded shadow"
+                        style={{ width: 22, height: 22, background: 'rgba(24,24,27,0.9)', color: '#fafafa', border: `1px solid ${SUGGEST_ACCENT}`, cursor: 'pointer' }}
+                        title="Keep the top where it is and hide this suggestion"
+                        onClick={(e) => { e.stopPropagation(); onDismissTopSuggestion?.(suggestion) }}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  </>
+                )}
 
                 {/* Removes this crop. Sits inside the box so it is always
                     beside what it deletes, and stops propagation so the

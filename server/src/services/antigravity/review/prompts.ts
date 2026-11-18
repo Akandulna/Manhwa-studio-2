@@ -6,7 +6,7 @@
  *    annotatedImages = false) — ClipperPage.fixPrompt(), which the phone sends WITHOUT crop rules.
  * 3. Correction after a refused reply: CropReview.correctionPrompt(errors) — also ClipperPage.fixPrompt().
  */
-import { ANALYSIS_SCHEMA, SLICE_COORDINATES, stripMarkdownFence } from './analysisImport.js'
+import { ANALYSIS_SCHEMA, REVIEW_ROTATE_RULE, ROTATE_RULE, SLICE_COORDINATES, stripMarkdownFence } from './analysisImport.js'
 import { isBlank, ktTrim, stringify, type WritableJson } from './json.js'
 import { currentCrops, GEOMETRY_REVIEW_SCHEMA, sweepLines } from './reviewState.js'
 import {
@@ -79,7 +79,8 @@ export function renderAnalysisPrompt(input: AnalysisPromptInput): string {
     FIRST_SLICE_ID: first.id,
     FIRST_SLICE_HEIGHT: first.height,
   })
-  return withRules(prompt, input.cropRules === undefined ? DEFAULT_CROP_RULES : input.cropRules, null)
+  // Fixed text, not part of the editable template, so every saved prompt pack gets it.
+  return withRules(`${prompt}\n${ROTATE_RULE}`, input.cropRules === undefined ? DEFAULT_CROP_RULES : input.cropRules, null)
 }
 
 /** HandoffFormat.wholePageCoordinates (the handoff must have exactly one slice, as Kotlin's single()). */
@@ -150,7 +151,7 @@ export function renderReviewPrompt(input: ReviewPromptInput): string {
   const images = handoff.wholePage
     ? renderTemplate(REVIEW_IMAGES_WHOLE_PAGE, size)
     : renderTemplate(REVIEW_IMAGES_SLICES, { ...size, SLICE_COUNT: slices.length, SLICE_IDS: slices.map((s) => s.id).join(', ') })
-  const prompt = renderTemplate(input.template ?? DEFAULT_REVIEW_TEMPLATE, {
+  const body = renderTemplate(input.template ?? DEFAULT_REVIEW_TEMPLATE, {
     PAGE_STEM: source.pageStem,
     IMAGES: images,
     CONTINUITY_RULES: input.continuityRules ?? CONTINUITY_RULES,
@@ -164,6 +165,8 @@ export function renderReviewPrompt(input: ReviewPromptInput): string {
     EXAMPLE_JSON: stringify(example, true),
     CURRENT_CROPS_JSON: stringify(crops, true),
   })
+  // Fixed text after CURRENT CROPS, not part of the editable template, so every saved prompt pack gets it.
+  const prompt = `${body}\n\n${ROTATE_RULE} ${REVIEW_ROTATE_RULE}`
   return input.cropRules != null && !isBlank(input.cropRules) ? withRules(prompt, input.cropRules, null) : prompt
 }
 

@@ -111,7 +111,7 @@ export class YouTubeStore {
     if (existing) return existing
     const index = {} as Index
     for (const kind of kinds) {
-      const name = kind === 'thumbnail' ? 'thumbnail-guidelines.pdf' : `${kind}-guidelines.md`
+      const name = `${kind}-guidelines.md`
       const version = await this.createVersion(kind, await fs.readFile(path.join(this.defaults, name)), name)
       index[kind] = version.id
     }
@@ -278,7 +278,7 @@ export class YouTubeStore {
       }
       this.checkRevision(workspace, expectedRevision)
       const previous = new Set([...workspace.titles.suggestions.map(item => titleKey(item.title)), ...workspace.titles.selections.map(item => titleKey(item.title)), ...(workspace.selectedTitle ? [titleKey(workspace.selectedTitle)] : [])])
-      if (response.titles.some(title => previous.has(titleKey(title)))) throw new YouTubeTitleError('This response repeats a previous suggestion or custom title. Ask ChatGPT for five new titles using the same prompt.')
+      if (response.titles.some(title => previous.has(titleKey(title)))) throw new YouTubeTitleError('This response repeats a previous suggestion or custom title. Ask the AI for five new titles using the same prompt.')
       const now = new Date().toISOString()
       request.response = response
       request.importedAt = now

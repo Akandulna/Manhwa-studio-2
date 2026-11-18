@@ -1,0 +1,93 @@
+{
+  "sections": [
+    {
+      "section": "Section 1",
+      "timelines": [
+        {
+          "timeline": "00:00.00 - 00:02.50",
+          "selectedImages": [
+            "ch001_reincarnated_as_the_grand_duke_s_third_s_page_020_03_illustrated_shot.png"
+          ]
+        },
+        {
+          "timeline": "00:02.50 - 00:05.00",
+          "selectedImages": [
+            "ch002_reincarnated_as_the_grand_duke_s_third_s_page_005_01_illustrated_shot.png"
+          ]
+        },
+        {
+          "timeline": "00:05.00 - 00:08.00",
+          "selectedImages": [
+            "ch002_reincarnated_as_the_grand_duke_s_third_s_page_007_01_illustrated_shot.png"
+          ]
+        },
+        {
+          "timeline": "00:08.00 - 00:12.00",
+          "selectedImages": [
+            "ch002_reincarnated_as_the_grand_duke_s_third_s_page_013_04_illustrated_shot.png"
+          ]
+        },
+        {
+          "timeline": "00:12.00 - 00:15.00",
+          "selectedImages": [
+            "ch002_reincarnated_as_the_grand_duke_s_third_s_page_013_01_illustrated_shot.png"
+          ]
+        },
+        {
+          "timeline": "00:15.00 - 00:18.00",
+          "selectedImages": [
+            "ch004_reincarnated_as_the_grand_duke_s_third_s_page_016_02_object_closeup.png"
+          ]
+        },
+        {
+          "timeline": "00:18.00 - 00:20.50",
+          "selectedImages": [
+            "ch004_reincarnated_as_the_grand_duke_s_third_s_page_020_01_figure_shot_audited_continuous.png"
+          ]
+        },
+        {
+          "timeline": "00:20.50 - 00:24.00",
+          "selectedImages": [
+            "ch016_reincarnated_as_the_grand_duke_s_third_s_page_017_04_face_closeup_audited_continuous.png"
+          ]
+        },
+        {
+          "timeline": "00:24.00 - 00:27.00",
+          "selectedImages": [
+            "ch020_reincarnated_as_the_grand_duke_s_third_s_page_008_03_illustrated_shot.png"
+          ]
+        },
+        {
+          "timeline": "00:27.00 - 00:30.00",
+          "selectedImages": [
+            "ch020_reincarnated_as_the_grand_duke_s_third_s_page_011_03_illustrated_shot.png"
+          ]
+        },
+        {
+          "timeline": "00:30.00 - 00:33.00",
+          "selectedImages": [
+            "ch020_reincarnated_as_the_grand_duke_s_third_s_page_010_02_illustrated_shot.png"
+          ]
+        },
+        {
+          "timeline": "00:33.00 - 00:35.50",
+          "selectedImages": [
+            "ch020_reincarnated_as_the_grand_duke_s_third_s_page_013_02_framed_swordsman.png"
+          ]
+        },
+        {
+          "timeline": "00:35.50 - 00:37.00",
+          "selectedImages": [
+            "ch020_reincarnated_as_the_grand_duke_s_third_s_page_014_05_sword_clash_audited_continuous.png"
+          ]
+        },
+        {
+          "timeline": "00:37.00 - 00:40.00",
+          "selectedImages": [
+            "ch020_reincarnated_as_the_grand_duke_s_third_s_page_015_04_framed_action_audited_continuous.png"
+          ]
+        }
+      ]
+    }
+  ]
+}

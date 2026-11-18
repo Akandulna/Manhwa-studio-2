@@ -12,7 +12,7 @@ let result:unknown|null
 let http:Server|undefined
 beforeEach(async()=>{
  root=await fs.mkdtemp(path.join(os.tmpdir(),'youtube-automation-test-'));store=new YouTubeStore(path.join(root,'workspace'));result=null
- transport={phones:vi.fn(async()=>[{id:'phone',name:'Test phone',ready:true,reason:'',prefix:'Manhwa/'}]),put:vi.fn(async()=>{}),get:vi.fn(async()=>result),start:vi.fn(async()=>{})}
+ transport={phones:vi.fn(async()=>[{id:'phone',name:'Test phone',ready:true,reason:'',prefix:'Manhwa/',aiStudioText:true}]),put:vi.fn(async()=>{}),get:vi.fn(async()=>result),start:vi.fn(async()=>{}),jobStatus:vi.fn(async()=>({running:false})),stop:vi.fn(async()=>{})}
  automation=new YouTubeAutomation(store,transport,path.join(root,'jobs'))
 })
 afterEach(async()=>{if(http){http.closeAllConnections();await new Promise<void>(resolve=>http!.close(()=>resolve()));http=undefined}vi.useRealTimers();await fs.rm(root,{recursive:true,force:true})})
@@ -21,6 +21,36 @@ async function titleJob(id='series') {const w=await prepared(id);const job=await
 function envelope(job:YouTubeJob,response:string) {return {schema:job.schema,id:job.id,seriesId:job.seriesId,requestId:job.requestId,kind:job.kind,device:job.device,status:'ok',response}}
 function titles(job:YouTubeJob) {return JSON.stringify({schemaVersion:1,seriesId:job.seriesId,requestId:job.requestId,language:'en',status:'ok',research:{resolvedTitle:'Test Hunter',summary:'A rookie hunter discovers a secret talent that changes his life.',sources:[{title:'Publisher',url:'https://webtoons.com/test-hunter'},{title:'Second source',url:'https://tapas.io/test-hunter'}]},titles:['A Rookie Hunter Learns the Secret Behind His Hidden Talent','Everyone Ignored the Hunter Until His Hidden Power Awakened','His Rivals Never Knew He Could Copy Their Greatest Skills','The Academy’s Weakest Hunter Discovers a Forgotten Power','They Left Him Behind Until His Hidden Talent Changed Everything']})}
 describe('YouTube phone automation',()=>{
+ it('sends titles to AI Studio and keeps phones without the AI Studio update from starting them',async()=>{
+  const {job}=await titleJob();expect(job.provider).toBe('aistudio');expect(job.message).toContain('AI Studio (Gemini 4 Hydrogen')
+  expect(transport.put).toHaveBeenCalledWith(`Manhwa/youtube/jobs/${job.id}.json`,expect.objectContaining({provider:'aistudio',kind:'titles'}))
+  vi.mocked(transport.phones).mockResolvedValueOnce([{id:'phone2',name:'Old beta',ready:true,reason:'',prefix:'Manhwa/'}])
+  const other=await prepared('other');await expect(automation.start('other','titles',{device:'phone2',requestId:other.titles.requests[0].id,expectedRevision:other.titles.revision})).rejects.toThrow('AI Studio')
+ })
+ it('cancels a stuck job without stopping the phone when it is not working on that job',async()=>{
+  const {job}=await titleJob();const cancelled=await automation.cancel('series',job.id)
+  expect(cancelled.status).toBe('cancelled');expect(transport.stop).not.toHaveBeenCalled();expect(cancelled.message).toContain('not working on this request')
+  result=envelope(job,titles(job));expect((await automation.check('series',job.id)).status).toBe('cancelled');expect((await store.openWorkspace('series')).titles.suggestions).toHaveLength(0)
+  const other=await prepared('other');expect((await automation.start('other','titles',{device:'phone',requestId:other.titles.requests[0].id,expectedRevision:other.titles.revision})).status).toBe('waiting')
+ })
+ it('stops the phone only when it reports running the cancelled job',async()=>{
+  const {job}=await titleJob();vi.mocked(transport.jobStatus!).mockResolvedValueOnce({running:true,step:'Waiting for Gemini 4 Hydrogen'})
+  expect((await automation.cancel('series',job.id)).message).toContain('told to stop');expect(transport.stop).toHaveBeenCalledWith('phone')
+ })
+ it('retries the same prepared prompt as a new job and imports only the new result',async()=>{
+  const {w,job}=await titleJob();const next=await automation.retry('series',job.id,{device:'phone',expectedRevision:w.titles.revision})
+  expect(next.id).not.toBe(job.id);expect(next.requestId).toBe(job.requestId);expect(next.status).toBe('waiting');expect(transport.start).toHaveBeenCalledTimes(2)
+  expect((await automation.latest('series','titles',job.requestId))?.id).toBe(next.id);expect((await automation.check('series',job.id)).status).toBe('cancelled')
+  result=envelope(next,titles(next));expect((await automation.check('series',next.id)).status).toBe('done')
+  await expect(automation.retry('series',next.id,{device:'phone',expectedRevision:w.titles.revision})).rejects.toMatchObject({status:409})
+ })
+ it('shows the phone step while waiting and settles a start the phone refused',async()=>{
+  const {job}=await titleJob();vi.mocked(transport.jobStatus!).mockResolvedValueOnce({running:true,step:'Waiting for Gemini 4 Hydrogen'})
+  expect((await automation.check('series',job.id)).phoneStep).toBe('Waiting for Gemini 4 Hydrogen')
+  vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(Date.now()+20_000)
+  vi.mocked(transport.jobStatus!).mockResolvedValueOnce({running:false,start:{state:'refused',reason:'Managed work reserves this phone'}})
+  const refused=await automation.check('series',job.id);expect(refused.status).toBe('needs_attention');expect(refused.message).toContain('Managed work reserves this phone')
+ })
  it('sends the exact prepared prompt once and retains all request identity',async()=>{
   const {w,job}=await titleJob();const repeat=await automation.start(w.seriesId,'titles',{device:'phone',requestId:job.requestId,expectedRevision:w.titles.revision})
   expect(repeat.id).toBe(job.id);expect(transport.start).toHaveBeenCalledTimes(1);expect(transport.put).toHaveBeenCalledWith(`Manhwa/youtube/jobs/${job.id}.json`,expect.objectContaining({prompt:w.titles.requests[0].prompt,device:'phone',requestId:job.requestId,kind:'titles'}))
@@ -63,7 +93,7 @@ describe('YouTube phone automation',()=>{
  it('exposes series-scoped HTTP start, latest and result checks with phone selection',async()=>{
   const {job}=await titleJob();const app=express();app.use(express.json());app.use('/api/youtube',createYouTubeRouter({store,automation,seriesExists:async id=>id==='series'}));http=createServer(app)
   await new Promise<void>(resolve=>http!.listen(0,'127.0.0.1',resolve));const base=`http://127.0.0.1:${(http.address() as {port:number}).port}/api/youtube`
-  const phones=await(await fetch(base+'/automation/phones')).json();expect(phones).toEqual([{id:'phone',name:'Test phone',ready:true,reason:''}])
+  const phones=await(await fetch(base+'/automation/phones')).json();expect(phones).toEqual([{id:'phone',name:'Test phone',ready:true,reason:'',aiStudioText:true}])
   expect((await fetch(base+`/series/other/automation/jobs/${job.id}/check`,{method:'POST'})).status).toBe(404)
   const latest=await(await fetch(base+`/series/series/automation/titles/latest?requestId=${job.requestId}`)).json();expect(latest.id).toBe(job.id)
   result=envelope(job,titles(job));const checked=await(await fetch(base+`/series/series/automation/jobs/${job.id}/check`,{method:'POST'})).json();expect(checked.status).toBe('done')

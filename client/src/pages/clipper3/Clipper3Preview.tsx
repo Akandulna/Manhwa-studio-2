@@ -43,16 +43,18 @@ import {
   ShieldCheck,
   ShieldAlert,
   Scissors,
-  ChevronRight
+  ChevronRight,
+  ArrowDownToLine
 } from 'lucide-react'
 import {
   clipper3Api,
   type Clipper3ChapterImages,
   type Clipper3ChapterReview,
+  type Clipper3TopSuggestion,
   type PhonePageFinish
 } from '@/lib/api'
 import { useToast } from '@/components/ui/use-toast'
-import { CropPointerEditor, type CropMetadataEntry } from '@/components/clipper3/CropPointerEditor'
+import { CropPointerEditor, topSuggestionFor, type CropMetadataEntry } from '@/components/clipper3/CropPointerEditor'
 import ChapterSwitcher from '@/components/ChapterSwitcher'
 import { formatTook } from '@/components/PhoneSyncBadge'
 import { PhoneRefreshButton } from '@/components/PhoneRefreshButton'
@@ -192,6 +194,39 @@ export function Clipper3ChapterPreview({ chapterId: chapterIdProp, backTo, chapt
   const [draggingFile, setDraggingFile] = useState<string | null>(null)
   const [navOpen, setNavOpen] = useState(true)
 
+  // Tops that look one step too high (server topSlip.ts). Loaded after the
+  // pages, so a slow or failed check never holds the preview back.
+  const [topSuggestions, setTopSuggestions] = useState<Record<string, Clipper3TopSuggestion[]>>({})
+  const pageStackRef = useRef<HTMLDivElement | null>(null)
+  const lastTopJump = useRef<Element | null>(null)
+
+  /**
+   * Scrolls to the next suggested top, one crop after another, wrapping to the
+   * first. "Next" is the one after the last jump while that one is still on
+   * screen; after the user scrolls elsewhere (or accepts it, which removes
+   * it), it is the first one at or below the top of what they are looking at.
+   */
+  const jumpToNextTopSuggestion = useCallback(() => {
+    const stack = pageStackRef.current
+    if (!stack) return
+    const markers = [...stack.querySelectorAll('[data-top-suggestion]')]
+    if (markers.length === 0) return
+    const scroller = stack.closest('[data-radix-scroll-area-viewport]')
+    const view = (scroller ?? document.documentElement).getBoundingClientRect()
+    const viewTop = Math.max(0, view.top)
+    const viewBottom = Math.min(window.innerHeight, view.bottom)
+    const last = markers.indexOf(lastTopJump.current as Element)
+    const lastRect = last >= 0 ? markers[last].getBoundingClientRect() : null
+    const next = lastRect && lastRect.bottom > viewTop && lastRect.top < viewBottom
+      ? markers[(last + 1) % markers.length]
+      : markers.find(marker => marker.getBoundingClientRect().top >= viewTop) ?? markers[0]
+    lastTopJump.current = next
+    // Only the page list scrolls: scrollIntoView would also nudge the app shell around it.
+    const rect = next.getBoundingClientRect()
+    if (scroller) scroller.scrollBy({ top: rect.top + rect.height / 2 - (viewTop + viewBottom) / 2, behavior: 'smooth' })
+    else next.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [])
+
   // Which image is currently in view, so the nav panel can highlight it.
   const [activeFile, setActiveFile] = useState<string | null>(null)
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({})
@@ -237,6 +272,16 @@ export function Clipper3ChapterPreview({ chapterId: chapterIdProp, backTo, chapt
       })
       .finally(() => { if (!cancelled) setLoading(false) })
 
+    return () => { cancelled = true }
+  }, [chapterId, redoVersion])
+
+  useEffect(() => {
+    if (!chapterId) return
+    let cancelled = false
+    setTopSuggestions({})
+    clipper3Api.getTopSuggestions(chapterId)
+      .then(result => { if (!cancelled) setTopSuggestions(result.pages) })
+      .catch(() => { /* suggestions are optional; the preview works without them */ })
     return () => { cancelled = true }
   }, [chapterId, redoVersion])
 
@@ -321,6 +366,16 @@ export function Clipper3ChapterPreview({ chapterId: chapterIdProp, backTo, chapt
 
   const managedChapter=!!data?.images.some(image=>image.managed)
   const totalCrops = Object.values(session?.pages ?? {}).reduce((n, page) => n + page.file.crops.length, 0)+(data?.images.filter(image=>image.managed).reduce((total,image)=>total+image.cropCount,0)??0)
+  // A suggestion counts only while its crop's top is still where it was measured.
+  const liveTopSuggestions = (filename: string) => (topSuggestions[filename] ?? []).filter(suggestion =>
+    session?.pages[filename]?.file.crops.some(crop => {
+      const points = crop.crop.points.filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
+      return points.length > 0 && topSuggestionFor({
+        top: Math.min(...points.map(point => point.y)),
+        left: Math.min(...points.map(point => point.x))
+      }, [suggestion]) != null
+    }))
+  const topSuggestionCount = data.images.reduce((total, image) => total + liveTopSuggestions(image.filename).length, 0)
   const saveErrors = [...(session?.errors.entries() ?? [])]
   const unsaved = !!session?.pending || draggingFile != null
   const chapterLabel = `Chapter ${data.number}${data.title ? ` · ${data.title}` : ''}`
@@ -377,6 +432,19 @@ export function Clipper3ChapterPreview({ chapterId: chapterIdProp, backTo, chapt
           <Undo2 className="h-3.5 w-3.5 mr-1" />
           Undo
         </Button>
+
+        {topSuggestionCount > 0 && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-green-500/60 text-green-500 hover:text-green-400"
+            title="Crops whose top edge looks about 256 px too high. Each click goes to the next one, crop by crop; each is marked with a striped strip and a Move top here button."
+            onClick={jumpToNextTopSuggestion}
+          >
+            <ArrowDownToLine className="h-3.5 w-3.5 mr-1" />
+            {topSuggestionCount} top{topSuggestionCount === 1 ? '' : 's'} to check
+          </Button>
+        )}
 
         <div className="flex items-center gap-1 ml-auto">
           <Button
@@ -474,7 +542,7 @@ export function Clipper3ChapterPreview({ chapterId: chapterIdProp, backTo, chapt
             its pointers are placed against its own box — never a chapter-wide
             canvas. A ring + alternating tint + gap between cards makes clear
             where one image ends and the next begins. */}
-        <div className="flex flex-col items-center gap-6 py-6">
+        <div ref={pageStackRef} className="flex flex-col items-center gap-6 py-6">
           {data.images.map((img, index) => {
             const file = session?.pages[img.filename]?.file
             const isEven = index % 2 === 0
@@ -533,6 +601,11 @@ export function Clipper3ChapterPreview({ chapterId: chapterIdProp, backTo, chapt
                     hideInlineTrigger
                     metadataByCropId={parseMetadataByCropId(session?.pages[img.filename]?.metadata ?? '')}
                     showMetadataRail
+                    topSuggestions={topSuggestions[img.filename]}
+                    onDismissTopSuggestion={dismissed => setTopSuggestions(previous => ({
+                      ...previous,
+                      [img.filename]: (previous[img.filename] ?? []).filter(suggestion => suggestion !== dismissed)
+                    }))}
                     onInteractionChange={dragging => setDraggingFile(dragging ? img.filename : null)}
                     onCommit={(next, removedCropId, addedDescription) => {
                       try {

@@ -48,6 +48,8 @@ import { backupAudioFile, initializeSections } from './voiceoverService.js'
 import { validateAudioFile, type AudioMetadata } from './audioProcessor.js'
 import { alignSectionInBackground } from './alignment/alignmentService.js'
 import { removeAlignmentDocument } from './alignment/alignmentDocument.js'
+import { savedBeforeClear, scriptsClearedAt } from './scriptClear.js'
+import { voiceoverResetAt } from './voiceoverReset.js'
 import { LANGUAGE_NAMES, audioFolderName, scriptFileName, type NarrationLanguage } from './narrationLanguage.js'
 
 /** Folder the phone uploads chapter zips to, inside its R2 prefix. Keep in step with FOLDER in VoiceoverUpload.kt. */
@@ -63,7 +65,7 @@ const SCHEMA = /^sleeper-cell-voiceover-chapter\/1\./
 const MAX_ZIP_BYTES = 512 * 1024 * 1024
 
 /** What the desktop accepts as uploaded section audio (see uploadSectionAudio). */
-const AUDIO_EXTENSIONS = new Set(['wav', 'mp3', 'ogg', 'flac', 'aac', 'm4a', 'opus', 'weba'])
+export const AUDIO_EXTENSIONS = new Set(['wav', 'mp3', 'ogg', 'flac', 'aac', 'm4a', 'opus', 'weba'])
 
 export interface PhoneVoiceoverSection {
   index: number
@@ -228,7 +230,9 @@ export async function attachVoiceover(
   folderPath: string,
   voiceover: PhoneVoiceoverChapter,
   io?: Server | null,
-  language: NarrationLanguage = 'en'
+  language: NarrationLanguage = 'en',
+  /** `uploaded` for audio the user added by hand (see manualVoiceover.ts). */
+  options: { kind?: 'generated' | 'uploaded' } = {}
 ): Promise<boolean> {
   const audioDir = path.join(chapterDir(folderPath), audioFolderName(language))
   const staging = path.join(audioDir, '.phone-staging')
@@ -280,7 +284,7 @@ export async function attachVoiceover(
           chapterId,
           sectionId: row.id,
           language,
-          kind: 'generated',
+          kind: options.kind ?? 'generated',
           provider: voiceover.provider ?? 'sleeper-cell',
           model: voiceover.model,
           voice: voiceover.voice,
@@ -391,7 +395,7 @@ async function listSeriesZips(client: S3Client, config: R2Config, seriesId: stri
   return []
 }
 
-async function readMarker(audioDir: string): Promise<{ etag?: unknown; fetchedAt?: unknown } | null> {
+async function readMarker(audioDir: string): Promise<{ etag?: unknown; fetchedAt?: unknown; manual?: unknown } | null> {
   try {
     return JSON.parse(await fs.readFile(path.join(audioDir, FETCH_MARKER), 'utf-8'))
   } catch {
@@ -408,6 +412,12 @@ async function readMarkerEtag(audioDir: string): Promise<string | null> {
 export async function voiceoverFetchedAt(folderPath: string, language: NarrationLanguage): Promise<string | null> {
   const marker = await readMarker(path.join(chapterDir(folderPath), audioFolderName(language)))
   return typeof marker?.fetchedAt === 'string' ? marker.fetchedAt : null
+}
+
+/** When the chapter's voiceover in `language` was attached, and whether it was added by hand rather than fetched. */
+export async function voiceoverOrigin(folderPath: string, language: NarrationLanguage): Promise<{ at: string | null; manual: boolean }> {
+  const marker = await readMarker(path.join(chapterDir(folderPath), audioFolderName(language)))
+  return { at: typeof marker?.fetchedAt === 'string' ? marker.fetchedAt : null, manual: marker?.manual === true }
 }
 
 // ============ Preview ============
@@ -436,10 +446,18 @@ async function listLanguageZips(seriesId: string, language: NarrationLanguage): 
   const client = createClient(config)
   const byFolder = new Map(series.chapters.map(c => [path.basename(c.folderPath), c]))
   const folders = new Set(byFolder.keys())
+  const ids = series.chapters.map(c => c.id)
+  const [cleared, reset] = await Promise.all([scriptsClearedAt(ids), voiceoverResetAt(ids, language)])
   // The other language's zips share the folder; they are not this fetch's.
+  // Nor are those uploaded before the chapter's scripts were cleared in Studio (they voice the old script),
+  // or before its voiceover was reset (voiceoverReset.ts).
   const zips = (await listSeriesZips(client, config, seriesId, path.basename(series.rootFolder)))
     .map(zip => ({ ...zip, ...zipChapter(zip.base, folders) }))
-    .filter(zip => zip.language === language)
+    .filter(zip => {
+      if (zip.language !== language) return false
+      const id = byFolder.get(zip.folder)?.id ?? ''
+      return !savedBeforeClear(cleared.get(id), zip.uploadedAt) && !savedBeforeClear(reset.get(id), zip.uploadedAt)
+    })
     .sort((a, b) => a.folder.localeCompare(b.folder, undefined, { numeric: true }))
   return { client, config, zips, byFolder }
 }

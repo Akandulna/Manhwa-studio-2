@@ -22,6 +22,7 @@ import sharp from 'sharp'
 import { runTurn, type AgyTurnResult } from './cli.js'
 import { runCodexTurn } from './codexCli.js'
 import { readSessionEvidence, type CodexRateLimits } from './codexSession.js'
+import { claudeMcpConfig, runClaudeTurn, type ClaudeRateLimit, type ClaudeTurnResult } from './claudeCli.js'
 
 export const PROBE_SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'resources', 'antigravity', 'probe-mcp.mjs')
 export const MCP_SERVER_NAME = 'studio'
@@ -31,9 +32,9 @@ export type CheckState = { ok: boolean | null; detail: string }
 export interface CompatibilityReport {
   at: string
   /** Absent on reports saved before the Codex engine existed (= antigravity). */
-  engine?: 'antigravity' | 'codex'
+  engine?: 'antigravity' | 'codex' | 'claude'
   cliVersion: string | null
-  /** The account the test ran on (agy: Google email). Absent on older reports. */
+  /** The account the test ran on (agy: Google email; Claude: claude.ai email). Absent on older reports. */
   account?: string | null
   model: string
   effort: string | null
@@ -55,6 +56,8 @@ export interface CompatibilityReport {
   error: string | null
   /** Codex only: the ChatGPT plan's Codex usage windows after the test. */
   rateLimits?: CodexRateLimits | null
+  /** Claude only: the plan's usage windows as Claude Code reported them during the test. */
+  claudeLimits?: ClaudeRateLimit[]
 }
 
 const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
@@ -118,13 +121,13 @@ export async function runCompatibilityCheck(opts: {
   workRoot?: string
   signal?: AbortSignal
   nodeBinary?: string
-  /** Default antigravity (agy). codex = ChatGPT through the Codex CLI. */
-  engine?: 'antigravity' | 'codex'
+  /** Default antigravity (agy). codex = ChatGPT through the Codex CLI; claude = Claude Code. */
+  engine?: 'antigravity' | 'codex' | 'claude'
   /** Codex's home (the account the test runs on); also where its session record is read. */
   codexHome?: string
 }): Promise<CompatibilityReport> {
   const engine = opts.engine ?? 'antigravity'
-  const cli = engine === 'codex' ? 'codex' : 'agy'
+  const cli = engine === 'codex' ? 'codex' : engine === 'claude' ? 'claude' : 'agy'
   const started = Date.now()
   const workRoot = opts.workRoot ?? path.join(os.tmpdir(), 'manhwa-studio-antigravity')
   fs.mkdirSync(workRoot, { recursive: true, mode: 0o700 })
@@ -141,6 +144,8 @@ export async function runCompatibilityCheck(opts: {
   if (engine === 'antigravity') {
     fs.writeFileSync(path.join(workspace, '.agents', 'mcp_config.json'), JSON.stringify({ mcpServers: { [MCP_SERVER_NAME]: probeServer } }, null, 2))
   }
+  const claudeMcpPath = path.join(root, 'mcp.json')
+  if (engine === 'claude') fs.writeFileSync(claudeMcpPath, claudeMcpConfig({ ...probeServer, env: {} }), { mode: 0o600 })
 
   const report: CompatibilityReport = {
     at: new Date().toISOString(),
@@ -151,7 +156,9 @@ export async function runCompatibilityCheck(opts: {
     sandbox: opts.sandbox,
     transport: engine === 'codex'
       ? 'stdio MCP server passed as -c mcp_servers.studio.* (no user config, read-only sandbox, tools pre-approved for that server only)'
-      : 'stdio MCP server from the job workspace .agents/mcp_config.json',
+      : engine === 'claude'
+        ? 'stdio MCP server from --strict-mcp-config --mcp-config (no settings sources, no built-in tools, only mcp__studio allowed)'
+        : 'stdio MCP server from the job workspace .agents/mcp_config.json',
     imageDelivery: 'MCP tools/call result content type "image" (base64 PNG)',
     observedModel: 'unknown',
     conversationId: null,
@@ -168,7 +175,9 @@ export async function runCompatibilityCheck(opts: {
   }
   const timeoutMs = opts.timeoutMs ?? 5 * 60_000
   const base = { executable: opts.executable, cwd: workspace, model: opts.model, effort: opts.effort, settings: jobSettings(), sandbox: opts.sandbox, timeoutMs, signal: opts.signal }
-  const turn = (req: { prompt: string; conversationId?: string | null }): Promise<AgyTurnResult> => engine === 'codex'
+  const turn = (req: { prompt: string; conversationId?: string | null }): Promise<AgyTurnResult> => engine === 'claude'
+    ? runClaudeTurn({ executable: opts.executable, cwd: workspace, model: opts.model, effort: opts.effort, timeoutMs, signal: opts.signal, mcpConfigPath: claudeMcpPath, ...req })
+    : engine === 'codex'
     ? runCodexTurn({ executable: opts.executable, cwd: workspace, model: opts.model, effort: opts.effort, timeoutMs, signal: opts.signal, mcp: { ...probeServer, env: {} }, env: opts.codexHome ? { ...process.env, CODEX_HOME: opts.codexHome } : undefined, ...req })
     : runTurn({ ...base, ...req })
 
@@ -210,6 +219,12 @@ export async function runCompatibilityCheck(opts: {
       report.checks.contextRetained = sameId && matches({ code, shape, color }, key) && noTools
         ? { ok: true, detail: 'Recalled the image facts without calling tools.' }
         : { ok: false, detail: secondProblem ?? (noTools ? 'The answer did not match the earlier image.' : 'The model fetched the image again instead of recalling it.') }
+    }
+    if (engine === 'claude') {
+      // Claude Code names the served model in every assistant message and reports the plan's windows.
+      const claude = (first as ClaudeTurnResult).claude
+      if (claude?.model) report.observedModel = claude.model
+      report.claudeLimits = claude?.rateLimits ?? []
     }
     if (engine === 'codex' && conversationId) {
       // Codex records the session's model and the plan's usage windows in its own session file.

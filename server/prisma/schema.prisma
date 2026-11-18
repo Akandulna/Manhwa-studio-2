@@ -690,3 +690,44 @@ model AntigravityDelivery {
   @@index([jobId])
   @@index([chapterId, destination])
 }
+
+/// Gemini Mac app narration (docs/PRD-gemini-app-narration.md): one job per chapter and language. Gemini works
+/// a job through the local connector (resources/gemini-mcp/connector.mjs); `ref` is what it passes as `job`.
+/// English jobs read the chapter's pieces from a Google Drive folder; Hinglish jobs read the saved English script.
+model GeminiAppJob {
+  id              String    @id @default(uuid())
+  ref             String    @unique // e.g. "C012-EN-K7QM"
+  seriesId        String
+  chapterId       String
+  language        String    // en | hi
+  /// queued (Master, not prepared yet) | preparing | ready | working | saved | attention | failed | cancelled
+  state           String
+  /// notes | draft | review | check | hi_scenes | hi_script | hi_check | done
+  stage           String
+  rewrite         Boolean   @default(false)
+  /// Master queue position (null: started with Process for this chapter only).
+  queueOrder      Int?
+  /// The chapter's script for this language when the job was made; saving refuses if it changed.
+  scriptSha256    String?
+  /// Hinglish: the English script it is written from.
+  sourceSha256    String?
+  connectionId    String?
+  driveFolderId   String?
+  driveFolderName String?
+  /// [{ id, page, part, source, check, file, driveId }]
+  piecesJson      String    @default("[]")
+  uploaded        Int       @default(0)
+  total           Int       @default(0)
+  /// Accepted stages (notes, draft, review, ...).
+  stateJson       String?
+  submissions     Int       @default(0)
+  lastError       String?
+  lastActivityAt  DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  finishedAt      DateTime?
+  driveDeletedAt  DateTime?
+
+  @@index([chapterId, language])
+  @@index([state, queueOrder])
+}

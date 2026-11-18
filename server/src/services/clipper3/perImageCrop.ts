@@ -13,6 +13,7 @@ import fs from 'fs/promises'
 import path from 'path'
 import sharp from 'sharp'
 import {
+  cropRotation,
   getOutputDir,
   getSourceFolderPath,
   type Clipper3CropEntry
@@ -119,7 +120,10 @@ async function cutImageCropsLegacy(opts: {
 
     try {
       const rect = entryPixelRect(entry, imageWidth, imageHeight)
-      const info = await sharp(sourcePath).extract(rect).png().toFile(outputPath)
+      // A sideways-drawn crop is turned upright here, losslessly (quarter turns only).
+      const rotation = cropRotation(entry)
+      const cut = sharp(sourcePath).extract(rect)
+      const info = await (rotation === 0 ? cut : cut.rotate(rotation)).png().toFile(outputPath)
       const stat = await fs.stat(outputPath)
       files.push({
         cropId: entry.id,

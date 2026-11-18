@@ -1,3 +1,4 @@
+import { unresolvedNarrationBlocks, type PhoneNarrationBlock } from './narrationManual.js'
 import { youtubePhoneStatus, type YouTubePhoneActivity } from './youtubePhoneStatus.js'
 import { createLegacyR2S3Client } from './r2S3Client.js'
 import { metadataAverageTook } from './metadataPageTimes.js'
@@ -315,6 +316,7 @@ export interface PhoneChapterScript {
 }
 
 export interface PhoneScriptsStatus {
+  blocked?: PhoneNarrationBlock[]
   configured: boolean
   /** When the phone last wrote the receipt; null if it never has. */
   reportedAt: string | null
@@ -379,6 +381,7 @@ interface ScriptsReceipt {
   series?: Record<string, {
     total?: number
     done?: number
+    blocked?: unknown
     chapters?: Record<string, { status?: string; savedAt?: string }>
     hi?: {
       total?: number
@@ -496,6 +499,7 @@ export async function getPhoneScripts(seriesId?: string, fresh = false): Promise
   const series: PhoneScriptsStatus['series'] = {}
   const chapters: PhoneScriptsStatus['chapters'] = {}
   const hi: PhoneScriptsStatus['hi'] = { series: {}, chapters: {} }
+  const blocked: PhoneNarrationBlock[] = []
   for (const row of rows) {
     const entry = phoneSeries[path.basename(row.rootFolder)]
     if (!entry || typeof entry !== 'object') continue
@@ -511,6 +515,14 @@ export async function getPhoneScripts(seriesId?: string, fresh = false): Promise
 
     const englishChapters = entry.chapters && typeof entry.chapters === 'object' ? entry.chapters : null
     const hinglishChapters = hinglish?.chapters && typeof hinglish.chapters === 'object' ? hinglish.chapters : null
+    const entries = current.flatMap(r => {
+      const e = r.body.series?.[path.basename(row.rootFolder)]
+      return e ? [{ ...e, device: r.name }] : []
+    })
+    if ((!seriesId || row.id === seriesId) && entries.some(e => Array.isArray(e.blocked) && e.blocked.length)) {
+      const knownChapters = await prisma.chapter.findMany({ where: { seriesId: row.id }, select: { id: true, folderPath: true } })
+      blocked.push(...await unresolvedNarrationBlocks(entries, knownChapters, row.id, receipt.device ?? null))
+    }
     if (row.id !== seriesId || (!englishChapters && !hinglishChapters)) continue
     const byFolder = new Map(
       (await prisma.chapter.findMany({ where: { seriesId: row.id }, select: { id: true, folderPath: true } }))
@@ -536,6 +548,7 @@ export async function getPhoneScripts(seriesId?: string, fresh = false): Promise
     series,
     chapters,
     hi,
+    ...(blocked.length ? { blocked } : {}),
     runs: parseScriptRuns(receipt.runs)
   }
 }
@@ -796,6 +809,8 @@ interface CropsReceipt {
   speech?: unknown
   narration?: unknown
   automation?: unknown
+  /** How long each part of the receipt took to build on the phone, in ms ("total" and the parts). */
+  buildMs?: unknown
   series?: Record<string, {
     total?: number
     done?: number
@@ -1137,7 +1152,28 @@ export interface PhoneAutomation {
   stopAfter: boolean
   /** Image Clipper ends once the pages it's on are done. */
   clipperStopping: boolean
+  /** What became of the last start sent there (StartReport.kt on the phone); null from builds before it was kept. */
+  lastStart: PhoneStartReport | null
+  /** How long the phone took to build its last crops receipt (ms); null from builds before it said. */
+  reportMs: number | null
 }
+
+/**
+ * received → checking (who works on what) → waking → started; or refused (won't start: `reason`) or
+ * delayed (will try again: `reason`).
+ */
+export type PhoneStartState = 'received' | 'checking' | 'waking' | 'started' | 'delayed' | 'refused'
+export interface PhoneStartReport {
+  /** The request id the start came with; null for starts the phone made itself (a page redo). */
+  request: string | null
+  kind: PhoneRunKind | 'youtube'
+  seriesId: string | null
+  series: string | null
+  state: PhoneStartState
+  reason: string | null
+  at: string
+}
+const START_STATES = new Set<string>(['received', 'checking', 'waking', 'started', 'delayed', 'refused'])
 
 /**
  * The runs Sleeper-Cell can start from here: Image Clipper's crops (ChatGPT or
@@ -1245,7 +1281,7 @@ export async function getPhoneOverview(sync: PhoneSyncStatus | null, fresh = fal
   overview.profiles = parseUploadProfiles(crops.profiles)
   overview.gemini = { speech: parseGeminiUsage(crops.speech), narration: parseGeminiUsage(crops.narration) }
   const seriesFor = (folder: string) => byFolder.get(folder) ?? null
-  const automations = new Map(cropsList.map(r => [r.device, parseAutomation(r.body.automation, seriesFor)]))
+  const automations = new Map(cropsList.map(r => [r.device, parseAutomation(r.body.automation, seriesFor, r.body.buildMs)]))
   overview.automation = [...automations.values()].find(a => a?.remoteStart) ?? [...automations.values()].find(a => a) ?? null
   overview.reported = { sync: sync?.reportedAt ?? null, scripts: scripts?.reportedAt ?? null, crops: crops.updatedAt ?? null }
   overview.reportedAt = Object.values(overview.reported)
@@ -1361,7 +1397,23 @@ function overviewPhones(overview: PhoneOverview, automations: Map<string, PhoneA
   }))
 }
 
-function parseAutomation(raw: unknown, seriesFor: (folder: string) => { id: string; title: string } | null): PhoneAutomation | null {
+function parseStartReport(raw: unknown, seriesFor: (folder: string) => { id: string; title: string } | null): PhoneStartReport | null {
+  if (!isObject(raw) || typeof raw.kind !== 'string' || typeof raw.state !== 'string' || !START_STATES.has(raw.state) || !isTime(raw.at)) return null
+  if (raw.kind !== 'youtube' && !PHONE_RUN_KINDS.includes(raw.kind as PhoneRunKind)) return null
+  const folder = typeof raw.series === 'string' && raw.series ? raw.series : null
+  const row = folder ? seriesFor(folder) : null
+  return {
+    request: typeof raw.request === 'string' && raw.request ? raw.request : null,
+    kind: raw.kind as PhoneStartReport['kind'],
+    seriesId: row?.id ?? null,
+    series: row?.title ?? folder,
+    state: raw.state as PhoneStartState,
+    reason: typeof raw.reason === 'string' && raw.reason ? raw.reason : null,
+    at: raw.at as string
+  }
+}
+
+function parseAutomation(raw: unknown, seriesFor: (folder: string) => { id: string; title: string } | null, buildMs?: unknown): PhoneAutomation | null {
   if (!isObject(raw)) return null
   const resume = isObject(raw.resume) && typeof raw.resume.series === 'string' && isTime(raw.resume.at) ? raw.resume : null
   const row = resume ? seriesFor(resume.series as string) : null
@@ -1391,7 +1443,9 @@ function parseAutomation(raw: unknown, seriesFor: (folder: string) => { id: stri
     chapterRuns: Array.isArray(raw.chapterRuns) ? PHONE_RUN_KINDS.filter(kind => (raw.chapterRuns as unknown[]).includes(kind)) : [],
     rescope: raw.rescope === true,
     stopAfter: raw.stopAfter === true,
-    clipperStopping: raw.clipperStopping === true
+    clipperStopping: raw.clipperStopping === true,
+    lastStart: parseStartReport(raw.lastStart, seriesFor),
+    reportMs: isObject(buildMs) && Number.isFinite(Number(buildMs.total)) ? Number(buildMs.total) : null
   }
 }
 
@@ -1576,7 +1630,7 @@ export async function sendAutomationCommand(
     series,
     ...(scopedChapters ? { chapters: [...new Set(scopedChapters)] } : {}),
     tabs: takesTabs ? options.tabs : undefined,
-    ...(kind === 'clipper' ? { ai: options.ai, flow: options.ai ? (options.ai==='aistudio'?'steps' as const:'classic' as const) : undefined, chatGpt: options.chatGpt } : {}),
+    ...(kind === 'clipper' ? { ai: options.ai, flow: options.ai ? (options.ai === 'chatgpt' ? 'classic' as const : options.flow ?? 'steps') : undefined, chatGpt: options.chatGpt } : {}),
     ...(kind === 'metadata' ? {ai:'aistudio' as const} : {}),
     ...(kind === 'editor' ? { ai: options.ai, smallBatches: options.smallBatches, chatGpt: options.chatGpt } : {}),
     // Narration's AI only when asked for: Run automation has no choice of it, so the phone keeps its own.

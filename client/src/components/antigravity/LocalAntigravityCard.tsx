@@ -188,14 +188,15 @@ export default function LocalAntigravityCard() {
             </p>
           </div>
           <div className="space-y-1.5">
-            <label className="text-sm font-medium" htmlFor="ag-concurrency">Parallel pages</label>
+            <label className="text-sm font-medium" htmlFor="ag-concurrency">Parallel conversations</label>
             <Select value={String(settings.concurrency)} disabled={!!busy} onValueChange={v => void save({ concurrency: Number(v) })}>
               <SelectTrigger id="ag-concurrency"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="1">1 (default)</SelectItem>
-                {[2, 3, 4].map(n => <SelectItem key={n} value={String(n)}>{n} — separate conversation per page</SelectItem>)}
+                {[2, 3, 4].map(n => <SelectItem key={n} value={String(n)}>{n} conversations at once</SelectItem>)}
               </SelectContent>
             </Select>
+            <p className="text-xs text-muted-foreground">Clipping uses one conversation per page. Narration reads batches of up to five whole pages in parallel, then combines their notes before writing.</p>
             <label className="mt-3 flex items-start gap-2 text-sm">
               <input type="checkbox" className="mt-1" checked={settings.sandbox} disabled={!!busy} onChange={e => void save({ sandbox: e.target.checked })} />
               <span>Run agy with <code>--sandbox</code> (recommended: inherited command permissions cannot run shell commands)</span>

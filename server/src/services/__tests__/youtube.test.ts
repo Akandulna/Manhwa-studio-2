@@ -24,13 +24,15 @@ afterEach(async () => {
 })
 
 describe('YouTube guideline storage', () => {
-  it('loads the supplied title report and actual PDF, and keeps the master prompt internal', async () => {
+  it('loads the supplied guideline documents, imports the earlier PDF standard, and keeps the master prompt internal', async () => {
     const documents = await store.guidelines()
-    expect(documents.title.text).toContain('high-specificity story hook')
-    expect(documents.thumbnail.text).toContain('Lock the character')
+    expect(documents.title.text).toContain('Underdog vs. Reversal')
+    expect(documents.thumbnail.text).toContain('One dominant character')
     expect(documents.description.text).toContain('shared across all parts')
     expect(Object.keys(documents).sort()).toEqual(['description', 'thumbnail', 'title'])
-    const file = await store.original('thumbnail', documents.thumbnail.id)
+    const pdf = await store.replace('thumbnail', await fs.readFile(new URL('../../../resources/youtube/thumbnail-guidelines.pdf', import.meta.url)), 'thumbnail-guidelines.pdf', documents.thumbnail.id)
+    expect(pdf.text).toContain('Lock the character')
+    const file = await store.original('thumbnail', pdf.id)
     expect(file.buffer.subarray(0, 5).toString()).toBe('%PDF-')
   })
 
@@ -42,7 +44,7 @@ describe('YouTube guideline storage', () => {
     expect((await reopened.guidelines()).title.id).toBe(updated.id)
     expect((await reopened.openWorkspace('series-a')).guidelineVersions.title).toBe(original.title.id)
     expect((await reopened.version('title', original.title.id)).text).toBe(original.title.text)
-    expect((await reopened.original('title', original.title.id)).buffer.toString()).toContain('What Makes a Manhwa Recap Title Click')
+    expect((await reopened.original('title', original.title.id)).buffer.toString()).toContain('Manhwa Recap Title Guidelines')
     expect(await reopened.openWorkspace('series-a')).toEqual(workspace)
     expect(await reopened.history('title')).toHaveLength(2)
   })

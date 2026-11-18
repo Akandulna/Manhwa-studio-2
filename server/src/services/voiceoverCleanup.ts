@@ -32,6 +32,7 @@ import { unfinishedVoiceoverChapters } from './voiceoverChapterScope.js'
 import { seriesRestartPending } from './seriesRestartGuard.js'
 
 const SIDECAR = '.status.json'
+const RESET_MARKER = '.reset.json'
 const SETTLE_MS = 30_000
 
 export interface ListedObject { key: string; size: number; etag: string }
@@ -64,13 +65,15 @@ export function planVoiceoverCleanup(
     if (!chapters) continue
     const name = rest.slice(slash + 1)
     const sidecar = name.endsWith(`.zip${SIDECAR}`)
-    if (!sidecar && !name.endsWith('.zip')) continue
-    const base = name.slice(0, -(sidecar ? `.zip${SIDECAR}` : '.zip').length)
+    // Studio's reset marker (voiceoverReset.ts): only goes with the chapter's Part.
+    const reset = name.endsWith(`.zip${RESET_MARKER}`)
+    if (!sidecar && !reset && !name.endsWith('.zip')) continue
+    const base = name.slice(0, -(sidecar ? `.zip${SIDECAR}` : reset ? `.zip${RESET_MARKER}` : '.zip').length)
     const { folder, language } = zipChapter(base, new Set(chapters.keys()))
     const chapter = chapters.get(folder)
     if (!chapter) continue
     if (chapter.done) targets.push({ key: obj.key, bytes: obj.size, reason: 'part-done' })
-    else if (!sidecar && obj.etag && chapter.importedEtag[language] === obj.etag) {
+    else if (!sidecar && !reset && obj.etag && chapter.importedEtag[language] === obj.etag) {
       targets.push({ key: obj.key, bytes: obj.size, reason: 'imported' })
     }
   }

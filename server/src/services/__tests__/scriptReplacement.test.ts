@@ -10,6 +10,7 @@ let configured = true
 let uploadFails = false
 let transactionFails = false
 let aligning = 0
+let manualBlocks: any[] = []
 let chapter: any
 let sections: any[]
 let audioFiles: any[]
@@ -19,6 +20,7 @@ const matches = (where: any) => (row: any) => row.chapterId === where.chapterId 
 const database: any = {
   setting: { findUnique: async () => null },
   chapter: { findUnique: async () => chapter },
+  series: { update: async ({ data }: any) => Object.assign(chapter.series, data) },
   audioSection: {
     findMany: async ({ where }: any) => sections.filter(matches(where)),
     deleteMany: async ({ where }: any) => { sections = sections.filter(row => !matches(where)(row)) }
@@ -50,6 +52,7 @@ vi.mock('../../index.js', () => ({ prisma: database }))
 vi.mock('../alignment/alignmentService.js', () => ({ pendingAlignments: () => aligning }))
 vi.mock('../seriesProcess.js', () => ({ notifySeriesProcessChanged: vi.fn() }))
 vi.mock('../r2Service.js', () => ({
+  getPhoneScripts: async () => ({ blocked: manualBlocks }),
   getR2Config: () => configured ? { bucket: 'test', prefix: 'Phone/' } : null,
   phoneFolders: async () => ['Phone/'],
   requestPhoneUpdate: vi.fn(async () => ({})),
@@ -72,8 +75,9 @@ beforeEach(async () => {
   previousRoot = process.env.DOWNLOAD_ROOT
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'script-replacement-'))
   process.env.DOWNLOAD_ROOT = root
+  manualBlocks = []
   configured = true; uploadFails = false; transactionFails = false; aligning = 0; sent.length = 0
-  chapter = { id: 'c4', number: 4, status: 'done', completedAt: null, folderPath: 'Hero/Chapter 004', series: { rootFolder: 'Hero' },
+  chapter = { id: 'c4', seriesId: 's1', number: 4, status: 'done', completedAt: null, folderPath: 'Hero/Chapter 004', series: { rootFolder: 'Hero' },
     scripts: [{ language: 'hi', rollingSummary: 'Story so far.', status: 'done' }, { language: 'en', rollingSummary: 'English summary.', status: 'done' }] }
   sections = ['en', 'hi'].map(language => ({ chapterId: 'c4', language, text: 'old section' }))
   audioFiles = ['en', 'hi'].map(language => ({ chapterId: 'c4', language, filePath: 'old audio' }))
@@ -157,4 +161,118 @@ describe('chapter script replacement', () => {
     expect(await fs.readFile(path.join(dir(), 'script.hi.md'), 'utf-8')).toBe('पुराना।\n')
     expect(sections).toHaveLength(2)
   })
+})
+
+
+describe('manual completion of prohibited-content narration', () => {
+  const response = '===SCRIPT===\n[SCENE 1: P1]\nवो अंदर जाता है।\n\n===SUMMARY===\nवो अब अंदर है।'
+  const request = () => ({ text: response, expectedSha256: hash('पुराना।\n'), manualBlockId: 'blocked-4', sendToPhones: true })
+  const pending = () => ({ id: 'blocked-4', chapterId: 'c4', seriesId: 's1', language: 'hi', sourceSha256: hash('English source.') })
+  it('saves the pasted narration and summary, sends valid continuity, and supports retry after upload fails', async () => {
+    manualBlocks = [pending()]
+    uploadFails = true
+    const first = await replaceChapterScript('c4', 'hi', request())
+    expect(first.phoneSent).toBe(false)
+    expect(await fs.readFile(path.join(dir(), 'script.hi.md'), 'utf-8')).toBe('वो अंदर जाता है।')
+    expect(chapter.scripts.find((s: any) => s.language === 'hi').rollingSummary).toBe('वो अब अंदर है।')
+    // The marker is resolved locally, so it no longer appears in the next receipt view.
+    manualBlocks = []; uploadFails = false
+    const second = await replaceChapterScript('c4', 'hi', { ...request(), expectedSha256: first.sha256 })
+    expect(second).toMatchObject({ unchanged: true, phoneSent: true, backupPath: first.backupPath })
+    const files = JSON.parse(sent[0].Body).files
+    expect(files['script.hi.md']).toBe('वो अंदर जाता है।')
+    expect(JSON.parse(files['continuity.hi.json'])).toMatchObject({ summary: 'वो अब अंदर है।', closing: 'वो अंदर जाता है।', sourceSha256: hash('English source.') })
+  })
+  it('rejects resolved, wrong-language and stale-source handoffs before changing files', async () => {
+    for (const value of [[], [{ ...pending(), language: 'en' }], [{ ...pending(), sourceSha256: 'f'.repeat(64) }]]) {
+      manualBlocks = value
+      await expect(replaceChapterScript('c4', 'hi', request())).rejects.toThrow()
+      expect(await fs.readFile(path.join(dir(), 'script.hi.md'), 'utf-8')).toBe('पुराना।\n')
+    }
+  })
+})
+
+describe('copyable prompts in ordinary script replacement', () => {
+  const response = '===SCRIPT===\n[SCENE 1: P1]\nवो अंदर जाता है।\n\n===SUMMARY===\nवो अब अंदर है।'
+  const request = () => ({ text: response, expectedSha256: hash('पुराना।\n'), manualOutput: true,
+    sourceSha256: hash('English source.'), sendToPhones: true })
+
+  it('saves final Hinglish output without a blocked receipt, strips markers and sends its new summary', async () => {
+    const result = await replaceChapterScript('c4', 'hi', request())
+    expect(result.phoneSent).toBe(true)
+    expect(await fs.readFile(path.join(dir(), 'script.hi.md'), 'utf8')).toBe('वो अंदर जाता है।')
+    expect(chapter.scripts.find((s: any) => s.language === 'hi').rollingSummary).toBe('वो अब अंदर है।')
+    const files = JSON.parse(sent[0].Body).files
+    expect(files['script.hi.md']).toBe('वो अंदर जाता है।')
+    expect(JSON.parse(files['continuity.hi.json'])).toMatchObject({ summary: 'वो अब अंदर है।', sourceSha256: hash('English source.') })
+    expect(await fs.readFile(path.join(dir(), 'audio/section_01.wav'), 'utf8')).toBe('English audio')
+  })
+
+  it('retries a failed phone upload without resetting fresh Hindi audio', async () => {
+    uploadFails = true
+    const first = await replaceChapterScript('c4', 'hi', request())
+    await write('audio_hi/section_01.wav', 'new Hindi audio')
+    uploadFails = false
+    const retried = await replaceChapterScript('c4', 'hi', { ...request(), expectedSha256: first.sha256 })
+    expect(retried).toMatchObject({ phoneSent: true, unchanged: true, backupPath: first.backupPath })
+    expect(await fs.readFile(path.join(dir(), 'audio_hi/section_01.wav'), 'utf8')).toBe('new Hindi audio')
+  })
+
+  it('refuses stale English sources, scene notes and incomplete final replies before changing results', async () => {
+    for (const input of [
+      { ...request(), sourceSha256: null },
+      { ...request(), sourceSha256: hash('Outdated English.') },
+      { ...request(), text: '===SCENES===\n[SCENE 1: P1]\n- वो जाता है।' },
+      { ...request(), text: response.replace('[SCENE 1: P1]', '[SCENE 1: P1-P2]') },
+      { ...request(), text: '===SCRIPT===\n[SCENE 1: P1]\nवो अंदर जाता है।' }
+    ]) {
+      await expect(replaceChapterScript('c4', 'hi', input)).rejects.toThrow()
+      expect(await fs.readFile(path.join(dir(), 'script.hi.md'), 'utf8')).toBe('पुराना।\n')
+      expect(sections).toHaveLength(2)
+      expect(sent).toHaveLength(0)
+    }
+  })
+
+  it('also accepts a complete English prompt response and keeps its summary', async () => {
+    await replaceChapterScript('c4', 'en', { manualOutput: true, sendToPhones: false,
+      expectedSha256: hash('English source.\n'), text: '===SCRIPT===\nHe enters.\n\n===SUMMARY===\nHe is inside.' })
+    expect(await fs.readFile(path.join(dir(), 'script.md'), 'utf8')).toBe('He enters.')
+    expect(chapter.scripts.find((s: any) => s.language === 'en').rollingSummary).toBe('He is inside.')
+  })
+})
+
+
+it('manual English completion preserves ABOUT and summary for subsequent phone chapters', async () => {
+  chapter.number = 1
+  manualBlocks = [{ id: 'blocked-en', chapterId: 'c4', language: 'en', sourceSha256: null }]
+  const text = '===SCRIPT===\nHe enters.\n\n===SUMMARY===\nHe is inside.\n\n===ABOUT===\nA hunter returns to the past.'
+  await replaceChapterScript('c4', 'en', { text, manualBlockId: 'blocked-en', expectedSha256: hash('English source.\n'), sendToPhones: true })
+  expect(chapter.series.aboutSummary).toBe('A hunter returns to the past.')
+  expect(await fs.readFile(path.join(root, 'Hero/about.md'), 'utf-8')).toBe('A hunter returns to the past.\n')
+  const chapterBundle = JSON.parse(sent.find(s => s.Key.endsWith('Chapter 004.script.json')).Body)
+  expect(JSON.parse(chapterBundle.files['continuity.json'])).toMatchObject({ summary: 'He is inside.', closing: 'He enters.' })
+  const seriesBundle = JSON.parse(sent.find(s => s.Key.endsWith('_series.json')).Body)
+  expect(seriesBundle.about).toBe('A hunter returns to the past.')
+})
+
+it('a script Studio wrote (AntiGravity Narration) saves its own summary and resets English voiceover, alignment and timeline', async () => {
+  await write('script-timeline.md', 'old English alignment')
+  const text = 'Crash wakes.\n\nHe is fifteen again.'
+  const result = await replaceChapterScript('c4', 'en', { text, expectedSha256: hash('English source.\n'), sendToPhones: true, generated: { summary: 'Crash regressed.', about: null } })
+  expect(result).toMatchObject({ phoneSent: true, unchanged: false })
+  expect(await fs.readFile(path.join(dir(), 'script.md'), 'utf-8')).toBe(text)
+  expect(chapter.scripts.find((s: any) => s.language === 'en')).toMatchObject({ rollingSummary: 'Crash regressed.', closingParagraph: 'He is fifteen again.' })
+  expect(await fs.readFile(path.join(result.backupPath, 'script.md'), 'utf-8')).toBe('English source.\n')
+  expect(await fs.stat(path.join(dir(), 'audio')).catch(() => null)).toBeNull()
+  expect(await fs.stat(path.join(dir(), 'script-timeline.md')).catch(() => null)).toBeNull()
+  expect(sections.map(s => s.language)).toEqual(['hi'])
+  expect(timelines.find(t => t.language === 'en')).toMatchObject({ json: '', processedJson: null })
+  // Hindi is left alone; the phones get the new English script with its summary.
+  expect(await fs.readFile(path.join(dir(), 'script.hi.md'), 'utf-8')).toBe('पुराना।\n')
+  const payload = JSON.parse(sent[0].Body)
+  expect(payload.files['script.md']).toBe(text)
+  expect(JSON.parse(payload.files['continuity.json'])).toMatchObject({ summary: 'Crash regressed.', closing: 'He is fifteen again.' })
+  // A changed script on disk is never overwritten.
+  await expect(replaceChapterScript('c4', 'en', { text: 'Other.', expectedSha256: hash('English source.\n'), generated: { summary: 'S' } })).rejects.toThrow(/local script changed/)
+  await expect(replaceChapterScript('c4', 'en', { text: 'Other.', expectedSha256: hash(text), generated: { summary: ' ' } })).rejects.toThrow(/needs its story summary/)
 })

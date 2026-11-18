@@ -14,12 +14,12 @@
  *
  * Studio pages are always sliced (never whole-page), so only the sliced wording is ported. Pure.
  */
-import { ANALYSIS_SCHEMA, boundsFromSliceCorners, normalizeReason, REVIEW_FLAGS, SLICE_COORDINATES, stripMarkdownFence } from './analysisImport.js'
+import { ANALYSIS_SCHEMA, boundsFromSliceCorners, normalizeReason, parseRotation, REVIEW_FLAGS, REVIEW_ROTATE_RULE, ROTATE_RULE, SLICE_COORDINATES, stripMarkdownFence } from './analysisImport.js'
 import { describe, JNULL, JsonArray, JsonObject, ktTrim, parseJson, stringify, trimIndent, wholeNumber, type JsonValue, type WritableJson } from './json.js'
 import { correctionPrompt } from './prompts.js'
 import { currentCrops, GEOMETRY_REVIEW_SCHEMA, sweepLines } from './reviewState.js'
 import { CONTINUITY_RULES, REVIEW_RULES } from './templates.js'
-import type { AuditReport, Box, Handoff, HandoffSlice, ImportIssue, ReviewItem, ReviewState } from './types.js'
+import type { AuditReport, Box, Handoff, HandoffSlice, ImportIssue, ReviewItem, ReviewState, Rotation } from './types.js'
 
 export const STEPS_STATE_SCHEMA = 'clipper-steps/1.0'
 export const INVENTORY_SCHEMA = 'clipper-inventory/1.0'
@@ -59,6 +59,8 @@ export interface Placed {
   bounds: Box
   evidence: string
   flags: string[]
+  /** Sideways art (see ROTATE_RULE); absent = upright. */
+  rotate?: Rotation
 }
 export interface DroppedShot { shotId: string; why: string }
 
@@ -288,6 +290,7 @@ export function geometryPrompt(state: StepsState, h: Handoff): string {
     '- reason: a short factual snake_case label (e.g. framed_reaction, action_effects, wide_landscape).',
     '- visual_evidence: a short phrase saying why this is its own crop.',
     `- review_flags: zero or more of ${REVIEW_FLAGS.map((f) => `"${f}"`).join(', ')}.`,
+    `- rotate: only on sideways art. ${ROTATE_RULE}`,
     '',
     `Return ONE JSON object (${GEOMETRY_SCHEMA}), with no prose and no Markdown fences. job_id is real; the rest only shows the shape:`,
     stringify(example, true),
@@ -380,6 +383,8 @@ export function reviewStepPrompt(state: ReviewState, reviewItems: ReviewItem[], 
     'CURRENT CROPS:',
     // Geometry only: the crops are listed without their (empty) description field.
     stringify(crops.map(({ description: _description, ...rest }) => rest) as unknown as WritableJson, true),
+    '',
+    `${ROTATE_RULE} ${REVIEW_ROTATE_RULE}`,
   ].join('\n')
 }
 
@@ -575,6 +580,11 @@ export function applyGeometry(content: string, state: StepsState, h: Handoff, no
       }
     }
 
+    const rotate = parseRotation(item.value('rotate'))
+    if (rotate === undefined) {
+      errors.push(issue('GPT_JSON_INVALID', `${at}.rotate`, `${id}: rotate must be 90, -90 or left out (got ${describe(item.value('rotate'))})`, id))
+    }
+
     const exampleTopLeft = exampleCorner(h, 35, 110) as { slice_id: string; x: number; y: number }
     const exampleBottomRight = exampleCorner(h, 1045, 810) as { slice_id: string; x: number; y: number }
     const sameCorner = (c: JsonValue | undefined, e: { slice_id: string; x: number; y: number }) =>
@@ -600,7 +610,7 @@ export function applyGeometry(content: string, state: StepsState, h: Handoff, no
       const c = item.value(name) as JsonObject
       return { slice_id: c.value('slice_id') as string, x: Number(wholeNumber(c.value('x'))), y: Number(wholeNumber(c.value('y'))) }
     }
-    placed.push({ id, shotIds, reason, topLeft: corner('top_left'), bottomRight: corner('bottom_right'), bounds, evidence, flags })
+    placed.push({ id, shotIds, reason, topLeft: corner('top_left'), bottomRight: corner('bottom_right'), bounds, evidence, flags, ...(rotate ? { rotate } : {}) })
   })
 
   const dropped: DroppedShot[] = []
@@ -701,6 +711,7 @@ export function assemble(state: StepsState, h: Handoff): string {
         description: '',
         visual_evidence: p.evidence,
         review_flags: [...new Set([...p.flags, ...(problem ? [problem] : [])])],
+        ...(p.rotate ? { rotate: p.rotate } : {}),
       }
     }),
     page_review_flags: [],

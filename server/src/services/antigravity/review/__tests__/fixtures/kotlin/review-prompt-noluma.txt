@@ -265,3 +265,5 @@ CURRENT CROPS:
     ]
   }
 ]
+
+SIDEWAYS ART: a few panels are drawn turned on their side, so a reader must tilt their head to view them. For such a crop add "rotate": 90 when the art's top points LEFT (turn it clockwise to stand it upright) or "rotate": -90 when the art's top points RIGHT (turn it counter-clockwise). Judge by the figures, faces and lettering inside the crop, not by the page. Leave "rotate" out for every upright crop; no other value is allowed. The crop's corners stay measured on the page as it is. In the reply, a crop without "rotate" keeps the value listed under CURRENT CROPS (a split part keeps its parent's). Give "rotate": 90 or -90 to turn a crop that is drawn sideways, or "rotate": 0 when a listed crop is actually upright.

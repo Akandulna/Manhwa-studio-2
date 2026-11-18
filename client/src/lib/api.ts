@@ -6,11 +6,12 @@ import type { NarrationPartChoice, NarrationRunScope } from '../../../server/src
 export type { NarrationPartChoice, NarrationRunScope }
 
 const API_BASE = '/api'
-import type { MetadataChapterStatus, MetadataLibrarySnapshot, MetadataSyncReport } from '../../../server/src/services/metadataLibraryModel'
-export type { MetadataLibrarySnapshot, MetadataChapterStatus } from '../../../server/src/services/metadataLibraryModel'
+import type { MetadataChapterStatus, MetadataLibrarySnapshot, MetadataResetResult, MetadataSyncReport } from '../../../server/src/services/metadataLibraryModel'
+export type { MetadataLibrarySnapshot, MetadataChapterStatus, MetadataResetResult } from '../../../server/src/services/metadataLibraryModel'
 export const metadataApi = {
   library: () => fetchApi<MetadataLibrarySnapshot>('/metadata/library'),
-  sync: () => fetchApi<MetadataSyncReport>('/metadata/sync', { method: 'POST' })
+  sync: () => fetchApi<MetadataSyncReport>('/metadata/sync', { method: 'POST' }),
+  resetStale: (seriesId: string) => fetchApi<MetadataResetResult>(`/metadata/series/${seriesId}/reset-stale`, { method: 'POST' })
 }
 import type { ProcessSnapshot } from '../../../server/src/services/seriesProcessModel'
 export type { ProcessSnapshot, ProcessSeries, ProcessPart, ProcessStage, StageCount } from '../../../server/src/services/seriesProcessModel'
@@ -347,8 +348,10 @@ export interface NarrationChapter {
   alignmentProgress?: NarrationAlignmentProgress | null
   /** script-timeline.md (script-timeline.hi.md) is in the chapter folder. */
   documentWritten: boolean
-  /** When its voiceover was last fetched from the phone. */
+  /** When its voiceover was last fetched from the phone (or added by hand, see voiceoverManual). */
   fetchedAt: string | null
+  /** The voiceover was added by hand in Narration rather than fetched from a phone. */
+  voiceoverManual?: boolean
 }
 
 /** A "Fetch from phone" run, from `narration:fetch` (and the series detail while it runs). */
@@ -386,6 +389,21 @@ export interface PhoneScriptConflict {
     hinglish: boolean
     timeline: boolean
   }
+}
+
+/** A chapter Narration's "Clear scripts" can clear. */
+export interface ClearableScriptChapter {
+  chapterId: string
+  number: number
+  title: string | null
+  /** Studio has a script in this language. */
+  en: boolean
+  hi: boolean
+  voiceoverSections: number
+  published: boolean
+  /** A phone has a finished script newer than any clear; null when R2 couldn't be read. */
+  phoneEn: boolean | null
+  phoneHi: boolean | null
 }
 
 export interface NarrationSeriesDetail {
@@ -439,6 +457,9 @@ export interface PhoneVoiceoverFetch {
   failed: { folder: string; reason: string }[]
 }
 
+export interface ManualPromptStep { title: string; note: string; prompt: string; attach?: string[]; final?: boolean; slice?: boolean }
+export interface ManualPrompts { folderPath: string; slicesFolder: string | null; sourceSha256: string | null; correctionTemplate: string; steps: ManualPromptStep[] }
+
 export const narrationApi = {
   getAlignmentSections: (chapterId: string, lang: NarrationLanguage) =>
     fetchApi<{ id: string; number: number; audioReady: boolean; durationSec: number; aligned: boolean }[]>(
@@ -450,9 +471,33 @@ export const narrationApi = {
   getScript: (chapterId: string, lang: NarrationLanguage) =>
     fetchApi<{ text: string; sha256: string | null; phoneConfigured: boolean }>(`/narration/chapters/${chapterId}/script?lang=${lang}`),
 
-  replaceScript: (chapterId: string, lang: NarrationLanguage, body: { text: string; expectedSha256: string | null; sendToPhones: boolean }) =>
+  getManualPrompts: (chapterId: string, lang: NarrationLanguage) =>
+    fetchApi<ManualPrompts>(`/narration/chapters/${chapterId}/script/manual-prompts?lang=${lang}`),
+
+  /** English: cuts the pages into ≤2,000 px pieces in a temporary folder; deleted again when the script is saved. */
+  sliceManualPages: (chapterId: string) =>
+    fetchApi<ManualPrompts>(`/narration/chapters/${chapterId}/script/manual-slices?lang=en`, { method: 'POST' }),
+
+  replaceScript: (chapterId: string, lang: NarrationLanguage, body: { text: string; expectedSha256: string | null; sendToPhones: boolean; manualBlockId?: string; manualOutput?: boolean; sourceSha256?: string | null }) =>
     fetchApi<{ sha256: string; unchanged: boolean; backupPath: string; phoneSent: boolean; phoneNotified: boolean; phoneError?: string }>(
       `/narration/chapters/${chapterId}/script/replace?lang=${lang}`, { method: 'POST', body: JSON.stringify(body) }),
+
+  /** One audio file as the chapter's whole voiceover; multipart, so not through fetchApi's JSON header. */
+  addManualVoiceover: async (chapterId: string, lang: NarrationLanguage, file: File) => {
+    const body = new FormData()
+    body.append('file', file)
+    const response = await fetch(`${API_BASE}/narration/chapters/${chapterId}/voiceover/manual?lang=${lang}`, { method: 'POST', body })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: `Upload failed (${response.status} ${response.statusText})` }))
+      throw new Error(error.error || 'Upload failed')
+    }
+    return response.json() as Promise<{ sections: number; resplit: boolean }>
+  },
+
+  /** Removes the chapter's voiceover in this language here, in R2 and (when they next check) on the phones. */
+  resetVoiceover: (chapterId: string, lang: NarrationLanguage) =>
+    fetchApi<{ number: number; resetAt: string; backupPath: string | null; r2: { folders: string[] } | null; phonesAsked: boolean }>(
+      `/narration/chapters/${chapterId}/voiceover/reset?lang=${lang}`, { method: 'POST' }),
 
   getSeries: (lang: NarrationLanguage) => fetchApi<NarrationSeries[]>(`/narration/series?lang=${lang}`),
 
@@ -475,6 +520,17 @@ export const narrationApi = {
     fetchApi<{ imported?: number; kept?: boolean }>(`/narration/series/${seriesId}/phone/conflicts/resolve?lang=${lang}`, {
       method: 'POST',
       body: JSON.stringify(body)
+    }),
+
+  /** Chapters with a script in Studio, and whether the phones still have one (reads R2). */
+  getClearableScripts: (seriesId: string) =>
+    fetchApi<{ chapters: ClearableScriptChapter[] }>(`/narration/series/${seriesId}/scripts/clearable`),
+
+  /** Clears the chapters' English and Hinglish scripts, voiceovers, alignment and timelines (backed up first). */
+  clearScripts: (seriesId: string, chapterIds: string[]) =>
+    fetchApi<{ cleared: { chapterId: string; number: number; backupPath: string }[] }>(`/narration/series/${seriesId}/scripts/clear`, {
+      method: 'POST',
+      body: JSON.stringify({ chapterIds })
     }),
 
   /** Starts the fetch; progress and the outcome arrive on `narration:fetch`. */
@@ -884,6 +940,11 @@ export interface Clipper3CropEntry {
     mode: 'rectangle' | 'perspective'
     points: Clipper3Point[]
   }
+  /**
+   * Sideways art: Crop Sections turns the cut crop this many degrees to stand it upright.
+   * 90 = clockwise (the art's top points left), -90 = counter-clockwise. Absent = upright.
+   */
+  rotate?: 90 | -90
 }
 
 export interface Clipper3ImageCropFile {
@@ -905,6 +966,21 @@ export interface Clipper3ImagePoints {
   metadataValid: boolean
   /** The IMAGE's status, which also depends on its metadata document. */
   status: 'done' | 'pending'
+}
+
+/**
+ * A crop whose top edge probably sits one 256 px step above its panel (see
+ * server topSlip.ts). Coordinates are normalized against the crop's own image,
+ * like the pointers. `top`/`left` identify the crop by where it is now, so a
+ * suggestion stops applying the moment that edge is moved.
+ */
+export interface Clipper3TopSuggestion {
+  cropId: string
+  top: number
+  left: number
+  suggestedTop: number
+  /** How far down the top would move, in image pixels. */
+  movePx: number
 }
 
 export interface Clipper3ImageMetadata {
@@ -1108,6 +1184,10 @@ export const clipper3Api = {
     fetchApi<Clipper3ImagePoints>(
       `/clipper3/chapters/${chapterId}/images/${encodeURIComponent(filename)}/points`
     ),
+
+  // Tops that look one step too high, per page filename. Suggestions only: nothing is changed.
+  getTopSuggestions: (chapterId: string) =>
+    fetchApi<{ pages: Record<string, Clipper3TopSuggestion[]> }>(`/clipper3/chapters/${chapterId}/top-suggestions`),
 
   putImagePoints: (chapterId: string, filename: string, content: string) =>
     fetchApi<Clipper3ImagePoints>(
@@ -1496,6 +1576,8 @@ export interface PhoneSendSeriesProgress {
   chaptersTotal: number
   chaptersSent: number
   current?: { folder: string; phase: 'zipping' | 'uploading' }
+  /** Set while the series' chapters are being stitched before sending (library origin only). */
+  preparing?: { chapterNumber: number; index: number; total: number }
   bytesTotal: number
   bytesDone: number
   /** The series' folder in R2, once known. */
@@ -1616,7 +1698,14 @@ export interface PhoneChapterScript {
 }
 
 /** Scripts written on the Sleeper-Cell phone, from the receipt it writes to R2 after each save. */
+export interface PhoneNarrationBlock {
+  id: string; chapterId: string; seriesId: string; chapter: string; language: NarrationLanguage
+  reason: string; stage: string; failedAt: string; conversationUrl: string | null; account: string | null
+  sourceSha256: string | null; device: string | null
+}
+
 export interface PhoneScriptsStatus {
+  blocked?: PhoneNarrationBlock[]
   configured: boolean
   /** When the phone last reported; null if it never has. */
   reportedAt: string | null
@@ -1999,6 +2088,22 @@ export interface PhoneAutomation {
   stopAfter?: boolean
   /** Image Clipper ends once the pages it's on are done. */
   clipperStopping?: boolean
+  /** What became of the last start sent there; null or left out from builds before it was kept. */
+  lastStart?: PhoneStartReport | null
+  /** How long the phone took to build its last crops receipt (ms); null from builds before it said. */
+  reportMs?: number | null
+}
+
+/** received → checking → waking → started; or refused (won't start) / delayed (will try again), with a reason. */
+export type PhoneStartState = 'received' | 'checking' | 'waking' | 'started' | 'delayed' | 'refused'
+export interface PhoneStartReport {
+  request: string | null
+  kind: PhoneRunKind | 'youtube'
+  seriesId: string | null
+  series: string | null
+  state: PhoneStartState
+  reason: string | null
+  at: string
 }
 
 /** The automation runs Sleeper-Cell can start from here (PhoneRunKind in r2Service.ts). */
@@ -2632,14 +2737,54 @@ export const googleDriveApi = {
   disconnect: () => fetchApi<{ disconnected: boolean; revoked: boolean; message: string }>('/google-drive/disconnect', studioMutation('POST'))
 }
 
+// ─── Gemini MCP: connector for the Gemini Mac app (server/src/routes/geminiMcp.ts) ───
+import type { ConnectorStatus as GeminiMcpConnectorStatus } from '../../../server/src/services/geminiMcp/connector'
+export type { GeminiMcpConnectorStatus }
+import type { GeminiChapterRow, GeminiJobView, GeminiSeriesRow } from '../../../server/src/services/geminiMcp/model'
+export type { GeminiChapterRow, GeminiJobView, GeminiSeriesRow, GeminiLanguageStatus, JobState as GeminiJobState } from '../../../server/src/services/geminiMcp/model'
+export interface GeminiMcpSelfTest { ok: boolean; tools: string[]; reply: unknown; error: string | null }
+export interface GeminiJobLog {
+  startedAt: string | null; finishedAt: string | null
+  steps: { key: string; at: string; rejected: number }[]
+  rejections: { key: string; at: string; problems: string[] }[]
+}
+export const geminiMcpApi = {
+  connector: () => fetchApi<GeminiMcpConnectorStatus>('/gemini-mcp/connector'),
+  install: () => fetchApi<GeminiMcpConnectorStatus>('/gemini-mcp/connector/install', studioMutation('POST')),
+  readded: () => fetchApi<GeminiMcpConnectorStatus>('/gemini-mcp/connector/readded', studioMutation('POST')),
+  test: () => fetchApi<GeminiMcpSelfTest>('/gemini-mcp/connector/test', studioMutation('POST')),
+  series: () => fetchApi<{ series: GeminiSeriesRow[] }>('/gemini-mcp/series'),
+  chapters: (seriesId: string) => fetchApi<{ series: { id: string; title: string }; chapters: GeminiChapterRow[]; masterPrompt: string; masterActive: boolean }>(`/gemini-mcp/series/${encodeURIComponent(seriesId)}/chapters`),
+  process: (body: { chapterId: string; language: NarrationLanguage; rewrite?: boolean; restart?: boolean }) =>
+    fetchApi<{ job: GeminiJobView; prompt: string }>('/gemini-mcp/jobs/process', studioMutation('POST', body)),
+  job: (jobId: string) => fetchApi<{ job: GeminiJobView; prompt: string }>(`/gemini-mcp/jobs/${encodeURIComponent(jobId)}`),
+  cancel: (jobId: string) => fetchApi<{ job: GeminiJobView }>(`/gemini-mcp/jobs/${encodeURIComponent(jobId)}/cancel`, studioMutation('POST')),
+  retry: (jobId: string) => fetchApi<{ job: GeminiJobView; prompt: string }>(`/gemini-mcp/jobs/${encodeURIComponent(jobId)}/retry`, studioMutation('POST')),
+  log: (jobId: string) => fetchApi<GeminiJobLog>(`/gemini-mcp/jobs/${encodeURIComponent(jobId)}/log`),
+  cleanupDrive: () => fetchApi<{ kept: number; deleted: string[] }>('/gemini-mcp/drive/cleanup', studioMutation('POST')),
+  master: (seriesId: string, language: NarrationLanguage) =>
+    fetchApi<{ queued: GeminiJobView[]; skipped: { number: number; reason: string }[]; prompt: string }>('/gemini-mcp/master', studioMutation('POST', { seriesId, language })),
+  stopMaster: (seriesId: string) => fetchApi<{ cancelled: number }>('/gemini-mcp/master/stop', studioMutation('POST', { seriesId }))
+}
+
 // ─── Studio AntiGravity: local Antigravity CLI (server/src/routes/antigravity.ts) ───
 import type { AiEngine, AntigravitySettings, CodexConnectionView as CodexConnection, CodexSettings, ConnectionView as AntigravityConnection } from '../../../server/src/services/antigravity/settingsModel'
 import type { CompatibilityReport } from '../../../server/src/services/antigravity/compatibility'
 import type { CodexModel } from '../../../server/src/services/antigravity/codexCli'
 import type { CodexRateLimits } from '../../../server/src/services/antigravity/codexSession'
 import type { CodexAccountView } from '../../../server/src/services/antigravity/codexAccounts'
-export type { AiEngine, AntigravitySettings, AntigravityConnection, CodexAccountView, CodexConnection, CodexModel, CodexRateLimits, CodexSettings, CompatibilityReport }
-export const ENGINE_LABELS: Record<AiEngine, string> = { antigravity: 'Antigravity', codex: 'ChatGPT (Codex)' }
+import type { ClaudeConnectionView as ClaudeConnection, ClaudeSettings } from '../../../server/src/services/antigravity/settingsModel'
+import type { ClaudeModel, ClaudeRateLimit, ClaudeUsage } from '../../../server/src/services/antigravity/claudeCli'
+export type { AiEngine, AntigravitySettings, AntigravityConnection, ClaudeConnection, ClaudeModel, ClaudeRateLimit, ClaudeSettings, ClaudeUsage, CodexAccountView, CodexConnection, CodexModel, CodexRateLimits, CodexSettings, CompatibilityReport }
+export const ENGINE_LABELS: Record<AiEngine, string> = { antigravity: 'Antigravity', codex: 'ChatGPT (Codex)', claude: 'Claude (Claude Code)' }
+/** Claude through the local Claude Code CLI — the third AntiGravity engine (server/src/routes/antigravity.ts /claude/*). */
+export const claudeApi = {
+  connection: () => fetchApi<ClaudeConnection>('/antigravity/claude/connection'),
+  saveSettings: (patch: Partial<ClaudeSettings>) => fetchApi<ClaudeSettings>('/antigravity/claude/settings', studioMutation('PUT', patch)),
+  check: () => fetchApi<CompatibilityReport>('/antigravity/claude/check', studioMutation('POST')),
+  cancelCheck: () => fetchApi<{ cancelled: boolean }>('/antigravity/claude/check/cancel', studioMutation('POST')),
+  signIn: () => fetchApi<{ opened: boolean; instructions: string }>('/antigravity/claude/sign-in', studioMutation('POST'))
+}
 /** ChatGPT through the local Codex CLI — the second AntiGravity engine (server/src/routes/antigravity.ts /codex/*). */
 export const codexApi = {
   connection: () => fetchApi<CodexConnection>('/antigravity/codex/connection'),
@@ -2657,10 +2802,12 @@ export const codexApi = {
 }
 import type { AgyQuota } from '../../../server/src/services/antigravity/cli'
 export type { AgyQuota }
-/** GET /antigravity/usage: Google (agy, live, cached 2 min) and each ChatGPT account's last recorded Codex windows. */
+/** GET /antigravity/usage: Google (agy, live, cached 2 min), each ChatGPT account's last recorded Codex windows, and Claude's last reported windows. */
 export interface AiUsageLimits {
   google: { account: string | null; quota: AgyQuota | null; error: string | null; checkedAt: string | null }
   codex: { autoSwitch: boolean; accounts: { id: string; label: string; enabled: boolean; limited: boolean; limitedUntil: string | null; limitReason: string | null; limits: CodexRateLimits | null }[] }
+  /** Absent from servers older than the Claude engine. */
+  claude?: { limits: ClaudeRateLimit[]; usage?: ClaudeUsage | null; error?: string | null; checkedAt?: string | null }
 }
 export const aiUsageApi = {
   get: (refresh = false) => fetchApi<AiUsageLimits>(`/antigravity/usage${refresh ? '?refresh=1' : ''}`)
@@ -2677,12 +2824,23 @@ export const antigravityApi = {
 export type AntigravityPromptKind = 'crop_rules' | 'analysis' | 'review'
 export interface AntigravityPrompt { kind: AntigravityPromptKind; id: string; sha256: string; origin: string; content: string }
 /** What an AntiGravity process does: crop pointers (Image Clipper) or crop descriptions + English-script links (Metadata). */
-export type AntigravityKind = 'clipper' | 'metadata' | 'editor'
+export type AntigravityKind = 'clipper' | 'metadata' | 'editor' | 'narration'
 /** Timeline: how each chapter's Editor 2.0 timeline is made, and in which languages (pinned to the run). */
 export type AntigravityEditorMethod = 'oneshot' | 'batches'
 export interface AntigravityEditorOptions { method: AntigravityEditorMethod; languages: NarrationLanguage[] }
 /** One chapter's Timeline status in one language (Editor 2.0's checklist). */
 export interface EditorTimelineLanguageStatus { saved: boolean; processed: boolean; model: string | null; ready: boolean; missing: { label: string; detail: string }[] }
+/** A chapter of a part as AntiGravity Narration sees it (POST /antigravity/narration/status). */
+export interface NarrationChapterStatus {
+  id: string; number: number; title: string | null
+  hasScript: boolean
+  script: { status: string; mode: string; updatedAt: string } | null
+  pages: number
+  /** Why it can't be written now (an earlier chapter without a script, no pages, completed Part), or null. */
+  blocked: string | null
+  /** The Hinglish script, written from the English one (after each English save, or by Start process). */
+  hinglish: { hasScript: boolean; stale: boolean; blocked: string | null }
+}
 export interface EditorTimelineChapterStatus { id: string; number: number; title: string | null; languages: Record<NarrationLanguage, EditorTimelineLanguageStatus> }
 export interface AntigravityJobView {
   id: string; runId: string; chapterId: string; filename: string; pageIndex: number; stage: string; sourceSha256: string; kind?: AntigravityKind
@@ -2705,7 +2863,7 @@ export interface AntigravityRunDetail {
   jobs: AntigravityJobView[]
   events: { seq: number; type: string; message: string; at: string; jobId: string | null }[]
 }
-export interface AntigravityRunSummary { id: string; seriesId: string; partNumber: number; kind?: AntigravityKind; engine?: AiEngine; model: string; control: string; mode?: 'next' | 'pages'; createdAt: string; finishedAt: string | null; editor?: AntigravityEditorOptions }
+export interface AntigravityRunSummary { concurrency?: number; id: string; seriesId: string; partNumber: number; kind?: AntigravityKind; engine?: AiEngine; model: string; control: string; mode?: 'next' | 'pages'; createdAt: string; finishedAt: string | null; editor?: AntigravityEditorOptions }
 /** The one process: the live run (running, pausing, paused or stopping), else the most recent run. */
 export interface AntigravityCurrentProcess { live: boolean; run: AntigravityRunSummary | null }
 export interface AntigravityStartResult { runId: string | null; created: string[]; reused: string[]; skipped: { chapterId: string; filename: string; reason: string }[] }
@@ -2717,22 +2875,53 @@ export const antigravityJobsApi = {
   /** Start process: this part's next pending pages, in chapter order, until none is left (one process at a time). */
   startNext: (seriesId: string, partNumber: number, kind: AntigravityKind = 'clipper', editor?: AntigravityEditorOptions) => fetchApi<AntigravityStartResult>('/antigravity/runs', studioMutation('POST', { seriesId, partNumber, mode: 'next', kind, editor })),
   /** Selected pages only. With a live process on this part they join it; prepareOnly = Upload to Drive (slice + upload, no AI). */
-  startPages: (seriesId: string, partNumber: number, pages: { chapterId: string; filename: string }[], prepareOnly = false, kind: AntigravityKind = 'clipper', editor?: AntigravityEditorOptions) =>
-    fetchApi<AntigravityStartResult>('/antigravity/runs', studioMutation('POST', { seriesId, partNumber, pages, prepareOnly, kind, editor })),
+  /** recreate (Metadata): ticked pages that already have Metadata are made again; the new files replace the old ones in Studio, R2 and on phones. */
+  startPages: (seriesId: string, partNumber: number, pages: { chapterId: string; filename: string }[], prepareOnly = false, kind: AntigravityKind = 'clipper', editor?: AntigravityEditorOptions, recreate = false) =>
+    fetchApi<AntigravityStartResult>('/antigravity/runs', studioMutation('POST', { seriesId, partNumber, pages, prepareOnly, kind, editor, ...(recreate && { recreate: true }) })),
   current: () => fetchApi<AntigravityCurrentProcess>('/antigravity/runs/current'),
   run: (id: string) => fetchApi<AntigravityRunDetail>(`/antigravity/runs/${id}`),
   /** The 50 newest runs (GET /antigravity/runs), newest first. */
   runs: () => fetchApi<AntigravityRunSummary[]>('/antigravity/runs'),
-  control: (id: string, action: 'pause' | 'resume' | 'stop') => fetchApi(`/antigravity/runs/${id}/${action}`, studioMutation('POST')),
-  retry: (jobId: string) => fetchApi<AntigravityJobView>(`/antigravity/jobs/${jobId}/retry`, studioMutation('POST')),
+  /** stop: the page (chapter) in progress finishes first; stop-now cancels it at once. */
+  control: (id: string, action: 'pause' | 'resume' | 'stop' | 'stop-now') => fetchApi(`/antigravity/runs/${id}/${action}`, studioMutation('POST')),
+  /** fresh (Narration): start over instead of keeping the previous attempt's accepted notes and draft. */
+  retry: (jobId: string, fresh = false) => fetchApi<AntigravityJobView>(`/antigravity/jobs/${jobId}/retry`, studioMutation('POST', fresh ? { fresh: true } : undefined)),
   pageJobs: (chapterIds: string[], kind: AntigravityKind = 'clipper') => fetchApi<AntigravityJobView[]>('/antigravity/page-jobs', studioMutation('POST', { chapterIds, kind })),
   /** Metadata status of one part's chapters (per page complete / pending / invalid, and why a chapter isn't ready). */
   metadataStatus: (seriesId: string, partNumber: number) => fetchApi<{ chapters: MetadataChapterStatus[] }>('/antigravity/metadata/status', studioMutation('POST', { seriesId, partNumber })),
   /** Timeline status of one part's chapters in English and Hindi (saved, and what Editor 2.0 still misses). */
+  narrationStatus: (seriesId: string, partNumber: number) => fetchApi<{ chapters: NarrationChapterStatus[] }>('/antigravity/narration/status', studioMutation('POST', { seriesId, partNumber })),
   editorStatus: (seriesId: string, partNumber: number) => fetchApi<{ chapters: EditorTimelineChapterStatus[] }>('/antigravity/editor/status', studioMutation('POST', { seriesId, partNumber })),
   publish: (jobId: string) => fetchApi<AntigravityJobView>(`/antigravity/jobs/${jobId}/publish`, studioMutation('POST')),
   reviewAgain: (jobId: string) => fetchApi<AntigravityJobView>(`/antigravity/jobs/${jobId}/review`, studioMutation('POST')),
   reject: (jobId: string, body: { rerun: boolean; note?: string }) => fetchApi<AntigravityJobView>(`/antigravity/jobs/${jobId}/reject`, studioMutation('POST', body)),
   fetchResults: (seriesId: string, chapterIds?: string[]) => fetchApi<AntigravityFetchOutcome>('/antigravity/results/fetch', studioMutation('POST', { seriesId, chapterIds })),
   r2Status: () => fetchApi<{ configured: boolean }>('/antigravity/r2-status')
+}
+
+// ─── Studio Agent (server/src/routes/agent.ts) ───
+export type AgentEngineId = 'claude' | 'codex' | 'antigravity'
+export type AgentEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+export interface AgentSettings { enabled: boolean; name: string; engine: AgentEngineId | 'auto'; models: Record<AgentEngineId, string | null>; efforts: Record<AgentEngineId, AgentEffort | null> }
+export interface AgentEngineStatus { id: AgentEngineId; label: string; available: boolean; detail: string; models: { id: string; label: string }[] }
+export interface AgentStatus { settings: AgentSettings; engines: AgentEngineStatus[]; activeEngine: AgentEngineId | null; busy: boolean; busyChatId: string | null }
+export interface AgentPendingAction { id: string; tool: string; args: Record<string, unknown>; summary: string; status: 'pending' | 'approved' | 'rejected' | 'failed'; result?: string }
+export interface AgentChatMessage { id: string; role: 'user' | 'agent' | 'system'; text: string; at: string; engine?: AgentEngineId; steps?: string[]; actions?: AgentPendingAction[]; error?: boolean }
+export interface AgentChatSummary { id: string; title: string; createdAt: string; updatedAt: string; messageCount: number }
+export interface AgentChat { id: string; title: string; createdAt: string; updatedAt: string; messages: AgentChatMessage[] }
+export interface AgentFile { text: string; bytes: number; updatedAt: string | null }
+export const agentApi = {
+  status: (fresh = false) => fetchApi<AgentStatus>(`/agent/status${fresh ? '?fresh=1' : ''}`),
+  saveSettings: (patch: { enabled?: boolean; name?: string; engine?: AgentSettings['engine']; models?: Partial<AgentSettings['models']>; efforts?: Partial<AgentSettings['efforts']> }) => fetchApi<AgentSettings>('/agent/settings', studioMutation('PUT', patch)),
+  chats: () => fetchApi<{ chats: AgentChatSummary[]; busy: boolean; busyChatId: string | null }>('/agent/chats'),
+  newChat: () => fetchApi<AgentChat>('/agent/chats', studioMutation('POST')),
+  getChat: (id: string) => fetchApi<{ chat: AgentChat; busy: boolean }>(`/agent/chats/${id}`),
+  send: (id: string, text: string) => fetchApi<{ messages: AgentChatMessage[]; busy: boolean }>(`/agent/chats/${id}/messages`, studioMutation('POST', { text })),
+  renameChat: (id: string, title: string) => fetchApi<{ renamed: boolean }>(`/agent/chats/${id}`, studioMutation('PATCH', { title })),
+  deleteChat: (id: string) => fetchApi<{ deleted: boolean }>(`/agent/chats/${id}`, studioMutation('DELETE')),
+  stop: () => fetchApi<{ stopping: boolean }>('/agent/stop', studioMutation('POST')),
+  decide: (actionId: string, approve: boolean) => fetchApi<{ messages: AgentChatMessage[] }>(`/agent/actions/${actionId}/${approve ? 'approve' : 'reject'}`, studioMutation('POST')),
+  file: (kind: 'knowledge' | 'memory') => fetchApi<AgentFile>(`/agent/files/${kind}`),
+  saveFile: (kind: 'knowledge' | 'memory', text: string) => fetchApi<AgentFile>(`/agent/files/${kind}`, studioMutation('PUT', { text })),
+  resetFile: (kind: 'knowledge' | 'memory') => fetchApi<AgentFile>(`/agent/files/${kind}/reset`, studioMutation('POST'))
 }

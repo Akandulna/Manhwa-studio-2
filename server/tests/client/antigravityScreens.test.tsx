@@ -18,20 +18,19 @@ const renderAt = (path: string, pattern: string, element: JSX.Element) =>
   renderToStaticMarkup(createElement(MemoryRouter, { initialEntries: [path] }, createElement(Routes, null, createElement(Route, { path: pattern, element }))))
 
 describe('AntiGravity workflow (AG-07)', () => {
-  it('has the five modules with Image Clipper and Metadata active', () => {
+  it('has the five modules with Narration, Image Clipper, Metadata and Timeline active', () => {
     expect(Object.keys(WORKFLOW_NODES).sort()).toEqual(['clipper', 'editor', 'metadata', 'narration', 'voiceover'])
-    expect(Object.entries(WORKFLOW_NODES).filter(([, n]) => n.active).map(([kind]) => kind).sort()).toEqual(['clipper', 'metadata'])
+    expect(Object.entries(WORKFLOW_NODES).filter(([, n]) => n.active).map(([kind]) => kind).sort()).toEqual(['clipper', 'editor', 'metadata', 'narration'])
   })
 
-  it('renders three disabled Coming Soon nodes and two links scoped to the series and part', () => {
+  it('renders Voiceover as the one Coming Soon node and four links scoped to the series and part', () => {
     const html = renderAt('/antigravity/series/s1/parts/2', '/antigravity/series/:seriesId/parts/:partNumber', createElement(AntiGravityWorkflow))
-    expect(html.match(/aria-disabled="true"/g)).toHaveLength(3)
-    expect(html.match(/>Coming Soon</g)).toHaveLength(3)
-    expect(html).toContain('href="/antigravity/series/s1/parts/2/image-clipper"')
-    expect(html).toContain('href="/antigravity/series/s1/parts/2/metadata"')
+    expect(html.match(/aria-disabled="true"/g)).toHaveLength(1)
+    expect(html.match(/>Coming Soon</g)).toHaveLength(1)
+    for (const node of ['narration', 'image-clipper', 'metadata', 'timeline']) expect(html).toContain(`href="/antigravity/series/s1/parts/2/${node}"`)
     expect(html).toContain('Chapters 21–40')
-    // Disabled nodes are not links.
-    expect(html).not.toMatch(/href="[^"]*(narration|voiceover|editor)"/)
+    // The disabled node is not a link.
+    expect(html).not.toMatch(/href="[^"]*voiceover"/)
   })
 })
 

@@ -25,6 +25,7 @@ import { withSeriesActivity } from '../services/seriesActivity.js'
  *   GET    /chapters/:id/images                    every image + its own status, prev/next chapter, review
  *   GET    /chapters/:id/review                    whether the whole chapter is reviewed (cropping needs it; cropped counts)
  *   PUT    /chapters/:id/review                    the desktop's Mark reviewed / Unmark
+ *   GET    /chapters/:id/top-suggestions           crops whose top looks one 256 px step too high (Preview's "Move top here")
  *   GET    /chapters/:id/images/:filename/points   that image's crop artifact
  *   PUT    /chapters/:id/images/:filename/points   store that image's crop artifact (Preview's box edits)
  *   GET    /chapters/:id/images/:filename/metadata that image's metadata document
@@ -85,6 +86,7 @@ import {
 import {publishMetadataJobs,fetchMetadataResults} from '../services/clipper3/metadataSplit.js'
 import { fetchPhoneCrops, publishAllCroppedMarkers, publishChapterCropped, publishChapterReviewed } from '../services/phoneCropImport.js'
 import { readEffectiveReview, setDesktopReview } from '../services/clipper3/chapterReview.js'
+import { chapterTopSuggestions } from '../services/clipper3/topSlip.js'
 import { reconcileQuietly } from '../services/diskReconcile.js'
 import { queueEditorPublish } from '../services/editorAutoPublish.js'
 import { doneNeighbours } from '../services/pageStitch.js'
@@ -673,6 +675,26 @@ export function initClipper3Routes(io: Server): Router {
     } catch (error) {
       console.error('[clipper3] reading chapter review failed:', error)
       res.status(500).json({ error: 'Failed to read the chapter review' })
+    }
+  })
+
+  /**
+   * GET /chapters/:id/top-suggestions
+   *
+   * Crops whose top edge looks one model "step" (256 or 512 px) above where
+   * their panel starts, per page filename — see topSlip.ts. Read-only: Preview
+   * shows each as a suggestion the user accepts or dismisses. Decodes every
+   * page that has pointers, so Preview asks once, after the pages are shown.
+   */
+  router.get('/chapters/:id/top-suggestions', async (req: Request, res: Response) => {
+    try {
+      const chapter = await findChapter(req.params.id)
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' })
+      const manifest = await getChapterManifest(chapter.folderPath)
+      res.json({ pages: await chapterTopSuggestions(chapter.folderPath, manifest.images.map(image => image.filename)) })
+    } catch (error) {
+      console.error('[clipper3] checking crop tops failed:', error)
+      res.status(500).json({ error: 'Failed to check crop tops' })
     }
   })
 

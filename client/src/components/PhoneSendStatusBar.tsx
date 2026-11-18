@@ -3,7 +3,7 @@ import type { PhoneSendJob, PhoneSendSeriesProgress } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { formatBytes } from '@/lib/utils'
-import { AlertTriangle, CheckCircle, ChevronDown, ChevronUp, Loader2, Smartphone, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle, ChevronDown, ChevronUp, Loader2, Scissors, Smartphone, XCircle } from 'lucide-react'
 
 interface Props {
   job: PhoneSendJob
@@ -57,13 +57,16 @@ export function PhoneSendStatusBar({ job, onCancel, onDismiss }: Props) {
   const bytesSent = job.series.reduce((sum, s) => sum + (s.chaptersSent > 0 ? s.bytesDone : 0), 0)
   const activeIndex = job.series.findIndex(s => s.state === 'sending')
   const active = activeIndex >= 0 ? job.series[activeIndex] : null
+  const stitching = job.series.find(s => s.preparing)
   const label = job.auto ? 'Auto-sending new chapters to the phone' : 'Sending chapters to the phone'
 
   let icon = <Loader2 className="h-5 w-5 animate-spin text-primary" />
   let title = `${label} · ${job.bucket}`
   let detail = active
     ? `${active.title} — ${active.current ? `${active.current.folder} (${active.chaptersSent + 1} of ${active.chaptersTotal})` : chapters(active.chaptersTotal)}`
-    : 'Preparing…'
+    : stitching?.preparing
+      ? `${stitching.title} — stitching chapter ${stitching.preparing.chapterNumber} (${stitching.preparing.index} of ${stitching.preparing.total}) before sending`
+      : 'Preparing…'
 
   if (job.state === 'cancelled') {
     icon = <XCircle className="h-5 w-5 text-muted-foreground" />
@@ -138,6 +141,17 @@ export function PhoneSendStatusBar({ job, onCancel, onDismiss }: Props) {
             )}
           </div>
         </div>
+
+        {running && !active && stitching?.preparing && (
+          <div className="flex items-center gap-3 pl-9 text-sm">
+            <Scissors className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <span className="w-20 shrink-0 text-muted-foreground">Stitching</span>
+            <Progress value={pct(stitching.preparing.index - 1, stitching.preparing.total)} className="h-2 flex-1" />
+            <span className="w-48 shrink-0 text-right text-muted-foreground tabular-nums">
+              Chapter {stitching.preparing.index} of {stitching.preparing.total}
+            </span>
+          </div>
+        )}
 
         {running && active && (
           <div className="flex items-center gap-3 pl-9 text-sm">

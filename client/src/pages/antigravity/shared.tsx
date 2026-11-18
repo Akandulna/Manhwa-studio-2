@@ -17,12 +17,14 @@ import {
   antigravityJobsApi,
   clipper3Api,
   codexApi,
+  claudeApi,
   ENGINE_LABELS,
   googleDriveApi,
   type AiEngine,
   type AntigravityConnection,
   type AntigravityCurrentProcess,
   type CodexConnection,
+  type ClaudeConnection,
   type Clipper3Chapter,
   type Clipper3ChapterSummary,
   type Clipper3Series,
@@ -62,14 +64,15 @@ export function lastLibraryPage(): string {
 
 /** Where a run was started from: its part's Image Clipper, Metadata or Timeline page. */
 export const runOriginPath = (run: { seriesId: string; partNumber: number; kind?: string }) =>
-  `/antigravity/series/${run.seriesId}/parts/${run.partNumber}/${run.kind === 'metadata' ? 'metadata' : run.kind === 'editor' ? 'timeline' : 'image-clipper'}`
+  `/antigravity/series/${run.seriesId}/parts/${run.partNumber}/${run.kind === 'metadata' ? 'metadata' : run.kind === 'editor' ? 'timeline' : run.kind === 'narration' ? 'narration' : 'image-clipper'}`
 
 /** "Image Clipper" / "Metadata" / "Timeline" for a run or job. */
-export const kindLabel = (kind?: string | null) => (kind === 'metadata' ? 'Metadata' : kind === 'editor' ? 'Timeline' : 'Image Clipper')
+export const kindLabel = (kind?: string | null) => (kind === 'metadata' ? 'Metadata' : kind === 'editor' ? 'Timeline' : kind === 'narration' ? 'Narration' : 'Image Clipper')
 
 /** A Timeline job's "page" (timeline-en / timeline-hi) as its language, else the filename. */
 export const jobUnitLabel = (job: { filename: string; kind?: string | null }) =>
-  job.kind === 'editor' ? (job.filename === 'timeline-hi' ? 'Hindi timeline' : job.filename === 'timeline-en' ? 'English timeline' : job.filename) : job.filename
+  job.kind === 'editor' ? (job.filename === 'timeline-hi' ? 'Hindi timeline' : job.filename === 'timeline-en' ? 'English timeline' : job.filename)
+    : job.kind === 'narration' ? (job.filename === 'narration-hi' ? 'Hinglish script' : 'English script') : job.filename
 
 /**
  * `libraryTo` overrides where the Library tab goes (Running processes sends
@@ -233,6 +236,7 @@ export interface Readiness {
   drive: DriveStatus | null
   antigravity: AntigravityConnection | null
   codex: CodexConnection | null
+  claude: ClaudeConnection | null
   /** The engine new runs use (Settings → AntiGravity → AI engine). */
   engine: AiEngine
   engineLabel: string
@@ -255,12 +259,14 @@ export function useReadiness(): Readiness {
   const [drive, setDrive] = useState<DriveStatus | null>(null)
   const [antigravity, setAntigravity] = useState<AntigravityConnection | null>(null)
   const [codex, setCodex] = useState<CodexConnection | null>(null)
+  const [claude, setClaude] = useState<ClaudeConnection | null>(null)
   const [r2, setR2] = useState<boolean | null>(null)
   useEffect(() => {
     googleDriveApi.status().then(setDrive).catch(() => setDrive(null))
     antigravityApi.connection().then(conn => {
       setAntigravity(conn)
       if (conn.settings.engine === 'codex') codexApi.connection().then(setCodex).catch(() => setCodex(null))
+      if (conn.settings.engine === 'claude') claudeApi.connection().then(setClaude).catch(() => setClaude(null))
     }).catch(() => setAntigravity(null))
     antigravityJobsApi.r2Status().then(s => setR2(s.configured)).catch(() => setR2(null))
   }, [])
@@ -275,6 +281,12 @@ export function useReadiness(): Readiness {
     else if (codex.account && !codex.account.signedIn) engineBlockers.push('Sign in to Codex with ChatGPT (Plus or above) in Settings → AntiGravity.')
     else if (!codex.settings.model) engineBlockers.push('Choose a Codex model in Settings → AntiGravity.')
     else if (!codex.proofValid) engineBlockers.push(codex.proofNote ?? 'Run the Codex compatibility test in Settings → AntiGravity.')
+  } else if (engine === 'claude') {
+    if (!claude) engineBlockers.push('Checking Claude Code…')
+    else if (!claude.installation.path) engineBlockers.push('Install Claude Code (claude.com/claude-code) or set its path.')
+    else if (claude.account && !claude.account.signedIn) engineBlockers.push('Sign in to Claude Code with your Claude account (Pro or Max) in Settings → AntiGravity.')
+    else if (!claude.settings.model) engineBlockers.push('Choose a Claude model in Settings → AntiGravity.')
+    else if (!claude.proofValid) engineBlockers.push(claude.proofNote ?? 'Run the Claude compatibility test in Settings → AntiGravity.')
   } else if (!antigravity?.installation.path) engineBlockers.push('Install the Antigravity CLI.')
   else if (!antigravity.settings.model) engineBlockers.push('Choose a model in Settings.')
   else if (!antigravity.proofValid) engineBlockers.push(antigravity.proofNote ?? 'Run the compatibility test in Settings.')
@@ -283,10 +295,10 @@ export function useReadiness(): Readiness {
   const metadataBlockers = [...engineBlockers]
   // Same rule as Settings' model picker (LocalAntigravityCard TEXT_ONLY): Metadata has to see the crops.
   if (engine === 'antigravity' && /^gpt-oss/i.test(antigravity?.settings.model ?? '')) metadataBlockers.push(`${antigravity?.settings.modelLabel ?? antigravity?.settings.model} has no image input: choose a vision model in Settings → AntiGravity.`)
-  const selected = engine === 'codex' ? codex?.settings : antigravity?.settings
+  const selected = engine === 'codex' ? codex?.settings : engine === 'claude' ? claude?.settings : antigravity?.settings
   return {
-    drive, antigravity, codex, engine, engineLabel: ENGINE_LABELS[engine],
-    modelLabel: selected?.modelLabel ?? selected?.model ?? null, effort: engine === 'codex' ? codex?.settings.effort ?? null : null,
+    drive, antigravity, codex, claude, engine, engineLabel: ENGINE_LABELS[engine],
+    modelLabel: selected?.modelLabel ?? selected?.model ?? null, effort: engine === 'codex' ? codex?.settings.effort ?? null : engine === 'claude' ? claude?.settings.effort ?? null : null,
     concurrency: antigravity?.settings.concurrency ?? 1, startBlockers, prepareBlockers, metadataBlockers, editorBlockers: [...engineBlockers]
   }
 }

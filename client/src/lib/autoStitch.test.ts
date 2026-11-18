@@ -7,9 +7,11 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  anchoredCut,
   autoOptions,
   blankBands,
   buildStrip,
+  manualCut,
   outputPieces,
   piecesOf,
   planChapter,
@@ -176,5 +178,40 @@ describe('dropped pages', () => {
   it('toggles a page', () => {
     assert.deepEqual(toggleDropped([], 100), [{ y: 100, reason: '' }])
     assert.deepEqual(toggleDropped([{ y: 100, reason: 'x' }], 100), [])
+  })
+})
+
+describe('manual slices', () => {
+  it('anchors a slice to its source row and follows it into a rescaled strip', () => {
+    const defs = [page(1, 1000, []), page(2, 1000, [], 128, 400), page(3, 1000, [])]
+    const before = strip(defs)
+    // p2 is 400 px wide, so it is 2000 strip px tall; strip y 2000 is its source row 500.
+    const cut = manualCut(before, 2000)!
+    assert.deepEqual(cut, { y: 2000, kind: 'manual', anchor: { file: 'p2', row: 500 } })
+    // Dropping p1 moves p2 to the top of the strip.
+    assert.equal(anchoredCut(strip(defs, new Set(['p1'])), cut)!.y, 1000)
+    // Dropping the sliced image drops the slice.
+    assert.equal(anchoredCut(strip(defs, new Set(['p2'])), cut), null)
+    assert.equal(manualCut(before, 0), null)
+    assert.equal(manualCut(before, before.height), null)
+  })
+
+  it('keeps manual slices when planning, even through artwork, and plans around them', () => {
+    const defs = Array.from({ length: 6 }, (_, i) => page(i + 1, 5000, [[4900, 5000]]))
+    const s = strip(defs)
+    const slice = manualCut(s, 7000)!
+    const { cuts } = planChapter(s, blankBands(s), options, null, [slice])
+    assert.ok(cuts.some(c => c.y === 7000 && c.kind === 'manual'))
+    assert.deepEqual(cuts.map(c => c.y), [...cuts.map(c => c.y)].sort((a, b) => a - b))
+    for (const range of segments(s, cuts)) assert.ok(range.bottom - range.top <= options.hardMax)
+  })
+
+  it('a slice inside a deleted intro leaves both halves deleted', () => {
+    const defs = [page(1, 1000, []), page(2, 1000, []), ...Array.from({ length: 4 }, (_, i) => page(i + 3, 5000, [[4900, 5000]]))]
+    const s = strip(defs)
+    const edges = { intro: { file: 'p2', row: 1000, referenceNumber: 1 }, outro: null }
+    const { cuts, dropped } = planChapter(s, blankBands(s), options, edges, [manualCut(s, 500)!])
+    assert.deepEqual(cuts.slice(0, 2).map(c => [c.y, c.kind]), [[500, 'manual'], [2000, 'gap']])
+    assert.deepEqual(dropped.map(d => d.y).sort((a, b) => a - b), [0, 500])
   })
 })

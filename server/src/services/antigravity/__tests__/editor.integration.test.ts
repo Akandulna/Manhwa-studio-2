@@ -93,6 +93,7 @@ const runDone = (runId: string) => until(`run ${runId} to finish`, async () => {
 }, 40_000)
 
 beforeAll(async () => {
+  await fs.writeFile(path.join(tmp, 'test.db'), '')
   execFileSync('npx', ['prisma', 'db', 'push', '--skip-generate'], { cwd: serverDir, env: { ...process.env, DATABASE_URL: dbUrl }, stdio: 'ignore' })
   await fs.chmod(FAKE_AGY, 0o755)
   prisma = new PrismaClient({ datasources: { db: { url: dbUrl } } })

@@ -28,6 +28,7 @@ import {withUnmanagedCropChapter} from './managedCropProjection.js'
  * groups are capped at the WebP dimension limit so both formats always work.
  */
 
+import { withStitchActivity } from './stitchActivity.js'
 import sharp from 'sharp'
 import fs from 'fs/promises'
 import path from 'path'
@@ -608,7 +609,7 @@ async function discardBackupLegacy(chapter: ChapterRef): Promise<void> {
 }
 
 export async function stitchChapter(chapter: ChapterRef, groups: unknown, restitch = false):Promise<StitchRecord> {
- return withUnmanagedCropChapter(chapter.folderPath,()=>stitchChapterLegacy(chapter,groups,restitch))
+ return withStitchActivity(chapter.folderPath,()=>withUnmanagedCropChapter(chapter.folderPath,()=>stitchChapterLegacy(chapter,groups,restitch)))
 }
 
 export async function undoStitch(chapter: ChapterRef):Promise<void> {

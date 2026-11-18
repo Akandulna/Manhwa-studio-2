@@ -4,7 +4,7 @@
  * the wrong place is an error; boxes are never clamped. Every string in the reply is data. Pure.
  */
 import { describe, isBlank, isNumber, JNULL, JsonArray, JsonObject, ktTrim, parseJson, sha256Hex, trimChar, wholeNumber, type JsonValue } from './json.js'
-import type { AnalysisParseResult, Box, Handoff, HandoffSlice, ImportedCandidate, ImportIssue } from './types.js'
+import type { AnalysisParseResult, Box, Handoff, HandoffSlice, ImportedCandidate, ImportIssue, Rotation } from './types.js'
 
 export const ANALYSIS_SCHEMA = 'chatgpt-analysis/1.0'
 export const CANONICAL_COORDINATES = 'canonical_original_pixels'
@@ -39,8 +39,29 @@ const TOP_LEVEL_KEYS = new Set([
   'coordinate_system', 'page_inspection_complete', 'candidates', 'page_review_flags',
 ])
 const CANDIDATE_KEYS = new Set([
-  'candidate_id', 'reason', 'top_left', 'bottom_right', 'bounds', 'description', 'visual_evidence', 'review_flags',
+  'candidate_id', 'reason', 'top_left', 'bottom_right', 'bounds', 'description', 'visual_evidence', 'review_flags', 'rotate',
 ])
+
+/**
+ * A crop's "rotate" field: 90 or -90 turn it upright; absent, null or 0 mean upright. Anything else is
+ * refused (returns undefined) so the model is asked again rather than a crop turned the wrong way.
+ */
+export function parseRotation(value: JsonValue | undefined): Rotation | null | undefined {
+  if (value === undefined || value === JNULL) return null
+  const n = wholeNumber(value)
+  if (n === 0n) return null
+  if (n === 90n) return 90
+  if (n === -90n) return -90
+  return undefined
+}
+
+/** The text every crop prompt carries about "rotate" (the same line is in the phone's HandoffFormat). */
+export const ROTATE_RULE =
+  'SIDEWAYS ART: a few panels are drawn turned on their side, so a reader must tilt their head to view them. For such a crop add "rotate": 90 when the art\'s top points LEFT (turn it clockwise to stand it upright) or "rotate": -90 when the art\'s top points RIGHT (turn it counter-clockwise). Judge by the figures, faces and lettering inside the crop, not by the page. Leave "rotate" out for every upright crop; no other value is allowed. The crop\'s corners stay measured on the page as it is.'
+
+/** The review rounds' addition to [ROTATE_RULE]: how a reply keeps, sets or clears a crop's turn. */
+export const REVIEW_ROTATE_RULE =
+  'In the reply, a crop without "rotate" keeps the value listed under CURRENT CROPS (a split part keeps its parent\'s). Give "rotate": 90 or -90 to turn a crop that is drawn sideways, or "rotate": 0 when a listed crop is actually upright.'
 
 /** Where an error is reported: code, field, message and the candidate it's about. */
 export type IssueSink = (code: string, field: string, message: string, candidateId: string | null) => void
@@ -262,6 +283,11 @@ export function parseAnalysis(content: string, handoff: Handoff, geometryOnly = 
       }
     }
 
+    const rotate = parseRotation(raw.value('rotate'))
+    if (rotate === undefined) {
+      error('GPT_JSON_INVALID', `${at}.rotate`, `${id}: rotate must be 90, -90 or left out (got ${describe(raw.value('rotate'))})`, id)
+    }
+
     if (bounds !== null) {
       candidates.push({
         candidateId: id,
@@ -272,6 +298,7 @@ export function parseAnalysis(content: string, handoff: Handoff, geometryOnly = 
         reviewFlags,
         unknownFlags,
         slices: slicesSpanned(bounds, handoff.slices),
+        ...(rotate ? { rotate } : {}),
       })
     }
   })

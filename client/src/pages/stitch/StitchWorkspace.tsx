@@ -17,10 +17,12 @@ import {
   Cut,
   Dropped,
   StripPiece,
+  anchoredCut,
   autoOptions,
   bandMiddle,
   blankBands,
   buildStrip,
+  manualCut,
   outputPieces,
   piecesOf,
   planChapter,
@@ -116,6 +118,8 @@ export default function StitchWorkspace() {
   const [planTarget, setPlanTarget] = useState(DEFAULT_TARGET)
   const [history, setHistory] = useState<Layout[]>([])
   const [previewGroup, setPreviewGroup] = useState<number | null>(null)
+  /** Manual slice mode: a click on a page image cuts it there. */
+  const [slicing, setSlicing] = useState(false)
 
   // Selection: page indices, with an anchor for Shift-click ranges.
   const [selected, setSelected] = useState<Set<number>>(new Set())
@@ -144,6 +148,7 @@ export default function StitchWorkspace() {
       const data = await stitchApi.getChapter(id)
       setState(data)
       setRestitching(false)
+      setSlicing(false)
       setProfiles(null)
       setEdges(null)
       setLayout({
@@ -201,7 +206,7 @@ export default function StitchWorkspace() {
     setHistory(history.slice(0, -1))
   }, [history])
 
-  // ⌘Z / Ctrl+Z undoes a layout edit; Escape clears the selection.
+  // ⌘Z / Ctrl+Z undoes a layout edit; Escape clears the selection and leaves manual slice mode.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement
@@ -211,6 +216,7 @@ export default function StitchWorkspace() {
         undoLayout()
       } else if (e.key === 'Escape') {
         setSelected(new Set())
+        setSlicing(false)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -275,6 +281,7 @@ export default function StitchWorkspace() {
   const overLimit = cuts ? autoPages.filter(p => p.overLimit).length : outputs.filter(o => o.overLimit).length
   const tallest = Math.max(0, ...(cuts ? keptAutoPages : outputs).map(o => o.height))
   const forcedCuts = cuts ? cuts.filter(c => c.kind === 'forced').length : 0
+  const manualCuts = cuts ? cuts.filter(c => c.kind === 'manual').length : 0
   const offRange = autoPages.filter(p => p.offRange).length
 
   const readTarget = (): number | null => {
@@ -297,32 +304,62 @@ export default function StitchWorkspace() {
    */
   const planAuto = async (nextExcluded: Set<string> = excluded, withEdges = removeEdges) => {
     const value = readTarget()
-    if (value === null || !id) return
-    let rows = profiles
-    let marks = edges
-    if (!rows) {
-      setMeasuring(true)
-      try {
-        const data = await stitchApi.profiles(id)
-        rows = data.profiles
-        marks = data.edges
-        setProfiles(rows)
-        setEdges(marks)
-      } catch (error) {
-        toast({
-          title: 'Could not measure the pages',
-          description: error instanceof Error ? error.message : 'Unknown error',
-          variant: 'destructive'
-        })
-        return
-      } finally {
-        setMeasuring(false)
-      }
-    }
+    if (value === null) return
+    const measured = await ensureProfiles()
+    if (!measured) return
+    const { rows, marks } = measured
     const nextStrip = buildStrip(pages, rows, nextExcluded)
-    const plan = planChapter(nextStrip, blankBands(nextStrip), autoOptions(value, maxHeight), withEdges ? marks : null)
+    // Manual slices follow their source row into the new strip; a slice on a dropped image goes with it.
+    const manual = (cuts ?? []).filter(c => c.kind === 'manual').map(c => anchoredCut(nextStrip, c)).filter((c): c is Cut => c !== null)
+    const plan = planChapter(nextStrip, blankBands(nextStrip), autoOptions(value, maxHeight), withEdges ? marks : null, manual)
     setPlanTarget(value)
     commit({ excluded: nextExcluded, ...plan })
+  }
+
+  /** Row profiles (and repeated intro/outro marks), measured once per chapter. */
+  const ensureProfiles = async (): Promise<{ rows: StitchProfile[]; marks: StitchEdges | null } | null> => {
+    if (profiles) return { rows: profiles, marks: edges }
+    if (!id) return null
+    setMeasuring(true)
+    try {
+      const data = await stitchApi.profiles(id)
+      setProfiles(data.profiles)
+      setEdges(data.edges)
+      return { rows: data.profiles, marks: data.edges }
+    } catch (error) {
+      toast({
+        title: 'Could not measure the pages',
+        description: error instanceof Error ? error.message : 'Unknown error',
+        variant: 'destructive'
+      })
+      return null
+    } finally {
+      setMeasuring(false)
+    }
+  }
+
+  /**
+   * Turn on Manual slice. Outside Auto stitch view the current page breaks are kept as they
+   * are — every page of a stitched chapter, or each group in Group view — so only your
+   * slices change anything.
+   */
+  const startSlicing = async (everyPage: boolean) => {
+    if (cuts) {
+      setSlicing(on => !on)
+      return
+    }
+    const measured = await ensureProfiles()
+    if (!measured) return
+    const nextStrip = buildStrip(pages, measured.rows, excluded)
+    const starts = new Set(
+      everyPage
+        ? pages.map(p => p.filename)
+        : groups.map(g => g.map(i => pages[i].filename).find(name => !excluded.has(name))).filter((n): n is string => !!n)
+    )
+    const breaks: Cut[] = nextStrip.pages.filter(p => p.top > 0 && starts.has(p.filename)).map(p => ({ y: p.top, kind: 'gap' }))
+    setPlanTarget(readTarget() ?? DEFAULT_TARGET)
+    commit({ cuts: breaks, dropped: [] })
+    setSlicing(true)
   }
 
   const switchRemoveEdges = (on: boolean) => {
@@ -350,6 +387,13 @@ export default function StitchWorkspace() {
 
   const removeCut = (y: number) => {
     if (cuts) commit(withoutCut(cuts, dropped, y))
+  }
+
+  /** Slice at strip `y`, anywhere in a page image (through artwork too). */
+  const addManualCut = (y: number) => {
+    if (!strip) return
+    const cut = manualCut(strip, y)
+    if (cut && !cuts?.some(c => c.y === cut.y)) addCut(cut)
   }
 
   /** Delete or restore one Auto stitch page. */
@@ -653,6 +697,15 @@ export default function StitchWorkspace() {
                 <Sparkles className="h-4 w-4 mr-2" />
                 Stitch again
               </Button>
+              <Button
+                variant="outline"
+                onClick={() => { setRestitching(true); void startSlicing(true) }}
+                disabled={busy !== null || measuring || state.blockers.length > 0 || pages.length === 0}
+                title="Keep these pages as they are and slice any of them by hand, even through artwork"
+              >
+                <Scissors className="h-4 w-4 mr-2" />
+                Manual slice
+              </Button>
               {record && <>
               <Button variant="outline" onClick={() => run('undo')} disabled={busy !== null}>
                 {busy === 'undo' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RotateCcw className="h-4 w-4 mr-2" />}
@@ -733,13 +786,29 @@ export default function StitchWorkspace() {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => commit({ cuts: null })}
+                      onClick={() => { setSlicing(false); commit({ cuts: null }) }}
                       title="Back to joining whole images by hand"
                     >
                       <Layers className="h-4 w-4 mr-2" />
                       Group view
                     </Button>
-                  ) : (
+                  ) : null}
+                  <Button
+                    variant={slicing ? 'default' : 'outline'}
+                    size="sm"
+                    className={slicing ? 'bg-violet-600 hover:bg-violet-700 text-white' : ''}
+                    onClick={() => void startSlicing(false)}
+                    disabled={measuring || pages.length === 0}
+                    title={
+                      cuts
+                        ? 'Click anywhere on a page image to slice it there, even through artwork (Esc to stop)'
+                        : 'Keep the current pages as they are and click anywhere on a page image to slice it there'
+                    }
+                  >
+                    <Scissors className="h-4 w-4 mr-2" />
+                    {slicing && cuts ? 'Slicing — click a page' : 'Manual slice'}
+                  </Button>
+                  {cuts ? null : (
                     <Button variant="outline" size="sm" onClick={applyAuto} title="Regroup whole images in reading order">
                       <Wand2 className="h-4 w-4 mr-2" />
                       Auto group
@@ -775,6 +844,7 @@ export default function StitchWorkspace() {
                   Tallest {tallest.toLocaleString()} px (max {maxHeight.toLocaleString()})
                   {excluded.size > 0 && ` · ${excluded.size} dropped`}
                   {cuts && dropped.length > 0 && ` · ${dropped.length} page${dropped.length === 1 ? '' : 's'} deleted`}
+                  {manualCuts > 0 && ` · ${manualCuts} manual slice${manualCuts === 1 ? '' : 's'}`}
                 </div>
                 {cuts && (forcedCuts > 0 || offRange > 0) && (
                   <div className="text-amber-600 dark:text-amber-400">
@@ -818,7 +888,10 @@ export default function StitchWorkspace() {
               <ArrowLeftToLine className="inline h-3 w-3" /> / <ArrowRightToLine className="inline h-3 w-3" /> to remove
               the cut above / below a page, <Trash2 className="inline h-3 w-3" /> to delete a whole page (repeated
               intro/outro art is deleted for you when the switch is on), or <EyeOff className="inline h-3 w-3" /> on an
-              image to drop it (the cuts are planned again). Nothing changes on disk until you stitch, and a stitch can be
+              image to drop it (the cuts are planned again). <strong>Manual slice</strong>{' '}
+              <Scissors className="inline h-3 w-3" /> lets you click anywhere on a page image to cut it there, even
+              through artwork; a manual slice shows in violet above its page, and <X className="inline h-3 w-3" /> deletes
+              it. Re-planning keeps your manual slices. Nothing changes on disk until you stitch, and a stitch can be
               undone.
             </p>
           ) : (
@@ -866,6 +939,7 @@ export default function StitchWorkspace() {
             <div className="flex gap-4 overflow-x-auto pb-4 items-start">
               {autoPages.map((out, k) => {
                 const forced = out.cutAbove?.kind === 'forced'
+                const manual = out.cutAbove?.kind === 'manual'
                 const below = autoPages[k + 1]?.cutAbove
                 const markers = bands.filter(b => {
                   const y = bandMiddle(b)
@@ -931,6 +1005,19 @@ export default function StitchWorkspace() {
                           {out.drop.reason}
                         </div>
                       )}
+                      {manual && (
+                        <div className="flex items-center gap-1 text-violet-600 dark:text-violet-400">
+                          <Scissors className="h-3 w-3 shrink-0" />
+                          <span className="flex-1 min-w-0 truncate">Manual slice above</span>
+                          <button
+                            className="p-0.5 rounded hover:bg-accent hover:text-destructive"
+                            title="Delete this manual slice: join this page back onto the previous one"
+                            onClick={() => out.cutAbove && removeCut(out.cutAbove.y)}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      )}
                       {forced && (
                         <div
                           className="flex items-center gap-1 text-amber-600 dark:text-amber-400"
@@ -945,8 +1032,13 @@ export default function StitchWorkspace() {
                     <div
                       className={`relative rounded overflow-hidden border ${
                         out.overLimit ? 'border-destructive ring-1 ring-destructive' : 'border-border'
-                      } ${forced ? 'border-t-4 border-t-amber-500' : ''} ${out.drop ? 'opacity-30 grayscale' : ''}`}
+                      } ${forced ? 'border-t-4 border-t-amber-500' : ''} ${manual ? 'border-t-4 border-t-violet-500' : ''} ${
+                        out.drop ? 'opacity-30 grayscale' : ''
+                      }`}
                     >
+                      {slicing && (
+                        <SliceOverlay top={out.range.top} height={out.height} onSlice={addManualCut} />
+                      )}
                       {out.pieces.map(piece => (
                         <PieceImage
                           key={`${piece.page.filename}:${piece.top}`}
@@ -1157,17 +1249,49 @@ export default function StitchWorkspace() {
                   {autoPages[previewGroup].height.toLocaleString()} px
                 </DialogDescription>
               </DialogHeader>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant={slicing ? 'default' : 'outline'}
+                  size="sm"
+                  className={slicing ? 'bg-violet-600 hover:bg-violet-700 text-white' : ''}
+                  onClick={() => setSlicing(on => !on)}
+                  title="Click anywhere on this page to slice it there, even through artwork"
+                >
+                  <Scissors className="h-4 w-4 mr-2" />
+                  {slicing ? 'Slicing — click the page' : 'Manual slice'}
+                </Button>
+                {autoPages[previewGroup].cutAbove?.kind === 'manual' && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => autoPages[previewGroup].cutAbove && removeCut(autoPages[previewGroup].cutAbove!.y)}
+                    title="Join this page back onto the previous one"
+                  >
+                    <X className="h-4 w-4 mr-2" />
+                    Delete manual slice above
+                  </Button>
+                )}
+              </div>
               <div className="overflow-y-auto -mx-6 px-6 flex-1 min-h-0">
-                {autoPages[previewGroup].pieces.map(piece => {
-                  const p = pageByName.get(piece.page.filename)!
-                  return (
-                    <PieceImage
-                      key={`${piece.page.filename}:${piece.top}`}
-                      src={stitchApi.imageUrl(id, p.filename, String(p.bytes))}
-                      piece={piece}
+                <div className="relative">
+                  {autoPages[previewGroup].pieces.map(piece => {
+                    const p = pageByName.get(piece.page.filename)!
+                    return (
+                      <PieceImage
+                        key={`${piece.page.filename}:${piece.top}`}
+                        src={stitchApi.imageUrl(id, p.filename, String(p.bytes))}
+                        piece={piece}
+                      />
+                    )
+                  })}
+                  {slicing && (
+                    <SliceOverlay
+                      top={autoPages[previewGroup].range.top}
+                      height={autoPages[previewGroup].height}
+                      onSlice={addManualCut}
                     />
-                  )
-                })}
+                  )}
+                </div>
               </div>
             </>
           )}
@@ -1196,6 +1320,36 @@ export default function StitchWorkspace() {
           )}
         </DialogContent>
       </Dialog>
+    </div>
+  )
+}
+
+/** Manual slice mode over one output page: a violet line follows the pointer, a click cuts there. */
+function SliceOverlay({ top, height, onSlice }: { top: number; height: number; onSlice: (y: number) => void }) {
+  const [hover, setHover] = useState<number | null>(null)
+  const fraction = (e: MouseEvent<HTMLDivElement>) => {
+    const box = e.currentTarget.getBoundingClientRect()
+    return Math.min(1, Math.max(0, (e.clientY - box.top) / box.height))
+  }
+  return (
+    <div
+      className="absolute inset-0 z-[15] cursor-crosshair"
+      onMouseMove={e => setHover(fraction(e))}
+      onMouseLeave={() => setHover(null)}
+      onClick={e => {
+        e.stopPropagation()
+        onSlice(top + fraction(e) * height)
+      }}
+    >
+      {hover !== null && (
+        <div className="pointer-events-none absolute inset-x-0 h-0" style={{ top: `${hover * 100}%` }}>
+          <span className="absolute inset-x-0 border-t-2 border-violet-500 shadow-[0_0_0_1px_rgba(255,255,255,0.6)]" />
+          <span className="absolute right-1 -top-5 flex items-center gap-0.5 rounded bg-violet-600 px-1 text-[10px] text-white shadow tabular-nums">
+            <Scissors className="h-2.5 w-2.5" />
+            {Math.round(hover * height).toLocaleString()} px
+          </span>
+        </div>
+      )}
     </div>
   )
 }

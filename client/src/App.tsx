@@ -10,6 +10,7 @@ import StitchLibrary from '@/pages/stitch/StitchLibrary'
 import StitchWorkspace from '@/pages/stitch/StitchWorkspace'
 import ChapterPreview from '@/pages/ChapterPreview'
 import Settings from '@/pages/Settings'
+import Agent from '@/pages/Agent'
 import YouTubeLibrary from '@/pages/youtube/YouTubeLibrary'
 import YouTubeWorkspace from '@/pages/youtube/YouTubeWorkspace'
 import { SocketProvider } from '@/lib/socket'
@@ -32,11 +33,15 @@ import AccountsStatus from '@/pages/sleeper/AccountsStatus'
 import LiveProgress from '@/pages/sleeper/LiveProgress'
 import ManagerIssues from '@/pages/sleeper/ManagerIssues'
 import AntiGravitySeries from '@/pages/antigravity/AntiGravitySeries'
+import GeminiMcpHome from '@/pages/geminiMcp/GeminiMcpHome'
+import GeminiMcpWorkflow from '@/pages/geminiMcp/GeminiMcpWorkflow'
+import GeminiMcpNarration from '@/pages/geminiMcp/GeminiMcpNarration'
 import AntiGravityParts from '@/pages/antigravity/AntiGravityParts'
 import AntiGravityWorkflow from '@/pages/antigravity/AntiGravityWorkflow'
 import AntiGravityClipper from '@/pages/antigravity/AntiGravityClipper'
 import AntiGravityMetadata from '@/pages/antigravity/AntiGravityMetadata'
 import AntiGravityTimeline from '@/pages/antigravity/AntiGravityTimeline'
+import AntiGravityNarration from '@/pages/antigravity/AntiGravityNarration'
 import AntiGravityRuns from '@/pages/antigravity/AntiGravityRuns'
 import AntiGravityChapterPreview from '@/pages/antigravity/AntiGravityChapterPreview'
 import { ManagerProvider } from '@/hooks/useManagers'
@@ -45,6 +50,7 @@ import { ManagerProvider } from '@/hooks/useManagers'
 import EditorLibrary2 from '@/pages/editor2/EditorLibrary2'
 import EditorChapterList2 from '@/pages/editor2/EditorChapterList2'
 import Editor2Preview from '@/pages/editor2/Editor2Preview'
+import Shorts from '@/pages/shorts/Shorts'
 
 function App() {
   return (
@@ -52,6 +58,8 @@ function App() {
       <ManagerProvider>
       <Layout>
         <Routes>
+          <Route path="/agent" element={<Agent />} />
+
           {/* Module 1: Library & Downloader */}
           <Route path="/" element={<Library />} />
           <Route path="/add" element={<AddSeries />} />
@@ -81,6 +89,7 @@ function App() {
           <Route path="/editor2" element={<EditorLibrary2 />} />
           <Route path="/editor2/:seriesId" element={<EditorChapterList2 />} />
           <Route path="/editor2/chapter/:chapterId/preview" element={<Editor2Preview />} />
+          <Route path="/shorts" element={<Shorts />} />
 
           <Route path="/youtube" element={<YouTubeLibrary />} />
           <Route path="/youtube/series/:seriesId" element={<YouTubeWorkspace />} />
@@ -88,12 +97,16 @@ function App() {
           {/* Sleeper Cells */}
           {/* Studio AntiGravity (docs/PRD-antigravity-studio.md §6.1) */}
           <Route path="/antigravity" element={<AntiGravitySeries />} />
+          <Route path="/gemini-mcp" element={<GeminiMcpHome />} />
+          <Route path="/gemini-mcp/series/:seriesId" element={<GeminiMcpWorkflow />} />
+          <Route path="/gemini-mcp/series/:seriesId/narration" element={<GeminiMcpNarration />} />
           <Route path="/antigravity/settings" element={<Navigate to="/settings?tab=antigravity" replace />} />
           <Route path="/antigravity/series/:seriesId" element={<AntiGravityParts />} />
           <Route path="/antigravity/series/:seriesId/parts/:partNumber" element={<AntiGravityWorkflow />} />
           <Route path="/antigravity/series/:seriesId/parts/:partNumber/image-clipper" element={<AntiGravityClipper />} />
           <Route path="/antigravity/series/:seriesId/parts/:partNumber/metadata" element={<AntiGravityMetadata />} />
           <Route path="/antigravity/series/:seriesId/parts/:partNumber/timeline" element={<AntiGravityTimeline />} />
+          <Route path="/antigravity/series/:seriesId/parts/:partNumber/narration" element={<AntiGravityNarration />} />
           <Route path="/antigravity/series/:seriesId/parts/:partNumber/chapters/:chapterId" element={<AntiGravityChapterPreview />} />
           <Route path="/antigravity/runs" element={<AntiGravityRuns />} />
           <Route path="/antigravity/runs/phones" element={<AntiGravityRuns phonesView />} />

@@ -88,7 +88,12 @@ export interface ImportedCandidate {
   reviewFlags: string[]
   unknownFlags: string[]
   slices: string[]
+  /** Sideways art: the quarter turn that stands the crop upright (90 clockwise, -90 counter-clockwise). Absent = upright. */
+  rotate?: Rotation
 }
+
+/** The only turns a crop can carry. */
+export type Rotation = 90 | -90
 
 export interface ImportedAnalysis {
   jobId: string
@@ -129,6 +134,8 @@ export interface ReviewCrop {
   unknownFlags: string[]
   acknowledged: string[]
   note: string
+  /** Absent = upright. Stored as "rotate" in review-state.json only when set. */
+  rotate?: Rotation
 }
 
 export interface ReviewPage {

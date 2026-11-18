@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import sharp from 'sharp'
 import { describe, expect, it } from 'vitest'
-import { parseAnalysis } from '../analysisImport.js'
+import { parseAnalysis, REVIEW_ROTATE_RULE, ROTATE_RULE } from '../analysisImport.js'
 import { audit, greyscaleLuma, lumaFromImage } from '../cropAudit.js'
 import { javaDoubleToString, parseJson, trimIndent } from '../json.js'
 import { correctionPrompt, extractJson, renderAnalysisPrompt, renderReviewPrompt, stripMarkdownFence } from '../prompts.js'
@@ -127,6 +127,7 @@ describe('analysis prompt', () => {
       'slice-03: 800x904, original page y=4096..5000',
       `${K}Return JSON only: {"schema_version":"chatgpt-analysis/1.0","job_id":"${JOB}","source_sha256":"${SHA}","page_stem":"page_003","source_width":800,"source_height":5000,"coordinate_system":"slice_local_pixels","page_inspection_complete":true,"page_review_flags":[],"candidates":[{"candidate_id":"candidate-01","reason":"illustrated_shot","top_left":{"slice_id":"slice-01","x":0,"y":0},"bottom_right":{"slice_id":"slice-01","x":800,"y":2048},"visual_evidence":"Visible shot boundary","review_flags":[]}]}`,
       `${K}The candidate above is an example, not a target crop. Return an empty candidates array only for a page with no eligible artwork. Never invent an internal shot boundary.`,
+      ROTATE_RULE,
     ].join('\n')
     expect(renderAnalysisPrompt({ handoff: handoff3(), cropRules: '  RULE A\n' })).toBe(expected)
   })
@@ -353,5 +354,73 @@ describe('review round', () => {
     const many = correctionPrompt(Array.from({ length: 27 }, (_, i) => issue(i)))
     expect(many.split('\n').filter((l) => l.startsWith('- '))).toHaveLength(26)
     expect(many).toContain('\n- …and 2 more\n')
+  })
+})
+
+describe('sideways crops (rotate)', () => {
+  const h = handoff3()
+  const turned = (cand: string, rotate: string) => cand.replace('"review_flags"', `"rotate":${rotate},"review_flags"`)
+
+  it('reads 90 / -90, treats 0 and null as upright and refuses anything else', () => {
+    const ok = parseAnalysis(analysisReply([turned(CANDS[0]!, '90'), turned(CANDS[1]!, '-90'), turned(CANDS[5]!, '0'), turned(CANDS[6]!, 'null')]), h, true)
+    expect(ok.errors).toEqual([])
+    expect(ok.warnings.filter((w) => w.code === 'UNKNOWN_FIELD')).toEqual([])
+    expect(ok.analysis!.candidates.map((x) => x.rotate)).toEqual([90, -90, undefined, undefined])
+    for (const bad of ['180', '45', '"90"', '270']) {
+      const r = parseAnalysis(analysisReply([turned(CANDS[0]!, bad)]), h, true)
+      expect(r.analysis).toBeNull()
+      expect(r.errors.map((e) => e.field)).toEqual(['candidates[0].rotate'])
+    }
+  })
+
+  it('carries the turn through seed, storage, prompt and review; split parts inherit it', () => {
+    const parsed = parseAnalysis(analysisReply([turned(CANDS[0]!, '90'), CANDS[1]!, turned(CANDS[2]!, '-90')]), h, true)
+    const seeded = seed(parsed.analysis!, NOW)
+    expect(seeded.crops.map((x) => x.rotate)).toEqual([90, undefined, -90])
+    expect(parseState(toJson(seeded))).toEqual(seeded)
+    // Upright crops write no key at all, so the phone-compatible file is unchanged for them.
+    expect((toJson(seeded).match(/"rotate"/g) ?? []).length).toBe(2)
+
+    const report = reAudit(seeded, null)
+    const its = items(seeded, report.findings)
+    const prompt = renderReviewPrompt({ state: seeded, items: its, audit: report, handoff: h })
+    expect(prompt).toContain('"rotate": 90')
+    expect(prompt.endsWith(`${ROTATE_RULE} ${REVIEW_ROTATE_RULE}`)).toBe(true)
+    expect(renderAnalysisPrompt({ handoff: h }).endsWith(ROTATE_RULE)).toBe(true)
+
+    const corner = (s: string, x: number, y: number) => `{"slice_id":"${s}","x":${x},"y":${y}}`
+    const reply = (crops: string[]) => `{"schema_version":"clipper-review-geometry/1.0","job_id":"${JOB}","source_sha256":"${SHA}","review_revision":1,"coordinate_system":"slice_local_pixels","crops":[${crops.join(',')}],"removed_keys":[],"sweep_done":true}`
+    const r = applyReply(reply([
+      // kept, no "rotate" → keeps 90
+      `{"key":"candidate-01","top_left":${corner('slice-01', 40, 100)},"bottom_right":${corner('slice-01', 760, 900)}}`,
+      // upright crop turned by the reviewer
+      `{"key":"candidate-02","rotate":-90,"top_left":${corner('slice-01', 40, 900)},"bottom_right":${corner('slice-01', 760, 1500)}}`,
+      // split of a -90 crop: first part inherits, second is cleared with 0
+      `{"key":null,"from_keys":["candidate-03"],"top_left":${corner('slice-02', 0, 200)},"bottom_right":${corner('slice-02', 800, 1200)}}`,
+      `{"key":null,"from_keys":["candidate-03"],"rotate":0,"top_left":${corner('slice-02', 0, 1200)},"bottom_right":${corner('slice-03', 800, 100)}}`,
+    ]), seeded, its, h, NOW, true)
+    expect(r.errors).toEqual([])
+    expect(r.state!.crops.map((x) => [x.key, x.rotate])).toEqual([
+      ['candidate-01', 90], ['candidate-02', -90], ['candidate-03.a', -90], ['candidate-03.b', undefined],
+    ])
+    expect(parseState(toJson(r.state!))).toEqual(r.state)
+
+    const bad = applyReply(reply([`{"key":"candidate-01","rotate":180,"top_left":${corner('slice-01', 40, 100)},"bottom_right":${corner('slice-01', 760, 900)}}`]), seeded, its, h, NOW, true)
+    expect(bad.state).toBeNull()
+    expect(bad.errors.some((e) => e.field === 'crops[0].rotate')).toBe(true)
+  })
+})
+
+describe('final pointer file', () => {
+  it('writes rotate only on turned crops, after the points, and Clipper\'s reader keeps it', async () => {
+    const { buildPointerFile } = await import('../../delivery.js')
+    const { extractCrops } = await import('../../../clipper3/perImageStore.js')
+    const { file } = buildPointerFile([
+      { reason: 'upright', bounds: { x0: 0, y0: 0, x1: 800, y1: 500 } },
+      { reason: 'sideways', bounds: { x0: 0, y0: 600, x1: 800, y1: 1400 }, rotate: 90 },
+    ], { filename: 'page_003.jpg', width: 800, height: 5000, sourceSha256: SHA })
+    expect(Object.keys(file.crops[1]!)).toEqual(['id', 'reason', 'crop', 'rotate'])
+    expect(file.crops[0]).not.toHaveProperty('rotate')
+    expect(extractCrops(file as never).map((c) => c.rotate)).toEqual([undefined, 90])
   })
 })

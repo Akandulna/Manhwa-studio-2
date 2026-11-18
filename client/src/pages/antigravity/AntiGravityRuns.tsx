@@ -141,13 +141,14 @@ export default function AntiGravityRuns({ phonesView = false }: { phonesView?: b
             <Link to="/antigravity/runs" className={item(selected !== 'phones')} aria-current={selected !== 'phones' ? 'page' : undefined}>
               <div className="flex items-center gap-2">
                 {current?.live && proc && WORKING.has(proc.control) ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" /> : <Light tone={current?.live ? 'good' : 'idle'} size="h-2.5 w-2.5" />}
-                <span className="truncate text-sm font-medium">{current?.live && proc ? `${proc.kind === 'metadata' ? 'Metadata · ' : proc.kind === 'editor' ? 'Timeline · ' : ''}${titles.get(proc.seriesId) ?? 'Series'} · Part ${proc.partNumber}` : 'Current process'}</span>
+                <span className="truncate text-sm font-medium">{current?.live && proc ? `${proc.kind === 'metadata' ? 'Metadata · ' : proc.kind === 'editor' ? 'Timeline · ' : proc.kind === 'narration' ? 'Narration · ' : ''}${titles.get(proc.seriesId) ?? 'Series'} · Part ${proc.partNumber}` : 'Current process'}</span>
               </div>
               <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
                 {!current ? 'Reading…' : current.live && proc ? (
                   <>
                     <Badge variant={runBadge(proc.control)} className="px-1.5 py-0 text-[10px]">{proc.control.replace(/_/g, ' ')}</Badge>
                     {proc.engine === 'codex' && <Badge variant="outline" className="px-1.5 py-0 text-[10px]">ChatGPT</Badge>}
+                    {proc.engine === 'claude' && <Badge variant="outline" className="px-1.5 py-0 text-[10px]">Claude</Badge>}
                     <span className="truncate" title={new Date(proc.createdAt).toLocaleString()}>started {ago(proc.createdAt, now)}</span>
                   </>
                 ) : 'Nothing running'}

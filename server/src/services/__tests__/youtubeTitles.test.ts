@@ -18,8 +18,7 @@ beforeEach(async () => {
   const defaults = path.join(root, 'defaults')
   await fs.mkdir(defaults)
   await fs.writeFile(path.join(defaults, 'title-guidelines.md'), 'Title guideline alpha: use specific factual hooks, not generic hype.')
-  // Reuse the actual PDF: only the PDF importer needs to parse it; title tests use its normal defaults.
-  await fs.copyFile(new URL('../../../resources/youtube/thumbnail-guidelines.pdf', import.meta.url), path.join(defaults, 'thumbnail-guidelines.pdf'))
+  await fs.writeFile(path.join(defaults, 'thumbnail-guidelines.md'), 'Thumbnail guideline alpha: one dominant character and a short caption.')
   await fs.writeFile(path.join(defaults, 'description-guidelines.md'), 'Use verified story context in concise English descriptions.')
   store = new YouTubeStore(path.join(root, 'data'), defaults)
 })
@@ -54,7 +53,7 @@ describe('title prompts and durable workspaces', () => {
     expect(request.prompt).toContain('WRITE EXACTLY FIVE')
     expect(request.prompt).toContain('"seriesName": "Test Hunter"')
     expect(request.prompt).toContain(request.id)
-    expect(request.prompt).toContain('do not add part numbers')
+    expect(request.prompt).toContain('Do not add part numbers')
     const before = await store.guidelines()
     const nextGuideline = await store.replace('title', Buffer.from('Title guideline beta: use new updated instructions.'), 'beta.txt', before.title.id)
     const second = await store.prepareTitles('a', 'Test Hunter', first.titles.revision)

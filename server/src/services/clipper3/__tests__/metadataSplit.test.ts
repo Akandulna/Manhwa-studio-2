@@ -59,6 +59,45 @@ describe('pointer-only clipping and approved Metadata handoff',()=>{
  })
 })
 
+describe('sideways crops',()=>{
+ it('cuts a rotate:90 crop upright, binds the turn into the receipt and asks for the rotating renderer',async()=>{
+  // Left half red, right half blue: turned clockwise, the red (left) side becomes the top.
+  const left=await sharp({create:{width:50,height:200,channels:3,background:'#ff0000'}}).png().toBuffer()
+  await sharp({create:{width:100,height:200,channels:3,background:'#0000ff'}}).composite([{input:left,left:0,top:0}]).png().toFile(path.join(root,folder,page))
+  const turned={...crop,rotate:90 as const},p=await pointers();p.crops=[turned]
+  await writeImagePoints(folder,page,p);await setDesktopReview(folder,true)
+  const baseline=await captureMetadataGeometry(chapter)
+  const cut=await cutImageCrops({folderPath:folder,imageFilename:page,crops:[turned],slug:'series'})
+  expect([cut.files[0].width,cut.files[0].height]).toEqual([100,100])
+  const out=await sharp(cut.files[0].path).raw().toBuffer({resolveWithObject:true})
+  expect([...out.data.subarray(0,3)]).toEqual([255,0,0]) // top-left pixel: red
+  const lastRow=(out.info.height-1)*out.info.width*out.info.channels
+  expect([...out.data.subarray(lastRow,lastRow+3)]).toEqual([0,0,255]) // bottom-left pixel: blue
+  await recordMetadataCut(chapter,baseline)
+  const payload=JSON.parse((await currentMetadataJobs(chapter,{restartRevision:null,pageRevision:null})).jobs[0].payloadText)
+  expect(payload.renderer).toBe('studio-minmax-round-rotate/1')
+  expect(payload.crops[0]).toMatchObject({bounds:{x0:0,y0:0,x1:100,y1:100},rotate:90})
+  expect(JSON.parse(payload.pointersText).crops[0].rotate).toBe(90)
+  // Turning it back upright is a geometry change: the cut must be made again.
+  p.crops=[crop];await writeImagePoints(folder,page,p)
+  await expect(currentMetadataJobs(chapter,{restartRevision:null,pageRevision:null})).rejects.toThrow(/review|changed/)
+ })
+ it('keeps upright pages on the old renderer and drops any turn other than 90 / -90',async()=>{
+  const p=await pointers();p.crops=[{...crop,rotate:180} as never]
+  await writeImagePoints(folder,page,p);await setDesktopReview(folder,true)
+  const stored=(await readImagePoints(folder,page))!.file!
+  const {extractCrops}=await import('../perImageStore.js')
+  expect(extractCrops(stored)[0]).not.toHaveProperty('rotate')
+  const baseline=await captureMetadataGeometry(chapter)
+  const cut=await cutImageCrops({folderPath:folder,imageFilename:page,crops:extractCrops(stored),slug:'series'})
+  expect([cut.files[0].width,cut.files[0].height]).toEqual([100,100])
+  await recordMetadataCut(chapter,baseline)
+  const payload=JSON.parse((await currentMetadataJobs(chapter,{restartRevision:null,pageRevision:null})).jobs[0].payloadText)
+  expect(payload.renderer).toBe('studio-minmax-round/1');expect(payload.crops[0]).not.toHaveProperty('rotate')
+  expect(JSON.parse(payload.pointersText).crops[0]).not.toHaveProperty('rotate')
+ })
+})
+
 describe('Metadata jobs for redone pages',()=>{
  async function redo(status:'pending'|'imported'){
   await fs.mkdir(path.join(root,folder,'.studio-page-redo'),{recursive:true})

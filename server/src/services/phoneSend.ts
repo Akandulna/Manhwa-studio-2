@@ -601,6 +601,8 @@ export interface PhoneSendSeriesProgress {
   chaptersSent: number
   /** The chapter being zipped or uploaded. */
   current?: { folder: string; phase: 'zipping' | 'uploading' }
+  /** Set while the series' chapters are being stitched before sending (library origin only). */
+  preparing?: { chapterNumber: number; index: number; total: number }
   /** Page bytes of the picked chapters, and how much of that is up. */
   bytesTotal: number
   bytesDone: number
@@ -750,7 +752,14 @@ export async function startPhoneSend(requests: PhoneSendRequest[], io: Server, a
         const origin = await isLibraryOrigin(row.id)
         if (origin && !request?.resetClipping) {
           const { prepareLibrarySeries } = await import('./libraryPreparation.js')
-          await prepareLibrarySeries(row.id, request?.chapterIds)
+          try {
+            await prepareLibrarySeries(row.id, request?.chapterIds, step => {
+              progress.preparing = step
+              emit(true)
+            })
+          } finally {
+            delete progress.preparing
+          }
         }
         state = await seriesState(row, receipt, autoSeries.has(row.id))
         progress.folder = `${folder}${state.index.series}/`

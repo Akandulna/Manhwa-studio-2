@@ -15,13 +15,15 @@ import { AgyError, detectInstallation, listModels, readUsage, signedInEmail, typ
 import { runCompatibilityCheck, type CompatibilityReport } from '../services/antigravity/compatibility.js'
 import { googleDriveService, localOnlyGuard } from './googleDrive.js'
 import {
-  DEFAULT_CODEX_SETTINGS, DEFAULT_SETTINGS, codexProofStatus, proofStatus, sanitizeCodexSettings, sanitizeSettings,
-  type AiEngine, type AntigravitySettings, type CodexConnectionView, type CodexSettings, type ConnectionView
+  DEFAULT_CLAUDE_SETTINGS, DEFAULT_CODEX_SETTINGS, DEFAULT_SETTINGS, claudeProofStatus, codexProofStatus, proofStatus, sanitizeClaudeSettings, sanitizeCodexSettings, sanitizeSettings,
+  type AiEngine, type AntigravitySettings, type ClaudeConnectionView, type ClaudeSettings, type CodexConnectionView, type CodexSettings, type ConnectionView
 } from '../services/antigravity/settingsModel.js'
+import { CLAUDE_MODELS, claudeAccount, detectClaude, readClaudeUsage, type ClaudeRateLimit, type ClaudeUsage } from '../services/antigravity/claudeCli.js'
 export { DEFAULT_SETTINGS, proofStatus, sanitizeSettings, type AntigravitySettings, type ConnectionView }
 import { CodexError, codexAccount, detectCodex, listCodexModels, type CodexModel } from '../services/antigravity/codexCli.js'
 import { CodexAccountStore, DEFAULT_ACCOUNT_ID } from '../services/antigravity/codexAccounts.js'
 import { AntigravityJobs, clipperPartNumber, type JobKind, type RunSettings } from '../services/antigravity/jobs.js'
+import { narrationStudioDeps } from '../services/antigravity/narrationStudio.js'
 import { PROMPT_KINDS, PromptStore, type PromptKind } from '../services/antigravity/prompts.js'
 import { notifySeriesProcessChanged } from '../services/seriesProcess.js'
 import { AntigravityPublisher, openR2Exchange } from '../services/antigravity/publication.js'
@@ -32,6 +34,10 @@ const SETTINGS_KEY = 'antigravitySettings'
 const REPORT_KEY = 'antigravityCompatibility'
 const CODEX_SETTINGS_KEY = 'antigravityCodexSettings'
 const CODEX_REPORT_KEY = 'antigravityCodexCompatibility'
+const CLAUDE_SETTINGS_KEY = 'antigravityClaudeSettings'
+const CLAUDE_REPORT_KEY = 'antigravityClaudeCompatibility'
+/** The Claude plan's usage windows as Claude Code last reported them in a Studio turn (newest per window). */
+const CLAUDE_USAGE_KEY = 'antigravityClaudeUsage'
 let jobsInstance: AntigravityJobs | null = null
 /** The running job service (null until the routes are initialized). */
 export const antigravityJobs = () => jobsInstance
@@ -49,6 +55,13 @@ export function initAntigravityRoutes(prisma: PrismaClient, io?: Server): Router
     prisma.setting.upsert({ where: { key }, create: { key, value: JSON.stringify(value) }, update: { value: JSON.stringify(value) } })
   const loadSettings = async () => ({ ...DEFAULT_SETTINGS, ...(await readJson<Partial<AntigravitySettings>>(SETTINGS_KEY)) })
   const loadCodexSettings = async (): Promise<CodexSettings> => ({ ...DEFAULT_CODEX_SETTINGS, ...(await readJson<Partial<CodexSettings>>(CODEX_SETTINGS_KEY)) })
+  const loadClaudeSettings = async (): Promise<ClaudeSettings> => ({ ...DEFAULT_CLAUDE_SETTINGS, ...(await readJson<Partial<ClaudeSettings>>(CLAUDE_SETTINGS_KEY)) })
+  const claudeLimits = async () => (await readJson<ClaudeRateLimit[]>(CLAUDE_USAGE_KEY)) ?? []
+  /** Newest report per window wins; a window that was refused stays shown until its reset passes. */
+  const recordClaudeLimits = async (limits: ClaudeRateLimit[]) => {
+    const merged = [...(await claudeLimits()).filter(l => !limits.some(n => n.type === l.type)), ...limits]
+    await writeJson(CLAUDE_USAGE_KEY, merged.sort((a, b) => a.type.localeCompare(b.type)))
+  }
 
   let modelCache: { at: number; executable: string; models: AgyModel[] } | null = null
   let modelsError: ConnectionView['modelsError'] = null
@@ -216,12 +229,37 @@ export function initAntigravityRoutes(prisma: PrismaClient, io?: Server): Router
     await googleUsageLoading
   }
 
+  // Claude: live from `claude -p "/usage"` (no model turn, no cost), cached like Google.
+  let claudeUsage: { at: number; usage: ClaudeUsage | null; error: string | null } | null = null
+  let claudeUsageLoading: Promise<void> | null = null
+  const loadClaudeUsage = async (refresh: boolean) => {
+    if (!refresh && claudeUsage && Date.now() - claudeUsage.at < USAGE_TTL_MS) return
+    claudeUsageLoading ??= (async () => {
+      try {
+        const installation = await detectClaude((await loadClaudeSettings()).executablePath)
+        if (!installation.path) claudeUsage = { at: Date.now(), usage: null, error: installation.error ?? 'Claude Code was not found.' }
+        else claudeUsage = { at: Date.now(), usage: await readClaudeUsage(installation.path), error: null }
+      } catch (error) {
+        claudeUsage = { at: Date.now(), usage: claudeUsage?.usage ?? null, error: error instanceof Error ? error.message : 'Could not read Claude usage.' }
+      } finally {
+        claudeUsageLoading = null
+      }
+    })()
+    await claudeUsageLoading
+  }
+  const claudeUsageView = async (refresh: boolean) => {
+    await loadClaudeUsage(refresh)
+    return { limits: await claudeLimits(), usage: claudeUsage?.usage ?? null, error: claudeUsage?.error ?? null, checkedAt: claudeUsage ? new Date(claudeUsage.at).toISOString() : null }
+  }
+
   router.get('/usage', async (req, res) => {
     try {
-      const [, codex] = await Promise.all([loadGoogleUsage(req.query.refresh === '1'), codexAccounts.usage()])
+      const refresh = req.query.refresh === '1'
+      const [, codex, claude] = await Promise.all([loadGoogleUsage(refresh), codexAccounts.usage(), claudeUsageView(refresh)])
       res.json({
         google: { account: signedInEmail(), quota: googleUsage?.quota ?? null, error: googleUsage?.error ?? null, checkedAt: googleUsage ? new Date(googleUsage.at).toISOString() : null },
-        codex
+        codex,
+        claude
       })
     } catch (error) { fail(res, error, 500) }
   })
@@ -331,6 +369,86 @@ export function initAntigravityRoutes(prisma: PrismaClient, io?: Server): Router
     try { res.json(await codexAccounts.setAutoSwitch(req.body?.on === true)) } catch (error) { fail(res, error) }
   })
 
+  // ─── Claude (Claude Code) engine ───
+  let claudeCheckRunning: AbortController | null = null
+
+  const claudeView = async (): Promise<ClaudeConnectionView> => {
+    const settings = await loadClaudeSettings()
+    const installation = await detectClaude(settings.executablePath)
+    const account = installation.path ? await claudeAccount(installation.path).catch(() => null) : null
+    const report = await readJson<CompatibilityReport>(CLAUDE_REPORT_KEY)
+    const proof = claudeProofStatus(report, installation, settings, account)
+    const usage = installation.path && account?.signedIn ? await claudeUsageView(false) : null
+    return { installation, account, settings, report, proofValid: proof.valid, proofNote: proof.note, checkRunning: !!claudeCheckRunning, models: CLAUDE_MODELS, rateLimits: await claudeLimits(), usage: usage?.usage ?? null, usageError: usage?.error ?? null }
+  }
+
+  router.get('/claude/connection', async (_req, res) => {
+    try { res.json(await claudeView()) } catch (error) { fail(res, error, 500) }
+  })
+
+  router.put('/claude/settings', async (req, res) => {
+    try {
+      const next = sanitizeClaudeSettings(req.body, await loadClaudeSettings())
+      if (next.model) {
+        const model = CLAUDE_MODELS.find(m => m.id === next.model)
+        if (!model) throw new Error('Choose a Claude model from the list.')
+        if (next.effort && !model.efforts.includes(next.effort)) next.effort = model.defaultEffort as ClaudeSettings['effort']
+      }
+      await writeJson(CLAUDE_SETTINGS_KEY, next)
+      res.json(next)
+    } catch (error) { fail(res, error) }
+  })
+
+  /** Explicit live proof on the selected Claude model (uses a little of the Claude plan's usage). */
+  router.post('/claude/check', async (_req, res) => {
+    if (claudeCheckRunning) return res.status(409).json({ error: 'A Claude compatibility test is already running.' })
+    const controller = new AbortController()
+    claudeCheckRunning = controller
+    try {
+      const settings = await loadClaudeSettings()
+      const installation = await detectClaude(settings.executablePath)
+      if (!installation.path) return res.status(409).json({ error: installation.error })
+      if (!settings.model) return res.status(409).json({ error: 'Choose and save a Claude model first.' })
+      const account = await claudeAccount(installation.path).catch(() => null)
+      if (!account?.signedIn) return res.status(409).json({ error: 'Sign in to Claude Code first (Settings → AntiGravity → Claude).' })
+      const report = await runCompatibilityCheck({
+        engine: 'claude',
+        executable: installation.path,
+        cliVersion: installation.version,
+        model: settings.model,
+        effort: settings.effort,
+        sandbox: true,
+        signal: controller.signal
+      })
+      const tested = { ...report, account: account.email }
+      if (report.claudeLimits?.length) await recordClaudeLimits(report.claudeLimits)
+      await writeJson(CLAUDE_REPORT_KEY, tested)
+      res.json(tested)
+    } catch (error) {
+      fail(res, error, 500)
+    } finally {
+      claudeCheckRunning = null
+    }
+  })
+
+  router.post('/claude/check/cancel', (_req, res) => {
+    claudeCheckRunning?.abort()
+    res.json({ cancelled: !!claudeCheckRunning })
+  })
+
+  /** Open `claude auth login` in Terminal: the official claude.ai sign-in in the browser. Studio never sees credentials. */
+  router.post('/claude/sign-in', async (_req, res) => {
+    const installation = await detectClaude((await loadClaudeSettings()).executablePath)
+    if (!installation.path) return res.status(409).json({ error: installation.error })
+    const quote = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`
+    const command = `${quote(installation.path)} auth login --claudeai`
+    if (process.platform !== 'darwin') return res.json({ opened: false, instructions: `Run in a terminal: ${command}` })
+    const script = `tell application "Terminal" to do script ${JSON.stringify(command)}`
+    execFile('osascript', ['-e', script, '-e', 'tell application "Terminal" to activate'], error => {
+      res.json({ opened: !error, instructions: 'Terminal opened claude auth login. Finish the Claude sign-in in the browser (Pro or Max), then click Refresh here.' })
+    })
+  })
+
   // ─── Prompt pack (PRD §9.1) ───
   const prompts = new PromptStore(prisma)
 
@@ -368,6 +486,16 @@ export function initAntigravityRoutes(prisma: PrismaClient, io?: Server): Router
   const runSettings = async (engineOverride?: AiEngine): Promise<RunSettings> => {
     const settings = await loadSettings()
     const engine = engineOverride ?? settings.engine
+    if (engine === 'claude') {
+      const claude = await loadClaudeSettings()
+      const installation = await detectClaude(claude.executablePath)
+      if (!installation.path) throw new Error(installation.error ?? 'Claude Code was not found.')
+      if (!claude.model) throw new Error('Choose a Claude model in Settings → AntiGravity → Claude.')
+      const account = await claudeAccount(installation.path).catch(() => null)
+      const proof = claudeProofStatus(await readJson<CompatibilityReport>(CLAUDE_REPORT_KEY), installation, claude, account)
+      if (!proof.valid) throw new Error(proof.note ?? 'Run the Claude compatibility test in Settings → AntiGravity.')
+      return { engine, model: claude.model, modelLabel: claude.modelLabel, effort: claude.effort, sandbox: true, concurrency: settings.concurrency, pageTimeoutMinutes: settings.pageTimeoutMinutes, executable: installation.path, cliVersion: installation.version }
+    }
     if (engine === 'codex') {
       const codex = await loadCodexSettings()
       const installation = await detectCodex(codex.executablePath)
@@ -425,6 +553,7 @@ export function initAntigravityRoutes(prisma: PrismaClient, io?: Server): Router
     publisher,
     notifyPhones,
     codexAccounts,
+    claudeUsage: { record: recordClaudeLimits },
     // Timeline: Editor 2.0's own inputs, small-batches checkpoint, processor and save (loaded on first use).
     editor: {
       savedTimeline: async (chapterId, language) => {
@@ -465,6 +594,8 @@ export function initAntigravityRoutes(prisma: PrismaClient, io?: Server): Router
       // Phones skip chapters a Timeline job is making (editorClaims.ts).
       claimsChanged: () => { void import('../services/editorClaims.js').then(m => m.queueEditorClaims()) }
     },
+    // Narration: the chapter's pages and continuity; the save is Narration's Replace (backup, reset, send to phones).
+    narration: narrationStudioDeps(prisma),
     pinnedPrompts: async ids => {
       const texts: Record<string, string> = {}
       const hashes: Record<string, string> = {}
@@ -509,12 +640,14 @@ export function initAntigravityRoutes(prisma: PrismaClient, io?: Server): Router
       const body = req.body ?? {}
       // Metadata is saved in Studio only (no Drive, no R2); a Timeline is saved in Editor 2.0, whose own sending
       // reaches the phones when R2 is set up; Image Clipper publishes its results to phones through R2.
-      const kind: JobKind = body.kind === 'metadata' || body.kind === 'editor' ? body.kind : 'clipper'
+      const kind: JobKind = body.kind === 'metadata' || body.kind === 'editor' || body.kind === 'narration' ? body.kind : 'clipper'
       const editor = kind === 'editor' ? body.editor : undefined
+      // Recreate (Metadata): pages that already have Metadata are made again and replaced in Studio, R2 and on phones.
+      const recreate = kind === 'metadata' && body.recreate === true
       const requireR2 = async () => {
-        if (kind !== 'clipper') return
+        if (kind !== 'clipper' && !recreate) return
         const { getR2Config } = await import('../services/r2Service.js')
-        if (!getR2Config()) throw new Error('Set up Cloudflare R2 (Settings → Cloudflare) before starting: results are published there for phones.')
+        if (!getR2Config()) throw new Error(recreate ? 'Set up Cloudflare R2 (Settings → Cloudflare) before recreating Metadata: the new files replace the old ones on R2 and the phones through it.' : 'Set up Cloudflare R2 (Settings → Cloudflare) before starting: results are published there for phones.')
       }
       // Start process: the part's next pending pages, one process at a time (no page list).
       if (body.mode === 'next') {
@@ -533,7 +666,7 @@ export function initAntigravityRoutes(prisma: PrismaClient, io?: Server): Router
         // PRD §14.1: Start needs R2; preparation does not.
         await requireR2()
       }
-      res.json(await jobs.start({ seriesId: body.seriesId, partNumber: Number(body.partNumber), pages, prepareOnly, kind, editor }))
+      res.json(await jobs.start({ seriesId: body.seriesId, partNumber: Number(body.partNumber), pages, prepareOnly, kind, editor, recreate }))
     } catch (error) { fail(res, error) }
   })
 
@@ -557,14 +690,16 @@ export function initAntigravityRoutes(prisma: PrismaClient, io?: Server): Router
     } catch (error) { fail(res, error, 500) }
   })
 
-  for (const action of ['pause', 'resume', 'stop'] as const) {
+  // stop: the page (chapter) in progress finishes first; stop-now cancels it at once.
+  for (const action of ['pause', 'resume', 'stop', 'stop-now'] as const) {
     router.post(`/runs/:id/${action}`, async (req, res) => {
       try { res.json(await jobs.control(req.params.id, action)) } catch (error) { fail(res, error) }
     })
   }
 
   router.post('/jobs/:id/retry', async (req, res) => {
-    try { res.json(await jobs.retry(req.params.id)) } catch (error) { fail(res, error) }
+    // fresh (Narration): start over instead of keeping the previous attempt's accepted notes and draft.
+    try { res.json(await jobs.retry(req.params.id, { fresh: req.body?.fresh === true })) } catch (error) { fail(res, error) }
   })
 
   router.post('/jobs/:id/reject', async (req, res) => {
@@ -608,7 +743,7 @@ export function initAntigravityRoutes(prisma: PrismaClient, io?: Server): Router
   router.post('/page-jobs', async (req, res) => {
     try {
       const ids = Array.isArray(req.body?.chapterIds) ? req.body.chapterIds.filter((x: unknown) => typeof x === 'string').slice(0, 200) : []
-      res.json(await jobs.pageJobs(ids, req.body?.kind === 'metadata' || req.body?.kind === 'editor' ? req.body.kind : 'clipper'))
+      res.json(await jobs.pageJobs(ids, ['metadata', 'editor', 'narration'].includes(req.body?.kind) ? req.body.kind : 'clipper'))
     } catch (error) { fail(res, error, 500) }
   })
 
@@ -660,6 +795,44 @@ export function initAntigravityRoutes(prisma: PrismaClient, io?: Server): Router
           }]
         }))
       }))
+      res.json({ chapters })
+    } catch (error) { fail(res, error) }
+  })
+
+  /**
+   * Narration status of one part's chapters: whether each has an English script (and how it was made), its page
+   * count, and why it can't be written now (an earlier chapter without a script, no pages, completed Part); the
+   * same for its Hinglish script, which is written from the English one.
+   */
+  router.post('/narration/status', async (req, res) => {
+    try {
+      const seriesId = typeof req.body?.seriesId === 'string' ? req.body.seriesId : ''
+      const partNumber = Number(req.body?.partNumber)
+      if (!seriesId || !Number.isInteger(partNumber) || partNumber < 1) throw new Error('Missing series or part.')
+      if (!(await prisma.series.findUnique({ where: { id: seriesId }, select: { id: true } }))) return res.status(404).json({ error: 'Series not found.' })
+      const rows = (await prisma.chapter.findMany({ where: { seriesId }, orderBy: { number: 'asc' }, select: { id: true, number: true, title: true, scripts: { select: { language: true, status: true, mode: true, updatedAt: true } } } }))
+        .filter(c => clipperPartNumber(c.number) === partNumber)
+      const deps = narrationStudioDeps(prisma)
+      const chapters = []
+      for (const row of rows) {
+        const input = await deps.input(row.id)
+        const english = row.scripts.find(s => s.language === 'en')
+        const hindi = row.scripts.find(s => s.language === 'hi')
+        const hinglish = deps.hinglish ? await deps.hinglish.input(row.id) : { reason: 'Not available in this Studio build.' }
+        chapters.push({
+          id: row.id, number: row.number, title: row.title,
+          hasScript: 'reason' in input ? !!english : !!input.scriptSha256,
+          script: english ? { status: english.status, mode: english.mode, updatedAt: english.updatedAt } : null,
+          pages: 'reason' in input ? 0 : input.pages.length,
+          blocked: 'reason' in input ? input.reason : null,
+          hinglish: {
+            hasScript: 'reason' in hinglish ? !!hindi : !!hinglish.scriptSha256,
+            // Written from an older English: the next English save (or a tick) rewrites it.
+            stale: !('reason' in hinglish) && !!hinglish.scriptSha256 && !!hinglish.madeFromSha256 && hinglish.madeFromSha256 !== hinglish.sourceSha256,
+            blocked: 'reason' in hinglish ? hinglish.reason : null
+          }
+        })
+      }
       res.json({ chapters })
     } catch (error) { fail(res, error) }
   })

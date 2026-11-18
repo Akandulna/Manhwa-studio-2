@@ -533,10 +533,16 @@ export async function sendPhoneRequest(
   }
   if(!action&&!cloudOnly&&wifiHub()){
     const targets=args.device?[args.device]:[...new Set([...presence.map(p=>p.id),...wifiHub()!.status().devices])]
-    if(targets.length){await Promise.all(targets.map(async device=>{
-      const m={type:'refresh_status',id:request.id,requestedAt:request.requestedAt,deadline:original?.deadline??Date.parse(request.requestedAt)+60_000,device}
-      if(!await wifiHub()!.refresh(m))await sendPhoneRequest(undefined,{device},m,true)
-    }));return {...request,phones:targets.length}}
+    if(targets.length){
+      // Not awaited: a phone answering on Wi-Fi resolves only once all its receipts are in (up to 50 s), and the
+      // answers arrive as receipts anyway. A phone not on Wi-Fi (or not answering) is asked through the relay.
+      void Promise.all(targets.map(async device=>{
+        const m={type:'refresh_status',id:request.id,requestedAt:request.requestedAt,deadline:original?.deadline??Date.parse(request.requestedAt)+60_000,device}
+        try { if(!await wifiHub()!.refresh(m))await sendPhoneRequest(undefined,{device},m,true) }
+        catch (error) { console.error(`[relay] refresh of ${device} failed:`, error instanceof Error ? error.message : error) }
+      }))
+      return {...request,phones:targets.length}
+    }
   }
   await beforeRelaySend()
   // Browser commands require the authority's admission response. Socket send alone cannot prove admission.

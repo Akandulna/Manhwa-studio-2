@@ -57,9 +57,18 @@ export interface Cut {
   /**
    * `gap`: on a blank row — inside a band, or on a blank run too short to be
    * one (no `band`). `forced`: no blank row fitted, so it crosses artwork.
+   * `manual`: a slice the user placed by hand, anywhere in a page image.
    */
-  kind: 'gap' | 'forced'
+  kind: 'gap' | 'forced' | 'manual'
   band?: Band
+  /** Manual slices only: the source row they cut, so they survive a re-plan. */
+  anchor?: CutAnchor
+}
+
+/** A source row of one page image. */
+export interface CutAnchor {
+  file: string
+  row: number
 }
 
 export interface PieceSpec {
@@ -268,6 +277,24 @@ function sourceRow(page: StripPage, offset: number): number {
   return Math.round((offset * page.height) / page.scaledHeight)
 }
 
+/** A manual slice at strip `y`, anchored to the source row it cuts. Null on the strip's very top or bottom. */
+export function manualCut(strip: Strip, y: number): Cut | null {
+  const at = Math.round(y)
+  if (at <= 0 || at >= strip.height) return null
+  const page = strip.pages.find(p => at >= p.top && at < p.top + p.scaledHeight)
+  if (!page) return null
+  return { y: at, kind: 'manual', anchor: { file: page.filename, row: sourceRow(page, at - page.top) } }
+}
+
+/** Where a manual slice falls in `strip`, or null when its image is no longer in it. */
+export function anchoredCut(strip: Strip, cut: Cut): Cut | null {
+  if (!cut.anchor) return null
+  const page = strip.pages.find(p => p.filename === cut.anchor!.file)
+  if (!page) return null
+  const y = page.top + Math.round((cut.anchor.row * page.scaledHeight) / page.height)
+  return y > 0 && y < strip.height ? { ...cut, y } : null
+}
+
 /** The source-row pieces that make up strip range [top, bottom). */
 export function piecesOf(strip: Strip, range: Band): StripPiece[] {
   const pieces: StripPiece[] = []
@@ -343,13 +370,16 @@ export function edgeCut(strip: Strip, bands: Band[], y: number): Cut | null {
 
 /**
  * Plan the whole chapter: cut off the repeated intro and outro (when found
- * and `edges` is given) as dropped pages, and plan the cuts between them.
+ * and `edges` is given) as dropped pages, keep the manual slices, and plan
+ * the cuts between them.
  */
 export function planChapter(
   strip: Strip,
   bands: Band[],
   o: AutoOptions,
-  edges: EdgeMarks | null
+  edges: EdgeMarks | null,
+  /** Manual slices, already placed in `strip` (see anchoredCut). */
+  manual: Cut[] = []
 ): { cuts: Cut[]; dropped: Dropped[] } {
   let top = 0
   let bottom = strip.height
@@ -372,9 +402,19 @@ export function planChapter(
     dropped.push({ y: outro.y, reason: `Outro — repeats Ch ${edges!.outro!.referenceNumber}` })
   }
 
-  cuts.push(...planCuts(strip, bands, o, { top, bottom }))
+  // Manual slices stay where they are; the planner only fills the stretches between them.
+  const fixed = [...new Map(manual.filter(c => c.y > top && c.y < bottom).map(c => [c.y, c])).values()].sort((a, b) => a.y - b.y)
+  let from = top
+  for (const cut of fixed) {
+    cuts.push(...planCuts(strip, bands, o, { top: from, bottom: cut.y }), cut)
+    from = cut.y
+  }
+  cuts.push(...planCuts(strip, bands, o, { top: from, bottom }))
   if (bottom < strip.height) cuts.push(outro!)
-  return { cuts, dropped }
+  // A manual slice inside the deleted intro / outro splits it; both halves stay deleted.
+  let result = { cuts, dropped }
+  for (const cut of manual.filter(c => c.y < top || c.y > bottom)) result = withCut(result.cuts, result.dropped, cut)
+  return { cuts: [...result.cuts].sort((a, b) => a.y - b.y), dropped: result.dropped }
 }
 
 /** Remove the cut at `y`. The two pages it separated merge, and stay dropped only if both were. */

@@ -37,5 +37,5 @@ export function useMetadataLibrary() {
       for (const event of events) socket?.off(event, load)
     }
   }, [socket, reload])
-  return { snapshot, error, sync, fetching: fetching || !!snapshot?.syncing }
+  return { snapshot, error, sync, reload, fetching: fetching || !!snapshot?.syncing }
 }

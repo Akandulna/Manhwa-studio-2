@@ -107,7 +107,7 @@ describe('Codex settings and proof', () => {
     expect(() => sanitizeCodexSettings({ effort: 'ultra' }, DEFAULT_CODEX_SETTINGS)).toThrow()
     expect(() => sanitizeCodexSettings({ executablePath: 'codex' }, DEFAULT_CODEX_SETTINGS)).toThrow()
     expect(sanitizeSettings({ engine: 'codex' }, DEFAULT_SETTINGS).engine).toBe('codex')
-    expect(() => sanitizeSettings({ engine: 'claude' }, DEFAULT_SETTINGS)).toThrow()
+    expect(() => sanitizeSettings({ engine: 'gemini-direct' }, DEFAULT_SETTINGS)).toThrow()
   })
 
   it('needs sign-in, a passing test on this codex version and the selected model', () => {
